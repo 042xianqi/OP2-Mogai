@@ -49,7 +49,7 @@ impl CoreDeviceToolRuntime {
     async fn execute_port(
         &self,
         node_id: String,
-        request: CoreCallRequest,
+        mut request: CoreCallRequest,
     ) -> Result<serde_json::Value, String> {
         let router = self.router.clone();
         let (send, receive) = tokio::sync::oneshot::channel();
@@ -59,6 +59,13 @@ impl CoreDeviceToolRuntime {
                 Box::pin(async move {
                     let result = match router.upgrade() {
                         Some(router) if node_id != router.localNodeId() => {
+                            // Pin capture ingress to the Core owning the reserved receiver.
+                            if request.target == "edge.audio" && request.methodName == "startInput" {
+                                match &mut request.args {
+                                    CoreValue::Map(args) => { args.insert("receiverNodeId".into(), CoreValue::String(router.localNodeId().into())); }
+                                    _ => { let _ = send.send(Err("Invalid audio start arguments".into())); return; }
+                                }
+                            }
                             // Target routing retains pairing direction, Space membership and
                             // NetworkControl policy. No direct peer call, forced address, or adapter retry.
                             match router.callNode(node_id, request).await.result {
@@ -136,6 +143,15 @@ impl CoreDeviceToolRuntime {
 }
 
 impl DeviceToolRuntime for CoreDeviceToolRuntime {
+    fn execute_audio(&self, node_id: String, request: CoreCallRequest)
+        -> JsExecutionCompletion<Result<serde_json::Value, String>> {
+        if request.target != "edge.audio" || !matches!(request.methodName.as_str(), "listInputs" | "startInput" | "stopInput" | "finishInput") {
+            return Box::pin(async { Err("Only declared Edge audio entrypoints are allowed".into()) });
+        }
+        let runtime = self.clone();
+        Box::pin(async move { runtime.execute_port(node_id, request).await })
+    }
+
     fn dispatch_with_preflight(
         &self,
         mut request: JsToolCallRequest,

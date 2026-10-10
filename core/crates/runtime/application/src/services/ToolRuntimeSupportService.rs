@@ -55,6 +55,7 @@ impl ToolRuntimeSupportService {
             chatHistoryManager: OnceLock::new(),
             coreNodeToolRuntime: RwLock::new(None),
             deviceToolRuntime: OnceLock::new(),
+            edgeAudioRegistry: Arc::new(operit_tools::runtime_support::edge_audio::EdgeAudioRegistry::new()),
             coreRouteChangeHandler: RwLock::new(None),
         })
     }
@@ -74,6 +75,7 @@ pub struct RuntimeToolSupport {
     runtimeBindings: OnceLock<RuntimeToolBindings>,
     chatHistoryManager: OnceLock<operit_store::repository::ChatHistoryManager::ChatHistoryManager>,
     coreNodeToolRuntime: RwLock<Option<Arc<dyn CoreNodeToolRuntime>>>,
+    edgeAudioRegistry: Arc<operit_tools::runtime_support::edge_audio::EdgeAudioRegistry>,
     deviceToolRuntime: OnceLock<Arc<dyn operit_tools::tools::DeviceTools::DeviceToolRuntime>>,
     coreRouteChangeHandler: RwLock<Option<CoreRouteChangeHandler>>,
 }
@@ -128,6 +130,17 @@ impl RuntimeToolSupport {
 }
 
 impl ToolRuntimeSupport for RuntimeToolSupport {
+    fn edgeAudioRegistry(&self) -> Result<Arc<operit_tools::runtime_support::edge_audio::EdgeAudioRegistry>, String> {
+        Ok(self.edgeAudioRegistry.clone())
+    }
+    fn executeEdgeAudio(&self, nodeId: String, request: operit_link::CoreCallRequest)
+        -> operit_plugin_sdk::javascript::JsExecutionCompletion<Result<serde_json::Value, String>> {
+        match self.deviceToolRuntime.get() {
+            Some(runtime) => runtime.execute_audio(nodeId, request),
+            None => Box::pin(async { Err("Device audio routing is not initialized".into()) }),
+        }
+    }
+
     fn bindDeviceToolRuntime(&self, runtime: Arc<dyn operit_tools::tools::DeviceTools::DeviceToolRuntime>) -> Result<(), String> {
         self.deviceToolRuntime.set(runtime).map_err(|_| "Device tool routing is already initialized".into())
     }

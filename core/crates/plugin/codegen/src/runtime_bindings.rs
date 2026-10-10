@@ -7,6 +7,7 @@ use syn::{Expr, FnArg, Item, Lit, Pat, TraitItem};
 use tree_sitter::Parser;
 
 const HOST_TRAITS: &[(&str, &str, &str)] = &[
+    ("js_sdk/edge.rs", "EdgeHost", "Edge"),
     ("js_sdk/files.rs", "FilesHost", "Files"),
     ("js_sdk/network.rs", "NetHost", "Net"),
     ("js_sdk/network.rs", "NetCookieManager", "Net.cookies"),

@@ -75,6 +75,10 @@ pub struct JsToolApiVariant {
 /// Contains every active JavaScript Tools method binding.
 #[rustfmt::skip]
 pub const JS_TOOL_BINDINGS: &[JsToolBinding] = &[
+    JsToolBinding { namespace: "Edge", method: "listAudioInputs", target: BuiltinToolName::EdgeListAudioInputs, strict_arguments: true, facade: JsToolFacade::Promise, fixed_parameters: &[] },
+    JsToolBinding { namespace: "Edge", method: "openAudioInput", target: BuiltinToolName::EdgeOpenAudioInput, strict_arguments: true, facade: JsToolFacade::Promise, fixed_parameters: &[] },
+    JsToolBinding { namespace: "Edge", method: "readAudioInput", target: BuiltinToolName::EdgeReadAudioInput, strict_arguments: true, facade: JsToolFacade::Promise, fixed_parameters: &[] },
+    JsToolBinding { namespace: "Edge", method: "closeAudioInput", target: BuiltinToolName::EdgeCloseAudioInput, strict_arguments: true, facade: JsToolFacade::Promise, fixed_parameters: &[] },
     JsToolBinding { namespace: "Chat", method: "agentStatus", target: BuiltinToolName::AgentStatus, strict_arguments: false, facade: JsToolFacade::Promise, fixed_parameters: &[] },
     JsToolBinding { namespace: "Chat", method: "createNew", target: BuiltinToolName::CreateNewChat, strict_arguments: false, facade: JsToolFacade::Promise, fixed_parameters: &[] },
     JsToolBinding { namespace: "Chat", method: "deleteChat", target: BuiltinToolName::DeleteChat, strict_arguments: false, facade: JsToolFacade::Promise, fixed_parameters: &[] },

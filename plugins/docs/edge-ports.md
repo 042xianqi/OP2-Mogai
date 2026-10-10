@@ -60,7 +60,7 @@ AI / CLI 的 `edge_execute` / `io_execute` 注册工具也进入同一运行时�
 
 ## 暂不实现的后续能力
 
-串口 `read/write`、端口枚举、串口会话、波特率设置、二进制分块、订阅输入流、背压、
+串口 `read/write`、端口枚举、串口会话、波特率设置、通用串口二进制分块、订阅串口输入流、背压、
 完整专属硬件插件实例生命周期暂未开放。设备视图支持 `timeoutMs`、`signal` 和
 `cancel()`；已提交的固件动作继续完成 Link 应答清理，不能通过取消撤销。
 `{port:"serial",operation:"read"}` 当前**明确拒绝**，不返回空数据假装接通。
@@ -99,3 +99,5 @@ ESP32 的 320×240、24 像素保留区及 C 屏幕适配在 `apps/esp32` 配置
 其他设备可选择不同配置、另一种渲染实现，或完全不提供显示能力。
 
 插件开发、素材适配、模拟器联调与发布步骤见 [Edge 插件作者指南](edge-plugin-guide.md)。
+
+麦克风 PCM 使用独立的 Edge 音频采集接口和现有 Link Push，详见 [流式音频](../../docs/edge-streaming-audio.md)。

@@ -1,3 +1,4 @@
+pub mod edge_audio;
 use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
 use std::pin::Pin;
@@ -303,6 +304,14 @@ pub trait CoreNodeToolRuntime: Send + Sync {
 
 /// Provides runtime-owned services that the tools crate must not own.
 pub trait ToolRuntimeSupport: Send + Sync {
+    fn edgeAudioRegistry(&self) -> Result<Arc<edge_audio::EdgeAudioRegistry>, String> {
+        Err("Edge audio receiving is not initialized".into())
+    }
+    fn executeEdgeAudio(&self, _nodeId: String, _request: operit_link::CoreCallRequest)
+        -> operit_plugin_sdk::javascript::JsExecutionCompletion<Result<serde_json::Value, String>> {
+        Box::pin(async { Err("Device audio routing is not initialized".into()) })
+    }
+
     fn bindDeviceToolRuntime(&self, _runtime: Arc<dyn crate::tools::DeviceTools::DeviceToolRuntime>) -> Result<(), String> {
         Err("Device tool routing is not supported by this runtime".into())
     }

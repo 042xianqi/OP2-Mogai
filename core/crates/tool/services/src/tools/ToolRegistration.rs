@@ -886,6 +886,35 @@ fn registerInternalTools(handler: &mut AIToolHandler, context: &HostManager) {
     handler.registerBuiltinTool(BuiltinToolName::PackageProxy, crate::ToolExecutionManager::RegisteredToolExecutor::Alias,
         ToolRegistrationVisibility::INTERNAL);
     handler.registerBuiltinTool(
+        BuiltinToolName::EdgeListAudioInputs,
+        crate::ToolExecutionManager::RegisteredToolExecutor::Asynchronous(Box::new(
+            crate::tools::EdgeAudioTool::EdgeAudioToolExecutor {
+                operation: crate::tools::EdgeAudioTool::EdgeAudioOperation::List, runtime: handler.runtimeSupport() })),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+    handler.registerBuiltinTool(
+        BuiltinToolName::EdgeOpenAudioInput,
+        crate::ToolExecutionManager::RegisteredToolExecutor::Asynchronous(Box::new(
+            crate::tools::EdgeAudioTool::EdgeAudioToolExecutor {
+                operation: crate::tools::EdgeAudioTool::EdgeAudioOperation::Open, runtime: handler.runtimeSupport() })),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+    handler.registerBuiltinTool(
+        BuiltinToolName::EdgeReadAudioInput,
+        crate::ToolExecutionManager::RegisteredToolExecutor::Asynchronous(Box::new(
+            crate::tools::EdgeAudioTool::EdgeAudioToolExecutor {
+                operation: crate::tools::EdgeAudioTool::EdgeAudioOperation::Read, runtime: handler.runtimeSupport() })),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+    handler.registerBuiltinTool(
+        BuiltinToolName::EdgeCloseAudioInput,
+        crate::ToolExecutionManager::RegisteredToolExecutor::Asynchronous(Box::new(
+            crate::tools::EdgeAudioTool::EdgeAudioToolExecutor {
+                operation: crate::tools::EdgeAudioTool::EdgeAudioOperation::Close, runtime: handler.runtimeSupport() })),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+
+    handler.registerBuiltinTool(
         BuiltinToolName::EdgeExecute,
         crate::ToolExecutionManager::RegisteredToolExecutor::Asynchronous(Box::new(
             crate::tools::EdgePortTool::EdgePortToolExecutor { io: false, runtime: handler.runtimeSupport() })),

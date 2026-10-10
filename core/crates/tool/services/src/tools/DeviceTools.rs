@@ -17,6 +17,12 @@ pub type DeviceToolPreflight = JsExecutionCompletion<Result<(), String>>;
 
 /// Outbound capability installed by the owning Core assembly.
 pub trait DeviceToolRuntime: Send + Sync {
+    /// Core-owned audio ingress uses the same authenticated device router.
+    fn execute_audio(&self, _node_id: String, _request: operit_link::CoreCallRequest)
+        -> JsExecutionCompletion<Result<serde_json::Value, String>> {
+        Box::pin(async { Err("Device audio routing is not initialized".into()) })
+    }
+
     fn dispatch(&self, request: JsToolCallRequest) -> JsExecutionCompletion<JsToolCallResult> {
         self.dispatch_with_preflight(request, None)
     }
