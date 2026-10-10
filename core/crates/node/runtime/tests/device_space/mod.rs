@@ -67,6 +67,12 @@ mod policy_contracts {
         "/tests/device_space/policy_contracts.rs"
     ));
 }
+mod revocation_notice {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/device_space/revocation_notice.rs"
+    ));
+}
 mod approving_exit {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),

@@ -191,8 +191,11 @@ impl RuntimePeerService for ApprovalMeshPeer {
         Ok(())
     }
     /// Exercises removePairedPeer through the device-space contract fixture.
-    async fn removePairedPeer(&self, _: &str) -> Result<(), CoreLinkError> {
-        unreachable!()
+    async fn removePairedPeer(&self, node: &str) -> Result<(), CoreLinkError> {
+        // Unpairing drops both the pairing record and the live link.
+        self.endpoints.lock().unwrap().remove(node);
+        self.active.lock().unwrap().remove(node);
+        Ok(())
     }
 }
 
