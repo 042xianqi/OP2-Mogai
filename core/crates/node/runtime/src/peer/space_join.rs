@@ -5,6 +5,7 @@ use super::*;
 use crate::PeerStateStore::PeerStateStore;
 use operit_store::CoreSpaceStore::CoreSpaceDeviceConnection;
 use operit_store::NetworkControlStore::{NetworkControlCommand, NetworkControlCommandRecord};
+use operit_store::PreferencesDataStore::{CoreNodeStateStore, stringPreferencesKey};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Mutex;
 
@@ -15,6 +16,9 @@ pub(crate) const INBOX: &str = "runtime/link_access/space_merge_review_inbox.pre
 pub(crate) const RESULTS: &str = "runtime/link_access/space_merge_review_results.preferences.json";
 const LIFETIME_MS: i64 = 15 * 60 * 1000;
 const OFFLINE_GRACE_MS: i64 = 30_000;
+/// One-shot marker: this device retired because the Space removed it and the
+/// asynchronous sweep still has to drop every pairing credential.
+const RETIRED_REMOVAL_PATH: &str = "runtime/link_access/space_retired_removal.preferences.json";
 static MUTATION: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -241,6 +245,69 @@ pub(crate) fn reconcile(service: &dyn NodeSpaceContext, record: &mut Record) -> 
     expire(record, now, &current.spaceId);
     recoverCommittedApproval(service, record, &current)?;
     assign(service, record, now)
+}
+
+/// Reports whether the replayed control log already carries a removal command
+/// for one device. The log is the authority: every replica that can read it
+/// decides this identically, which is what makes self-retirement verifiable on
+/// the receiving side instead of trusting a peer's claim.
+pub(crate) fn memberRemovalCommitted(service: &dyn NodeSpaceContext, nodeId: &str) -> Result<bool, String> {
+    let spaceId = service.spaceStore().space()?.spaceId;
+    Ok(service.networkControlStore().currentSpaceOperations()?.into_iter().any(|operation| {
+        NetworkControlCommandRecord::deserialize(&operation.payload).is_ok_and(|command| {
+            command.spaceId == spaceId
+                && matches!(&command.command, NetworkControlCommand::RemoveMember { nodeId: removed } if removed == nodeId)
+        })
+    }))
+}
+
+/// Retires this device once the shared policy removed it. The check is
+/// replay-based, never a peer's word: a removal may arrive as a direct notice,
+/// a control exchange or a snapshot, and each one only takes effect after the
+/// local log proves it. Returns the Space id it left.
+pub(crate) fn retireRemovedLocalDevice(service: &dyn NodeSpaceContext) -> Result<Option<String>, String> {
+    let local = service.localNodeId();
+    let state = service.networkControlStore().currentState()?;
+    if state.memberNodeIds.contains(&local) { return Ok(None); }
+    if !memberRemovalCommitted(service, &local)? { return Ok(None); }
+    let previous = service.spaceStore().space()?.spaceId;
+    leave(service)?;
+    // Mutual forgetting needs the peer service, which this replay-side path
+    // cannot await. Mark the retirement so the asynchronous sweep drops every
+    // pairing exactly once, wherever the removal reached this device first.
+    markRetiredLocalRemoval(service, &previous)?;
+    Ok(Some(previous))
+}
+
+/// Records one retired removal so the asynchronous sweep finishes forgetting.
+fn markRetiredLocalRemoval(service: &dyn NodeSpaceContext, previousSpaceId: &str) -> Result<(), String> {
+    let store = CoreNodeStateStore::newWithStorage(service.storage(), RETIRED_REMOVAL_PATH);
+    let mut preferences = store.data().map_err(|error| error.to_string())?;
+    preferences.set(
+        &stringPreferencesKey("previousSpaceId"),
+        previousSpaceId.to_string(),
+    );
+    store.replaceRecoverably(preferences).map_err(|error| error.to_string())
+}
+
+/// Consumes the retired-removal marker, returning the Space id it recorded.
+pub(crate) fn takeRetiredLocalRemoval(service: &dyn NodeSpaceContext) -> Result<Option<String>, String> {
+    let store = CoreNodeStateStore::newWithStorage(service.storage(), RETIRED_REMOVAL_PATH);
+    let mut preferences = store.data().map_err(|error| error.to_string())?;
+    let previous = preferences
+        .get(&stringPreferencesKey("previousSpaceId"))
+        .map(|previous| previous.to_string());
+    let Some(previous) = previous else {
+        return Ok(None);
+    };
+    preferences.remove(&stringPreferencesKey("previousSpaceId"));
+    store.replaceRecoverably(preferences).map_err(|error| error.to_string())?;
+    Ok(Some(previous))
+}
+
+/// Keeps the retired-removal marker after a partial sweep.
+pub(crate) fn restoreRetiredLocalRemoval(service: &dyn NodeSpaceContext, previousSpaceId: &str) -> Result<(), String> {
+    markRetiredLocalRemoval(service, previousSpaceId)
 }
 
 /// Local ownership recovery is independent of direct pairing. Serialize it

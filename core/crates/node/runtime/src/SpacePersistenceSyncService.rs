@@ -251,6 +251,19 @@ impl SpacePersistenceSyncService {
     /// Exchanges Space projections through direct pairings, then synchronizes every reachable member.
     pub async fn synchronizeOnce(&self) -> Result<(), String> {
         self.state.spaceStore.initialize()?;
+        // A shared removal takes effect before any exchange: when the replayed
+        // policy no longer admits this device it retires itself here, and a
+        // duplicate delivery of the same command is a no-op.
+        {
+            let service = crate::RuntimeRemoteLinkService::RuntimeRemoteLinkService::newWithRouter(
+                (*self.state.localRuntime).clone(), self.state.nodeRouter.clone());
+            if let Err(error) = service.retireRemovedDevice().await {
+                operit_util::AppLogger::AppLogger::w(
+                    "SpacePersistenceSyncService",
+                    &format!("Removed-device retirement check failed: {error}"),
+                );
+            }
+        }
         self.workspaceFiles().scan()?;
         let services = self.state.nodeRouter.nodeServices()?;
         let activePeers = services.peers().activePeerNodeIds().map_err(|error| error.to_string())?;
@@ -341,9 +354,11 @@ impl SpacePersistenceSyncService {
         let request = serviceCallRequest(&self.state.nodeRouter,
             crate::NodeSpaceService::NODE_SPACE_CONTROL_TARGET, "exchange",
             serde_json::to_value(control.currentSpaceOperations()?).map_err(|error| error.to_string())?)?;
+        let membersBefore = control.currentState().map_err(|error| error.to_string())?.memberNodeIds;
         let response = self.state.nodeRouter.callNode(targetNodeId.clone(), request).await;
         let remote = crate::NodeSpaceService::decodeControlExchange(response.result)?;
         control.projectPeerControlOperations(&targetNodeId, &remote)?;
+        self.forgetDepartedMembers(&membersBefore).await;
         // Admission is not a storage grant. No business RPC, blob transfer or
         // bootstrap reset may run unless both endpoints currently have it.
         if !self.storageReplicationAllowed(&targetNodeId)? { return Ok(()); }
@@ -363,6 +378,68 @@ impl SpacePersistenceSyncService {
     fn replicaMarker(&self) -> CoreNodeStateStore {
         CoreNodeStateStore::newWithStorage(self.state.localRuntime.runtimeStorageHost(),
             "runtime/link_access/storage_replica.preferences.json")
+    }
+
+    /// Reads the replayed membership policy as one comparable snapshot.
+    fn memberNodeIdsSnapshot(&self) -> Result<BTreeSet<String>, String> {
+        Ok(NetworkControlStore::new(self.state.localRuntime.runtimeStorageHost())
+            .map_err(|error| error.to_string())?
+            .currentState()
+            .map_err(|error| error.to_string())?
+            .memberNodeIds)
+    }
+
+    /// Forgets direct pairings with devices one applied projection removed.
+    /// Only devices the replayed log shows removed lose their pairing, and
+    /// only at the transition this call observes: a device that is merely
+    /// awaiting a fresh admission keeps its pairing.
+    async fn forgetDepartedMembers(&self, membersBefore: &BTreeSet<String>) {
+        let departed = match self.memberNodeIdsSnapshot() {
+            Ok(after) => membersBefore.difference(&after).cloned().collect::<Vec<_>>(),
+            Err(error) => {
+                operit_util::AppLogger::AppLogger::w(
+                    "SpacePersistenceSyncService",
+                    &format!("Removed-member pairing sweep skipped: {error}"),
+                );
+                return;
+            }
+        };
+        if departed.is_empty() { return; }
+        let service = crate::RuntimeRemoteLinkService::RuntimeRemoteLinkService::newWithRouter(
+            (*self.state.localRuntime).clone(), self.state.nodeRouter.clone());
+        let paired = match service.pairedDevicesSnapshot() {
+            Ok(paired) => paired.into_keys().collect::<BTreeSet<_>>(),
+            Err(error) => {
+                operit_util::AppLogger::AppLogger::w(
+                    "SpacePersistenceSyncService",
+                    &format!("Removed-member pairing sweep skipped: {error}"),
+                );
+                return;
+            }
+        };
+        for deviceId in departed {
+            if !paired.contains(&deviceId) { continue; }
+            if !crate::NodeSpaceService::space_join::memberRemovalCommitted(&service, &deviceId)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let peers = match self.state.nodeRouter.nodeServices() {
+                Ok(services) => services.peers().clone(),
+                Err(_) => continue,
+            };
+            if let Err(error) = peers.removePairedPeer(&deviceId).await {
+                operit_util::AppLogger::AppLogger::w(
+                    "SpacePersistenceSyncService",
+                    &format!("Removed-member pairing sweep failed device={deviceId}: {error}"),
+                );
+            } else {
+                operit_util::AppLogger::AppLogger::i(
+                    "SpacePersistenceSyncService",
+                    &format!("Removed member forgotten device={deviceId}"),
+                );
+            }
+        }
     }
 
     pub(crate) fn replicaBootstrapRequired(&self, spaceId: &str) -> Result<bool, String> {
@@ -561,9 +638,11 @@ impl SpacePersistenceSyncService {
             &self.state.nodeRouter, peerNodeId,
             crate::RuntimeRemoteLinkService::NODE_SPACE_TARGET, "snapshot", Value::Null,
         ).await?;
+        let membersBefore = self.memberNodeIdsSnapshot()?;
         let service = crate::RuntimeRemoteLinkService::RuntimeRemoteLinkService::newWithRouter(
             (*self.state.localRuntime).clone(), self.state.nodeRouter.clone());
         service.observePeerSpaceSnapshot(peerNodeId, remote)?;
+        self.forgetDepartedMembers(&membersBefore).await;
         let local = service.peerSpaceSnapshot()?;
         let remoteSpace: CoreSpace = callRemoteService(
             &self.state.nodeRouter, peerNodeId,

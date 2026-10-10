@@ -1010,6 +1010,44 @@ impl CoreNodeRouter {
         self.callSpaceWithOrigin(request, self.localNodeId.clone()).await
     }
 
+    /// Sends one best-effort same-Space envelope along an explicitly chosen first hop.
+    ///
+    /// Removal notices are the only caller. After one removal the target may
+    /// already be outside this device's membership view, and the hop may have
+    /// lost its transit licence while it still holds the links this device no
+    /// longer resolves. Every receiving node keeps its normal per-hop checks:
+    /// the envelope still carries this device as the origin, and each hop
+    /// validates the previous device against its own Space policy.
+    #[allow(non_snake_case)]
+    pub(crate) async fn sendSpaceEnvelopeAlongHop(
+        &self,
+        firstHop: &str,
+        targetNodeId: &str,
+        request: CoreCallRequest,
+    ) -> CoreCallResponse {
+        let requestId = request.requestId.clone();
+        let space = match self.spaceStore.initialize() {
+            Ok(space) => space,
+            Err(error) => return CoreCallResponse::err(requestId, CoreLinkError::internal(error)),
+        };
+        let ttl = match routeTtl(&space) {
+            Ok(ttl) => ttl,
+            Err(error) => return CoreCallResponse::err(requestId, error),
+        };
+        let route = RoutedCoreRequest {
+            spaceId: space.spaceId,
+            originNodeId: self.localNodeId.clone(),
+            targetNodeId: targetNodeId.to_string(),
+            ttl,
+            routeKind: RoutedCoreRequestKind::Target,
+            payload: request,
+        };
+        match self.nodeServices() {
+            Ok(services) => services.peers().call(firstHop, route).await,
+            Err(error) => CoreCallResponse::err(requestId, CoreLinkError::internal(error)),
+        }
+    }
+
     /// Allocate bindings only for explicit creation commands, after caller authorization.
     async fn prepareCreationBinding(&self, route: &crate::GeneratedSpaceRoute, key: &str,
         origin: &str) -> Result<(), CoreLinkError> {
