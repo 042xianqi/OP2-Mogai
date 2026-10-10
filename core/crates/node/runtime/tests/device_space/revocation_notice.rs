@@ -146,12 +146,29 @@ async fn bridge_removal_reaches_the_far_side_through_the_captured_route() {
         .await
         .unwrap();
 
-    // The far side applied the removal and only the bridge left its policy.
+    // The far side applied the removal: its policy no longer admits the
+    // bridge, and its own member table drops the bridge with it.
     let leafState = routers[2].networkControlStore.currentState().unwrap();
     assert!(!leafState.memberNodeIds.contains(&bridge));
     assert!(leafState.memberNodeIds.contains(&leaf));
+    assert!(!routers[2].spaceStore.contains(bridge.clone()).unwrap());
+    assert!(!routers[2]
+        .spaceStore
+        .space()
+        .unwrap()
+        .members
+        .contains(&bridge));
     // The bridge itself retired against its own replayed log.
-    assert_eq!(routers[1].spaceStore.space().unwrap().members, vec![bridge]);
+    assert_eq!(routers[1].spaceStore.space().unwrap().members, vec![bridge.clone()]);
+
+    // The far side's deferred sweep finishes the mutual forgetting.
+    let leafSync = crate::SpacePersistenceSyncService::SpacePersistenceSyncService::new(
+        routers[2].localCore.clone(),
+        routers[2].clone(),
+        routers[2].spaceStore.clone(),
+    );
+    leafSync.forgetPendingRemovedDevices().await.unwrap();
+    assert!(!routers[2].spaceStore.contains(bridge).unwrap());
 }
 
 /// Verifies a member forgets a removed device at the transition it observes,
@@ -183,8 +200,9 @@ async fn members_forget_a_removed_device_after_applying_the_removal() {
         .iter()
         .any(|peer| peer.nodeId == removed));
 
-    // One control exchange with the remover applies the removal and the
-    // observer forgets the device, while its other pairings stay.
+    // One control exchange with the remover applies the removal: the policy
+    // drops the device, the observer's member table shrinks with it, and the
+    // deferred sweep drops the pairing while its other pairings stay.
     let sync = crate::SpacePersistenceSyncService::SpacePersistenceSyncService::new(
         routers[2].localCore.clone(),
         routers[2].clone(),
@@ -199,6 +217,14 @@ async fn members_forget_a_removed_device_after_applying_the_removal() {
         .unwrap()
         .memberNodeIds
         .contains(&removed));
+    assert!(!routers[2].spaceStore.contains(removed.clone()).unwrap());
+    assert!(!routers[2]
+        .spaceStore
+        .space()
+        .unwrap()
+        .members
+        .contains(&removed));
+    sync.forgetPendingRemovedDevices().await.unwrap();
     assert!(!peers[2]
         .pairedPeers()
         .unwrap()

@@ -285,10 +285,11 @@ pub fn acceptSpaceControlCall(service: &dyn NodeSpaceContext, origin: &str, requ
     if request.methodName != "exchange" { return Err("Unknown Space control method".into()); }
     let operations: Vec<SyncOperation> = fromCoreValue(request.args).map_err(|error| error.to_string())?;
     service.networkControlStore().projectPeerControlOperations(origin, &operations)?;
-    // A removal that targets this device retires it as soon as the local log
-    // proves it, whatever path delivered the command. Duplicate deliveries are
-    // no-ops because the retired Space no longer contains a removal for it.
+    // Removals take effect locally whatever path delivered them: this device
+    // retires itself when the command targets it, and shrinks its own member
+    // projection for every other removed device.
     space_join::retireRemovedLocalDevice(service)?;
+    space_join::applyRemovedMemberLocalEffects(service, &operations)?;
     toCoreValue(service.networkControlStore().currentSpaceOperations()?).map_err(|error| error.to_string())
 }
 

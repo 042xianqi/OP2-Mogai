@@ -5,7 +5,7 @@ use super::*;
 use crate::PeerStateStore::PeerStateStore;
 use operit_store::CoreSpaceStore::CoreSpaceDeviceConnection;
 use operit_store::NetworkControlStore::{NetworkControlCommand, NetworkControlCommandRecord};
-use operit_store::PreferencesDataStore::{CoreNodeStateStore, stringPreferencesKey};
+use operit_store::PreferencesDataStore::{CoreNodeStateStore, Preferences, stringPreferencesKey};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Mutex;
 
@@ -19,6 +19,9 @@ const OFFLINE_GRACE_MS: i64 = 30_000;
 /// One-shot marker: this device retired because the Space removed it and the
 /// asynchronous sweep still has to drop every pairing credential.
 const RETIRED_REMOVAL_PATH: &str = "runtime/link_access/space_retired_removal.preferences.json";
+/// One-shot list: devices whose removal this replica applied but whose pairing
+/// still awaits the asynchronous sweep.
+const PENDING_FORGET_PATH: &str = "runtime/link_access/space_pending_forget.preferences.json";
 static MUTATION: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -259,6 +262,66 @@ pub(crate) fn memberRemovalCommitted(service: &dyn NodeSpaceContext, nodeId: &st
                 && matches!(&command.command, NetworkControlCommand::RemoveMember { nodeId: removed } if removed == nodeId)
         })
     }))
+}
+
+/// Applies the local consequences of removals that just reached this device's
+/// control log: every member shrinks its own membership projection for the
+/// removed device, exactly like the remover does, so the member table and the
+/// device list converge from the shared log instead of a peer's rewrite. The
+/// pairing drop needs the peer service and is deferred to the asynchronous
+/// sweep through the pending-forget marker.
+pub(crate) fn applyRemovedMemberLocalEffects(service: &dyn NodeSpaceContext, operations: &[SyncOperation]) -> Result<(), String> {
+    let local = service.localNodeId();
+    let spaceId = service.spaceStore().space()?.spaceId;
+    let mut removed = Vec::new();
+    for operation in operations {
+        let Ok(record) = NetworkControlCommandRecord::deserialize(&operation.payload) else { continue };
+        if record.spaceId != spaceId { continue; }
+        if let NetworkControlCommand::RemoveMember { nodeId } = &record.command {
+            // The local device's own removal retires the whole Space separately.
+            if nodeId != &local && !removed.contains(nodeId) { removed.push(nodeId.clone()); }
+        }
+    }
+    if removed.is_empty() { return Ok(()); }
+    for nodeId in &removed {
+        // No-op when the device is absent or was admitted again since.
+        service.spaceStore().removeRemoteMember(nodeId.clone())?;
+    }
+    markPendingForgotten(service, &removed)
+}
+
+/// Records devices whose removal still awaits the asynchronous pairing sweep.
+fn markPendingForgotten(service: &dyn NodeSpaceContext, nodeIds: &[String]) -> Result<(), String> {
+    let store = CoreNodeStateStore::newWithStorage(service.storage(), PENDING_FORGET_PATH);
+    let mut preferences = store.data().map_err(|error| error.to_string())?;
+    let mut pending = readPendingForgotten(&preferences);
+    for nodeId in nodeIds {
+        if !pending.contains(nodeId) { pending.push(nodeId.clone()); }
+    }
+    preferences.set(
+        &stringPreferencesKey("devices"),
+        serde_json::to_string(&pending).map_err(|error| error.to_string())?,
+    );
+    store.replaceRecoverably(preferences).map_err(|error| error.to_string())
+}
+
+/// Consumes every device whose removal still awaits the pairing sweep.
+pub(crate) fn takePendingForgotten(service: &dyn NodeSpaceContext) -> Result<Vec<String>, String> {
+    let store = CoreNodeStateStore::newWithStorage(service.storage(), PENDING_FORGET_PATH);
+    let mut preferences = store.data().map_err(|error| error.to_string())?;
+    let pending = readPendingForgotten(&preferences);
+    if pending.is_empty() { return Ok(Vec::new()); }
+    preferences.remove(&stringPreferencesKey("devices"));
+    store.replaceRecoverably(preferences).map_err(|error| error.to_string())?;
+    Ok(pending)
+}
+
+/// Reads the pending-forget list from one preferences snapshot.
+fn readPendingForgotten(preferences: &Preferences) -> Vec<String> {
+    preferences
+        .get(&stringPreferencesKey("devices"))
+        .and_then(|encoded| serde_json::from_str::<Vec<String>>(&encoded).ok())
+        .unwrap_or_default()
 }
 
 /// Retires this device once the shared policy removed it. The check is
