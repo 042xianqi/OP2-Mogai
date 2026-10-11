@@ -497,26 +497,40 @@ impl RuntimeRemoteLinkService {
     /// mutual forgetting. Duplicate deliveries are no-ops.
     pub(crate) async fn retireRemovedDevice(&self) -> Result<bool, String> {
         let retired = space_join::retireRemovedLocalDevice(self)?.is_some();
-        let Some(previousSpaceId) = space_join::takeRetiredLocalRemoval(self)? else {
+        let Some(pending) = space_join::takeRetiredLocalRemoval(self)? else {
             return Ok(retired);
         };
         operit_util::AppLogger::AppLogger::i(
             "RuntimeRemoteLinkService",
-            &format!("Device retired after Space removal previousSpaceId={previousSpaceId}"),
+            &format!(
+                "Device retired after Space removal previousSpaceId={}",
+                pending.previousSpaceId
+            ),
         );
-        let mut failed = false;
-        for peerNodeId in self.pairedDevicesSnapshot()?.into_keys().collect::<Vec<_>>() {
+        let paired = self
+            .pairedDevicesSnapshot()?
+            .into_keys()
+            .collect::<BTreeSet<_>>();
+        let mut remaining = Vec::new();
+        for peerNodeId in pending.devices {
+            if !paired.contains(&peerNodeId) { continue; }
             if let Err(error) = self.nodeServices()?.peers().removePairedPeer(&peerNodeId).await {
-                failed = true;
+                remaining.push(peerNodeId.clone());
                 operit_util::AppLogger::AppLogger::w(
                     "RuntimeRemoteLinkService",
                     &format!("Retired removal pairing drop failed device={peerNodeId}: {error}"),
                 );
             }
         }
-        if failed {
-            // Keep the marker until every pairing is gone.
-            space_join::restoreRetiredLocalRemoval(self, &previousSpaceId)?;
+        if !remaining.is_empty() {
+            // Keep only what still has to be dropped for the next sweep.
+            space_join::restoreRetiredLocalRemoval(
+                self,
+                &space_join::RetiredLocalRemoval {
+                    previousSpaceId: pending.previousSpaceId,
+                    devices: remaining,
+                },
+            )?;
         }
         Ok(retired)
     }

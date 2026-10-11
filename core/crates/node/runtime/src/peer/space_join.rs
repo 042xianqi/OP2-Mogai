@@ -334,43 +334,69 @@ pub(crate) fn retireRemovedLocalDevice(service: &dyn NodeSpaceContext) -> Result
     if state.memberNodeIds.contains(&local) { return Ok(None); }
     if !memberRemovalCommitted(service, &local)? { return Ok(None); }
     let previous = service.spaceStore().space()?.spaceId;
+    // Pairings that existed at retirement are the ones the removal forgets.
+    // Capturing them here keeps a later pairing for re-admission safe even if
+    // the sweep runs after the user already paired the device again.
+    let devices = service
+        .peers()?
+        .pairedPeers()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|peer| peer.nodeId)
+        .collect::<Vec<_>>();
     leave(service)?;
     // Mutual forgetting needs the peer service, which this replay-side path
-    // cannot await. Mark the retirement so the asynchronous sweep drops every
-    // pairing exactly once, wherever the removal reached this device first.
-    markRetiredLocalRemoval(service, &previous)?;
+    // cannot await. Mark the retirement so the asynchronous sweep drops those
+    // pairings exactly once, wherever the removal reached this device first.
+    markRetiredLocalRemoval(service, &previous, &devices)?;
     Ok(Some(previous))
 }
 
 /// Records one retired removal so the asynchronous sweep finishes forgetting.
-fn markRetiredLocalRemoval(service: &dyn NodeSpaceContext, previousSpaceId: &str) -> Result<(), String> {
+fn markRetiredLocalRemoval(service: &dyn NodeSpaceContext, previousSpaceId: &str, devices: &[String]) -> Result<(), String> {
     let store = CoreNodeStateStore::newWithStorage(service.storage(), RETIRED_REMOVAL_PATH);
     let mut preferences = store.data().map_err(|error| error.to_string())?;
     preferences.set(
         &stringPreferencesKey("previousSpaceId"),
         previousSpaceId.to_string(),
     );
+    preferences.set(
+        &stringPreferencesKey("devices"),
+        serde_json::to_string(devices).map_err(|error| error.to_string())?,
+    );
     store.replaceRecoverably(preferences).map_err(|error| error.to_string())
 }
 
-/// Consumes the retired-removal marker, returning the Space id it recorded.
-pub(crate) fn takeRetiredLocalRemoval(service: &dyn NodeSpaceContext) -> Result<Option<String>, String> {
+/// One retired removal: the Space this device left and the pairings it held
+/// when it left.
+pub(crate) struct RetiredLocalRemoval {
+    pub previousSpaceId: String,
+    pub devices: Vec<String>,
+}
+
+/// Consumes the retired-removal marker.
+pub(crate) fn takeRetiredLocalRemoval(service: &dyn NodeSpaceContext) -> Result<Option<RetiredLocalRemoval>, String> {
     let store = CoreNodeStateStore::newWithStorage(service.storage(), RETIRED_REMOVAL_PATH);
     let mut preferences = store.data().map_err(|error| error.to_string())?;
     let previous = preferences
         .get(&stringPreferencesKey("previousSpaceId"))
         .map(|previous| previous.to_string());
-    let Some(previous) = previous else {
+    let Some(previousSpaceId) = previous else {
         return Ok(None);
     };
+    let devices = preferences
+        .get(&stringPreferencesKey("devices"))
+        .and_then(|encoded| serde_json::from_str::<Vec<String>>(&encoded).ok())
+        .unwrap_or_default();
     preferences.remove(&stringPreferencesKey("previousSpaceId"));
+    preferences.remove(&stringPreferencesKey("devices"));
     store.replaceRecoverably(preferences).map_err(|error| error.to_string())?;
-    Ok(Some(previous))
+    Ok(Some(RetiredLocalRemoval { previousSpaceId, devices }))
 }
 
 /// Keeps the retired-removal marker after a partial sweep.
-pub(crate) fn restoreRetiredLocalRemoval(service: &dyn NodeSpaceContext, previousSpaceId: &str) -> Result<(), String> {
-    markRetiredLocalRemoval(service, previousSpaceId)
+pub(crate) fn restoreRetiredLocalRemoval(service: &dyn NodeSpaceContext, retired: &RetiredLocalRemoval) -> Result<(), String> {
+    markRetiredLocalRemoval(service, &retired.previousSpaceId, &retired.devices)
 }
 
 /// Local ownership recovery is independent of direct pairing. Serialize it
@@ -415,6 +441,8 @@ pub(crate) fn leave(service: &dyn NodeSpaceContext) -> Result<CoreSpace, String>
 }
 
 pub(crate) async fn request(service: &dyn NodeSpaceContext, deviceId: String) -> Result<SpaceJoinRequest, String> {
+    let mut retiredStaleSplit = false;
+    loop {
     paired(service, &deviceId, false)?;
     if let Some(old) = outgoing(service)?.into_iter().find(|r| r.targetDeviceId == deviceId && active(&r.status)) {
         return refresh(service, old.requestId).await;
@@ -436,6 +464,20 @@ pub(crate) async fn request(service: &dyn NodeSpaceContext, deviceId: String) ->
         let converged: PeerSpaceSnapshot = callPeerSpace(service, &deviceId, "snapshot", CoreValue::Null).await?;
         if converged.space.members.contains(&localId) {
             return Err("This device is already a member of the target Space".into());
+        }
+        // The converged truth excludes this device: its records still named
+        // the shared Space while the shared log does not admit it. The
+        // reconcile already retires that stale membership; apply again as the
+        // independent Space this device now is, so a removed device submits
+        // its request on this attempt instead of retrying by hand. The
+        // submission that follows carries the retired single-device source,
+        // never the divergent projection.
+        if !retiredStaleSplit {
+            retiredStaleSplit = true;
+            retireRemovedLocalDevice(service)?;
+            // The pairing this application arrived on is intentional and stays.
+            let _ = takeRetiredLocalRemoval(service)?;
+            continue;
         }
         return Err(format!(
             "Membership split with {deviceId} reconciled; the shared Space control log admits {} \
@@ -460,7 +502,8 @@ pub(crate) async fn request(service: &dyn NodeSpaceContext, deviceId: String) ->
     };
     saveRecord(service, OUTBOUND, &record.request.requestId, &record)?;
     // refresh also handles a result already approved after a lost initial reply.
-    refresh(service, record.request.requestId).await
+    return refresh(service, record.request.requestId).await;
+    }
 }
 async fn sendSubmission(service: &dyn NodeSpaceContext, record: &Record) -> Result<Record, String> {
     callPeerSpace(service, &record.request.targetDeviceId, "requestJoin", toCoreValue(Submission {

@@ -310,3 +310,110 @@ async fn control_exchange_rejects_relayed_foreign_authority_commands() {
         .expect_err("a member must not introduce another issuer's authority command");
     assert!(error.contains("cannot introduce another issuer"), "{error}");
 }
+
+/// Verifies a removed device can pair again and submit a fresh join request:
+/// its own retirement leaves it as an independent Space, which is exactly the
+/// state the join flow expects from an applicant.
+#[tokio::test]
+async fn removed_device_rejoins_after_pairing_again() {
+    let _guard = routeTestGlobalLock().lock().await;
+    installTestRuntimeScheduler();
+    let (routers, access, peers) = revocationMesh(
+        "revoke-rejoin",
+        4,
+        &[(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)],
+    );
+    let target = 0;
+    let removed = routers[3].localNodeId();
+
+    access[target]
+        .removeDeviceSpaceMember(removed.clone())
+        .await
+        .unwrap();
+
+    // The removed device retired into its own Space and finished forgetting.
+    assert_eq!(
+        routers[3].spaceStore.space().unwrap().members,
+        vec![removed.clone()]
+    );
+    let removedService = RuntimeRemoteLinkService::newWithRouter(
+        (*routers[3].localCore).clone(),
+        routers[3].clone(),
+    );
+    removedService.retireRemovedDevice().await.unwrap();
+    assert!(peers[3].pairedPeers().unwrap().is_empty());
+
+    // Pairing again (the fixture models the handshake by linking) and applying.
+    peers[3].link(&routers[target]);
+    peers[target].link(&routers[3]);
+    let request = access[3]
+        .requestDeviceSpaceJoin(routers[target].localNodeId())
+        .await
+        .expect("a re-paired removed device must be able to submit a join request");
+    assert_eq!(request.targetDeviceId, routers[target].localNodeId());
+    assert!(access[target]
+        .incomingDeviceSpaceJoins()
+        .await
+        .unwrap()
+        .iter()
+        .any(|pending| pending.requestId == request.requestId));
+}
+
+/// Verifies a device that never learned about its removal — it was offline
+/// when it happened and no sync ran since — heals on its own when it applies
+/// again: the join flow reconciles the split, proves the removal from the
+/// merged log, retires it into its own Space and submits the request instead
+/// of failing with a bare "membership split" error.
+#[tokio::test]
+async fn stale_removed_device_heals_into_its_own_space_when_reapplying() {
+    let _guard = routeTestGlobalLock().lock().await;
+    installTestRuntimeScheduler();
+    let (routers, access, peers) = revocationMesh(
+        "revoke-stale",
+        4,
+        &[(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)],
+    );
+    let target = 0;
+    let removed = routers[3].localNodeId();
+
+    // The device is offline for the removal on every link: it neither
+    // receives the notice (not even through a relay) nor runs a
+    // synchronization round, so it keeps its stale member view.
+    for index in 0..4 {
+        peers[index].disconnectPeer(&removed).await.unwrap();
+    }
+    access[target]
+        .removeDeviceSpaceMember(removed.clone())
+        .await
+        .unwrap();
+    assert!(routers[3]
+        .networkControlStore
+        .currentState()
+        .unwrap()
+        .memberNodeIds
+        .contains(&removed));
+    assert_eq!(
+        routers[3].spaceStore.space().unwrap().spaceId,
+        routers[target].spaceStore.space().unwrap().spaceId
+    );
+
+    // Pairing again (the fixture models the handshake by linking) and applying.
+    peers[target].link(&routers[3]);
+    peers[3].link(&routers[target]);
+    let request = access[3]
+        .requestDeviceSpaceJoin(routers[target].localNodeId())
+        .await
+        .expect("a stale removed device must heal and submit its request");
+    assert_eq!(request.targetDeviceId, routers[target].localNodeId());
+    assert!(access[target]
+        .incomingDeviceSpaceJoins()
+        .await
+        .unwrap()
+        .iter()
+        .any(|pending| pending.requestId == request.requestId));
+    // The applicant ended up as its own Space, ready for the admission.
+    assert_eq!(
+        routers[3].spaceStore.space().unwrap().members,
+        vec![removed]
+    );
+}
