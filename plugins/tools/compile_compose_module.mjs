@@ -3,11 +3,13 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const parserInput = new URL(composeManifest.parserSource, composeRoot);
+const artifactInput = new URL(composeManifest.artifact, composeRoot);
 const compilerInput = new URL(composeManifest.compiler, composeRoot);
 
 /** Build inputs are shared with the runtime, never a second implementation of DSL lowering. */
 export const composeCompilerInputs = [
   parserInput,
+  artifactInput,
   compilerInput,
   new URL(import.meta.url),
   new URL('sources.json', composeRoot),
@@ -24,6 +26,7 @@ export function compileComposeModule(source, identity) {
     context.exports = context.module.exports;
     vm.runInContext(readFileSync(parserInput, 'utf8'), context);
     context.__operitAcorn = context.module.exports;
+    vm.runInContext(readFileSync(artifactInput, 'utf8'), context);
     vm.runInContext(readFileSync(compilerInput, 'utf8'), context);
     compiler = context.OperitComposeCompiler;
   }

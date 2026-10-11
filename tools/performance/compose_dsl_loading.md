@@ -90,46 +90,18 @@ retained ingest p50 为 0.326/0.484/2.239 ms，测试 build/layout/paint p50 为
 3. **真实打开链路**：在生产 Host 读包、引擎准备、首次提交、Flutter 首帧、业务 onLoad 完成
    之间传递同一个 trace ID；只有这一层才能回答“用户打开页面到底等多久”。
 
-## 第二轮：按需初始化源码解析器（2026-10-11）
+## 当前初始化链路（2026-10-11）
 
-第一轮后继续拆分 native 初始化：Acorn 单独 evaluate p50 约 31.2 ms，
-compiler + generation 约 1.85 ms，完整 DSL bootstrap 约 43.0 ms。
-因此没有拆散所有 SDK 或加引擎池，只调整源码解析器的初始化边界：
+运行时仅从统一 bootstrap 入口初始化。bootstrap 源码组装一次，可信编译结果由 host 共享；每个页面 runtime 的 heap、globals、绑定及状态仍独立。
 
-- `compose/Parser.js` 是轻量 facade。预编译页面不初始化 Acorn；
-  旧源码第一次 `parse()` 时才用 `new Function` 初始化，每引擎一次。
-- Acorn 在局部 `exports/module` 中初始化，成功后才发布 parser 引用。
-  超时中断或异常留下的局部对象被丢弃，下次可以重新初始化；成功后释放源码引用。
-- 243 KB 的 parser 文本由 SDK `build.rs` 转为 JS 字符串常量，
-  避免在每次页面引擎启动时重复 JSON 序列化。仍需装载该字符串，并非零内存成本。
-- 原编译器（包含 generation）仍 eager 加载，它的实测成本很小；
-  必需 SDK 的 eager 初始化不变。没有共享运行时对象或绕过 Host 执行。
-- 这是解析器加载方式变化，生成代码未变，不需升级 artifact ABI。
+辅助库和 Acorn 源码在实际使用时读取。预编译页面不读取或初始化解析器。解析器以局部 exports 初始化，错误和中断保持终止状态，不重新初始化。旧模块组装入口、重复性能 probe 和文本回调测试夹具已删除或迁移至统一 host Promise 协议。
 
-同机第二轮复测（12 次新引擎，debug；编译和回归测试完成后单独运行）：
+最终 QuickJS 三策略测试及真实 CoreLink/Flutter 首树帧对照见 [加载优化报告](../../docs/dsl-load-optimization-20261011.md)。报告分别注明首次编译、编译结果复用、同 DLL 对照及测量范围，保留原始样本。
 
-| 页面 | 第一轮后冷阶段合计 p50 | 第二轮后 p50 / p95 | 第二轮后引擎初始化 p50 |
-| --- | ---: | ---: | ---: |
-| 编辑器 | 77.453 | 44.584 / 47.839 | 34.470 |
-| 选择器 | 80.959 | 49.258 / 52.093 | 35.188 |
-| 侧栏 | 88.614 | 56.973 / 90.206 | 34.766 |
+在仓库根目录单独运行：
 
-这是预编译页面的进一步收益；旧源码仍需初始化和运行解析器，只是成本移至首次编译，
-不应声称其冷启动同样加速。此次旧源码合计 p50 为 326.31 / 337.548 / 533.678 ms；
-预编译页面同输入热刷新 p50 为 1.821 / 2.626 / 4.64 ms。本轮没有优化热刷新；侧栏该次测量高于第一轮的 4.05 ms，
-且 p95 有较大波动，不能据此声称热路径加速或保证尾延迟改善。
-前一次并行构建期间曾出现侧栏 1.34 s 的异常样本，说明需要控制系统负载再比较尾延迟。
-
-新增 Node/native 回归验证：预编译零初始化、旧源码只初始化一次、语法错误后继续可用、
-不同引擎不共享实例；真实 Native Host 的 interrupt 在初始化中途触发，关闭该 interrupt 后
-重新解析成功，且 `exports/module/acorn` 不泄露到全局。
-
-组件对照可重复运行（同一次测试中对照 eager 与 lazy DSL bootstrap）：
-
-```sh
-cargo test --manifest-path core/Cargo.toml -p operit-js-bridge --lib \
-  native_compose_bootstrap_component_probe -- --ignored --nocapture --test-threads=1
+```powershell
+$env:RUSTFLAGS='-Awarnings'
+cargo test --manifest-path core/Cargo.toml -p operit-js-bridge --lib `
+  native_bootstrap_bytecode_probe -- --ignored --nocapture --test-threads=1
 ```
-
-剩余优先级转向前述**会话输入边界**与**真实打开链路**，而不是继续为仅约 1.85 ms 的
-compiler/generation 拆文件、增加复杂度。

@@ -787,14 +787,18 @@ function selectorView(ctx, input, state, controller) {
   else if (state.data === null) body = OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:40176",[{ key: "selector-load-error", text: state.error, color: colors.error, paddingHorizontal: 16, paddingVertical: 18, weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs));
   else if (state.data.options.length === 0) body = OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:40367",[{ text: input.kind === "group" ? "\u6682\u65E0\u7FA4\u7EC4" : "\u6682\u65E0\u89D2\u8272\u5361", style: "bodySmall", color: colors.onSurfaceVariant, paddingStart: 16, paddingTop: 18, paddingEnd: 16, paddingBottom: 20, weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs));
   else {
-    const rows = [];
-    for (const option of state.data.options) {
-      if (rows.length !== 0) rows.push(OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:40726",[{ thickness: 1, color: colors.outlineVariant.copy({ alpha: 0.45 }) }],(...__operitArgs)=>ctx.UI.HorizontalDivider(...__operitArgs)));
-      rows.push(selectorRow(ctx, option, state, controller));
-    }
-    body = OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:40902",[rows],()=>[{ key: "selector-records", weight: 1, fillMaxWidth: true, paddingStart: 8, paddingTop: 4, paddingEnd: 8, paddingBottom: 8 },rows],(...__operitArgs)=>ctx.UI.LazyColumn(...__operitArgs));
+    const options = state.data.options;
+    const items = ctx.lazyItems(
+      { key: "selector-records", itemCount: options.length, itemExtent: 56, initialItemCount: 12 },
+      /** Builds one keyed row only when it enters the materialized viewport window. */
+      (index) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:40897",[{ key: "selector-item:" + options[index].key, fillMaxWidth: true },[
+        selectorRow(ctx, options[index], state, controller),
+        ...index + 1 === options.length ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:41090",[{ thickness: 1, color: colors.outlineVariant.copy({ alpha: 0.45 }) }],(...__operitArgs)=>ctx.UI.HorizontalDivider(...__operitArgs))]
+      ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs))
+    );
+    body = OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:41213",[{ key: "selector-records", weight: 1, fillMaxWidth: true, paddingStart: 8, paddingTop: 4, paddingEnd: 8, paddingBottom: 8, ...items }],(...__operitArgs)=>ctx.UI.LazyColumn(...__operitArgs));
   }
-  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:41065",[{
+  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:41380",[{
     key: "character-selection",
     containerColor: "surfaceContainerHigh",
     shape: { cornerRadius: 28 },
@@ -804,11 +808,11 @@ function selectorView(ctx, input, state, controller) {
     onLoad: () => controller.load(),
     /** Returns explicit V1 cancellation for host dismissal rather than changing a global active selection. */
     onDismissRequest: () => selectorResultJson(controller.cancel())
-  },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:41716",[{ fillMaxWidth: true, height: 420, modifier: ctx.Modifier.widthIn({ maxWidth: 360 }).heightIn({ minHeight: 420, maxHeight: 420 }) },[
+  },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:42031",[{ fillMaxWidth: true, height: 420, modifier: ctx.Modifier.widthIn({ maxWidth: 360 }).heightIn({ minHeight: 420, maxHeight: 420 }) },[
     header,
-    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:41881",[],()=>[{ thickness: 1 }],(...__operitArgs)=>ctx.UI.HorizontalDivider(...__operitArgs)),
+    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:42196",[],()=>[{ thickness: 1 }],(...__operitArgs)=>ctx.UI.HorizontalDivider(...__operitArgs)),
     body,
-    ...state.error === "" || state.data === null ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:41992",[{ key: "selector-commit-error", text: state.error, color: colors.error, style: "bodySmall", paddingHorizontal: 16, paddingVertical: 8 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))]
+    ...state.error === "" || state.data === null ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:42307",[{ key: "selector-commit-error", text: state.error, color: colors.error, style: "bodySmall", paddingHorizontal: 16, paddingVertical: 8 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))]
   ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs))],(...__operitArgs)=>ctx.UI.Dialog(...__operitArgs));
 }
 function renderSelectionScreen(ctx) {

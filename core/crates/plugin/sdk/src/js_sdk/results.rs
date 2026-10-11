@@ -6,10 +6,15 @@ use chrono::{Local, TimeZone};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
+/// Preserves an arbitrary JSON result without interpreting strings or discarding null values.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct JsonResultData { pub value: serde_json::Value }
+
 /// Contains every concrete payload returned by the built-in tool runtime.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "__type")]
 pub enum ToolResultData {
+    JsonResultData(JsonResultData),
     EdgePortResultData(EdgePortResultData),
     BooleanResultData(BooleanResultData),
     StringResultData(StringResultData),
@@ -78,6 +83,7 @@ impl ToolResultData {
     #[allow(non_snake_case)]
     pub fn toString(&self) -> String {
         match self {
+            Self::JsonResultData(data) => serde_json::to_string(&data.value).expect("Structured result serialization must succeed"),
             Self::EdgePortResultData(data) => serde_json::to_string(data).expect("Edge port result serialization failed"),
             Self::BooleanResultData(data) => data.value.to_string(),
             Self::StringResultData(data) => data.value.clone(),

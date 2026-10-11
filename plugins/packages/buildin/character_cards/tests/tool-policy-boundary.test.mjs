@@ -7,7 +7,7 @@ const paths = {
   manager: "core/crates/tool/services/src/ToolExecutionManager.rs",
   hook: "core/crates/tool/services/src/tools/AIToolHook.rs",
   handler: "core/crates/tool/services/src/tools/AIToolHandler.rs",
-  terminal: "core/crates/tool/services/src/tools/AIToolHandlerJsToolsHost.rs",
+  terminal: "core/crates/tool/services/src/tools/ToolJsRuntime.rs",
   lifecycle: "core/crates/runtime/application/src/plugins/toolpkg/ToolPkgToolLifecycleBridge.rs",
   prompt: "core/crates/runtime/application/src/plugins/toolpkg/ToolPkgPromptHookBridge.rs",
   registry: "core/crates/provider/services/src/chat/hooks/PromptHookRegistry.rs",

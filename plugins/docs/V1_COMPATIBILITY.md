@@ -72,6 +72,20 @@ emitting the canonical v2 bindings. Both inline and modular engine bootstrap pat
 therefore install the same code. Adapters capture the canonical functions before
 installing versioned entry points, so v1 cannot recursively invoke itself.
 
+### SoftwareSettings environment variables and V2 domain resources
+
+The copied V1 declarations remain unchanged. `readEnvironmentVariable` and
+`writeEnvironmentVariable` retain their original signatures through an explicitly
+versioned adapter for 1.0.0 and 1.0.1. JSDoc checks both the historical signatures
+and the canonical V2 host calls. The adapter preserves complete host results and
+original failures.
+
+V2 exposes configured resources through `Tools.Models`, `Tools.Tts`, `Tools.Theme`
+and `Tools.Catalog`. The seven domain methods are available since 2.0.0 and use
+fully qualified native dispatch paths, including separate `Tts.listConfigs` and
+`Theme.listConfigs` paths. These methods were never part of the copied V1
+`SoftwareSettings` contract, so no historical aliases are installed for them.
+
 ### Files
 
 All functions in the copied v1 `Files` namespace have signature adapters:

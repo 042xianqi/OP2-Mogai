@@ -7,21 +7,43 @@
         return value == null ? '' : String(value);
     }
 
-    /** Copies tool parameters into safe own data properties. */
+    /** Snapshots complete structured requests without invoking accessors or changing JSON value types. */
+    function snapshotJsonObject(value) {
+        if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Tool parameters must be a JSON object');
+        var ancestors = [], nodes = 0;
+        /** Copies each own JSON data property and rejects unsupported or excessive request data. */
+        function copy(entry, depth) {
+            if (++nodes > 1000000 || depth > 128) throw new TypeError('Tool request exceeds structured depth/node limit');
+            if (entry === null || typeof entry === 'string' || typeof entry === 'boolean') return entry;
+            if (typeof entry === 'number' && Number.isFinite(entry)) return entry;
+            if (typeof entry !== 'object' || (!Array.isArray(entry) && Object.getPrototypeOf(entry) !== Object.prototype && Object.getPrototypeOf(entry) !== null)) throw new TypeError('Tool request contains a non-JSON value');
+            if (ancestors.indexOf(entry) !== -1) throw new TypeError('Tool request contains a cyclic value');
+            ancestors.push(entry);
+            var array = Array.isArray(entry), result = array ? [] : {};
+            var keys = Reflect.ownKeys(entry);
+            if (array) {
+                if (keys.length !== entry.length + 1) throw new TypeError('Tool request contains non-JSON array properties');
+                for (var offset = 0; offset < entry.length; offset++) {
+                    if (!Object.prototype.hasOwnProperty.call(entry, offset)) throw new TypeError('Tool request contains a non-JSON array hole');
+                }
+            }
+            keys.forEach(function(key) {
+                if (array && key === 'length') return;
+                if (typeof key !== 'string') throw new TypeError('Tool request contains a non-JSON key');
+                var descriptor = Object.getOwnPropertyDescriptor(entry, key);
+                if (!descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) throw new TypeError('Tool request contains a non-JSON property');
+                Object.defineProperty(result, key, { value: copy(descriptor.value, depth + 1), enumerable: true, writable: true, configurable: true });
+            });
+            ancestors.pop();
+            return result;
+        }
+        return copy(value, 0);
+    }
+
+    /** Copies optional public parameters through the sole structured request validator. */
     function clonePlainObject(value) {
         if (value === undefined) return {};
-        if (!value || typeof value !== 'object' || Array.isArray(value)) {
-            throw new TypeError('Tool params must be a JSON object');
-        }
-        var copy = {};
-        var keys = Object.keys(value);
-        for (var i = 0; i < keys.length; i += 1) {
-            // Match JSON data properties; never invoke __proto__'s setter.
-            Object.defineProperty(copy, keys[i], {
-                value: value[keys[i]], enumerable: true, writable: true, configurable: true
-            });
-        }
-        return copy;
+        return snapshotJsonObject(value);
     }
 
     /** Rejects callback streaming that the tool execution host does not implement. */
@@ -67,7 +89,7 @@
             throw new TypeError('Tool host returned an invalid result envelope');
         }
         if (!result.success) {
-            throw new Error(asString(result.message).trim());
+            throw new Error(asString(result.message));
         }
         return result.data;
     }
@@ -130,6 +152,7 @@
         }
     }
 
+    root.__operitExpose('__operitSnapshotJsonObject', snapshotJsonObject);
     root.__operitExpose('__operitInvokeHostAsync', invokeHostAsync);
     root.__operitExpose('toolCall', toolCall);
 })();

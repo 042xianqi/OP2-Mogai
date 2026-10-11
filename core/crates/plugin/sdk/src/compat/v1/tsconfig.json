@@ -17,6 +17,7 @@
     "chat.js",
     "workflow.js",
     "characters.js",
-    "memory.js"
+    "memory.js",
+    "install.js"
   ]
 }

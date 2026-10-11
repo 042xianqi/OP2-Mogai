@@ -18,8 +18,9 @@ export function renderSidebarScreen(ctx: ComposeDslContext): ComposeNode {
   const [input] = ctx.useState<CurrentSidebar["input"] | null>("input", null);
   const [chatSidebar] = ctx.useState<CurrentSidebar["chatSidebar"] | null>("chatSidebar", null);
   const supplied = { input, chatSidebar };
-  const current = ctx.useRef<CurrentSidebar>("native-sidebar-current", parseCurrentSidebar(supplied));
-  current.current = parseCurrentSidebar(supplied);
+  const parsed = parseCurrentSidebar(supplied);
+  const current = ctx.useRef<CurrentSidebar>("native-sidebar-current", parsed);
+  current.current = parsed;
   const catalogKey = sidebarCatalogKey;
   const [warmData] = ctx.useState<unknown>("chatSidebarPrepared", null);
   const prepared = preparedSidebar(warmData, current.current);

@@ -9,6 +9,7 @@ const sdk = new URL('../../core/crates/plugin/sdk/src/toolpkg/', import.meta.url
 /** Loads only the production compiler entry; artifact loading must not need Acorn. */
 function runtime() {
   const context = vm.createContext({});
+  vm.runInContext(readFileSync(new URL('compose/Artifact.js', sdk), 'utf8'), context);
   vm.runInContext(readFileSync(new URL('compose/Compiler.js', sdk), 'utf8'), context);
   return context;
 }
@@ -63,7 +64,7 @@ test('artifact body exactly matches runtime lowering from the same SDK compiler'
 function parserRuntime(parserSource = readFileSync(new URL('vendor/acorn.js', sdk), 'utf8')) {
   const context = runtime();
   vm.runInContext(readFileSync(new URL('compose/Parser.js', sdk), 'utf8')
-    .replace('__OPERIT_COMPOSE_PARSER_SOURCE__', () => JSON.stringify(parserSource)), context);
+    .replace('__OPERIT_COMPOSE_PARSER_SOURCE__', () => 'function() { return ' + JSON.stringify(parserSource) + '; }'), context);
   vm.runInContext(`
     globalThis.parserInitializations = 0;
     const originalFunction = Function;
@@ -91,24 +92,21 @@ test('precompiled pages never initialize the parser; old source initializes it o
   assert.equal(other.parserInitializations, 1);
 });
 
-test('failed parser initialization publishes no partial exports and retries from an isolated scope', () => {
-  const parser = readFileSync(new URL('vendor/acorn.js', sdk), 'utf8');
-  const context = parserRuntime(`
-    if (!globalThis.attemptedParser) {
-      globalThis.attemptedParser = true;
-      exports.parse = function() { throw Error('Partial parser used'); };
-      throw Error('Injected initialization failure');
+test('failed parser initialization preserves the exact error without retry or partial globals', () => {
+  for (const failure of [new Error('Injected initialization failure'), undefined, null, false, 0, '']) {
+    const context = parserRuntime('exports.parse = function() {}; throw globalThis.parserFailure;');
+    context.parserFailure = failure;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let caught = false;
+      try { context.OperitComposeCompiler.prepare(source, 'failed-parser'); }
+      catch (error) { caught = true; assert.equal(error, failure); }
+      assert.equal(caught, true);
     }
-  ` + parser);
-  assert.throws(() => context.OperitComposeCompiler.prepare(source, 'retry'), /Injected initialization failure/);
-  assert.equal(context.parserInitializations, 1);
-  assert.doesNotThrow(() => context.OperitComposeCompiler.prepare(source, 'retry'));
-  assert.equal(context.parserInitializations, 2);
-  context.OperitComposeCompiler.prepare(source, 'cached');
-  assert.equal(context.parserInitializations, 2);
-  assert.equal(context.exports, undefined);
-  assert.equal(context.module, undefined);
-  assert.equal(context.acorn, undefined);
+    assert.equal(context.parserInitializations, 1);
+    assert.equal(context.exports, undefined);
+    assert.equal(context.module, undefined);
+    assert.equal(context.acorn, undefined);
+  }
 });
 
 test('runtime registration preserves a screen expression without a trailing semicolon', () => {

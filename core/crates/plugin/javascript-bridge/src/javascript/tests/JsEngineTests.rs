@@ -235,9 +235,12 @@ impl ToolPkgTextResourceHost for StaticToolPkgTextResourceHost {
     }
 }
 
-crate::impl_rejecting_js_tools_host!(TestPluginConfigExecutionHost, storageTestRequest);
-
 impl JsExecutionHost for TestPluginConfigExecutionHost {
+        /// Captures this fixture's shared state through the same native invocation boundary.
+        fn capture_tool_invocation_host(&self) -> Arc<dyn JsExecutionHost> { Arc::new(self.clone()) }
+
+
+
     /// Retains shared host fixtures while accepting only concrete engine-owned package contexts.
     fn for_toolpkg_execution_context(
         &self,
@@ -262,6 +265,21 @@ impl JsExecutionHost for TestPluginConfigExecutionHost {
         &self,
         request: JsToolCallRequest,
     ) -> operit_plugin_sdk::javascript::JsExecutionCompletion<JsToolCallResult> {
+        if request.tool_name == "storage_request" {
+            let decoded = request.parameters.get("request").cloned()
+                .ok_or_else(|| "Missing storage request".to_string())
+                .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()));
+            let operation = match decoded {
+                Ok(request) => storageTestRequest(self, request),
+                Err(error) => return Box::pin(async move { JsToolCallResult {
+                    success: false, data: JsToolCallResultData::Value(Value::Null), error: Some(error),
+                } }),
+            };
+            return Box::pin(async move { match operation.await {
+                Ok(value) => JsToolCallResult { success: true, data: JsToolCallResultData::Value(value), error: None },
+                Err(error) => JsToolCallResult { success: false, data: JsToolCallResultData::Value(Value::Null), error: Some(error.to_string()) },
+            } });
+        }
         let gatedToolCalls = self.gatedToolCalls.clone();
         let gatedToolStarted = self.gatedToolStarted.clone();
         let edgePortCalls = self.edgePortCalls.clone();
@@ -3612,15 +3630,15 @@ fn chat_extension_owner_ignores_forged_tool_parameters() {
         ]),
     };
     assert_eq!(
-        super::chatExtensionExecutionOwner(Some(&contextA)).unwrap(),
+        { contextA.validate().unwrap(); contextA.container_package_name.as_str() },
         "org.example.owner-a"
     );
     assert_eq!(
-        super::chatExtensionExecutionOwner(Some(&contextB)).unwrap(),
+        { contextB.validate().unwrap(); contextB.container_package_name.as_str() },
         "org.example.owner-b"
     );
     assert_ne!(
-        super::chatExtensionExecutionOwner(Some(&contextA)).unwrap(),
+        { contextA.validate().unwrap(); contextA.container_package_name.as_str() },
         request.parameters["owner"].as_str().unwrap()
     );
 }
@@ -3628,15 +3646,11 @@ fn chat_extension_owner_ignores_forged_tool_parameters() {
 /// Rejects missing native execution identity even when JavaScript can supply a nonempty owner string.
 #[test]
 fn chat_extension_owner_requires_real_execution_context() {
-    assert_eq!(
-        super::chatExtensionExecutionOwner(None).unwrap_err(),
-        "Chat extensions require a real ToolPkg execution owner"
-    );
     let mut context = chatExtensionFixtureContext("org.example.owner-a");
     context.context_key.clear();
-    assert!(super::chatExtensionExecutionOwner(Some(&context)).is_err());
+    assert!(context.validate().is_err());
     let context = chatExtensionFixtureContext(" ");
-    assert!(super::chatExtensionExecutionOwner(Some(&context)).is_err());
+    assert!(context.validate().is_err());
 }
 
 /// Lowered async functions subscribing to one retained service Promise keep distinct call owners.
@@ -3722,10 +3736,10 @@ async fn storage_structured_promise_roundtrips_real_sqlite_and_record_proxies() 
             const originalRequest=__operitStorageRequest;
             /** Verifies request conversion remains structured while unrelated engine bookkeeping runs normally. */
             __operitStorageRequest=function(request){return withoutTextCodecs(()=>originalRequest(request));};
-            const native=__operitNativeStorageRequestAsync;
+            const native=__operitNativeCallToolStructured;
             /** Requires a real host-owned Promise, rather than a JS callback identity. */
-            __operitNativeStorageRequestAsync=function(scope,request) {
-                const promise=withoutTextCodecs(()=>native(scope,request));
+            __operitNativeCallToolStructured=function(scope,type,name,parameters) {
+                const promise=withoutTextCodecs(()=>native(scope,type,name,parameters));
                 if (!promise || typeof promise.then !== 'function') throw new Error('Storage requires a host Promise');
                 return promise;
             };
@@ -4051,40 +4065,15 @@ fn registration_failure_result_survives_the_ordinary_text_adapter() {
     assert_eq!(result.expect_err("failed registration must not publish a capture").message, "exact registration failure");
 }
 
-/// Separates native bootstrap evaluation costs without involving personal data or plugin code.
-#[test]
-#[ignore = "Run explicitly to measure native SDK bootstrap components"]
-fn native_compose_bootstrap_component_probe() {
-    let host = testJavaScriptRuntimeHost();
-    let sdk = Path::new(env!("CARGO_MANIFEST_DIR")).join("../sdk/src/toolpkg");
-    let bootstrap = operit_plugin_sdk::toolpkg::ToolPkgComposeDslBridge::buildComposeDslContextBridgeDefinition();
-    let facade = operit_plugin_sdk::toolpkg::ToolPkgComposeDslBridge::buildComposeDslParserDefinition();
-    let acorn = std::fs::read_to_string(sdk.join("vendor/acorn.js")).unwrap();
-    let eager = format!("var __operitAcorn = {{}}; (function(exports, module) {{ {acorn} }})(__operitAcorn, {{exports: __operitAcorn}});");
-    let eager_bootstrap = bootstrap.replacen(&facade, &eager, 1);
-    let components = [
-        ("acorn", std::fs::read_to_string(sdk.join("vendor/acorn.js")).unwrap()),
-        ("compiler", std::fs::read_to_string(sdk.join("compose/Compiler.js")).unwrap()),
-        ("generation", std::fs::read_to_string(sdk.join("compose/Generation.js")).unwrap()),
-        ("compose-bootstrap-eager-comparison", eager_bootstrap),
-        ("compose-bootstrap-lazy", bootstrap),
-    ];
-    for (name, script) in components {
-        let mut samples = Vec::new();
-        for _ in 0..12 {
-            let mut runtime = host.createHostJavaScriptRuntime().unwrap();
-            let start = Instant::now();
-            runtime.evaluateHostJavaScriptVoid(name, &script).unwrap();
-            samples.push(start.elapsed().as_secs_f64() * 1000.0);
-        }
-        samples.sort_by(f64::total_cmp);
-        eprintln!("compose_bootstrap_probe component={name} bytes={} p50Ms={:.3} p95Ms={:.3}", script.len(), samples[5], samples[11]);
-    }
+/// Provides trusted parser bytes explicitly for SDK-only tests without an application host.
+fn testComposeParserSourceProvider() -> String {
+    format!("function() {{ return {}; }}", serde_json::to_string(
+        operit_plugin_sdk::toolpkg::ToolPkgComposeDslBridge::readComposeDslParserSource()).unwrap())
 }
 
 /// Exercises the real SDK bootstrap in QuickJS, not a Node-only approximation of laziness.
 #[test]
-fn native_compose_bootstrap_defers_parser_until_first_source_compilation() {
+fn native_compose_compiler_defers_parser_until_first_source_compilation() {
     let mut runtime = testJavaScriptRuntimeHost().createHostJavaScriptRuntime().unwrap();
     runtime.evaluateHostJavaScriptVoid("observe-parser", r#"
         globalThis.parserInitializations = 0;
@@ -4092,7 +4081,7 @@ fn native_compose_bootstrap_defers_parser_until_first_source_compilation() {
         globalThis.Function = function(...args) { parserInitializations++; return originalFunction(...args); };
     "#).unwrap();
     runtime.evaluateHostJavaScriptVoid("compose-bootstrap",
-        &operit_plugin_sdk::toolpkg::ToolPkgComposeDslBridge::buildComposeDslContextBridgeDefinition()).unwrap();
+        &operit_plugin_sdk::toolpkg::ToolPkgComposeDslBridge::buildComposeDslCompilerDefinition(&testComposeParserSourceProvider())).unwrap();
     let result = runtime.evaluateHostJavaScriptString("probe-lazy-parser", r#"JSON.stringify((function() {
         var startup = parserInitializations;
         var artifact = '// @operit-compose-artifact 1\nexports.default = ctx => ctx.UI.Text({text:"artifact"});';
@@ -4107,10 +4096,9 @@ fn native_compose_bootstrap_defers_parser_until_first_source_compilation() {
     assert_eq!(serde_json::from_str::<Value>(&result).unwrap(), serde_json::json!([0, 0, 1, 1]));
 }
 
-/// Interrupts inside parser initialization after an export was assigned, then retries
-/// under a fresh execution budget. Partial installation must never escape the loader.
+/// Keeps interrupted parser initialization terminal without exposing partial exports.
 #[test]
-fn native_compose_parser_retries_after_interrupted_initialization() {
+fn native_compose_parser_rejects_after_interrupted_initialization() {
     let mut runtime = testJavaScriptRuntimeHost().createHostJavaScriptRuntime().unwrap();
     let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let signal = armed.clone();
@@ -4120,8 +4108,8 @@ fn native_compose_parser_retries_after_interrupted_initialization() {
     })).unwrap();
     let sdk = Path::new(env!("CARGO_MANIFEST_DIR")).join("../sdk/src/toolpkg");
     let parser = format!(r#"
-        if (!globalThis.parserAttempted) {{
-            globalThis.parserAttempted = true;
+        globalThis.parserAttempts = (globalThis.parserAttempts || 0) + 1;
+        if (globalThis.parserAttempts == 1) {{
             exports.parse = function() {{ throw Error('Partial parser published'); }};
             __armParserInterrupt();
             while (true) {{}}
@@ -4129,12 +4117,152 @@ fn native_compose_parser_retries_after_interrupted_initialization() {
         {}
     "#, std::fs::read_to_string(sdk.join("vendor/acorn.js")).unwrap());
     let loader = std::fs::read_to_string(sdk.join("compose/Parser.js")).unwrap()
-        .replace("__OPERIT_COMPOSE_PARSER_SOURCE__", &serde_json::to_string(&parser).unwrap());
+        .replace("__OPERIT_COMPOSE_PARSER_SOURCE__", &format!("function() {{ return {}; }}", serde_json::to_string(&parser).unwrap()));
     runtime.evaluateHostJavaScriptVoid("lazy-parser", &loader).unwrap();
     runtime.setHostJavaScriptInterruptHandler(Some(Arc::new(move || armed.load(Ordering::SeqCst)))).unwrap();
     assert!(runtime.evaluateHostJavaScriptVoid("interrupted-parse", "__operitAcorn.parse('let value = 1;', {ecmaVersion:2022});").is_err());
     runtime.setHostJavaScriptInterruptHandler(None).unwrap();
-    let result = runtime.evaluateHostJavaScriptString("retry-parse", "__operitAcorn.parse('let value = 1;', {ecmaVersion:2022}).type").unwrap();
-    assert_eq!(result, "Program");
+    assert!(runtime.evaluateHostJavaScriptVoid("rejected-parse", "__operitAcorn.parse('let value = 1;', {ecmaVersion:2022});").is_err());
+    assert_eq!(runtime.evaluateHostJavaScriptString("one-parser-attempt", "String(parserAttempts)").unwrap(), "1");
     assert_eq!(runtime.evaluateHostJavaScriptString("no-parser-global-leak", "[typeof exports, typeof module, typeof acorn].join(',')").unwrap(), "undefined,undefined,undefined");
+}
+
+/// Validates deferred grouped exports in the actual host-owned QuickJS engine.
+#[test]
+fn native_bootstrap_libraries_preserve_globals_and_initialize_once() {
+    let mut state = newTestJsEngineState(None);
+    let output = state.evalJavaScriptString(r#"
+        var libraryReads = [];
+        var originalLibrarySource = __operitNativeReadBootstrapLibrary;
+        __operitNativeReadBootstrapLibrary = function(name) {
+            libraryReads.push(name);
+            return originalLibrarySource(name);
+        };
+        var initial = Object.getOwnPropertyDescriptor(globalThis, 'UINode');
+        var first = UINode;
+        var again = UINode;
+        var types = [typeof Android, typeof PackageManager, typeof DeviceController,
+            typeof OkHttp, typeof OkHttpClient, typeof CryptoJS, typeof Jimp, typeof pako];
+        JSON.stringify({lazy: typeof initial.get === 'function', same: first === again,
+            reads: libraryReads, types: types});
+    "#).unwrap();
+    let output: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(output["lazy"], true);
+    assert_eq!(output["same"], true);
+    assert_eq!(output["reads"], serde_json::json!([
+        "assets/js/UINode.js", "assets/js/AndroidUtils.js", "assets/js/OkHttp3.js",
+        "assets/js/CryptoJS.js", "assets/js/Jimp.js", "assets/js/pako.js"
+    ]));
+    assert_eq!(output["types"], serde_json::json!([
+        "function", "function", "function", "object", "function", "object", "object", "object"
+    ]));
+}
+
+/// Compares initialization policies in fresh native contexts without business queries or Flutter.
+#[test]
+#[ignore = "Run explicitly to measure native bootstrap bytecode reuse"]
+fn native_bootstrap_bytecode_probe() {
+    use crate::javascript::JsLibraries::{buildEagerLibraryProbeSource, buildLazyLibraryBootstrapScript};
+    use operit_plugin_sdk::toolpkg::ToolPkgComposeDslBridge::buildComposeDslContextBridgeDefinition;
+    let host = NativeHostJavaScriptRuntimeHost::new();
+    let source = crate::javascript::JsLibraries::buildRuntimeBootstrapScript();
+    let eager_libraries = buildEagerLibraryProbeSource();
+    let host_context = buildComposeDslContextBridgeDefinition();
+    assert_eq!(source.matches(&host_context).count(), 1);
+    // Use identical current SDK modules, changing only the eager initialization policy.
+    let eager = source.replace(&buildLazyLibraryBootstrapScript(), &eager_libraries);
+    let mut eager_samples = Vec::new();
+    let mut source_samples = Vec::new();
+    let mut bytecode_samples = Vec::new();
+    for index in 0..22 {
+        for (name, script, samples) in [
+            ("eager-source", eager.as_str(), &mut eager_samples),
+            ("deferred-source", source, &mut source_samples),
+            ("shared-bytecode", source, &mut bytecode_samples),
+        ] {
+            let mut runtime = host.createHostJavaScriptRuntime().unwrap();
+            let start = Instant::now();
+            if name == "shared-bytecode" { runtime.evaluateHostJavaScriptBootstrap(source).unwrap(); }
+            else { runtime.evaluateHostJavaScriptVoid("operit.bootstrap.js", script).unwrap(); }
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+            if index >= 2 { samples.push(elapsed); }
+            if index == 0 && name == "shared-bytecode" {
+                eprintln!("native_bootstrap_bytecode_probe firstCompileAndExecuteMs={elapsed:.3}");
+            }
+        }
+    }
+    for (name, bytes, mut samples) in [
+        ("eager-source", eager.len(), eager_samples),
+        ("deferred-source", source.len(), source_samples),
+        ("shared-bytecode", source.len(), bytecode_samples),
+    ] {
+        samples.sort_by(f64::total_cmp);
+        eprintln!("native_bootstrap_bytecode_probe mode={name} sourceBytes={bytes} samples={} p50Ms={:.3} p95Ms={:.3}",
+            samples.len(), samples[9], samples[18]);
+    }
+}
+
+
+/// Compares only compiler ownership in otherwise identical fresh production page engines.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "Set OPERIT_DSL_PROBE_SCRIPT to measure an explicit script without reading user state"]
+async fn native_compose_page_load_probe() {
+    let path = std::env::var("OPERIT_DSL_PROBE_SCRIPT").expect("Explicit DSL probe script required");
+    let source = std::fs::read_to_string(path).unwrap();
+    let isolated_compiler = operit_plugin_sdk::toolpkg::ToolPkgComposeDslBridge::buildComposeDslCompilerDefinition(&testComposeParserSourceProvider());
+    let mut samples = Vec::new();
+    for index in 0..14 {
+        for mode in ["page-compiler", "shared-compiler"] {
+            testJavaScriptRuntimeHost();
+            let bootstrap = Instant::now();
+            let engine = super::JsEngine::new_toolpkg_registration_engine().unwrap();
+            let bootstrap_ms = bootstrap.elapsed().as_secs_f64() * 1000.0;
+            let setup = format!("exports.install = function() {{ {} return true; }};", if mode == "page-compiler" {
+                format!("{isolated_compiler}\n__operitNativePrepareComposeModule = function(source, identity) {{ return OperitComposeCompiler.prepare(source, identity); }};")
+            } else { String::new() });
+            let options = BTreeMap::from([
+                ("executionContextKey".into(), Value::String("compiler-comparison".into())),
+                ("__operit_package_lang".into(), Value::String("en".into())),
+                ("theme".into(), serde_json::json!({"brightness":"dark", "colors":{"primary":"#ff102030"}})),
+            ]);
+            engine.execute_script_function(&setup, "install", &options, &BTreeMap::new(), None, false, 60, None).await.unwrap();
+            let updates = Arc::new(Mutex::new(Vec::<Value>::new()));
+            let sink = updates.clone();
+            let started = Instant::now();
+            let result = engine.execute_compose_dsl_script_stream_async(
+                source.clone(), options, BTreeMap::new(), Arc::new(BTreeMap::new()),
+                Arc::new(move |value| sink.lock().unwrap().push(value)),
+            ).await.unwrap();
+            let render_ms = started.elapsed().as_secs_f64() * 1000.0;
+            assert_eq!(result, Some(Value::Null));
+            let nodes: usize = updates.lock().unwrap().iter().filter_map(|event| event["response"]["update"]["upserts"].as_array()).map(Vec::len).sum();
+            assert!(nodes > 0, "Page must publish a real retained tree");
+            samples.push(serde_json::json!({"mode":mode,"sample":index,"sourceBytes":source.len(),"bootstrapMs":bootstrap_ms,"renderMs":render_ms,"nodes":nodes}));
+            engine.destroy();
+        }
+    }
+    eprintln!("dsl_compiler_comparison {}", serde_json::to_string(&samples).unwrap());
+}
+
+/// Verifies shared lowering never shares page state, closures or globals between engines.
+#[tokio::test(flavor = "current_thread")]
+async fn compose_shared_compilation_keeps_page_heaps_independent() {
+    let first = newTestToolPkgRegistrationEngine();
+    let second = newTestToolPkgRegistrationEngine();
+    let source = r#"exports.default = function(ctx) {
+        const [count, setCount] = ctx.useState('count', 0);
+        return ctx.UI.Button({label: String(count), onClick: function() { setCount(count + 1); }});
+    };"#;
+    let options = testParams();
+    let one = first.renderForAssertions(source, &options, &BTreeMap::new(), Arc::new(BTreeMap::new())).await.unwrap().unwrap();
+    let two = second.renderForAssertions(source, &options, &BTreeMap::new(), Arc::new(BTreeMap::new())).await.unwrap().unwrap();
+    assert_eq!(one["tree"]["props"]["label"], "0");
+    assert_eq!(two["tree"]["props"]["label"], "0");
+    let action = one["tree"]["props"]["onClick"]["__actionId"].as_str().unwrap();
+    let changed = first.actionForAssertions(action, None, &options, &BTreeMap::new(), None).await.unwrap().unwrap();
+    assert_eq!(changed["tree"]["props"]["label"], "1");
+    let action = two["tree"]["props"]["onClick"]["__actionId"].as_str().unwrap();
+    let independent = second.actionForAssertions(action, None, &options, &BTreeMap::new(), None).await.unwrap().unwrap();
+    assert_eq!(independent["tree"]["props"]["label"], "1");
+    first.destroy(); second.destroy();
 }

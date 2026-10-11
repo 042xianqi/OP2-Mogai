@@ -100,15 +100,21 @@ var OperitComposeNodes = function () {
     }
     return OperitComposeGeneration.observeNode(node);
   }
+  /// Retains one factory per node type without changing the public registry shape.
   function createUiRegistry(runtime) {
+    var factories = new Map();
     return new Proxy({}, {
       get: function (_target, prop) {
         if (typeof prop !== 'string') {
           return undefined;
         }
-        return function (props, children) {
-          return buildNode(runtime, prop, props, children);
-        };
+        if (!factories.has(prop)) {
+          /// Builds nodes with one factory per type owned by this exact context.
+          factories.set(prop, function (props, children) {
+            return buildNode(runtime, prop, props, children);
+          });
+        }
+        return factories.get(prop);
       }
     });
   }

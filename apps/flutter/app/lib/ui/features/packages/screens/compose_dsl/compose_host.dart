@@ -118,7 +118,7 @@ class _ComposeHostState extends State<_ComposeHost> {
     );
   }
 
-  /// Resolves dispatch root on load for the Compose DSL renderer.
+  /// Runs initial loading once and measures its first subsequent content frame.
   void _dispatchRootOnLoad() {
     if (_hasDispatchedInitialOnLoad || widget.loading || widget.error != null) {
       return;
@@ -146,7 +146,25 @@ class _ComposeHostState extends State<_ComposeHost> {
         return;
       }
       _hasDispatchedInitialOnLoad = true;
+      final watch = Stopwatch()..start();
+      final owner = widget.webViewHostContext;
       await widget.onAction(rootOnLoadActionId, null);
+      if (!mounted || widget.error != null) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted ||
+            widget.error != null ||
+            widget.webViewHostContext.executionContextKey !=
+                owner.executionContextKey) {
+          return;
+        }
+        watch.stop();
+        ClientLogger.i(
+          'event=compose_onload_frame package=${owner.packageName} '
+          'context=${owner.executionContextKey} elapsedMs=${watch.elapsedMilliseconds}',
+          tag: 'ToolPkgUiLauncher',
+        );
+      });
+      WidgetsBinding.instance.ensureVisualUpdate();
     });
   }
 }
@@ -159,8 +177,9 @@ Widget buildComposeDslHostForTest({
   String? error,
 }) {
   final tree = _ComposeDslNode.parse(node);
-  if (tree == null)
+  if (tree == null) {
     throw const FormatException('A Compose host requires a valid node');
+  }
   return _ComposeHost(
     loading: false,
     error: error,

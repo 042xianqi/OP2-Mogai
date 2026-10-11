@@ -4,12 +4,12 @@ import path from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import { createDiskHarness } from "./disk-files.mjs";
 import { openPlugin } from "./plugin-entry-harness.mjs";
-import { createSoftwareSettingsFixture } from "./software-settings-fixture.mjs";
+import { createHostDirectoriesFixture } from "./host-directories-fixture.mjs";
 import { loadModule, plain } from "./runtime.mjs";
 
 // These explicit typed directory inputs isolate unit-test dependencies; they are not native-host configuration evidence.
-const directoryInput = plain(loadModule("tests/software-settings-input.ts").softwareSettingsTestInput);
-const snapshotDirectoryMethods = ["listModelSummaries", "listTtsConfigs", "readToolSourceCatalog"];
+const directoryInput = plain(loadModule("tests/host-directories-input.ts").hostDirectoriesTestInput);
+const snapshotDirectoryMethods = ["Models.listSummaries", "Tts.listConfigs", "Catalog.readToolSources"];
 
 /** Requires the real main callbacks to call exactly the declared SDK methods with their actual no-argument contract. */
 function assertDirectoryCalls(settings, methods) {
@@ -82,8 +82,8 @@ test("registered API command and Web IPC preserve a bad-file initialization fail
 });
 
 /** Executes real main and file-backed snapshot logic with explicit SDK directory inputs, not native-host integration. */
-test("registered management Web IPC preserves a full file-backed snapshot with explicit SoftwareSettings test inputs", async t => {
-  const disk = await createDiskHarness(t), settings = createSoftwareSettingsFixture(disk, directoryInput), plugin = openPlugin(settings.harness);
+test("registered management Web IPC preserves a full file-backed snapshot with explicit host directory test inputs", async t => {
+  const disk = await createDiskHarness(t), settings = createHostDirectoriesFixture(disk, directoryInput), plugin = openPlugin(settings.harness);
   assert.equal(settings.calls.length, 0, "Registration must not read configured directories");
   assert.equal(disk.calls.length, 0, "Registration must not open plugin files");
   const managementRoute = "toolpkg:com.operit.character_cards:ui:main", attachmentRoute = "toolpkg:com.operit.character_cards:ui:memory-attachment";
@@ -139,7 +139,7 @@ test("registered management Web IPC preserves a full file-backed snapshot with e
 
 /** Executes actual staged Web save with explicit SDK directory inputs and one real state-file publication. */
 test("actual Web card save commits the complete staged tag change set once", async t => {
-  const disk = await createDiskHarness(t), settings = createSoftwareSettingsFixture(disk, directoryInput), plugin = openPlugin(settings.harness);
+  const disk = await createDiskHarness(t), settings = createHostDirectoriesFixture(disk, directoryInput), plugin = openPlugin(settings.harness);
   assert.equal(settings.calls.length, 0, "Actual main registration must remain lazy");
   const card = await plugin.api("character.create", { values: { name: "Web 原角色" } });
   const removed = await plugin.api("tag.create", { values: { name: "旧标签", description: "", promptContent: "旧提示", tagType: "CUSTOM" } });
@@ -150,7 +150,7 @@ test("actual Web card save commits the complete staged tag change set once", asy
   const state = JSON.parse(await disk.stateBytes().toString("utf8"));
   assert.deepEqual(state.cards, plain(snapshot.cards)); assert.deepEqual(state.tags, plain(snapshot.tags));
   assertCompleteSnapshot(snapshot, state);
-  assertDirectoryCalls(settings, ["listTtsConfigs", ...snapshotDirectoryMethods]);
+  assertDirectoryCalls(settings, ["Tts.listConfigs", ...snapshotDirectoryMethods]);
   const newTags = snapshot.tags.filter(
     /** Identifies the real staged creation by its explicit unique input name. */
     tag => tag.name === "新标签",
@@ -188,38 +188,38 @@ test("IO-only file entrypoints reject undeclared SoftwareSettings instead of sup
     () => disk.globals.Tools.SoftwareSettings,
     { message: "Disk harness permits Files and Storage only: SoftwareSettings" },
   );
-  await assert.rejects(plugin.web({ action: "snapshot" }), { message: "Disk harness permits Files and Storage only: SoftwareSettings" });
-  await assert.rejects(plugin.api("snapshot", {}), { message: "Disk harness permits Files and Storage only: SoftwareSettings" });
+  await assert.rejects(plugin.web({ action: "snapshot" }), { message: "Disk harness permits Files and Storage only: Models" });
+  await assert.rejects(plugin.api("snapshot", {}), { message: "Disk harness permits Files and Storage only: Models" });
   assertNoMutations(disk); assert.deepEqual(await disk.stateBytes(), before);
 });
 
 /** Keeps the explicit directory fixture narrow and immutable without treating it as native-host evidence. */
-test("explicit SoftwareSettings test inputs preserve values and reject undeclared host methods", async t => {
-  const disk = await createDiskHarness(t), supplied = plain(directoryInput), settings = createSoftwareSettingsFixture(disk, supplied);
+test("explicit host directory test inputs preserve values and reject undeclared host methods", async t => {
+  const disk = await createDiskHarness(t), supplied = plain(directoryInput), settings = createHostDirectoriesFixture(disk, supplied);
   assert.equal(settings.harness.globals.Tools.Files, disk.files);
-  const api = settings.harness.globals.Tools.SoftwareSettings;
+  const api = settings.harness.globals.Tools;
   assert.throws(
     /** Rejects the legacy caller bridge even though directory read inputs have been explicitly installed. */
-    () => api.exec,
-    { message: "Undeclared SoftwareSettings fixture capability: exec" },
+    () => api.Models.exec,
+    { message: "Undeclared Models fixture capability: exec" },
   );
   assert.throws(
     /** Rejects unrelated host business capabilities rather than manufacturing a successful manager. */
     () => settings.harness.globals.Tools.Memory,
     { message: "Undeclared Tools fixture capability: Memory" },
   );
-  await assert.rejects(api.listModelSummaries("unexpected"), { message: "SoftwareSettings fixture requires the SDK's zero-argument directory call: listModelSummaries" });
+  await assert.rejects(api.Models.listSummaries("unexpected"), { message: "Host directory fixture requires the SDK's zero-argument directory call: Models.listSummaries" });
   assert.equal(settings.calls.length, 0);
   supplied.models[0].capabilities.toolCall = false;
   supplied.ttsConfigs[0].headers[0].value = "mutated-supplied-header";
   supplied.toolCatalog.mcpServers[0].description = "mutated-supplied-source";
-  const models = await api.listModelSummaries(), speech = await api.listTtsConfigs(), catalog = await api.readToolSourceCatalog();
+  const models = await api.Models.listSummaries(), speech = await api.Tts.listConfigs(), catalog = await api.Catalog.readToolSources();
   assert.deepEqual(models, directoryInput.models); assert.deepEqual(speech, directoryInput.ttsConfigs); assert.deepEqual(catalog, directoryInput.toolCatalog);
   models[0].providerName = "mutated-returned-model"; speech[0].responsePipeline[0].path = "mutated-returned-path";
   catalog.builtinTools[0].name = "mutated-returned-tool";
-  assert.deepEqual(await api.listModelSummaries(), directoryInput.models);
-  assert.deepEqual(await api.listTtsConfigs(), directoryInput.ttsConfigs);
-  assert.deepEqual(await api.readToolSourceCatalog(), directoryInput.toolCatalog);
+  assert.deepEqual(await api.Models.listSummaries(), directoryInput.models);
+  assert.deepEqual(await api.Tts.listConfigs(), directoryInput.ttsConfigs);
+  assert.deepEqual(await api.Catalog.readToolSources(), directoryInput.toolCatalog);
   assertDirectoryCalls(settings, [...snapshotDirectoryMethods, ...snapshotDirectoryMethods]);
   assert.equal(disk.calls.length, 0, "Directory test inputs must not initialize or manufacture plugin records");
   assert.deepEqual(await disk.entries(), []);
@@ -228,7 +228,7 @@ test("explicit SoftwareSettings test inputs preserve values and reject undeclare
 for (const method of snapshotDirectoryMethods) {
   /** Propagates one exact SDK directory rejection through real API/Web service calls and aborts staged business writes. */
   test("actual entrypoints propagate " + method + " read errors without publishing staged card or tags", async t => {
-    const disk = await createDiskHarness(t), settings = createSoftwareSettingsFixture(disk, directoryInput), plugin = openPlugin(settings.harness);
+    const disk = await createDiskHarness(t), settings = createHostDirectoriesFixture(disk, directoryInput), plugin = openPlugin(settings.harness);
     const card = await plugin.api("character.create", { values: { name: "失败读取前角色", description: "保存前描述" } });
     const updated = await plugin.api("tag.create", { values: { name: "错误前保留标签", description: "保留描述", promptContent: "保留提示", tagType: "TONE" } });
     const removed = await plugin.api("tag.create", { values: { name: "错误前删除标签", description: "删除前描述", promptContent: "删除前提示", tagType: "CUSTOM" } });
@@ -287,14 +287,16 @@ test("independently evaluated main API connects lazy directory readers without c
     ...disk.globals,
     Tools: {
       Files: disk.files, Storage: disk.storage,
-      SoftwareSettings: {
+      Models: {
         /** Records the real directory read attempt and rejects instead of simulating production success. */
-        async listModelSummaries() { calls.push("listModelSummaries"); throw failure; },
+        async listSummaries() { calls.push("Models.listSummaries"); throw failure; }
+  }, Tts: {
         /** Rejects another real dependency without inventing a configured TTS directory. */
-        async listTtsConfigs() { calls.push("listTtsConfigs"); throw failure; },
+        async listConfigs() { calls.push("Tts.listConfigs"); throw failure; }
+  }, Catalog: {
         /** Rejects another real dependency without inventing a complete tool catalog. */
-        async readToolSourceCatalog() { calls.push("readToolSourceCatalog"); throw failure; },
-      },
+        async readToolSources() { calls.push("Catalog.readToolSources"); throw failure; }
+  },
     },
     ToolPkg: {
       ...disk.globals.ToolPkg,
@@ -313,14 +315,14 @@ test("independently evaluated main API connects lazy directory readers without c
     /** Requires the original host rejection, not the missing-reader failure caught by native CLI testing. */
     error => error === failure,
   );
-  assert.deepEqual(calls, ["listModelSummaries", "listTtsConfigs", "readToolSourceCatalog"]);
+  assert.deepEqual(calls, ["Models.listSummaries", "Tts.listConfigs", "Catalog.readToolSources"]);
 });
 
 
 /** Public API invocation evaluates a fresh module, not the old registration runtime's globals. */
 test("fresh exported chat UI APIs retain package routes without replaying registration", async t => {
   const disk = await createDiskHarness(t);
-  const settings = createSoftwareSettingsFixture(disk, directoryInput);
+  const settings = createHostDirectoriesFixture(disk, directoryInput);
   const registered = openPlugin(settings.harness);
   await registered.api("character.list", {});
   const fresh = loadModule("src/main.ts", {
@@ -343,7 +345,7 @@ test("fresh exported chat UI APIs retain package routes without replaying regist
 
 
 test("sidebar preparation reads real plugin data and avatars without opening a UI", async t => {
-  const disk = await createDiskHarness(t), settings = createSoftwareSettingsFixture(disk, directoryInput);
+  const disk = await createDiskHarness(t), settings = createHostDirectoriesFixture(disk, directoryInput);
   const avatar = path.join(disk.directory, "prepared-avatar.png");
   await writeFile(avatar, Buffer.from("iVBORw0KGgo=", "base64"));
   const extensionReads = [];

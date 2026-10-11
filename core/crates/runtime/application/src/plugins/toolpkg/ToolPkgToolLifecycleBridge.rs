@@ -232,12 +232,14 @@ fn build_base_payload(tool: &AITool) -> Value {
 fn deliver(runtime: &ToolPkgBridgeRuntime, eventName: &str, eventPayload: Value) {
     let runtime = runtime.to_owned();
     let eventName = eventName.to_owned();
-    // Capture before scheduling: notification tasks do not inherit another turn's task-local state.
-    let executionContext = ToolExecutionManager::currentToolRuntimeContext();
+    // The shared pipeline enters this hook's scope before dispatching its notification.
+    let invocationContext = ToolExecutionManager::currentToolInvocationContext()
+        .expect("Tool lifecycle notifications require the native invocation context");
+    let executionContext = invocationContext.turnSnapshot().cloned();
     super::ToolPkgHookBridgeSupport::scheduleToolPkgNotification(
         "operit-toolpkg-notification",
         move || {
-            Box::pin(async move {
+            Box::pin(invocationContext.scope(async move {
                 let runtime = &runtime;
                 let eventName = &eventName;
                 let manager = match RuntimePackageManager::readySnapshot(
@@ -315,7 +317,7 @@ fn deliver(runtime: &ToolPkgBridgeRuntime, eventName: &str, eventPayload: Value)
                         ),
                     }
                 }
-            })
+            }))
         },
     );
 }

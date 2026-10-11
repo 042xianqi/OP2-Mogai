@@ -8,7 +8,7 @@ export function composeSource(name) {
   return readFileSync(new URL(name, composeRoot), 'utf8');
 }
 export function composeContextScript() {
-  return composeParserScript() + '\n' + composeManifest.context.map(composeSource).join('\n');
+  return composeParserScript() + '\n' + composeManifest.context.map(composeSource).join('\n') + '\n' + composeSource(composeManifest.compiler);
 }
 export function composeExecutionScript() {
   return '(function() {\n' + composeManifest.execution.map(composeSource).join('\n') + '\n})();';
@@ -19,7 +19,7 @@ export function wrapComposeScript(script = '') {
 export function composeParserScript() {
   return composeSource(composeManifest.parser).replace(
     '__OPERIT_COMPOSE_PARSER_SOURCE__',
-    () => JSON.stringify(composeSource(composeManifest.parserSource)),
+    () => "function() { return " + JSON.stringify(composeSource(composeManifest.parserSource)) + "; }",
   );
 }
 

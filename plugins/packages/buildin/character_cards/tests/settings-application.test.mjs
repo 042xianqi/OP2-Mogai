@@ -10,7 +10,7 @@ import { importedCallCount, loadModule, plain } from "./runtime.mjs";
 
 const { createChatInput } = loadModule("src/chat-lifecycle.ts");
 const themeId = "independent-theme-two", speechId = "tts-two";
-const cardCalls = ["listThemeConfigs", "listTtsConfigs", "applyThemeConfig", "setCurrentTtsConfigId", "getCurrentTtsConfigId"];
+const cardCalls = ["Theme.listConfigs", "Tts.listConfigs", "Theme.applyConfig", "Tts.setCurrentConfigId", "Tts.getCurrentConfigId"];
 
 /** Audits genuine host writes without supplying any role, selection or persistence implementation. */
 function writes(runtime) {
@@ -41,10 +41,11 @@ async function environment(t) {
 /** Asserts every directory validation observes the exact pre-selection file and namespace before any real mutation. */
 async function auditPrevalidation(runtime) {
   const before = await stateBytes(runtime), extension = plain(runtime.records.get("selector-chat").extension);
-  for (const method of ["listThemeConfigs", "listTtsConfigs"]) {
-    const original = runtime.tools.SoftwareSettings[method];
+  for (const method of ["Theme.listConfigs", "Tts.listConfigs"]) {
+    const [namespace, name] = method.split(".");
+    const original = runtime.tools[namespace][name];
     /** Inspects actual native and file state at the SDK read boundary, not a plugin-provided success flag. */
-    runtime.tools.SoftwareSettings[method] = async (...args) => {
+    runtime.tools[namespace][name] = async (...args) => {
       assert.equal(Buffer.compare(await stateBytes(runtime), before), 0, method + " must precede file publication");
       assert.deepEqual(runtime.records.get("selector-chat").extension, extension, method + " must precede native selection writes");
       return original(...args);
@@ -75,7 +76,7 @@ test("main registers one lazy real Settings access and main IPC reads actual nam
     { id: "independent-theme-one", label: "Controlled prior independent theme" },
     { id: themeId, label: "Controlled independent theme" },
   ]);
-  assert.deepEqual(settings.calls, [{ method: "listThemeConfigs", args: [] }]);
+  assert.deepEqual(settings.calls, [{ method: "Theme.listConfigs", args: [] }]);
   assert.deepEqual(settings.current, { theme: "independent-theme-one", tts: "tts-one" });
 });
 
@@ -110,7 +111,7 @@ test("registered group selection aliases use only the group own Theme and never 
         : operation === "chat.configuration.binding.write" ? { chatId: "selector-chat", selection: "group:" + group.id } : { id: group.id };
       await runtime.api(operation, payload);
       assert.notEqual(group.themeConfigId, settings.themes.get(themeId).id);
-      assert.deepEqual(settings.calls, [{ method: "listThemeConfigs", args: [] }, { method: "applyThemeConfig", args: [group.themeConfigId] }]);
+      assert.deepEqual(settings.calls, [{ method: "Theme.listConfigs", args: [] }, { method: "Theme.applyConfig", args: [group.themeConfigId] }]);
       assert.deepEqual(settings.current, { theme: group.themeConfigId, tts: "tts-one" });
       if (operation === "chat.configuration.binding.write") assert.equal(runtime.records.get("selector-chat").extension.selection, "group:" + group.id);
       else assert.deepEqual(JSON.parse((await stateBytes(runtime)).toString("utf8")).active, { CharacterGroup: { id: group.id } });
@@ -126,7 +127,7 @@ test("real Web activate and writeChatBinding IPC requests await the same central
       const { runtime, settings, card } = await environment(s);
       const request = action === "activate" ? { action, type: "card", id: card.id } : { action, chatId: "selector-chat", selection: "card:" + card.id };
       await runtime.web(request);
-      const expected = action === "activate" ? ["listThemeConfigs", "listTtsConfigs", "listTtsConfigs", "applyThemeConfig", "setCurrentTtsConfigId", "getCurrentTtsConfigId"] : cardCalls;
+      const expected = action === "activate" ? ["Theme.listConfigs", "Tts.listConfigs", "Tts.listConfigs", "Theme.applyConfig", "Tts.setCurrentConfigId", "Tts.getCurrentConfigId"] : cardCalls;
       assert.deepEqual(settings.calls.map(
         /** Includes the management snapshot's genuine TTS directory read instead of hiding it from the audit. */
         call => call.method,
@@ -167,7 +168,7 @@ test("deleted Theme or TTS IDs reject registered active, binding and native sele
         assert.deepEqual(settings.calls.map(
           /** Requires only the actual preceding validation reads, never an apply or setter invocation. */
           call => call.method,
-        ), missing === "theme" ? ["listThemeConfigs"] : ["listThemeConfigs", "listTtsConfigs"]);
+        ), missing === "theme" ? ["Theme.listConfigs"] : ["Theme.listConfigs", "Tts.listConfigs"]);
         assert.equal(runtime.disk.calls.filter(
           /** Requires zero real file writes, not merely unchanged displayed state. */
           call => call.method === "write" || call.method === "move",
@@ -187,7 +188,7 @@ test("deleted Theme or TTS IDs reject registered active, binding and native sele
 test("registered Settings directory rejection preserves its original error and performs no selection commit", async t => {
   const { runtime, settings, card } = await environment(t), original = new Error("Controlled original Theme directory rejection"), before = await stateBytes(runtime);
   /** Rejects the formally declared directory read at the controlled host boundary. */
-  runtime.tools.SoftwareSettings.listThemeConfigs = async () => { throw original; };
+  runtime.tools.Theme.listConfigs = async () => { throw original; };
   await assert.rejects(runtime.api("chat.configuration.binding.write", { chatId: "selector-chat", selection: "card:" + card.id }),
     /** Requires the original boundary rejection identity, not a transformed success or retry response. */
     failure => failure === original,
@@ -198,7 +199,7 @@ test("registered Settings directory rejection preserves its original error and p
 /** Verifies UI completion remains pending and every interactive control is disabled until the actual independent apply acknowledgement arrives. */
 test("registered selector awaits Theme and TTS before V1 completion for both chat and explicit global targets", async t => {
   for (const chatId of ["selector-chat", null]) {
-    for (const method of ["applyThemeConfig", "setCurrentTtsConfigId", "getCurrentTtsConfigId"]) {
+    for (const method of ["Theme.applyConfig", "Tts.setCurrentConfigId", "Tts.getCurrentConfigId"]) {
     /** Uses the actual registered native modal and callback dispatcher for each real acknowledgement and target mode. */
     await t.test((chatId === null ? "global:" : "chat:") + method, async s => {
       const { runtime, settings, card } = await environment(s), requestId = chatId === null ? "settings-global" : "settings-chat";
@@ -223,7 +224,7 @@ test("registered selector awaits Theme and TTS before V1 completion for both cha
         assert.deepEqual(settings.calls.map(
           /** Confirms no subsequent step or V1 completion can precede this exact outstanding acknowledgement. */
           call => call.method,
-        ), cardCalls.slice(0, method === "applyThemeConfig" ? 3 : method === "setCurrentTtsConfigId" ? 4 : 5));
+        ), cardCalls.slice(0, method === "Theme.applyConfig" ? 3 : method === "Tts.setCurrentConfigId" ? 4 : 5));
       } finally { gate.release(); }
       const result = await pending; assertCardApplication(settings);
       assert.deepEqual(plain(result.actionResult), { type: "toolpkg.presentation.complete", requestId, value: { selection: "card:" + card.id, contextKey: "card:" + card.id } });
@@ -235,7 +236,7 @@ test("registered selector awaits Theme and TTS before V1 completion for both cha
 
 /** Application errors expose true acknowledged partial progress, preserve the original error and leave the same modal open without retry. */
 test("registered selector apply failures retain partial selection state and do not emit successful completion", async t => {
-  for (const method of ["applyThemeConfig", "setCurrentTtsConfigId"]) {
+  for (const method of ["Theme.applyConfig", "Tts.setCurrentConfigId"]) {
     /** Injects a real post-write SDK rejection rather than pretending cross-store selection and preferences are atomic. */
     await t.test(method, async s => {
       const { runtime, settings, card } = await environment(s), ui = await ready(runtime, presentation("partial-" + method, "selector-chat"));
@@ -245,14 +246,14 @@ test("registered selector apply failures retain partial selection state and do n
         /** Requires the precise confirmed progress and original SDK cause from the real application coordinator. */
         failure => {
           assert.equal(failure.name, "SelectionApplicationFailure"); assert.equal(failure.cause, original);
-          assert.deepEqual(plain(failure.completed), method === "applyThemeConfig" ? [{ type: "selection", selection: "card:" + card.id }]
+          assert.deepEqual(plain(failure.completed), method === "Theme.applyConfig" ? [{ type: "selection", selection: "card:" + card.id }]
             : [{ type: "selection", selection: "card:" + card.id }, { type: "theme", id: themeId }]);
-          assert.deepEqual(plain(failure.failedStep), { type: method === "applyThemeConfig" ? "theme" : "tts", id: method === "applyThemeConfig" ? themeId : speechId });
+          assert.deepEqual(plain(failure.failedStep), { type: method === "Theme.applyConfig" ? "theme" : "tts", id: method === "Theme.applyConfig" ? themeId : speechId });
           return true;
         },
       );
       assert.equal(runtime.records.get("selector-chat").extension.selection, "card:" + card.id); assert.equal(writes(runtime).length, 1);
-      assert.equal(settings.current.theme, themeId); assert.equal(settings.current.tts, method === "applyThemeConfig" ? "tts-one" : speechId);
+      assert.equal(settings.current.theme, themeId); assert.equal(settings.current.tts, method === "Theme.applyConfig" ? "tts-one" : speechId);
       const tree = ui.render().tree; assert.equal(tree.type, "Dialog"); assert.equal(keyedNode(tree, "selector-close").props.enabled, true);
       assert.match(keyedNode(tree, "selector-commit-error").props.text, /选择已提交.*实际存储状态待核对.*未自动撤销或重试.*Controlled post-write rejection/);
       const audit = plain(settings.calls); ui.render(); assert.deepEqual(settings.calls, audit);
@@ -264,21 +265,21 @@ test("registered selector apply failures retain partial selection state and do n
 
 /** Exact-ID receipts are required even when the independent owner has genuinely changed its preference state. */
 test("registered binding application rejects contradictory Theme, TTS setter and current-ID receipts", async t => {
-  for (const method of ["applyThemeConfig", "setCurrentTtsConfigId", "getCurrentTtsConfigId"]) {
+  for (const method of ["Theme.applyConfig", "Tts.setCurrentConfigId", "Tts.getCurrentConfigId"]) {
     /** Tests each formal acknowledgement separately through the real registered binding provider. */
     await t.test(method, async s => {
       const { runtime, settings, card } = await environment(s);
-      settings.returnReceipt(method, method === "applyThemeConfig" ? settings.themes.get("independent-theme-one") : "tts-one");
+      settings.returnReceipt(method, method === "Theme.applyConfig" ? settings.themes.get("independent-theme-one") : "tts-one");
       await assert.rejects(runtime.api("chat.configuration.binding.write", { chatId: "selector-chat", selection: "card:" + card.id }),
         /** Rejects exact receipt mismatch while retaining confirmed selection and every genuinely acknowledged earlier apply. */
         failure => {
           assert.equal(failure.name, "SelectionApplicationFailure"); assert.match(String(failure.cause), /ID 与请求不一致|未确认请求的 ID/);
-          assert.equal(failure.failedStep.type, method === "applyThemeConfig" ? "theme" : "tts"); return true;
+          assert.equal(failure.failedStep.type, method === "Theme.applyConfig" ? "theme" : "tts"); return true;
         },
       );
       assert.equal(writes(runtime).length, 1); assert.equal(runtime.records.get("selector-chat").extension.selection, "card:" + card.id);
-      assert.equal(settings.current.theme, themeId); assert.equal(settings.current.tts, method === "applyThemeConfig" ? "tts-one" : speechId);
-      assert.equal(settings.calls.length, method === "applyThemeConfig" ? 3 : method === "setCurrentTtsConfigId" ? 4 : 5);
+      assert.equal(settings.current.theme, themeId); assert.equal(settings.current.tts, method === "Theme.applyConfig" ? "tts-one" : speechId);
+      assert.equal(settings.calls.length, method === "Theme.applyConfig" ? 3 : method === "Tts.setCurrentConfigId" ? 4 : 5);
     });
   }
 });
@@ -306,7 +307,7 @@ test("registered file selection commit failure preserves the original IO rejecti
     failure => failure === original,
   );
   assert.equal(Buffer.compare(await stateBytes(runtime), before), 0);
-  assert.deepEqual(settings.calls, [{ method: "listThemeConfigs", args: [] }, { method: "listTtsConfigs", args: [] }]);
+  assert.deepEqual(settings.calls, [{ method: "Theme.listConfigs", args: [] }, { method: "Tts.listConfigs", args: [] }]);
   assert.deepEqual(settings.current, { theme: "independent-theme-one", tts: "tts-one" });
 });
 
@@ -334,7 +335,7 @@ test("execution runtime can read named themes before registerToolPkg is invoked"
   const disk = await createDiskHarness(t), settings = createSelectionSettingsFixture(), channels = new Map();
   loadModule("src/main.ts", {
     ...disk.globals,
-    Tools: { ...disk.globals.Tools, SoftwareSettings: settings.settings },
+    Tools: { ...disk.globals.Tools, ...settings.settings },
     ToolPkg: { ...disk.globals.ToolPkg, ipc: {
       /** Retains the real main-module handler without invoking package registration or emulating business operations. */
       on(name, handler) { assert.equal(channels.has(name), false); channels.set(name, handler); },

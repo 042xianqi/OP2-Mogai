@@ -1,3 +1,4 @@
+import { installScopedHostRuntime, installGeneratedToolsRuntime } from "../../../../../tools/tests/fixtures/scoped_host_runtime.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
@@ -6,11 +7,6 @@ import vm from "node:vm";
 const root = new URL("../../../../../", import.meta.url);
 /** Reads current production code, not an emitted runtime artifact. */
 function source(path) { return readFileSync(new URL(path, root), "utf8"); }
-const generator = source("core/crates/plugin/codegen/src/runtime_bindings.rs");
-const validatorStart = generator.indexOf("function __operitRequireChatJsonObject(value) {");
-const validatorEnd = generator.indexOf("/** Invokes only the narrow typed native record binding", validatorStart);
-assert.ok(validatorStart >= 0 && validatorEnd > validatorStart);
-const runtimeScript = generator.slice(validatorStart, validatorEnd) + source("core/crates/plugin/sdk/src/chat_runtime.js");
 const submitted = { kind: "submit", chatId: "chat-a", runtime: "main", input: { text: "Original", attachments: [], replyToMessageTimestamp: null }, turn: { kind: "execute", participantId: "participant-a" }, notifyReply: false };
 const receipt = { chatId: "chat-a", message: "Original", aiResponse: "Visible text", receivedAt: 30, sentAt: 10,
   outcome: { type: "committed", status: "completed", userMessageTimestamp: 11, assistant: { messageTimestamp: 22, variantIndex: 0 } } };
@@ -21,17 +17,21 @@ function plain(value) { return JSON.parse(JSON.stringify(value)); }
 /** Loads the actual SDK runtime with an explicitly controlled native ABI, not another stream implementation. */
 function runtime(native) {
   const calls = [], context = vm.createContext({ console });
-  context.__operitNativeChatAsync =
-    /** Audits exactly one current native invocation and exposes its real private response callback. */
-    function(id, method, payload) {
-      const value = JSON.parse(payload); calls.push({ method, value });
+  const registry = installScopedHostRuntime(context);
+  context.__operitNativeCallToolStructured = registry.binding(
+    /** Submits host-owned structured values and settles the exact production Promise. */
+    function(id, type, name, parameters) {
+      assert.equal(type, 'default');
+      const method = name === 'chat_observe' ? parameters.observation.op : name === 'chat_send_message' ? 'send' : name === 'chat_cancel' ? 'cancel' : name;
+      const payload = name === 'chat_observe' ? parameters.observation.op === 'open' ? parameters.observation.request : parameters.observation.handle : name === 'chat_send_message' ? parameters.request : parameters.chatId;
+      const value = structuredClone(payload); calls.push({ method, value });
       native(method, value,
-        /** Delivers the explicitly planned native value through the actual production callback slot. */
-        result => context[id](JSON.stringify(result), false),
-        /** Preserves the explicitly planned native rejection message. */
-        message => context[id](JSON.stringify({ message }), true));
-    };
-  vm.runInContext(runtimeScript, context);
+        /** Delivers the planned host result without JSON text or public callback slots. */
+        result => registry.settle(id, {success:true,data:result}, false),
+        /** Preserves the planned host rejection through the same scoped channel. */
+        message => registry.settle(id, message, true));
+    });
+  installGeneratedToolsRuntime(context);
   return { context, calls,
     /** Evaluates caller code in the same JavaScript realm as the strict production JSON validator. */
     run(code) { return vm.runInContext(code, context); },
@@ -40,8 +40,8 @@ function runtime(native) {
   };
 }
 
-/** Requires callback cleanup after every actual transport response. */
-function noCallbacks(context) { assert.deepEqual(Object.keys(context).filter(key => /^__operit_chat_send_\d+$/.test(key)), []); }
+/** Requires every host operation to release its owning call reference. */
+function assertCallReleased(context) { assert.equal(context.refs, 0); }
 
 /** The non-streaming call returns the actual receipt and does not split admission/wait/finalization into author calls. */
 test("send: exactly one current native send returns its real terminal receipt", async () => {
@@ -49,8 +49,8 @@ test("send: exactly one current native send returns its real terminal receipt", 
     /** Supplies only the declared single-send capability for this scenario. */
     (method, request, resolve) => { assert.equal(method, "send"); assert.deepEqual(request, submitted); resolve(receipt); },
   );
-  assert.deepEqual(plain(await env.context.__operitChatSend(env.request())), receipt);
-  assert.deepEqual(env.calls.map(call => call.method), ["send"]); noCallbacks(env.context);
+  assert.deepEqual(plain(await env.context.Tools.Chat.sendMessage(env.request())), receipt);
+  assert.deepEqual(env.calls.map(call => call.method), ["send"]); assertCallReleased(env.context);
 });
 
 /** A streamed replacement carries already parsed thinking/tool/status blocks and the final real receipt on one channel. */
@@ -77,12 +77,12 @@ test("stream: ordered native pulls deliver atomic semantic replacements and one 
       }
     },
   );
-  const stream = env.context.__operitChatStream(env.request());
+  const stream = env.context.Tools.Chat.sendMessageStreaming(env.request());
   assert.equal(typeof stream.then, "undefined"); assert.equal(env.calls.length, 0);
   const actual = [];
   for await (const event of stream) actual.push(plain(event));
   assert.deepEqual(actual, expected); assert.equal(next, 3);
-  assert.deepEqual(env.calls.map(call => call.method), ["open", "next", "next", "next", "close"]); noCallbacks(env.context);
+  assert.deepEqual(env.calls.map(call => call.method), ["open", "next", "next", "next", "close"]); assertCallReleased(env.context);
 });
 
 /** Breaking a loop disposes the native observation but cannot cancel an accepted model request. */
@@ -95,10 +95,10 @@ test("stream: break disposes once without issuing cancel", async () => {
       else { assert.equal(method, "close"); resolve(null); }
     },
   );
-  const stream = env.context.__operitChatStream(env.request());
+  const stream = env.context.Tools.Chat.sendMessageStreaming(env.request());
   for await (const _event of stream) break;
   await stream.return();
-  assert.deepEqual(env.calls.map(call => call.method), ["open", "next", "close"]); noCallbacks(env.context);
+  assert.deepEqual(env.calls.map(call => call.method), ["open", "next", "close"]); assertCallReleased(env.context);
 });
 
 /** Disposal must wake an outstanding native pull instead of waiting indefinitely for another provider chunk. */
@@ -109,21 +109,21 @@ test("stream: return closes a pending pull and concurrent next is rejected", asy
     resolve => { signal = resolve; },
   );
   const env = runtime(
-    /** Holds the actual native next callback until its explicit close operation. */
+    /** Holds the actual native next completion until its explicit close operation. */
     (method, _value, resolve) => {
       if (method === "open") resolve("observation");
       else if (method === "next") { pending = resolve; signal(); }
       else { assert.equal(method, "close"); assert.notEqual(pending, null); pending(null); resolve(null); }
     },
   );
-  const stream = env.context.__operitChatStream(env.request()), next = stream.next();
+  const stream = env.context.Tools.Chat.sendMessageStreaming(env.request()), next = stream.next();
   await started;
   await assert.rejects(stream.next(), /only one pending next/);
   assert.equal((await stream.return()).done, true); assert.equal((await next).done, true);
-  assert.deepEqual(env.calls.map(call => call.method), ["open", "next", "close"]); noCallbacks(env.context);
+  assert.deepEqual(env.calls.map(call => call.method), ["open", "next", "close"]); assertCallReleased(env.context);
 });
 
-/** A failed observation retains its original error and removes all its private callback and stream resources. */
+/** A failed observation retains its original error and removes all its host Promise and stream resources. */
 test("stream: original native errors propagate and cleanup failures retain both causes", async () => {
   const env = runtime(
     /** Plans two independent original errors rather than creating a successful completion. */
@@ -133,10 +133,10 @@ test("stream: original native errors propagate and cleanup failures retain both 
       else { assert.equal(method, "close"); reject(" original disposal error "); }
     },
   );
-  await assert.rejects(env.context.__operitChatStream(env.request()).next(),
+  await assert.rejects(env.context.Tools.Chat.sendMessageStreaming(env.request()).next(),
     /** Verifies both errors without manufacturing a receipt or retrying. */
     error => error.cause.message === " original generation error " && error.cleanupError.message === " original disposal error ");
-  noCallbacks(env.context);
+  assertCallReleased(env.context);
 });
 
 /** The request is captured once, so later caller mutation cannot change the accepted send. */
@@ -149,11 +149,11 @@ test("stream: snapshots the request and closing an unopened iterator does not se
       else { assert.equal(method, "close"); resolve(null); }
     },
   );
-  const request = env.request(), stream = env.context.__operitChatStream(request); request.input.text = "Changed";
+  const request = env.request(), stream = env.context.Tools.Chat.sendMessageStreaming(request); request.input.text = "Changed";
   assert.equal((await stream.next()).value.type, "completed");
-  const unopened = env.context.__operitChatStream(env.request()); await unopened.return();
+  const unopened = env.context.Tools.Chat.sendMessageStreaming(env.request()); await unopened.return();
   assert.equal((await unopened.next()).done, true);
-  assert.deepEqual(env.calls.map(call => call.method), ["open", "next", "close"]); noCallbacks(env.context);
+  assert.deepEqual(env.calls.map(call => call.method), ["open", "next", "close"]); assertCallReleased(env.context);
 });
 
 /** Invalid argument counts and non-JSON objects are rejected before scheduling any native operation. */
@@ -162,11 +162,11 @@ test("send: rejects malformed caller data without a native call", async () => {
     /** Any native invocation is forbidden in this validation-only scenario. */
     () => assert.fail("Invalid data reached native Chat"),
   );
-  await assert.rejects(env.run("__operitChatSend()"), /exactly one request/);
-  await assert.rejects(env.run("__operitChatSend({ value: () => 1 })"), /non-JSON/);
-  assert.throws(() => env.run("__operitChatStream({ value: NaN })"), /non-JSON/);
-  await assert.rejects(env.run("__operitChatCancel('')"), /nonempty chatId/);
-  assert.equal(env.calls.length, 0); noCallbacks(env.context);
+  await assert.rejects(env.run("Tools.Chat.sendMessage()"), /exactly (?:one request|1 arguments)/);
+  await assert.rejects(env.run("Tools.Chat.sendMessage({ value: () => 1 })"), /non-JSON/);
+  assert.throws(() => env.run("Tools.Chat.sendMessageStreaming({ value: NaN })"), /non-JSON/);
+  await assert.rejects(env.run("Tools.Chat.cancel('')"), /Identifier must be exact nonblank text/);
+  assert.equal(env.calls.length, 0); assertCallReleased(env.context);
 });
 
 /** Chat cancellation uses only the public chat identity; the native host captures execution ownership internally. */
@@ -176,8 +176,8 @@ test("cancel: returns the exact native owner/chat cancellation acknowledgement",
     /** Provides only cancellation for the declared chat. */
     (method, value, resolve) => { assert.equal(method, "cancel"); assert.equal(value, "chat-a"); resolve(actual); },
   );
-  assert.deepEqual(plain(await env.context.__operitChatCancel("chat-a")), actual);
-  assert.deepEqual(env.calls, [{ method: "cancel", value: "chat-a" }]); noCallbacks(env.context);
+  assert.deepEqual(plain(await env.context.Tools.Chat.cancel("chat-a")), actual);
+  assert.deepEqual(env.calls, [{ method: "cancel", value: "chat-a" }]); assertCallReleased(env.context);
 });
 
 /** Audits the mounted native/SDK path without claiming this source assertion is a Rust execution test. */
@@ -201,8 +201,9 @@ test("static: only three send controls are public and native snapshots use the e
   assert.match(observation, /MAX_CHAT_SNAPSHOT_BYTES: usize = 8 \* 1024 \* 1024/);
   assert.match(observation, /watch::channel\(ObservationState::default\(\)\)/);
   assert.doesNotMatch(observation, /unbounded|VecDeque|cancelNativeChatExecution/);
-  assert.match(engine, /"__operitNativeChatAsync"/);
-  assert.match(engine, /let cancel = host\.cancel\(chatId\)/);
+  assert.match(engine, /"__operitNativeCallToolStructured"/);
+  assert.doesNotMatch(engine, /__operitNativeChatAsync/);
+  assert.match(source("core/crates/tool/services/src/tools/ToolRegistration.rs"), /runtimeSupport\(\)\.requestPluginChatCancellation\(&context\.requirePluginOwner\(\)\?, &args\.chat_id\)/);
 });
 
 console.log("SCOPE: actual JavaScript iterator execution with a controlled native ABI plus source checks; no Rust compilation or live AI generation");

@@ -2666,8 +2666,46 @@ pub struct IconProps {
     /// Duration in milliseconds of one full rotation.
     pub spinDurationMs: Option<f64>,
 }
+/// Fixed-extent item generation owned by one keyed list in a bounded viewport.
+pub struct ComposeLazyItemOptions {
+    /// Stable list identity within the owning page.
+    pub key: String,
+    /// Total number of items, including items outside the current window.
+    pub itemCount: u32,
+    /// Unscaled main-axis item extent, including its separator; Flutter applies the current text scale.
+    pub itemExtent: f64,
+    /// Number of items materialized before Flutter reports its viewport.
+    pub initialItemCount: u32,
+}
+/// Visible item interval with an exclusive last index.
+pub struct ComposeLazyRange {
+    /// First materialized item index.
+    pub firstIndex: u32,
+    /// Exclusive end of the materialized interval.
+    pub lastIndex: u32,
+}
+/// Total extent and range action delivered through the existing node protocol.
+pub struct ComposeLazyViewport {
+    /// Absolute index of the first delivered child.
+    pub firstIndex: u32,
+    /// Total item count independent of the delivered child count.
+    pub itemCount: u32,
+    /// Unscaled main-axis item extent; Flutter applies the current text scale.
+    pub itemExtent: f64,
+    /// Requests the next materialized range through normal action dispatch.
+    pub onRangeChanged: Arc<dyn Fn(ComposeLazyRange) -> () + Send + Sync>,
+}
+/// Windowed content accepted by the existing lazy column and row factories.
+pub struct ComposeLazyItems {
+    /// Materialized nodes with stable item identities.
+    pub content: Vec<ComposeNode>,
+    /// Viewport metadata for the owning Flutter list.
+    pub viewport: ComposeLazyViewport,
+}
 /// Vertically scrolling list whose child content is hosted by a lazy column.
 pub struct LazyColumnProps {
+    /// Optional viewport protocol supplied by lazyItems for generated content.
+    pub viewport: Option<ComposeLazyViewport>,
     /// Shared node layout, drawing, identity, and lifecycle properties.
     pub base_compose_common_props: ComposeCommonProps,
     /// List content rendered in vertical order.
@@ -3210,6 +3248,12 @@ pub struct ComposeDslContext {
 }
 /// Stateful rendering and host-service operations available to Compose screens.
 pub trait ComposeDslContextMethods: Send + Sync {
+    /// Builds the requested range using stable item keys and a fixed main-axis extent.
+    fn lazyItems(
+        &self,
+        options: ComposeLazyItemOptions,
+        itemBuilder: Arc<dyn Fn(u32) -> ComposeNode + Send + Sync>,
+    ) -> ComposeLazyItems;
     /// Retains a keyed value across renders and returns a setter that schedules updates.
     fn useState<T>(&self, key: String, initialValue: T) -> (T, Arc<dyn Fn(T) -> () + Send + Sync>);
     /// Retains a keyed mutable value and returns a callback for replacing it.

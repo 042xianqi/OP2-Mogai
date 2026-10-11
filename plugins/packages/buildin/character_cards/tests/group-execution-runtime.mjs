@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { createDiskHarness } from "./disk-files.mjs";
 import { loadModule, plain } from "./runtime.mjs";
-import { createSoftwareSettingsFixture } from "./software-settings-fixture.mjs";
+import { createHostDirectoriesFixture } from "./host-directories-fixture.mjs";
 
-const directoryInput = plain(loadModule("tests/software-settings-input.ts").softwareSettingsTestInput);
+const directoryInput = plain(loadModule("tests/host-directories-input.ts").hostDirectoriesTestInput);
 const owner = "com.operit.character_cards", otherOwner = "controlled.sibling_package";
 
 /** Creates a deterministic test rendezvous without delays, timers or speculative polling. */
@@ -25,7 +25,7 @@ export function controlledReceipt(input, userMessageTimestamp, assistant, status
 
 /** Opens real disk domain records while injecting explicitly controlled, owner-isolated Chat, AI and turn-transport boundaries. */
 export async function groupEnvironment(t, transport) {
-  const disk = await createDiskHarness(t), settings = createSoftwareSettingsFixture(disk, directoryInput), chatId = "controlled-real-chat";
+  const disk = await createDiskHarness(t), settings = createHostDirectoriesFixture(disk, directoryInput), chatId = "controlled-real-chat";
   const records = new Map(), planReplies = [], planningStarted = deferred(), calls = [], modelCalls = [], extensionCalls = [];
   const chat = {
     /** Requires an actual fixture chat and reads only the authenticated owner namespace; unknown targets are errors. */
@@ -45,7 +45,7 @@ export async function groupEnvironment(t, transport) {
       return { text: response.text, turns: [], finishReason: "stop", inputTokens: 1, outputTokens: 1 };
     },
   };
-  const tools = new Proxy({ Files: disk.files, Storage: disk.storage, SoftwareSettings: settings.harness.globals.Tools.SoftwareSettings, Chat: chat }, {
+  const tools = new Proxy({ Files: disk.files, Storage: disk.storage, Models: settings.harness.globals.Tools.Models, Tts: settings.harness.globals.Tools.Tts, Catalog: settings.harness.globals.Tools.Catalog, Chat: chat }, {
     /** Rejects every unspecified host capability rather than emulating a working SDK. */
     get(target, property) {
       if (!Object.hasOwn(target, property)) throw new Error("Unprovided controlled Tools capability: " + String(property));
@@ -55,11 +55,11 @@ export async function groupEnvironment(t, transport) {
   const globals = { ...disk.globals, Tools: tools };
   const repository = await loadModule("src/storage/database.ts", globals).DatabaseCharacterRepository.open({
     /** Reads only the explicitly supplied complete controlled model directory. */
-    listModels: () => tools.SoftwareSettings.listModelSummaries(),
+    listModels: () => tools.Models.listSummaries(),
     /** Reads only the explicitly supplied complete controlled voice directory. */
-    listTtsConfigs: () => tools.SoftwareSettings.listTtsConfigs(),
+    listTtsConfigs: () => tools.Tts.listConfigs(),
     /** Reads only the explicitly supplied complete controlled tool-source catalog. */
-    readToolCatalog: () => tools.SoftwareSettings.readToolSourceCatalog(),
+    readToolCatalog: () => tools.Catalog.readToolSources(),
   });
   const service = loadModule("src/service.ts", globals).createCharacterCardsService(repository);
   const a = await service.dispatchDomain("character.create", { values: { name: "Participant A", avatarUri: "a.png" } });

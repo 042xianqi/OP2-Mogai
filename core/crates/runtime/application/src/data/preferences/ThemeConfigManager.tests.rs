@@ -793,6 +793,16 @@ impl operit_host_api::HostRuntimeTaskSchedulerHost for ThemeObserverScheduler {
             "Theme observer tests do not schedule async work",
         ))
     }
+    /// Rejects cooperative futures outside this test's declared synchronous observer boundary.
+    fn scheduleHostRuntimeCooperativeAsyncTask(
+        &self,
+        _: &str,
+        _: operit_host_api::HostRuntimeAsyncTask,
+    ) -> operit_host_api::HostResult<()> {
+        Err(HostError::new(
+            "Theme observer tests do not schedule cooperative async work",
+        ))
+    }
     /// Rejects delayed work outside this test's declared observer boundary.
     fn scheduleDelayedHostRuntimeTask(
         &self,

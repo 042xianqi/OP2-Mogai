@@ -1,6 +1,7 @@
+import { compileComposeModule } from "../../plugins/tools/compile_compose_module.mjs";
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { productionBootstrap } from './fixtures/production_bootstrap.mjs';
+import { productionBootstrap, bootstrapLibrarySource } from './fixtures/production_bootstrap.mjs';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
@@ -29,6 +30,9 @@ function runtime(operations = {}) {
   vm.runInContext(source('hosts/web/src/javascript_promises.js'), context);
   const registry = context.__operitHostPromiseRegistry;
   const builtins = {
+    /** Reads the exact trusted library requested by its production accessor. */
+    __operitNativeReadBootstrapLibrary: bootstrapLibrarySource,
+    __operitNativePrepareComposeModule: compileComposeModule,
     __operitNativeHashText(value) { return createHash("sha256").update(value).digest("hex"); },
     /** Records plugin logs as structured host requests. */
     __operitNativeLog() { return null; },
@@ -110,7 +114,7 @@ test('crypto and deflate use direct structured values without error-string guess
   vm.runInContext('JSON.parse = JSON.stringify = function() { throw Error("JSON transport used"); };', context);
   assert.equal(vm.runInContext('CryptoJS.MD5("input").toString()', context), '{"nativeError":"literal data"}');
   assert.equal(vm.runInContext('pako.inflate("encoded", {to:"string"})', context), '{"nativeError":"decompressed text"}');
-  assert.equal(calls.length, 2);
+  assert.equal(calls.filter(call => call.name !== '__operitNativeReadBootstrapLibrary').length, 2);
   const failed = runtime({
     /** Rejects invalid cryptographic input instead of returning an empty plaintext. */
     __operitNativeCrypto() { throw new Error('invalid AES key'); },
@@ -138,7 +142,7 @@ test('Jimp uses an owned host Promise and releases exactly the original executio
   await assert.rejects(image.crop(0, 0, 10, 10), /image operation rejected/);
   await flush();
   assert.equal(context.__operitGetCallState('owner').pendingReferences, 0);
-  assert.equal(calls[1].args[1][0], 'image-handle');
+  assert.equal(calls.filter(call => call.name === '__operitNativeImageProcessing')[1].args[1][0], 'image-handle');
   assert.equal(Object.keys(context).some(key => /^_jimp_|^__operit_compose_webview_/.test(key)), false);
 });
 
@@ -333,4 +337,19 @@ test('module reads preserve empty source and propagate the original resource-own
   await flush();
   assert.equal(failed.outputs.size, 0);
   assert.match(failed.failures.get('failed-modules').message, /resource owner read denied/);
+});
+
+/** Ensures compiled artifacts never cross the compiler boundary and page globals contain no parser. */
+test('page bootstrap owns no compiler and precompiled factories bypass shared lowering', () => {
+  const { context } = runtime({
+    /** Rejects any unintended compiler request from an artifact factory. */
+    __operitNativePrepareComposeModule() { throw Error('Artifact attempted source lowering'); },
+  });
+  assert.equal(vm.runInContext('typeof __operitAcorn + ":" + typeof OperitComposeCompiler', context), 'undefined:undefined');
+  const source = '// @operit-compose-artifact 1\nexports.run = function() { return 7; };';
+  const factory = context.__operitGetFactory('main', 'pkg:artifact', source, true);
+  const module = { exports: {} };
+  factory(module, module.exports, () => { throw Error('Unexpected require'); }, {});
+  assert.equal(module.exports.run(), 7);
+  assert.throws(() => context.__operitGetFactory('main', 'pkg:bad', '// @operit-compose-artifact 999\n', true), /Unsupported Compose artifact/);
 });

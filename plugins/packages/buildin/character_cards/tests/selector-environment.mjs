@@ -22,15 +22,18 @@ export async function selectorEnvironment(t, configurationSettings = {}, runtime
       };
     },
   };
-  const tools = { Files: disk.files, Storage: disk.storage, Chat: chat, SoftwareSettings: {
+  const tools = { Files: disk.files, Storage: disk.storage, Chat: chat, Models: {
     /** Provides the labelled readonly real SDK-shaped model catalog, not character storage or CRUD. */
-    async listModelSummaries() { directoryCalls.push("models"); return plain(readonly.models); },
+    async listSummaries() { directoryCalls.push("models"); return plain(readonly.models); }
+  }, Tts: {
     /** Provides the labelled readonly TTS input required by the actual snapshot operation. */
-    async listTtsConfigs() { directoryCalls.push("tts"); return plain(readonly.ttsConfigs); },
+    async listConfigs() { directoryCalls.push("tts"); return plain(readonly.ttsConfigs); },
+    ...configurationSettings.Tts
+  }, Catalog: {
     /** Provides explicitly labelled readonly tool sources without synthesizing a production policy result. */
-    async readToolSourceCatalog() { directoryCalls.push("tools"); return plain(readonly.toolCatalog); },
-    // Additional independently controlled Settings methods are explicit test inputs, never production defaults.
-    ...configurationSettings,
+    async readToolSources() { directoryCalls.push("tools"); return plain(readonly.toolCatalog); }
+  }, Theme: {
+    ...configurationSettings.Theme
   } };
   const plugin = openPlugin({ ...disk, composeModules, globals: { ...disk.globals, ...runtimeGlobals, Tools: tools, ToolPkg: { ...disk.globals.ToolPkg,
     /** Resolves and verifies one actually declared plugin resource on disk, never a fabricated avatar capability. */

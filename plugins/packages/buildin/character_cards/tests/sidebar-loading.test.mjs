@@ -13,7 +13,10 @@ function sidebarPlugin(disk, readExtension) {
   return openPlugin({ ...disk, globals: { ...disk.globals, Tools: {
     Files: disk.files, Storage: disk.storage, Chat: { readExtension },
     // The sidebar must work without these unrelated management-page dependencies.
-    SoftwareSettings: new Proxy({}, { get(_target, name) { throw new Error('Sidebar requested unrelated directory: ' + String(name)); } }),
+    ...Object.fromEntries(['Models', 'Tts', 'Theme', 'Catalog'].map(
+      /** Rejects each unrelated domain directory if sidebar loading attempts to read it. */
+      namespace => [namespace, new Proxy({}, { get(_target, name) { throw new Error('Sidebar requested unrelated directory: ' + namespace + '.' + String(name)); } })],
+    )),
   } } });
 }
 
@@ -58,4 +61,36 @@ test('bounded sidebar reads propagate storage and invalid selection failures ins
   await assert.rejects(plugin.sidebar(request), /exactly one stored record/);
   extension = { version: 99, selection: 'card:default' };
   await assert.rejects(plugin.sidebar(request), /Unsupported chat marker version/);
+});
+
+/** Gates only real directory IO and verifies independent extension requests start before it finishes. */
+test('sidebar overlaps authoritative directory and extension reads without dropping freshness checks', async t => {
+  const disk = await createDiskHarness(t);
+  const open = disk.storage.objects.open;
+  let armed = false, signal, release;
+  const entered = new Promise(resolve => { signal = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  disk.storage.objects.open = async options => {
+    const database = await open(options), collection = database.collection;
+    database.collection = name => {
+      const records = collection(name), list = records.list;
+      records.list = async (...args) => {
+        if (armed) { signal(); await gate; }
+        return list(...args);
+      };
+      return records;
+    };
+    return database;
+  };
+  let reads = 0;
+  const plugin = sidebarPlugin(disk, async () => { reads++; return null; });
+  const request = context([summary(1)]);
+  await plugin.sidebar(request);
+  armed = true; reads = 0;
+  const pending = plugin.sidebar(request);
+  await entered;
+  try { assert.equal(reads, 1, 'Extension reads must not wait for directory completion'); }
+  finally { release(); }
+  const data = plain(await pending);
+  assert.equal(data.sections.find(section => section.id === 'unbound').chats[0].id, 'loading-1');
 });

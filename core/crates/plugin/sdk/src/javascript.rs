@@ -137,7 +137,10 @@ impl ToolPkgConfigScope {
 }
 
 /// Defines the fixed Rust execution contract required by package JavaScript.
-pub trait JsExecutionHost: crate::js_sdk::JsToolsHost + Send + Sync {
+pub trait JsExecutionHost: Send + Sync {
+    /// Captures immutable native caller state before crossing the JavaScript runtime scheduler.
+    fn capture_tool_invocation_host(&self) -> Arc<dyn JsExecutionHost>;
+
     /// Binds a host instance to an engine-owned authenticated ToolPkg execution context.
     fn for_toolpkg_execution_context(
         &self,
@@ -443,6 +446,17 @@ pub struct ToolPkgExecutionContext {
     pub container_package_name: String,
     pub api_version: String,
     pub text_resource_host: Arc<dyn ToolPkgTextResourceHost>,
+}
+
+impl ToolPkgExecutionContext {
+    /// Rejects incomplete native package contexts before an engine attempts authenticated binding.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.context_key.trim().is_empty() || self.context_key.trim() != self.context_key ||
+            self.container_package_name.trim().is_empty() || self.container_package_name.trim() != self.container_package_name {
+            return Err("ToolPkg execution context requires exact nonblank identities".to_owned());
+        }
+        Ok(())
+    }
 }
 
 /// JavaScript execution handle supplied by the JS bridge crate.

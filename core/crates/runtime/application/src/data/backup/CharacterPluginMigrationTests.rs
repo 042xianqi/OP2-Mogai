@@ -455,3 +455,525 @@ fn rejects_invalid_global_memory_policy_before_publication() {
     assert!(fixture.writer().list("cards").unwrap().is_empty());
     assert!(fixture.writer().get("imports", "invalid-global-memory-policy").unwrap().is_none());
 }
+
+/// Opens the canonical user preference file on the fixture's production storage host.
+fn themePreferences(fixture: &Fixture) -> PreferencesDataStore {
+    PreferencesDataStore::newWithStorage(
+        fixture.host.clone(),
+        operit_util::RuntimeStorageLayout::USER_PREFERENCES_PATH,
+    )
+}
+
+/// Exercises role, tag, speech, model, shared-memory and group preservation alongside one-to-one theme adoption.
+#[test]
+fn migrates_card_and_group_themes_without_changing_other_bindings() {
+    let fixture = Fixture::new();
+    let mut source = data();
+    source.cards[0].attachedTagIds = vec!["tag".to_string()];
+    source.cards[0].chatModelBindingMode = "FIXED_MODEL".to_string();
+    source.cards[0].chatModelId = Some("model".to_string());
+    source.cards[0].ttsConfigId = Some("voice".to_string());
+    source.cards[0].memoryBindingMode = "SHARED".to_string();
+    source.cards[0].sharedMemoryId = Some("store".to_string());
+    source.cards[0].sharedMemoryMounts = vec![CharacterSharedMemoryMount {
+        sharedMemoryId: "store".to_string(),
+        readable: true,
+        writable: false,
+    }];
+    source.tags.push(PromptTag {
+        id: "tag".to_string(),
+        name: "Tag".to_string(),
+        description: "kept".to_string(),
+        promptContent: "content".to_string(),
+        tagType: TagType::CUSTOM,
+        createdAt: 100,
+        updatedAt: 200,
+    });
+    source.stores.push(SharedMemoryStore {
+        id: "store".to_string(),
+        name: "Store".to_string(),
+        createdAt: 100,
+        updatedAt: 200,
+    });
+    source.owners.push(ownerMetadata(
+        "shared:store",
+        MemorySettings::default(),
+        MemorySearchConfig::default(),
+    ));
+    source.documents.insert("shared:store".to_string(), b"# Shared source profile\n".to_vec());
+    source.groups.push(CharacterGroupCard {
+        id: "group".to_string(),
+        name: "Group".to_string(),
+        description: "kept".to_string(),
+        members: vec![GroupMemberConfig {
+            characterCardId: "legacy".to_string(),
+            orderIndex: 7,
+        }],
+        createdAt: 100,
+        updatedAt: 200,
+    });
+    source.active = Some(json!({"CharacterGroup":{"id":"group"}}));
+    let mut expected_card = serde_json::to_value(&source.cards[0]).unwrap();
+    let mut expected_group = serde_json::to_value(&source.groups[0]).unwrap();
+    let expected_tag = serde_json::to_value(&source.tags[0]).unwrap();
+    fixture.writer().import("operit2-v27", source).unwrap();
+    let preferences = themePreferences(&fixture);
+    preferences
+        .edit(|saved| {
+            saved.set(
+                &stringPreferencesKey("character_card_theme_legacy_theme_mode"),
+                "dark".to_string(),
+            );
+            saved.set(
+                &stringPreferencesKey("character_card_theme_legacy_font_scale"),
+                "1.3".to_string(),
+            );
+            saved.set(
+                &stringPreferencesKey("character_group_theme_group_chat_style"),
+                "bubble".to_string(),
+            );
+            saved.set(
+                &stringPreferencesKey("custom_user_avatar_uri"),
+                "/app/data/global-avatar.png".to_string(),
+            );
+            saved.set(&stringPreferencesKey("unrelated"), "keep".to_string());
+        })
+        .unwrap();
+    fixture.writer().migrateCoreThemes().unwrap();
+    let manager =
+        crate::data::preferences::ThemeConfigManager::ThemeConfigManager::new(fixture.host.clone());
+    let configs = manager.list().unwrap();
+    assert_eq!(configs.len(), 2);
+    let card_id = "legacy-theme:operit2-v27:cards:legacy";
+    let group_id = "legacy-theme:operit2-v27:groups:group";
+    expected_card["themeConfigId"] = json!(card_id);
+    expected_group["themeConfigId"] = json!(group_id);
+    assert_eq!(
+        fixture.writer().get("cards", "legacy").unwrap().unwrap()["value"],
+        expected_card
+    );
+    assert_eq!(
+        fixture.writer().get("groups", "group").unwrap().unwrap()["value"],
+        expected_group
+    );
+    assert_eq!(
+        fixture.writer().get("tags", "tag").unwrap().unwrap()["value"],
+        expected_tag
+    );
+    assert_eq!(
+        manager.get(card_id.to_string()).unwrap().snapshot["themeMode"],
+        "dark"
+    );
+    assert_eq!(
+        manager.get(card_id.to_string()).unwrap().snapshot["fontScale"],
+        1.3
+    );
+    assert_eq!(
+        manager.get(group_id.to_string()).unwrap().snapshot["chatStyle"],
+        "bubble"
+    );
+    assert_eq!(
+        manager.get(group_id.to_string()).unwrap().snapshot["customUserAvatarUri"],
+        "/app/data/global-avatar.png"
+    );
+    let saved = preferences.data().unwrap();
+    assert_eq!(
+        saved
+            .get(&stringPreferencesKey("active_theme_config_id"))
+            .unwrap(),
+        &format!("\"{group_id}\"")
+    );
+    assert_eq!(
+        saved.get(&stringPreferencesKey("unrelated")).unwrap(),
+        "keep"
+    );
+    assert!(saved
+        .iterEntries()
+        .all(|(key, _)| !key.starts_with("character_card_theme_")
+            && !key.starts_with("character_group_theme_")));
+}
+
+/// Repairs the previously completed schema and leaves later role/configuration edits intact on reopen.
+#[test]
+fn upgrades_completed_core_theme_migration_once() {
+    let fixture = Fixture::new();
+    let mut source = data();
+    source
+        .cleanup_paths
+        .push(legacyMemoryRoot("character:legacy").unwrap());
+    fixture.writer().import("operit2-v27", source).unwrap();
+    let mut marker = fixture
+        .writer()
+        .get("imports", "operit2-v27")
+        .unwrap()
+        .unwrap()["value"]
+        .clone();
+    marker.as_object_mut().unwrap().remove("themeTargets");
+    marker["cleanupComplete"] = json!(true);
+    fixture
+        .writer()
+        .commit(vec![fixture
+            .writer()
+            .mutation("imports", "operit2-v27", marker)
+            .unwrap()])
+        .unwrap();
+    let preferences = themePreferences(&fixture);
+    preferences
+        .edit(|saved| {
+            saved.set(
+                &stringPreferencesKey("character_card_theme_legacy_theme_mode"),
+                "dark".to_string(),
+            )
+        })
+        .unwrap();
+    fixture.writer().migrateCoreThemes().unwrap();
+    let id = "legacy-theme:operit2-v27:cards:legacy";
+    let manager =
+        crate::data::preferences::ThemeConfigManager::ThemeConfigManager::new(fixture.host.clone());
+    manager
+        .rename(id.to_string(), "User renamed".to_string())
+        .unwrap();
+    fixture.writer().migrateCoreThemes().unwrap();
+    assert_eq!(manager.list().unwrap().len(), 1);
+    assert_eq!(manager.get(id.to_string()).unwrap().name, "User renamed");
+    assert_eq!(
+        fixture
+            .writer()
+            .get("imports", "operit2-v27:themes-v1")
+            .unwrap()
+            .unwrap()["value"]["complete"],
+        true
+    );
+}
+
+/// Stops on invalid source data without publishing a theme plan, changing a binding or deleting source bytes.
+#[test]
+fn invalid_legacy_theme_stops_before_publication_and_cleanup() {
+    for (key, value) in [
+        ("character_card_theme_legacy_theme_mode", "invalid"),
+        ("character_card_theme_legacy_font_scale", "NaN"),
+        ("character_card_theme_legacy_unknown", "true"),
+        ("character_card_theme_missing_theme_mode", "dark"),
+    ] {
+        let fixture = Fixture::new();
+        fixture.writer().import("operit2-v27", data()).unwrap();
+        let preferences = themePreferences(&fixture);
+        preferences
+            .edit(|saved| saved.set(&stringPreferencesKey(key), value.to_string()))
+            .unwrap();
+        let bytes = fixture
+            .host
+            .readBytes(operit_util::RuntimeStorageLayout::USER_PREFERENCES_PATH)
+            .unwrap();
+        assert!(fixture.writer().migrateCoreThemes().is_err());
+        assert_eq!(
+            fixture
+                .host
+                .readBytes(operit_util::RuntimeStorageLayout::USER_PREFERENCES_PATH)
+                .unwrap(),
+            bytes
+        );
+        assert!(fixture
+            .writer()
+            .get("imports", "operit2-v27:themes-v1")
+            .unwrap()
+            .is_none());
+        assert!(
+            fixture.writer().get("cards", "legacy").unwrap().unwrap()["value"]["themeConfigId"]
+                .is_null()
+        );
+    }
+}
+
+/// Preserves an explicit custom appearance while creating the independent role themes.
+#[test]
+fn completed_migration_upgrade_preserves_explicit_custom_appearance() {
+    let fixture = Fixture::new();
+    fixture.writer().import("operit2-v27", data()).unwrap();
+    let preferences = themePreferences(&fixture);
+    preferences
+        .edit(|saved| {
+            saved.set(
+                &stringPreferencesKey("active_theme_config_id"),
+                "null".to_string(),
+            );
+            saved.set(&stringPreferencesKey("theme_mode"), "light".to_string());
+            saved.set(
+                &stringPreferencesKey("character_card_theme_legacy_theme_mode"),
+                "dark".to_string(),
+            );
+        })
+        .unwrap();
+    fixture.writer().migrateCoreThemes().unwrap();
+    let saved = preferences.data().unwrap();
+    assert_eq!(
+        saved.get(&stringPreferencesKey("theme_mode")).unwrap(),
+        "light"
+    );
+    assert_eq!(
+        saved
+            .get(&stringPreferencesKey("active_theme_config_id"))
+            .unwrap(),
+        "null"
+    );
+    let manager =
+        crate::data::preferences::ThemeConfigManager::ThemeConfigManager::new(fixture.host.clone());
+    assert_eq!(manager.list().unwrap()[0].snapshot["themeMode"], "dark");
+}
+
+/// Rejects conflicting independent bindings without altering source themes or user-owned configuration references.
+#[test]
+fn theme_migration_never_replaces_a_saved_role_binding() {
+    let fixture = Fixture::new();
+    fixture.writer().import("operit2-v27", data()).unwrap();
+    let mut card = fixture.writer().get("cards", "legacy").unwrap().unwrap()["value"].clone();
+    card["themeConfigId"] = json!("user-choice");
+    fixture
+        .writer()
+        .commit(vec![fixture
+            .writer()
+            .mutation("cards", "legacy", card.clone())
+            .unwrap()])
+        .unwrap();
+    assert!(fixture
+        .writer()
+        .migrateCoreThemes()
+        .unwrap_err()
+        .contains("existing theme binding"));
+    assert_eq!(
+        fixture.writer().get("cards", "legacy").unwrap().unwrap()["value"],
+        card
+    );
+    assert!(fixture
+        .writer()
+        .get("imports", "operit2-v27:themes-v1")
+        .unwrap()
+        .is_none());
+}
+
+/// Prevents synchronization from recreating retired role theme keys while preserving ordinary theme preferences.
+#[test]
+fn retires_only_scoped_legacy_theme_synchronization_entries() {
+    let mut operation = operit_store::SyncOperationStore::SyncOperation {
+        opId: "id".to_string(),
+        originDeviceId: "origin".to_string(),
+        sequence: 1,
+        createdAt: 1,
+        domain: "preferences".to_string(),
+        entityType: "entry".to_string(),
+        entityId: "entry".to_string(),
+        operation: "set".to_string(),
+        semantics: operit_store::SyncOperationStore::SyncOperationSemantics::EntityState,
+        schemaVersion: 1,
+        payload: json!({"storagePath":operit_util::RuntimeStorageLayout::USER_PREFERENCES_PATH,
+            "key":"character_card_theme_legacy_theme_mode","value":"dark"}),
+    };
+    assert!(isRetiredCharacterOperation(&operation));
+    operation.payload["key"] = json!("character_group_theme_group_chat_style");
+    assert!(isRetiredCharacterOperation(&operation));
+    for key in [
+        "theme_mode",
+        "theme_configs",
+        "custom_user_avatar_uri",
+        "active_theme_config_id",
+    ] {
+        operation.payload["key"] = json!(key);
+        assert!(!isRetiredCharacterOperation(&operation));
+    }
+}
+
+/// Reopens a durable theme plan after a configuration-owner failure without duplicating configurations.
+#[test]
+fn resumes_theme_adoption_after_configuration_conflict() {
+    let fixture = Fixture::new();
+    fixture.writer().import("operit2-v27", data()).unwrap();
+    let preferences = themePreferences(&fixture);
+    preferences
+        .edit(|saved| {
+            saved.set(
+                &stringPreferencesKey("active_theme_config_id"),
+                "null".to_string(),
+            );
+            saved.set(
+                &stringPreferencesKey("character_card_theme_legacy_theme_mode"),
+                "dark".to_string(),
+            );
+        })
+        .unwrap();
+    let manager =
+        crate::data::preferences::ThemeConfigManager::ThemeConfigManager::new(fixture.host.clone());
+    let conflict = crate::data::preferences::ThemeConfigManager::ThemeConfig {
+        id: "legacy-theme:operit2-v27:cards:legacy".to_string(),
+        name: "Conflicting source".to_string(),
+        snapshot: readLegacyCharacterThemeSnapshot(&operit_store::PreferencesDataStore::emptyPreferences(), "character_card_theme_legacy_").unwrap().0,
+        createdAt: 100,
+        updatedAt: 200,
+    };
+    manager
+        .importLegacyConfigurations(&[conflict.clone()], None)
+        .unwrap();
+    assert!(fixture
+        .writer()
+        .migrateCoreThemes()
+        .unwrap_err()
+        .contains("different data"));
+    assert_eq!(
+        fixture
+            .writer()
+            .get("imports", "operit2-v27:themes-v1")
+            .unwrap()
+            .unwrap()["value"]["complete"],
+        false
+    );
+    assert_eq!(
+        preferences
+            .data()
+            .unwrap()
+            .get(&stringPreferencesKey(
+                "character_card_theme_legacy_theme_mode"
+            ))
+            .unwrap(),
+        "dark"
+    );
+    manager.delete(conflict.id).unwrap();
+    fixture.writer().migrateCoreThemes().unwrap();
+    assert_eq!(manager.list().unwrap().len(), 1);
+    assert_eq!(manager.list().unwrap()[0].snapshot["themeMode"], "dark");
+    assert!(!preferences.data().unwrap().contains(&stringPreferencesKey(
+        "character_card_theme_legacy_theme_mode"
+    )));
+}
+
+/// Keeps a concurrently changed legacy preference visible instead of deleting unverified source data.
+#[test]
+fn theme_cleanup_rejects_source_changed_during_interruption() {
+    let fixture = Fixture::new();
+    fixture.writer().import("operit2-v27", data()).unwrap();
+    let preferences = themePreferences(&fixture);
+    preferences
+        .edit(|saved| {
+            saved.set(
+                &stringPreferencesKey("active_theme_config_id"),
+                "null".to_string(),
+            );
+            saved.set(
+                &stringPreferencesKey("character_card_theme_legacy_theme_mode"),
+                "dark".to_string(),
+            );
+        })
+        .unwrap();
+    let manager =
+        crate::data::preferences::ThemeConfigManager::ThemeConfigManager::new(fixture.host.clone());
+    let conflict = crate::data::preferences::ThemeConfigManager::ThemeConfig {
+        id: "legacy-theme:operit2-v27:cards:legacy".to_string(),
+        name: "Conflicting source".to_string(),
+        snapshot: readLegacyCharacterThemeSnapshot(&operit_store::PreferencesDataStore::emptyPreferences(), "character_card_theme_legacy_").unwrap().0,
+        createdAt: 100,
+        updatedAt: 200,
+    };
+    manager
+        .importLegacyConfigurations(&[conflict.clone()], None)
+        .unwrap();
+    assert!(fixture.writer().migrateCoreThemes().is_err());
+    preferences
+        .edit(|saved| {
+            saved.set(
+                &stringPreferencesKey("character_card_theme_legacy_theme_mode"),
+                "light".to_string(),
+            )
+        })
+        .unwrap();
+    manager.delete(conflict.id).unwrap();
+    assert!(fixture
+        .writer()
+        .migrateCoreThemes()
+        .unwrap_err()
+        .contains("changed before cleanup"));
+    assert_eq!(
+        preferences
+            .data()
+            .unwrap()
+            .get(&stringPreferencesKey(
+                "character_card_theme_legacy_theme_mode"
+            ))
+            .unwrap(),
+        "light"
+    );
+    assert_eq!(
+        fixture
+            .writer()
+            .get("imports", "operit2-v27:themes-v1")
+            .unwrap()
+            .unwrap()["value"]["complete"],
+        false
+    );
+}
+
+/// Removes the obsolete Core memory-auto-update key only after the plugin owns a verified policy.
+#[test]
+fn cleanup_removes_retired_memory_policy_and_preserves_live_api_preferences() {
+    let fixture = Fixture::new();
+    let mut source = data();
+    source.memory_preferences = Some(json!({"userDescriptionEnabled":true,"autoUpdateEnabled":false}));
+    fixture.writer().import("operit2-v27", source).unwrap();
+    let api = PreferencesDataStore::newWithStorage(fixture.host.clone(), API_PREFERENCES_PATH);
+    api.edit(|saved| {
+        saved.set(&stringPreferencesKey("enable_memory_auto_update"), "false".to_string());
+        saved.set(&stringPreferencesKey("disable_user_preference_description"), "false".to_string());
+        saved.set(&stringPreferencesKey("unrelated"), "keep".to_string());
+    }).unwrap();
+    cleanupLegacyCharacters(fixture.writer()).unwrap();
+    cleanupLegacyCharacters(fixture.writer()).unwrap();
+    let saved = api.data().unwrap();
+    assert!(!saved.contains(&stringPreferencesKey("enable_memory_auto_update")));
+    assert_eq!(saved.get(&stringPreferencesKey("disable_user_preference_description")).unwrap(), "false");
+    assert_eq!(saved.get(&stringPreferencesKey("unrelated")).unwrap(), "keep");
+    assert_eq!(fixture.writer().get("meta", "state").unwrap().unwrap()["value"]["memoryPreferences"]["autoUpdateEnabled"], false);
+}
+
+/// Retains obsolete settings when the destination memory policy has not been verified.
+#[test]
+fn cleanup_keeps_unverified_memory_policy_source() {
+    let fixture = Fixture::new();
+    fixture.writer().import("operit2-v27", data()).unwrap();
+    let api = PreferencesDataStore::newWithStorage(fixture.host.clone(), API_PREFERENCES_PATH);
+    api.edit(|saved| saved.set(&stringPreferencesKey("enable_memory_auto_update"), "false".to_string())).unwrap();
+    assert!(cleanupLegacyCharacters(fixture.writer()).is_err());
+    assert_eq!(api.data().unwrap().get(&stringPreferencesKey("enable_memory_auto_update")).unwrap(), "false");
+    assert_eq!(fixture.writer().get("imports", "operit2-v27").unwrap().unwrap()["value"]["cleanupComplete"], false);
+}
+
+/// Adopts rewritten archive resource paths while preserving the destination's ordinary user preferences.
+#[test]
+fn archive_theme_adoption_uses_source_snapshot_and_keeps_destination_preferences() {
+    let fixture = Fixture::new();
+    fixture.writer().import("operit1:archive:1", data()).unwrap();
+    let destination = themePreferences(&fixture);
+    destination.edit(|saved| {
+        saved.set(&stringPreferencesKey("active_theme_config_id"), "null".to_string());
+        saved.set(&stringPreferencesKey("theme_mode"), "light".to_string());
+        saved.set(&stringPreferencesKey("custom_user_avatar_uri"), "/app/data/current-user.png".to_string());
+    }).unwrap();
+    let before = fixture.host.readBytes(operit_util::RuntimeStorageLayout::USER_PREFERENCES_PATH).unwrap();
+    let mut source = operit_store::PreferencesDataStore::emptyPreferences();
+    source.set(&stringPreferencesKey("character_card_theme_legacy_background_image_uri"), "/app/data/imported/archive-background.png".to_string());
+    source.set(&stringPreferencesKey("character_card_theme_legacy_use_background_image"), "true".to_string());
+    source.set(&stringPreferencesKey("character_card_theme_legacy_theme_mode"), "dark".to_string());
+    source.set(&stringPreferencesKey("custom_user_avatar_uri"), "/app/data/imported/archive-user.png".to_string());
+    let targets = vec![("cards".to_string(), "legacy".to_string())];
+    fixture.writer().migrateThemes("operit1:archive:1", &source, &targets, false).unwrap();
+    let manager = crate::data::preferences::ThemeConfigManager::ThemeConfigManager::new(fixture.host.clone());
+    let configs = manager.list().unwrap();
+    assert_eq!(configs.len(), 1);
+    assert_eq!(configs[0].snapshot["backgroundImageUri"], "/app/data/imported/archive-background.png");
+    assert_eq!(configs[0].snapshot["customUserAvatarUri"], "/app/data/imported/archive-user.png");
+    let saved = destination.data().unwrap();
+    assert_eq!(saved.get(&stringPreferencesKey("theme_mode")).unwrap(), "light");
+    assert_eq!(saved.get(&stringPreferencesKey("custom_user_avatar_uri")).unwrap(), "/app/data/current-user.png");
+    assert!(source.contains(&stringPreferencesKey("character_card_theme_legacy_theme_mode")));
+    let committed = fixture.host.readBytes(operit_util::RuntimeStorageLayout::USER_PREFERENCES_PATH).unwrap();
+    assert_ne!(committed, before);
+    fixture.writer().migrateThemes("operit1:archive:1", &source, &targets, false).unwrap();
+    assert_eq!(fixture.host.readBytes(operit_util::RuntimeStorageLayout::USER_PREFERENCES_PATH).unwrap(), committed);
+    assert_eq!(fixture.writer().get("imports", "operit1:archive:1:themes-v1").unwrap().unwrap()["value"], json!({"complete":true}));
+}

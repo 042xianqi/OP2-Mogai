@@ -3356,9 +3356,85 @@ export interface IconProps extends ComposeCommonProps {
 }
 
 /**
+ * Fixed-extent item generation owned by one keyed list in a bounded viewport.
+ */
+export interface ComposeLazyItemOptions {
+  /**
+   * Stable list identity within the owning page.
+   */
+  key: string;
+  /**
+   * Total number of items, including items outside the current window.
+   */
+  itemCount: number;
+  /**
+   * Unscaled main-axis item extent, including its separator; Flutter applies the current text scale.
+   */
+  itemExtent: number;
+  /**
+   * Number of items materialized before Flutter reports its viewport.
+   */
+  initialItemCount: number;
+}
+
+/**
+ * Visible item interval with an exclusive last index.
+ */
+export interface ComposeLazyRange {
+  /**
+   * First materialized item index.
+   */
+  firstIndex: number;
+  /**
+   * Exclusive end of the materialized interval.
+   */
+  lastIndex: number;
+}
+
+/**
+ * Total extent and range action delivered through the existing node protocol.
+ */
+export interface ComposeLazyViewport {
+  /**
+   * Absolute index of the first delivered child.
+   */
+  firstIndex: number;
+  /**
+   * Total item count independent of the delivered child count.
+   */
+  itemCount: number;
+  /**
+   * Unscaled main-axis item extent; Flutter applies the current text scale.
+   */
+  itemExtent: number;
+  /**
+   * Requests the next materialized range through normal action dispatch.
+   */
+  onRangeChanged: (arg0: ComposeLazyRange) => void;
+}
+
+/**
+ * Windowed content accepted by the existing lazy column and row factories.
+ */
+export interface ComposeLazyItems {
+  /**
+   * Materialized nodes with stable item identities.
+   */
+  content: ComposeNode[];
+  /**
+   * Viewport metadata for the owning Flutter list.
+   */
+  viewport: ComposeLazyViewport;
+}
+
+/**
  * Vertically scrolling list whose child content is hosted by a lazy column.
  */
 export interface LazyColumnProps extends ComposeCommonProps {
+  /**
+   * Optional viewport protocol supplied by lazyItems for generated content.
+   */
+  viewport?: ComposeLazyViewport;
   /**
    * List content rendered in vertical order.
    */
@@ -4182,6 +4258,10 @@ export interface ComposeDslContext {
    * Core, Material 3, and host-registered component factories.
    */
   UI: ComposeDslContextUIIntersection;
+  /**
+   * Builds the requested range using stable item keys and a fixed main-axis extent.
+   */
+  lazyItems(options: ComposeLazyItemOptions, itemBuilder: (arg0: number) => ComposeNode): ComposeLazyItems;
   /**
    * Retains a keyed value across renders and returns a setter that schedules updates.
    */

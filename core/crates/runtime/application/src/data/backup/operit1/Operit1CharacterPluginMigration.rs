@@ -18,7 +18,26 @@ impl Operit1SnapshotImportManager {
             "operit1:{}:{}",
             parsed.archive.manifest.packageName, parsed.archive.manifest.createdAt
         );
+        let mut theme_preferences = operit_store::PreferencesDataStore::emptyPreferences();
+        let source_user_preferences = parsed.archive.datastorePreferences.get(ENTRY_USER_PREFERENCES)
+            .ok_or("Operit1 user preferences are missing for character themes")?;
+        for (key, value) in source_user_preferences {
+            let (key, value) = value.toTargetPreferenceEntry(key, plan)?;
+            theme_preferences.set(&operit_store::PreferencesDataStore::stringPreferencesKey(&key), value);
+        }
+        let mut theme_targets = Vec::new();
+        for (entry, list, collection) in [
+            (ENTRY_CHARACTER_CARDS, "character_card_list", "cards"),
+            (ENTRY_CHARACTER_GROUPS, "character_group_list", "groups"),
+        ] {
+            if let Some(preferences) = parsed.archive.datastorePreferences.get(entry) {
+                for id in optionalPreferenceStringSet(preferences, list)? {
+                    theme_targets.push((collection.to_string(), id));
+                }
+            }
+        }
         if writer.get("imports", &source)?.is_some() {
+            writer.migrateThemes(&source, &theme_preferences, &theme_targets, false)?;
             return Ok((0, 0));
         }
         let api_preferences = parsed.archive.datastorePreferences.get("payload/files/datastore/api_settings.preferences_pb");
@@ -133,6 +152,7 @@ impl Operit1SnapshotImportManager {
             }
         });
         writer.import(&source, data)?;
+        writer.migrateThemes(&source, &theme_preferences, &theme_targets, false)?;
         Ok((memory_count, link_count))
     }
 }

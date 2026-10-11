@@ -1,5 +1,6 @@
 import type { IndependentConfigurationAccess, ThemeChoice } from "./selection-application";
-import type { SoftwareSettings, SoftwareThemeConfig, SoftwareTtsConfig } from "../../../../types/software_settings";
+import type { Theme } from "../../../../types/theme";
+import type { Tts } from "../../../../types/tts";
 import { assertObject, assertString, requireId } from "./validation";
 
 let configured: IndependentConfigurationAccess | null = null;
@@ -30,8 +31,8 @@ export const independentConfigurations: IndependentConfigurationAccess = {
   applyTts: id => requiredAccess().applyTts(id),
 };
 
-/** Uses only the authoritative generic Settings methods; this plugin does not declare another wire schema. */
-type ConfigurationSettings = Pick<typeof SoftwareSettings, "listThemeConfigs" | "applyThemeConfig" | "listTtsConfigs" | "getCurrentTtsConfigId" | "setCurrentTtsConfigId">;
+/** Uses only the authoritative Theme and Tts methods; this plugin does not declare another wire schema. */
+type ConfigurationSettings = { Theme: typeof Theme; Tts: typeof Tts };
 
 /** Validates identity uniqueness in a real owner directory without inspecting or copying its preference snapshot. */
 function configurationRecords<T extends { id: string }>(values: T[], label: string): T[] {
@@ -61,7 +62,7 @@ export function createSettingsConfigurationAccess(readSettings: () => Configurat
   return {
     /** Projects actual named Theme configs into the plugin's one private picker row contract. */
     async readThemeChoices(): Promise<ThemeChoice[]> {
-      const configs = configurationRecords<SoftwareThemeConfig>(await readSettings().listThemeConfigs(), "主题配置");
+      const configs = configurationRecords<Theme.Config>(await readSettings().Theme.listConfigs(), "主题配置");
       return configs.map(
         /** Preserves the actual independent ID and display name without storing or rewriting its snapshot. */
         config => {
@@ -73,33 +74,33 @@ export function createSettingsConfigurationAccess(readSettings: () => Configurat
     },
     /** Verifies a genuine independent Theme ID before any active selection or chat namespace write. */
     async validateTheme(id: string): Promise<void> {
-      requireConfiguration<SoftwareThemeConfig>(await readSettings().listThemeConfigs(), id, "主题配置");
+      requireConfiguration<Theme.Config>(await readSettings().Theme.listConfigs(), id, "主题配置");
     },
     /** Verifies a genuine independent TTS ID before any active selection or chat namespace write. */
     async validateTts(id: string): Promise<void> {
-      requireConfiguration<SoftwareTtsConfig>(await readSettings().listTtsConfigs(), id, "TTS 配置");
+      requireConfiguration<Tts.Config>(await readSettings().Tts.listConfigs(), id, "TTS 配置");
     },
     /** Awaits the canonical Theme transaction and validates its acknowledgement of this exact independent config. */
     async applyTheme(id: string): Promise<void> {
       requireId(id, "主题配置引用 ID");
-      const applied = await readSettings().applyThemeConfig(id); assertObject(applied, "已应用主题配置");
+      const applied = await readSettings().Theme.applyConfig(id); assertObject(applied, "已应用主题配置");
       if (applied.id !== id) throw new Error("主题配置应用返回的 ID 与请求不一致：" + id);
     },
     /** Awaits the canonical speech write and actual current-ID read; failures remain visible partial application errors. */
     async applyTts(id: string): Promise<void> {
       requireId(id, "TTS 配置引用 ID");
-      const applied = await readSettings().setCurrentTtsConfigId(id);
+      const applied = await readSettings().Tts.setCurrentConfigId(id);
       if (applied !== id) throw new Error("TTS 配置提交返回的 ID 与请求不一致：" + id);
-      const current = await readSettings().getCurrentTtsConfigId();
+      const current = await readSettings().Tts.getCurrentConfigId();
       if (current !== id) throw new Error("TTS 当前配置读取结果未确认请求的 ID：" + id);
     },
   };
 }
 
-/** Connects the real Settings adapter exactly once during bootstrap without reading directories, opening files or applying prefs. */
+/** Connects the real domain configuration adapter exactly once during bootstrap without reading directories, opening files or applying prefs. */
 export function registerSelectionSettingsAccess(): void {
   connectIndependentConfigurations(createSettingsConfigurationAccess(
-    /** Resolves the canonical Settings capability only when a real directory read or application is requested. */
-    () => Tools.SoftwareSettings,
+    /** Resolves the canonical Theme and Tts capabilities only when a real directory read or application is requested. */
+    () => ({ Theme: Tools.Theme, Tts: Tools.Tts }),
   ));
 }

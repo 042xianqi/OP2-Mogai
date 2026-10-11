@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import test from "node:test";
-import { installScopedHostRuntime } from "./fixtures/scoped_host_runtime.mjs";
+import { installScopedHostRuntime, installGeneratedToolsRuntime } from "./fixtures/scoped_host_runtime.mjs";
 
 const source=readFileSync(new URL("../../core/crates/plugin/sdk/src/js_sdk/storage_runtime.js",import.meta.url),"utf8");
 
@@ -11,12 +11,14 @@ function fixture() {
   const pending=[];
   const sandbox=vm.createContext({pending});
   const registry=installScopedHostRuntime(sandbox);
-  sandbox.__operitNativeStorageRequestAsync=registry.binding((requestId,request)=>pending.push({requestId,request}));
-  vm.runInContext("globalThis.Tools={Storage:{}};",sandbox);
-  vm.runInContext(source+"\nTools.Storage.request=__operitStorageRequest;__operitInstallStorageFacade();",sandbox);
+  sandbox.__operitNativeCallToolStructured=registry.binding((requestId,type,name,parameters)=>{
+    assert.equal(type,"default"); assert.equal(name,"storage_request");
+    pending.push({requestId,request:parameters.request});
+  });
+  installGeneratedToolsRuntime(sandbox);
   return { sandbox,pending,
     run(code) {return vm.runInContext(code,sandbox);},
-    reply(value,isError=false) {const entry=pending.shift(); assert.ok(entry); registry.settle(entry.requestId,value,isError);return entry.request;},
+    reply(value,isError=false) {const entry=pending.shift(); assert.ok(entry); registry.settle(entry.requestId,isError ? value : {success:true,data:value},isError);return entry.request;},
     request() {return structuredClone(pending[0].request);},
   };
 }

@@ -28,6 +28,10 @@ var OperitComposeDslRuntime = function () {
       createWebViewController: function (key) {
         return OperitComposeWebView.create(runtime, key);
       },
+      /// Generates the visible item window on the original session context.
+      lazyItems: function (options, itemBuilder) {
+        return OperitComposeLazy.items(ctx, options, itemBuilder);
+      },
       h: function (type, props, children) {
         return OperitComposeNodes.build(runtime, type, props, children);
       },

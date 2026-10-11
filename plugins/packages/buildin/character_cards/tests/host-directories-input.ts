@@ -1,28 +1,30 @@
-import type { SoftwareSettings } from "../../../../types/software_settings";
+import type { Models } from "../../../../types/models";
+import type { Tts } from "../../../../types/tts";
+import type { Catalog } from "../../../../types/catalog";
 import type { CharacterDirectories } from "../src/model";
 
 /** Restricts controlled directory inputs to the existing generated SDK method results. */
-type DirectoryApis = Pick<typeof SoftwareSettings, "listModelSummaries" | "listTtsConfigs" | "readToolSourceCatalog">;
+type DirectoryApis = { models: typeof Models.listSummaries; tts: typeof Tts.listConfigs; tools: typeof Catalog.readToolSources };
 
 /** Supplies explicit unit-test dependencies, not configured native-host directories or production defaults. */
-export interface SoftwareSettingsTestInput {
-  models: Awaited<ReturnType<DirectoryApis["listModelSummaries"]>>;
-  ttsConfigs: Awaited<ReturnType<DirectoryApis["listTtsConfigs"]>>;
-  toolCatalog: Awaited<ReturnType<DirectoryApis["readToolSourceCatalog"]>>;
+export interface HostDirectoriesTestInput {
+  models: Awaited<ReturnType<DirectoryApis["models"]>>;
+  ttsConfigs: Awaited<ReturnType<DirectoryApis["tts"]>>;
+  toolCatalog: Awaited<ReturnType<DirectoryApis["tools"]>>;
 }
 
 type Equal<A, B> = [A] extends [B] ? [B] extends [A] ? true : false : false;
 type Assert<T extends true> = T;
 
 /** Checks the plugin's connected directory results against actual generated SDK declarations. */
-export type SoftwareSettingsDirectoryContracts = [
-  Assert<Equal<Awaited<ReturnType<CharacterDirectories["listModels"]>>, SoftwareSettingsTestInput["models"]>>,
-  Assert<Equal<Awaited<ReturnType<CharacterDirectories["listTtsConfigs"]>>, SoftwareSettingsTestInput["ttsConfigs"]>>,
-  Assert<Equal<Awaited<ReturnType<CharacterDirectories["readToolCatalog"]>>, SoftwareSettingsTestInput["toolCatalog"]>>,
+export type HostDirectoryContracts = [
+  Assert<Equal<Awaited<ReturnType<CharacterDirectories["listModels"]>>, HostDirectoriesTestInput["models"]>>,
+  Assert<Equal<Awaited<ReturnType<CharacterDirectories["listTtsConfigs"]>>, HostDirectoriesTestInput["ttsConfigs"]>>,
+  Assert<Equal<Awaited<ReturnType<CharacterDirectories["readToolCatalog"]>>, HostDirectoriesTestInput["toolCatalog"]>>,
 ];
 
 /** Preserves complete nonempty model, speech and all four tool-source inputs at the test-only host boundary. */
-export const softwareSettingsTestInput: SoftwareSettingsTestInput = {
+export const hostDirectoriesTestInput: HostDirectoriesTestInput = {
   models: [
     {
       providerId: "fixture-provider-token",

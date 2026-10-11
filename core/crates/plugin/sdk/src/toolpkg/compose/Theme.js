@@ -39,7 +39,7 @@ var OperitComposeTheme = function () {
       var next = readThemeSnapshot(value);
       if (JSON.stringify(next) === JSON.stringify(themeSnapshot)) return;
       themeSnapshot = next;
-      OperitComposeReactive.environmentChanged(runtime.ctx);
+      OperitComposeReactive.invalidateRoot(runtime.ctx);
       for (var listener of Array.from(themeListeners)) await listener(next);
     });
     return {

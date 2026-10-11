@@ -1,4 +1,5 @@
-import { productionBootstrap } from '../../../../../tools/tests/fixtures/production_bootstrap.mjs';
+import { compileComposeModule } from "../../../../../plugins/tools/compile_compose_module.mjs";
+import { productionBootstrap, bootstrapLibrarySource } from '../../../../../tools/tests/fixtures/production_bootstrap.mjs';
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -48,6 +49,8 @@ export function createNativeToolRuntime(globals, dispatchIpc) {
   const context=vm.createContext({...globals});
   vm.runInContext(nativeToolSource('hosts/web/src/javascript_promises.js'),context);
   const registry=context.__operitHostPromiseRegistry;
+  /** Supplies the trusted library source through the production structured binding. */
+  context.__operitNativeReadBootstrapLibrary=registry.syncBinding(bootstrapLibrarySource);
   context.__operitNativeSetCallResult=registry.syncBinding((callId,value)=>{
     const request=pending.get(callId);assert.ok(request,'Unexpected native result '+callId);
     pending.delete(callId);terminal.push({callId,type:'result',value});request.resolve(value);
@@ -70,6 +73,7 @@ export function createNativeToolRuntime(globals, dispatchIpc) {
       error=>registry.settle(requestId,String(error.message),true),
     );
   });
+  context.__operitNativePrepareComposeModule = compileComposeModule;
   vm.runInContext(productionBootstrap(),context);
 
   /** Invokes the production engine entry point with exactly the supplied converted native parameters. */

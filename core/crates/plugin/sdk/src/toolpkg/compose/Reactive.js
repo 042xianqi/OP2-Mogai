@@ -238,8 +238,8 @@ var OperitComposeReactive = function () {
     graph.tasks.delete(task.key);
   }
 
-  /// Invalidates the explicitly registered root scope after a host environment change.
-  function environmentChanged(ctx) {
+  /// Invalidates the root after host input, theme, or viewport state changes.
+  function invalidateRoot(ctx) {
     var graph = graphs.get(ctx);
     if (graph.root) graph.dirty.add(graph.root);
   }
@@ -265,7 +265,7 @@ var OperitComposeReactive = function () {
     state: state,
     derived: derived,
     expression: expression,
-    environmentChanged: environmentChanged,
+    invalidateRoot: invalidateRoot,
     stateChanged: stateChanged,
     render: render,
     dispose: dispose,

@@ -279,8 +279,7 @@ async fn native_compose_artifact_loads_without_parser_and_invalidates_changed_so
     let (session, engine) = native_session();
     let mut stream = session.updates().unwrap();
     let install = r#"exports.install = function() {
-        __operitAcorn.parse = function() { throw Error('Runtime parser invoked'); };
-        OperitComposeCompiler.compile = function() { throw Error('Runtime lowering invoked'); };
+        if (typeof __operitAcorn !== 'undefined' || typeof OperitComposeCompiler !== 'undefined') throw Error('Page must not own the compiler');
         return true;
     };"#;
     engine.execute_script_function(install, "install", &options(), &BTreeMap::new(), None, false, 60, None).await.unwrap();
@@ -318,18 +317,12 @@ async fn native_character_editor_load_stage_performance_probe() {
     let source_dir = std::env::var_os("OPERIT_DSL_PROBE_SOURCE_DIR").map(std::path::PathBuf::from)
         .unwrap_or_else(|| root.join("plugins/packages/buildin/character_cards/dist/ui"));
     let install = r#"exports.install = function() {
-        globalThis.__editorProbe = {parseMs:0, parseCalls:0, compileMs:0, compileCalls:0, renderMs:0, commitMs:0};
-        const parse = __operitAcorn.parse;
-        /** Measures AST parsing separately from the compiler transformation. */
-        __operitAcorn.parse = function(source, options) {
-            const start = Date.now(); const result = parse(source, options);
-            globalThis.__editorProbe.parseMs += Date.now() - start; globalThis.__editorProbe.parseCalls++; return result;
-        };
-        const compile = OperitComposeCompiler.compile;
-        /** Measures compilation while preserving the exact compiled output. */
-        OperitComposeCompiler.compile = function(source, identity) {
-            const start = Date.now(); const result = compile(source, identity);
-            globalThis.__editorProbe.compileMs += Date.now() - start; globalThis.__editorProbe.compileCalls++; return result;
+        globalThis.__editorProbe = {prepareMs:0, prepareCalls:0, renderMs:0, commitMs:0};
+        const prepare = __operitNativePrepareComposeModule;
+        /** Measures the shared compiler boundary, including queueing and exact-source reuse. */
+        __operitNativePrepareComposeModule = function(source, identity) {
+            const start = Date.now(); const result = prepare(source, identity);
+            globalThis.__editorProbe.prepareMs += Date.now() - start; globalThis.__editorProbe.prepareCalls++; return result;
         };
         const render = OperitComposeReactive.render;
         /** Measures synchronous execution of the actual editor root function. */
@@ -390,15 +383,14 @@ async fn native_character_editor_load_stage_performance_probe() {
             }
             let result = engine.execute_script_function(inspect, "inspect", &options(), &BTreeMap::new(), None, false, 60, None).await.unwrap().unwrap();
             let after: Value = serde_json::from_str(&result).unwrap();
-            assert_eq!(after["compileCalls"], Value::from(if precompiled { 0 } else { 1 }));
-            assert_eq!(after["parseCalls"], Value::from(if precompiled { 0 } else { 1 }));
+            assert_eq!(after["prepareCalls"], Value::from(if precompiled { 0 } else { 1 }));
             samples.push(serde_json::json!({"sample":sample,"engineBootstrapMs":bootstrap_ms,"scriptToCommitMs":render_ms,
                 "coldTotalMs":bootstrap_ms+render_ms,"upserts":node_count,"stages":stages,"warmInputRefreshMs":warm}));
             session.close(); engine.destroy();
         }
         screens.push(serde_json::json!({"screen":screen,"sourceBytes":source.len(),"precompiled":precompiled,"samples":samples}));
     }
-    eprintln!("dsl_native_probe {}", serde_json::json!({"scope":"native QuickJS, synthetic initial state; excludes file reads, instrumentation, Flutter and GPU; parse/compile timers have 1 ms resolution",
+    eprintln!("dsl_native_probe {}", serde_json::json!({"scope":"native QuickJS, synthetic initial state; excludes file reads, instrumentation, Flutter and GPU; shared preparation/root/commit timers have 1 ms resolution; first shared compiler miss is distinct from later fresh-page loads",
         "profile":if cfg!(debug_assertions) {"debug"} else {"release"}, "screens":screens}));
 }
 

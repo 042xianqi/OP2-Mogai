@@ -58,7 +58,7 @@ function renderComposeDsl(runtimeOptions) {
   if (reuse || options.__operit_update_inputs === true) {
     bundle.updateRuntimeOptions(options);
   }
-  if (reuse) OperitComposeReactive.environmentChanged(bundle.ctx);
+  if (reuse) OperitComposeReactive.invalidateRoot(bundle.ctx);
   var entry = resolveComposeEntry();
   if (typeof entry !== 'function') {
     throw new Error('compose_dsl entry function not found, expected default export or Screen function');

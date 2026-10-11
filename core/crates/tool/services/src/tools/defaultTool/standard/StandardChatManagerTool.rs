@@ -751,7 +751,7 @@ impl AsyncToolExecutor for ChatManagerToolExecutor {
     }
 
     /// Creates local runtime futures on their owning scheduler and awaits only a Send receipt.
-    fn invokeAndStreamAsync<'a>(&'a mut self, tool: &'a AITool) -> ToolInvocationFuture<'a> {
+    fn invokeAndStreamAsync<'a>(&'a mut self, tool: &'a AITool, context: &'a crate::ToolExecutionManager::ToolInvocationContext) -> ToolInvocationFuture<'a> {
         let tools = self.tools.clone();
         let operation = self.operation;
         let request = tool.clone();
@@ -1424,6 +1424,61 @@ fn toolError(tool: &AITool, message: String) -> ToolResult {
         success: false,
         result: stringResultData(""),
         error: Some(message),
+    }
+}
+
+/// Describes operations on a single engine-owned chat observation, not a separate invocation route.
+#[derive(serde::Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum ChatObservationRequest {
+    Open { request: operit_plugin_sdk::js_sdk::chat::ChatSendRequest },
+    Next { handle: String },
+    Close { handle: String },
+}
+
+/// Sends through the canonical native chat service and drains its actual terminal receipt.
+pub(crate) async fn executePluginChatSend(request: operit_plugin_sdk::js_sdk::chat::ChatSendRequest, context: crate::ToolExecutionManager::ToolInvocationContext) -> Result<Value, String> {
+    use operit_plugin_sdk::js_sdk::chat::ChatSendEvent;
+    let owner = context.requirePluginOwner()?;
+    let stream = context.host().runtimeSupport().openPluginChatMessage(&owner, request, false)?;
+    let result = loop {
+        match stream.next().await {
+            Ok(Some(ChatSendEvent::Part { .. })) => {},
+            Ok(Some(ChatSendEvent::Completed { result })) => break serde_json::to_value(result).map_err(|error| error.to_string()),
+            Ok(None) => break Err("Chat send ended without its terminal receipt".into()),
+            Err(error) => break Err(error.to_string()),
+        }
+    };
+    let closed = stream.close().await.map_err(|error| error.to_string());
+    match (result, closed) {
+        (Ok(result), Ok(())) => Ok(result),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+        (Err(error), Err(close)) => Err(format!("{error}; chat observation disposal failed: {close}")),
+    }
+}
+
+/// Operates on the authenticated caller's observation without holding the registry lock across a pull.
+pub(crate) async fn executePluginChatObservation(request: ChatObservationRequest, context: crate::ToolExecutionManager::ToolInvocationContext) -> Result<Value, String> {
+    let owner = context.requirePluginOwner()?;
+    let host = context.host();
+    match request {
+        ChatObservationRequest::Open { request } => {
+            let stream = host.runtimeSupport().openPluginChatMessage(&owner, request, true)?;
+            let handle = uuid::Uuid::new_v4().to_string();
+            host.chatObservations.lock().map_err(|_| "Chat observation registry mutex poisoned")?.insert(handle.clone(), stream);
+            Ok(Value::String(handle))
+        },
+        ChatObservationRequest::Next { handle } => {
+            let stream = host.chatObservations.lock().map_err(|_| "Chat observation registry mutex poisoned")?
+                .get(&handle).cloned().ok_or("Unknown Chat observation")?;
+            serde_json::to_value(stream.next().await.map_err(|error| error.to_string())?).map_err(|error| error.to_string())
+        },
+        ChatObservationRequest::Close { handle } => {
+            let stream = host.chatObservations.lock().map_err(|_| "Chat observation registry mutex poisoned")?
+                .remove(&handle).ok_or("Unknown Chat observation")?;
+            stream.close().await.map_err(|error| error.to_string())?;
+            Ok(Value::Null)
+        },
     }
 }
 

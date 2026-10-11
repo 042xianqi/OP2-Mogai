@@ -133,7 +133,6 @@ class _DrawerContentState extends State<DrawerContent> {
     try {
       if (chatId != widget.currentChatId) ChatSelectionTransition.begin(chatId);
       widget.onConversationActivated();
-      await WidgetsBinding.instance.endOfFrame;
       await _chatCoreProxy.switchChat(chatId: chatId);
       ClientLogger.i(
         'chat_switch.command_completed chatId=$chatId elapsedMs=${switchStartedAt.elapsedMilliseconds}',

@@ -136,7 +136,7 @@ const nativeWorker = section(toolsRuntime, "async fn runAdmittedChatTurn(", "///
 const sdkChat = source("core/crates/plugin/sdk/src/js_sdk/chat.rs");
 const sdkResults = source("core/crates/plugin/sdk/src/js_sdk/results.rs");
 const nativeRecordOnly = section(core, "pub(crate) fn recordOnlySequenceInput(", "/// Cancels only the native execution");
-const nativeHost = source("core/crates/tool/services/src/tools/AIToolHandlerJsToolsHost.rs");
+const nativeHost = source("core/crates/tool/services/src/tools/AIToolHandler.rs");
 verify(/fn sendMessage\(&self, request: ChatSendRequest\)/.test(sdkChat)
   && /fn sendMessageStreaming\(&self, request: ChatSendRequest\) -> JsAsyncIterable<ChatSendEvent>/.test(sdkChat)
   && /fn cancel\(&self, chatId: String\)/.test(sdkChat), "Authors receive only single send, semantic streaming send and owner/chat cancellation");
@@ -145,10 +145,12 @@ verify(/fn openPluginChatMessage\(/.test(toolsRuntime) && /fn requestPluginChatC
 verify(!/ChatTurnHandle|ChatSequenceFinishResultData/.test(sdkResults) && /uuid::Uuid::new_v4/.test(nativeTransport), "Only native admission generates execution handles; the author result contract does not expose them");
 verify(/manager\.beginChatExecution\(&chatId\)/.test(nativeTransport) && /lease: lease\.clone/.test(nativeTransport), "Native admission retains the canonical store lease through finalization");
 verify(/execution\.owner != owner/.test(nativeTransport) && /sequence\.owner != owner/.test(nativeTransport), "Execution and sequence operations must reject foreign authenticated owners");
-for (const helper of ["open_chat_send", "invoke_chat_cancel"]) {
-  const helperBody = section(nativeHost, `fn ${helper}(`, "\n}");
-  verify(/authenticated_chat_extension_owner\(host\)/.test(helperBody) && /host\.runtimeSupport\(\)/.test(helperBody), `${helper} must use actual immutable host authentication and runtime support`);
-}
+const chatTools = source("core/crates/tool/services/src/tools/defaultTool/standard/StandardChatManagerTool.rs");
+const registration = source("core/crates/tool/services/src/tools/ToolRegistration.rs");
+verify(/context\.requirePluginOwner\(\)\?/.test(chatTools) && /runtimeSupport\(\)\.openPluginChatMessage\(&owner/.test(chatTools), "Chat admission requires native invocation ownership and the canonical service");
+verify(/runtimeSupport\(\)\.requestPluginChatCancellation\(&context\.requirePluginOwner\(\)\?, &args\.chat_id\)/.test(registration), "Registered cancellation directly uses the native owner and canonical runtime");
+verify(!/RuntimeToolExecutor|RuntimeToolRequest|executeRuntimeOperation/.test(nativeHost), "The handler must not contain a second runtime business dispatcher");
+verify(/handler\.executeToolInvocation\(&call, ToolExecutionPolicy::Direct\)/.test(nativeHost), "JavaScript enters the common pipeline without AI permission preflight");
 verify(/ownedActiveExecution\(owner, chatId\)/.test(toolsRuntime)
   && /sequence\.owner == owner && sequence\.chatId == chatId/.test(nativeTransport), "Cancellation captures the actual authenticated owner/chat execution before asynchronous model access");
 verify(/source\.sender != "user"/.test(nativeTransport) && /Continuation source was superseded/.test(nativeTransport), "A continuation must identify a real nonsuperseded committed user row");

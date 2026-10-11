@@ -40,9 +40,19 @@ operations on the same repository instance.
    into plugin ownership and their Files API paths are updated.
 4. Each written record, document and resource is read back and verified. Completion
    is recorded only after all batches are stored. The plugin refuses incomplete data.
-5. Core resolves staged bindings in both current chats and historical sync chat rows.
-6. Cleanup validates every exact source path, removes migrated owner directories and
-   dedicated preferences, removes empty owner parent directories, and records cleanup
+5. Every imported card and group receives its own independent theme configuration and
+   exact `themeConfigId`. The released target-scoped appearance is decoded in
+   `ThemePreferenceSnapshot.rs`, including its original unset-field semantics and
+   globally scoped user avatar. Configurations are committed through `ThemeConfigManager`;
+   role bindings and configurations are read back before scoped source keys are removed.
+   The active legacy target becomes the initial named theme; an explicit new-domain
+   selection, including custom appearance, remains intact. Operit1 uses its parsed
+   preference map with resource paths rewritten by the existing import plan.
+6. Core resolves staged bindings in both current chats and historical sync chat rows.
+7. Cleanup validates every exact source path, removes migrated owner directories and
+   dedicated preferences, removes the obsolete `enable_memory_auto_update` Core key
+   only after verifying plugin policy ownership, removes empty owner parent directories,
+   and records cleanup
    completion. Reopening continues incomplete cleanup without importing completed
    source data again. Unrelated paths and directories remain outside the cleanup set.
 
@@ -54,7 +64,16 @@ An empty or ambiguous source range, an incorrect sender or an invalid variant is
 explicit migration error; candidates are never discarded or assigned invented versions.
 
 The synchronization service no longer requests the retired ObjectBox domain, and
-Core no longer applies its former character/memory operations.
+Core no longer applies its former character/memory operations or target-scoped theme
+preference operations. Ordinary theme catalog and appearance synchronization remains active.
+
+Theme adoption stores a durable plan only while incomplete. Reopening resumes the
+same stable configuration IDs and validates source values before deletion. Success
+replaces that plan with a compact completion marker; copied source values and snapshots
+are not retained in migration metadata. Completed pre-theme Core imports are upgraded
+from their cleanup manifest without importing their deleted source files again.
+Malformed appearance, unknown target keys, conflicting bindings and changed source
+values remain explicit errors, with unverified source data retained.
 
 ## Evidence boundaries
 

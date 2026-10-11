@@ -23,6 +23,10 @@ pub mod network;
 pub mod results;
 pub mod runtime_bindings;
 pub mod software_settings;
+pub mod models;
+pub mod tts;
+pub mod theme;
+pub mod catalog;
 pub mod storage;
 pub mod system;
 pub mod tool_types;
@@ -295,45 +299,6 @@ where
             None => Self::Null,
         })
     }
-}
-
-/// Requires an embedding host to implement every namespace exposed by the global Tools object.
-pub trait JsToolsHost:
-    files::FilesHost
-    + network::NetHost
-    + network::NetCookieManager
-    + system::SystemHost
-    + system::SystemBluetoothHost
-    + system::SystemBluetoothBleHost
-    + system::SystemTerminalHost
-    + system::SystemMusicHost
-    + software_settings::SoftwareSettingsHost
-    + chat::ChatHost
-    + edge::EdgeHost
-    + edge::IoHost
-    + storage::StorageHost
-    + Send
-    + Sync
-{
-}
-
-impl<T> JsToolsHost for T where
-    T: files::FilesHost
-        + network::NetHost
-        + network::NetCookieManager
-        + system::SystemHost
-        + system::SystemBluetoothHost
-        + system::SystemBluetoothBleHost
-        + system::SystemTerminalHost
-        + system::SystemMusicHost
-        + software_settings::SoftwareSettingsHost
-        + chat::ChatHost
-        + edge::EdgeHost
-        + edge::IoHost
-        + storage::StorageHost
-        + Send
-        + Sync
-{
 }
 
 /// Collects declarations reserved for host capabilities that are not active runtime Tools yet.

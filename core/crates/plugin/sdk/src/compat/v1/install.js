@@ -1,11 +1,41 @@
-/** Installs v1 adapters beside the generated v2 implementations without replacing their contracts. */
-(function installV1Adapters() {
-    var api = globalThis.__operitToolPkgApi;
+/**
+ * Preserves the copied v1 environment-variable signatures using the canonical v2 host methods.
+ * @param {Pick<typeof import('../../../../../../../plugins/types/software_settings').SoftwareSettings, 'readEnvironmentVariable' | 'writeEnvironmentVariable'>} current
+ * @returns {Pick<typeof import('../../../../../../../plugins/types-v1/software_settings').SoftwareSettings, 'readEnvironmentVariable' | 'writeEnvironmentVariable'>}
+ */
+function __operitCreateV1SoftwareSettings(current) {
+    return {
+        /** Reads the exact configured variable and preserves the host result and rejection. */
+        readEnvironmentVariable(key) {
+            return current.readEnvironmentVariable(key);
+        },
+        /** Writes through the canonical host without changing the legacy optional value contract. */
+        writeEnvironmentVariable(key, value) {
+            return current.writeEnvironmentVariable(key, value);
+        },
+    };
+}
+
+(/**
+ * Installs typed v1 adapters in the runtime's dynamic registration namespace.
+ * @param {Record<string, any>} runtime
+ */
+function installV1Adapters(runtime) {
+    var Tools = runtime.Tools;
+    var api = runtime.__operitToolPkgApi;
+    var currentSettings = Object.assign({}, Tools.SoftwareSettings);
+    var legacySettings = __operitCreateV1SoftwareSettings(currentSettings);
+    for (var [settingsMethod, settingsImplementation] of Object.entries(legacySettings)) {
+        Tools.SoftwareSettings[settingsMethod] = api.method()
+            .between('1.0.0', '2.0.0', settingsImplementation)
+            .since('2.0.0', currentSettings[settingsMethod])
+            .build('Tools.SoftwareSettings.' + settingsMethod);
+    }
     var currentFiles = Object.assign({}, Tools.Files);
     var legacyFiles = __operitCreateV1Files(currentFiles);
-    for (var method of Object.keys(legacyFiles)) {
+    for (var [method, filesImplementation] of Object.entries(legacyFiles)) {
         Tools.Files[method] = api.method()
-            .between('1.0.0', '2.0.0', legacyFiles[method])
+            .between('1.0.0', '2.0.0', filesImplementation)
             .since('2.0.0', currentFiles[method])
             .build('Tools.Files.' + method);
     }
@@ -16,9 +46,9 @@
         },
     );
     Tools.Workflow = {};
-    for (var name of Object.keys(workflow)) {
+    for (var [name, workflowImplementation] of Object.entries(workflow)) {
         Tools.Workflow[name] = api.method()
-            .between('1.0.0', '2.0.0', workflow[name])
+            .between('1.0.0', '2.0.0', workflowImplementation)
             .build('Tools.Workflow.' + name);
     }
     var characters = __operitCreateV1Characters(
@@ -36,25 +66,28 @@
         },
         /** Preserves native ordinary-send controls while the adapter translates role identity. */
         function(params) {
-            return globalThis.toolCall('send_message_to_ai', params);
+            return runtime.toolCall('send_message_to_ai', params);
         },
         characters.listCharacterCards,
     );
-    for (var chatMethod of Object.keys(legacyChat)) {
-        var chatBuilder = api.method().between('1.0.0', '2.0.0', legacyChat[chatMethod]);
+    for (var [chatMethod, chatImplementation] of Object.entries(legacyChat)) {
+        var chatBuilder = api.method().between('1.0.0', '2.0.0', chatImplementation);
         if (chatMethod !== 'listCharacterCards') chatBuilder.since('2.0.0', currentChat[chatMethod]);
         Tools.Chat[chatMethod] = chatBuilder.build('Tools.Chat.' + chatMethod);
     }
     var legacyMemory = __operitCreateV1Memory(
         /** Sends one package tool request with the active authenticated caller fields. */
         function(name, params) {
-            var state = globalThis.__operitGetCallState(api.currentCallId());
+            var state = runtime.__operitGetCallState(api.currentCallId());
             if (state.params.__operit_package_caller_participant_id !== undefined) legacyCallerCardId();
             for (var key of ['__operit_package_caller_name', '__operit_package_chat_id', '__operit_package_caller_participant_id', '__operit_package_caller_owner']) {
                 if (state.params[key] !== undefined) params[key] = state.params[key];
             }
-            return globalThis.toolCall('character_memory:' + name, params).then(
-                /** Decodes the package executor's JSON payload, including JSON-encoded string results. */
+            return runtime.toolCall('character_memory:' + name, params).then(
+                /**
+                 * Decodes the package executor's serialized JSON result.
+                 * @param {unknown} serialized
+                 */
                 function(serialized) {
                     if (typeof serialized !== 'string') throw new Error('Package memory tool must return its serialized execution result');
                     return JSON.parse(serialized);
@@ -63,14 +96,14 @@
         },
     );
     Tools.Memory = {};
-    for (var memoryMethod of Object.keys(legacyMemory)) {
+    for (var [memoryMethod, memoryImplementation] of Object.entries(legacyMemory)) {
         Tools.Memory[memoryMethod] = api.method()
-            .between('1.0.0', '2.0.0', legacyMemory[memoryMethod])
+            .between('1.0.0', '2.0.0', memoryImplementation)
             .build('Tools.Memory.' + memoryMethod);
     }
     /** Projects the role provider's authenticated participant into the historical card namespace. */
     function legacyCallerCardId() {
-        var params = globalThis.__operitGetCallState(api.currentCallId()).params;
+        var params = runtime.__operitGetCallState(api.currentCallId()).params;
         var participant = params.__operit_package_caller_participant_id;
         if (participant === undefined) return undefined;
         if (params.__operit_package_caller_owner !== 'com.operit.character_cards') {
@@ -92,4 +125,4 @@
         .between('1.0.1', '2.0.0', __operitCreateV1ChatCall(currentCall))
         .since('2.0.0', currentCall)
         .build('Tools.Chat.call');
-})();
+})(globalThis);

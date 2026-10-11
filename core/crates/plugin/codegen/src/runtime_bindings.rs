@@ -29,93 +29,23 @@ const HOST_TRAITS: &[(&str, &str, &str)] = &[
         "SoftwareSettingsHost",
         "SoftwareSettings",
     ),
+    ("js_sdk/models.rs", "ModelsHost", "Models"),
+    ("js_sdk/tts.rs", "TtsHost", "Tts"),
+    ("js_sdk/theme.rs", "ThemeHost", "Theme"),
+    ("js_sdk/catalog.rs", "CatalogHost", "Catalog"),
     ("js_sdk/chat.rs", "ChatHost", "Chat"),
     ("js_sdk/edge.rs", "EdgeHost", "Edge"),
     ("js_sdk/edge.rs", "IoHost", "Io"),
     ("js_sdk/storage.rs", "StorageHost", "Storage"),
 ];
 
-/// Generates concrete active Tools host trait implementations from canonical Rust signatures.
-pub fn generate_js_tools_host_implementation(
-    sdk_src: &Path,
-    bindings_path: &Path,
-    output_path: &Path,
-) -> Result<(), Box<dyn Error>> {
-    let javascript_bindings = parse_rust_tool_bindings(bindings_path)?;
-    let mut files = BTreeMap::<PathBuf, syn::File>::new();
-    let mut output =
-        String::from("// Generated from canonical Rust Tools traits. Do not edit.\n\n");
-
-    for (relative_path, trait_name, namespace) in HOST_TRAITS {
-        let path = sdk_src.join(relative_path);
-        if !files.contains_key(&path) {
-            files.insert(path.clone(), syn::parse_file(&fs::read_to_string(&path)?)?);
-        }
-        let file = files.get(&path).expect("inserted Rust SDK file is present");
-        let item_trait = file.items.iter().find_map(|item| match item {
-            Item::Trait(item_trait) if item_trait.ident == *trait_name => Some(item_trait),
-            _ => None,
-        });
-        let item_trait = item_trait.ok_or_else(|| format!("missing Rust trait `{trait_name}`"))?;
-        output.push_str(&format!("impl {trait_name} for AIToolHandler {{\n"));
-        for item in &item_trait.items {
-            let TraitItem::Fn(method) = item else {
-                continue;
-            };
-            let runtime_name = runtime_method_name(&method.sig.ident.to_string());
-            let binding = javascript_bindings
-                .get(&(namespace.to_string(), runtime_name.clone()))
-                .ok_or_else(|| {
-                    format!("missing JavaScript binding for `{namespace}.{runtime_name}`")
-                })?;
-            let tool_variant = binding.tool.as_deref().map(rust_variant_name);
-            let signature = &method.sig;
-            let arguments = method_arguments(signature)?;
-            output.push_str(&format!(
-                "    /// Executes the canonical `{namespace}.{runtime_name}` Tools binding.\n"
-            ));
-            output.push_str("    ");
-            output.push_str(
-                &quote!(#signature)
-                    .to_string()
-                    .replace("super :: JsNever", "operit_plugin_sdk :: js_sdk :: JsNever"),
-            );
-            output.push_str(" {\n");
-            match tool_variant {
-                Some(tool_variant) => output.push_str(&generated_method_body(
-                    namespace,
-                    &runtime_name,
-                    &tool_variant,
-                    &arguments,
-                )),
-                None => {
-                    let body = match (*namespace, runtime_name.as_str()) {
-                        ("SoftwareSettings", "listModelSummaries" | "listTtsConfigs" | "readToolSourceCatalog" | "listThemeConfigs" | "getCurrentTtsConfigId") if arguments.is_empty() => format!("        invoke_software_settings_directory(self, \"{runtime_name}\")\n"),
-                        ("SoftwareSettings", "applyThemeConfig" | "setCurrentTtsConfigId") if arguments == ["id"] => format!("        invoke_software_settings_config(self, \"{runtime_name}\", id)\n"),
-                        ("Chat", "sendMessage") if arguments == ["request"] => "        invoke_chat_send(self, request)\n".to_string(),
-                        ("Chat", "sendMessageStreaming") if arguments == ["request"] => "        invoke_chat_stream(self, request)\n".to_string(),
-                        ("Chat", "cancel") if arguments == ["chatId"] => "        invoke_chat_cancel(self, chatId)\n".to_string(),
-                        ("Chat", "readExtension") if arguments == ["target"] => "        invoke_chat_extension_read(self, target)\n".to_string(),
-                        ("Chat", "writeExtension") if arguments == ["target", "value"] => "        invoke_chat_extension_write(self, target, value)\n".to_string(),
-                        ("Chat", "deleteExtension") if arguments == ["target"] => "        invoke_chat_extension_delete(self, target)\n".to_string(),
-                        ("Storage", "request") if arguments == ["request"] => "        invoke_storage_request(self, request)\n".to_string(),
-                        _ => return Err(format!("Unsupported direct typed host signature: {namespace}.{runtime_name}").into()),
-                    };
-                    output.push_str(&body);
-                }
-            }
-            output.push_str("    }\n\n");
-        }
-        output.push_str("}\n\n");
-    }
-    fs::write(output_path, output)?;
-    Ok(())
-}
-
 /// Describes one generated JavaScript Tools method binding.
 #[derive(Clone, Debug)]
 struct JsToolBindingSpec {
-    tool: Option<String>,
+    tool: String,
+    runtime: bool,
+    facade: String,
+    fixed_parameters: Vec<(String, String)>,
     api_variants: Vec<JsToolApiVariantSpec>,
 }
 
@@ -152,6 +82,9 @@ fn parse_rust_tool_bindings(
         let mut namespace = None;
         let mut method = None;
         let mut tool = None;
+        let mut runtime = false;
+        let mut facade = None;
+        let mut fixed_parameters = None;
         for field in &binding.fields {
             let syn::Member::Named(name) = &field.member else {
                 continue;
@@ -167,13 +100,16 @@ fn parse_rust_tool_bindings(
                         method = Some(value.value());
                     }
                 }
-                ("tool", Expr::Path(value)) => {
-                    tool = value
-                        .path
-                        .segments
-                        .last()
-                        .map(|segment| pascal_case_to_snake_case(&segment.ident.to_string()));
+                ("target", Expr::Call(value)) => {
+                    let Expr::Path(target) = &*value.func else { return Err("Tool target must be an explicit contract variant".into()); };
+                    let kind = target.path.segments.last().ok_or("Tool target kind is missing")?.ident.to_string();
+                    runtime = match kind.as_str() { "Builtin" => false, "Runtime" => true, _ => return Err("Unknown executor target kind".into()) };
+                    if value.args.len() != 1 { return Err("Tool target requires exactly one executor identity".into()); }
+                    let Expr::Path(identity) = &value.args[0] else { return Err("Tool executor identity must be an enum variant".into()); };
+                    tool = Some(pascal_case_to_snake_case(&identity.path.segments.last().ok_or("Executor identity is missing")?.ident.to_string()));
                 }
+                ("facade", Expr::Path(value)) => facade = Some(value.path.segments.last().ok_or("Result facade is missing")?.ident.to_string()),
+                ("fixed_parameters", expression) => fixed_parameters = Some(parse_fixed_parameters(expression)?),
                 _ => {}
             }
         }
@@ -185,64 +121,16 @@ fn parse_rust_tool_bindings(
             .insert(
                 key.clone(),
                 JsToolBindingSpec {
-                    tool: Some(tool.ok_or("JsToolBinding tool is missing")?),
+                    tool: tool.ok_or("JsToolBinding target is missing")?,
+                    runtime,
+                    facade: facade.ok_or("JsToolBinding result facade is missing")?,
+                    fixed_parameters: fixed_parameters.ok_or("Builtin binding fixed parameters must be declared")?,
                     api_variants: Vec::new(),
                 },
             )
             .is_some()
         {
             return Err(format!("duplicate JsToolBinding for `{}.{}`", key.0, key.1).into());
-        }
-    }
-    let direct_const = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Const(item) if item.ident == "JS_DIRECT_HOST_BINDINGS" => Some(item),
-            _ => None,
-        })
-        .ok_or("JS_DIRECT_HOST_BINDINGS is missing")?;
-    let direct_expression = match &*direct_const.expr {
-        Expr::Reference(reference) => &*reference.expr,
-        expression => expression,
-    };
-    let Expr::Array(direct_entries) = direct_expression else {
-        return Err("JS_DIRECT_HOST_BINDINGS must reference an array literal".into());
-    };
-    for element in &direct_entries.elems {
-        let Expr::Struct(binding) = element else {
-            return Err("Direct host entries must be JsDirectHostBinding structs".into());
-        };
-        let mut namespace = None;
-        let mut method = None;
-        for field in &binding.fields {
-            let (syn::Member::Named(name), Expr::Lit(value)) = (&field.member, &field.expr) else {
-                return Err("Invalid direct host binding field".into());
-            };
-            let Lit::Str(value) = &value.lit else {
-                return Err("Direct host binding fields must be strings".into());
-            };
-            match name.to_string().as_str() {
-                "namespace" => namespace = Some(value.value()),
-                "method" => method = Some(value.value()),
-                _ => return Err("Unknown direct host binding field".into()),
-            }
-        }
-        let key = (
-            namespace.ok_or("Direct host namespace is missing")?,
-            method.ok_or("Direct host method is missing")?,
-        );
-        if bindings
-            .insert(
-                key.clone(),
-                JsToolBindingSpec {
-                    tool: None,
-                    api_variants: Vec::new(),
-                },
-            )
-            .is_some()
-        {
-            return Err(format!("duplicate direct host binding for {}.{}", key.0, key.1).into());
         }
     }
     let api_variant_const = file.items.iter().find_map(|item| match item {
@@ -413,35 +301,44 @@ pub fn generate_js_tools_runtime(
         .into());
     }
 
-    let mut output = String::from(
+    let parameter_rules = generate_parameter_rules(bindings_path, &methods)?;
+    let mut output = format!("var __operitToolParameterRules = {parameter_rules};\n");
+    output.push_str(
         r#"// Generated from canonical Rust Tools traits and bindings. Do not edit.
 var Tools = {};
 var tools = Tools;
 
+/** Converts public argument spelling to the executor naming convention. */
 function __operitToolsSnakeCase(name) {
     return String(name).replace(/[A-Z]/g, function(character) {
         return "_" + character.toLowerCase();
     });
 }
 
+/** Selects object expansion using the parameter conventions declared in the SDK contract. */
 function __operitToolsFlattens(name) {
-    return name === "options" || name === "params" || name === "updates" ||
-        name.endsWith("OrOptions") || name.endsWith("OrParams");
+    return __operitToolParameterRules.flattenArguments.indexOf(name) !== -1 ||
+        __operitToolParameterRules.scalarUnionSuffixes.some(function(suffix) { return name.endsWith(suffix); });
 }
 
+/** Resolves the scalar branch name of a declared union argument. */
 function __operitToolsScalarField(name) {
-    return __operitToolsSnakeCase(name.replace(/OrOptions$|OrParams$/, ""));
-}
-
-function __operitToolsWireName(namespace, method, name) {
-    if (namespace === "Files" && method === "writeBinary" && name === "base64Content") return "base64Content";
-    if (namespace === "Files" && (method === "apply" || method === "create" || method === "edit") && name === "newContent") return "new";
-    if (namespace === "Files" && method === "edit" && name === "oldContent") return "old";
-    if (namespace === "System" && method === "sleep" && name === "milliseconds") return "duration_ms";
-    if (namespace === "System" && method === "listApps" && name === "includeSystem") return "include_system_apps";
+    for (var suffix of __operitToolParameterRules.scalarUnionSuffixes) {
+        if (name.endsWith(suffix)) return __operitToolsSnakeCase(name.slice(0, -suffix.length));
+    }
     return __operitToolsSnakeCase(name);
 }
 
+/** Resolves an exact positional alias or applies the declared snake-case naming convention. */
+function __operitToolsWireName(namespace, method, name) {
+    var key = namespace + "." + method + "." + name;
+    if (Object.prototype.hasOwnProperty.call(__operitToolParameterRules.argumentNames, key)) {
+        return __operitToolParameterRules.argumentNames[key];
+    }
+    return __operitToolsSnakeCase(name);
+}
+
+/** Selects the declared object or positional overload from the actual arguments. */
 function __operitToolsSelectOverload(overloads, args) {
     if (overloads.length === 1) return overloads[0];
     if (args.length > 0 && args[0] !== null && typeof args[0] === "object" && !Array.isArray(args[0])) {
@@ -458,7 +355,8 @@ function __operitToolsSelectOverload(overloads, args) {
     return selected;
 }
 
-function __operitToolsBuildParameters(namespace, method, overloads, args) {
+/** Maps declared SDK arguments and fixed fields to one executor request. */
+function __operitToolsBuildParameters(namespace, method, overloads, args, fixedParameters) {
     var names = __operitToolsSelectOverload(overloads, args);
     var parameters = {};
     for (var index = 0; index < names.length; index += 1) {
@@ -468,7 +366,7 @@ function __operitToolsBuildParameters(namespace, method, overloads, args) {
             if (value === undefined || value === null) continue;
             if (typeof value === "object" && !Array.isArray(value)) {
                 Object.keys(value).forEach(function(field) {
-                    var wireField = namespace === "Net" ? field : __operitToolsSnakeCase(field);
+                    var wireField = __operitToolParameterRules.preserveObjectNamespaces.indexOf(namespace) !== -1 ? field : __operitToolsSnakeCase(field);
                     parameters[wireField] = value[field];
                 });
             } else {
@@ -478,72 +376,13 @@ function __operitToolsBuildParameters(namespace, method, overloads, args) {
             parameters[__operitToolsWireName(namespace, method, name)] = value;
         }
     }
-    if (namespace === "Net" && method === "httpGet") parameters.method = "GET";
-    if (namespace === "Net" && method === "httpPost") parameters.method = "POST";
-    if (namespace === "Net.cookies" && method === "get") parameters.action = "get";
-    if (namespace === "Net.cookies" && method === "set") parameters.action = "set";
-    if (namespace === "Net.cookies" && method === "clear") parameters.action = "clear";
+    for (var fixed of fixedParameters) parameters[fixed[0]] = fixed[1];
     return parameters;
 }
 
-function __operitInvokeToolsBinding(namespace, method, toolName, overloads, args) {
-    return toolCall(toolName, __operitToolsBuildParameters(namespace, method, overloads, args));
-}
-
-/** Reads one typed directory using the runtime's scoped structured Promise transport. */
-function __operitReadSoftwareSettingsDirectory(method) {
-    return __operitInvokeHostAsync(__operitNativeReadSoftwareSettingsDirectoryAsync, [method]);
-}
-
-/** Applies an exact configuration ID and preserves the host's original rejection. */
-function __operitApplySoftwareSettingsConfig(method, id) {
-    if (typeof id !== 'string' || id.trim() === '' || id.trim() !== id) return Promise.reject(new Error('Configuration ID must be exact nonblank text'));
-    return __operitInvokeHostAsync(__operitNativeApplySoftwareSettingsConfigAsync, [method, id]);
-}
-
-/** Validates and snapshots complete JSON objects without text conversion or property getters. */
-function __operitRequireChatJsonObject(value) {
-    if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Chat extension value must be a JSON object');
-    var ancestors = [], nodes = 0;
-    /** Copies data now, including requests whose first streaming pull happens later. */
-    function copy(entry, depth) {
-        if (++nodes > 1000000 || depth > 128) throw new Error('Chat extension exceeds structured depth/node limit');
-        if (entry === null || typeof entry === 'string' || typeof entry === 'boolean') return entry;
-        if (typeof entry === 'number' && Number.isFinite(entry)) return entry;
-        if (typeof entry !== 'object' || (!Array.isArray(entry) && Object.getPrototypeOf(entry) !== Object.prototype)) throw new Error('Chat extension contains a non-JSON value');
-        if (ancestors.indexOf(entry) !== -1) throw new Error('Chat extension contains a cyclic value');
-        ancestors.push(entry);
-        var result;
-        if (Array.isArray(entry)) {
-            result = [];
-            for (var index = 0; index < entry.length; index++) {
-                var item = Object.getOwnPropertyDescriptor(entry, String(index));
-                if (!item) throw new Error('Chat extension contains a non-JSON array hole');
-                if (!Object.prototype.hasOwnProperty.call(item, 'value')) throw new Error('Chat extension contains a non-JSON property');
-                Object.defineProperty(result, index, { value: copy(item.value, depth + 1), enumerable: true, writable: true, configurable: true });
-            }
-        } else {
-            result = {};
-            Reflect.ownKeys(entry).forEach(function(key) {
-                if (typeof key !== 'string') throw new Error('Chat extension contains a non-JSON key');
-                var descriptor = Object.getOwnPropertyDescriptor(entry, key);
-                if (!descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) throw new Error('Chat extension contains a non-JSON property');
-                Object.defineProperty(result, key, { value: copy(descriptor.value, depth + 1), enumerable: true, writable: true, configurable: true });
-            });
-        }
-        ancestors.pop();
-        return result;
-    }
-    return copy(value, 0);
-}
-/** Invokes only the narrow typed native record binding; the engine supplies the authenticated owner. */
-function __operitChatExtension(method, target, value) {
-    try {
-        __operitRequireChatJsonObject(target);
-        if (method === 'writeExtension') __operitRequireChatJsonObject(value);
-        else if (value !== null) throw new Error('Chat extension read/delete does not accept a value');
-        return __operitInvokeHostAsync(__operitNativeChatExtensionAsync, [method, target, value]);
-    } catch (error) { return Promise.reject(error); }
+/** Sends one mapped request through the existing structured tool transport. */
+function __operitInvokeToolsBinding(namespace, method, toolName, overloads, args, fixedParameters) {
+    return toolCall(toolName, __operitToolsBuildParameters(namespace, method, overloads, args, fixedParameters));
 }
 
 "#,
@@ -592,49 +431,27 @@ function __operitChatExtension(method, target, value) {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        if binding.tool.is_none() {
-            if namespace == "Storage" && method == "request" && canonical_signature == "request" {
-                output.push_str(&format!("{expression}[\"request\"] = __operitStorageRequest;\n__operitInstallStorageFacade();\n"));
-            } else if namespace == "SoftwareSettings" {
-                match (method.as_str(), canonical_signature.as_str()) {
-                    ("listModelSummaries" | "listTtsConfigs" | "readToolSourceCatalog" | "listThemeConfigs" | "getCurrentTtsConfigId", "") => {
-                        output.push_str(&format!("{expression}[\"{method}\"] = function() {{ if (arguments.length !== 0) return Promise.reject(new Error(\"SoftwareSettings.{method} requires exactly 0 arguments\")); return __operitReadSoftwareSettingsDirectory(\"{method}\"); }};\n"));
-                    }
-                    ("applyThemeConfig" | "setCurrentTtsConfigId", "id") => {
-                        output.push_str(&format!("{expression}[\"{method}\"] = function(id) {{ if (arguments.length !== 1) return Promise.reject(new Error(\"SoftwareSettings.{method} requires exactly 1 argument\")); return __operitApplySoftwareSettingsConfig(\"{method}\", id); }};\n"));
-                    }
-                    _ => return Err(format!("Unsupported direct SoftwareSettings signature: {method}").into()),
+        if binding.runtime {
+            let function = match binding.facade.as_str() {
+                "AsyncIterator" => format!("function({canonical_signature}) {{ if (arguments.length !== 1) throw new Error(\"{namespace}.{method} requires exactly one request\"); return __operitCreateToolStream(\"{}\", {canonical_signature}); }}", binding.tool),
+                "Promise" | "Storage" => {
+                    let names = &overloads[0];
+                    let fields = names.iter().map(|name| format!("\"{name}\": {name}")).collect::<Vec<_>>().join(", ");
+                    let validation = runtime_argument_checks(sdk_src, &namespace, &method)?;
+                    format!("function({canonical_signature}) {{ if (arguments.length !== {}) return Promise.reject(new Error(\"{namespace}.{method} requires exactly {} arguments\")); try {{ {validation} return toolCall(\"{}\", {{{fields}}}); }} catch (error) {{ return Promise.reject(error); }} }}", names.len(), names.len(), binding.tool)
                 }
-            } else if namespace == "Chat" && matches!(method.as_str(), "sendMessage" | "sendMessageStreaming" | "cancel") {
+                _ => return Err(format!("Unknown result facade: {}", binding.facade).into()),
+            };
+            if namespace == "Chat" {
                 if !chat_namespace_open {
                     output.push_str("Tools[\"Chat\"] = __operitToolPkgApi.namespace(\"Tools.Chat\", {\n");
                     chat_namespace_open = true;
                 }
-                let helper = match method.as_str() {
-                    "sendMessage" => "__operitChatSend",
-                    "sendMessageStreaming" => "__operitChatStream",
-                    "cancel" => "__operitChatCancel",
-                    _ => unreachable!("direct chat method was selected explicitly"),
-                };
-                output.push_str(&format!("\"{method}\": {helper},\n"));
-            } else if namespace == "Chat" {
-                let (arity, value) = match (method.as_str(), canonical_signature.as_str()) {
-                    ("readExtension" | "deleteExtension", "target") => (1, "null"),
-                    ("writeExtension", "target, value") => (2, "value"),
-                    _ => return Err(format!("Unsupported direct Chat signature: {method}").into()),
-                };
-                if !chat_namespace_open {
-                    output.push_str(
-                        "Tools[\"Chat\"] = __operitToolPkgApi.namespace(\"Tools.Chat\", {\n",
-                    );
-                    chat_namespace_open = true;
-                }
-                output.push_str(&format!("\"{method}\": function({canonical_signature}) {{ if (arguments.length !== {arity}) return Promise.reject(new Error(\"Chat.{method} requires exactly {arity} arguments\")); return __operitChatExtension(\"{method}\", target, {value}); }},\n"));
+                output.push_str(&format!("\"{method}\": {function},\n"));
             } else {
-                return Err(
-                    format!("Unsupported direct typed namespace: {namespace}.{method}").into(),
-                );
+                output.push_str(&format!("{expression}[\"{method}\"] = __operitToolPkgApi.method().since(\"2.0.0\", {function}).build(\"Tools.{namespace}.{method}\");\n"));
             }
+            if binding.facade == "Storage" { output.push_str("__operitInstallStorageFacade();\n"); }
             continue;
         }
         if namespace == "Chat" {
@@ -648,12 +465,10 @@ function __operitChatExtension(method, target, value) {
                 output.push_str(&generated_js_function(
                     &namespace,
                     &method,
-                    binding
-                        .tool
-                        .as_deref()
-                        .expect("builtin method has a tool binding"),
+                    &binding.tool,
                     &canonical_signature,
                     &canonical_overloads,
+                    &binding.fixed_parameters,
                 ));
             } else {
                 output.push_str("__operitToolPkgApi.method()");
@@ -680,12 +495,10 @@ function __operitChatExtension(method, target, value) {
                     let function = generated_js_function(
                         &namespace,
                         &method,
-                        binding
-                            .tool
-                            .as_deref()
-                            .expect("builtin method has a tool binding"),
+                        &binding.tool,
                         &signature,
                         &variant_overloads,
+                        &binding.fixed_parameters,
                     );
                     if let Some(until) = &variant.until {
                         output.push_str(&format!(
@@ -702,12 +515,10 @@ function __operitChatExtension(method, target, value) {
             let function = generated_js_function(
                 &namespace,
                 &method,
-                binding
-                    .tool
-                    .as_deref()
-                    .expect("builtin method has a tool binding"),
+                &binding.tool,
                 &canonical_signature,
                 &canonical_overloads,
+                &binding.fixed_parameters,
             );
             output.push_str(&format!("{expression}[\"{method}\"] = {function};\n"));
         }
@@ -732,6 +543,98 @@ function __operitChatExtension(method, target, value) {
     Ok(())
 }
 
+/// Derives public argument checks from canonical Rust types without selecting a separate transport.
+fn runtime_argument_checks(sdk_src: &Path, namespace: &str, method: &str) -> Result<String, Box<dyn Error>> {
+    let mut checks = Vec::new();
+    for (path, trait_name, declared_namespace) in HOST_TRAITS {
+        if *declared_namespace != namespace { continue; }
+        let file = syn::parse_file(&fs::read_to_string(sdk_src.join(path))?)?;
+        let contract = file.items.iter().find_map(|item| match item {
+            Item::Trait(item) if item.ident == *trait_name => Some(item), _ => None,
+        }).ok_or("Canonical Tools trait is missing")?;
+        let operation = contract.items.iter().find_map(|item| match item {
+            TraitItem::Fn(item) if runtime_method_name(&item.sig.ident.to_string()) == method => Some(item), _ => None,
+        }).ok_or("Canonical Tools method is missing")?;
+        for argument in &operation.sig.inputs {
+            let FnArg::Typed(argument) = argument else { continue; };
+            let Pat::Ident(name) = &*argument.pat else { return Err("Runtime arguments require named fields".into()); };
+            let name = name.ident.to_string();
+            match &*argument.ty {
+                syn::Type::Path(path) if path.path.is_ident("String") => checks.push(format!("if (typeof {name} !== 'string' || {name}.trim() === '' || {name}.trim() !== {name}) throw new TypeError('Identifier must be exact nonblank text');")),
+                syn::Type::Path(_) => checks.push(format!("{name} = __operitSnapshotJsonObject({name});")),
+                _ => return Err("Unsupported structured runtime argument type".into()),
+            }
+        }
+    }
+    Ok(checks.join(" "))
+}
+
+/// Emits parameter metadata from the canonical contract and verifies every exact positional alias.
+fn generate_parameter_rules(
+    path: &Path,
+    methods: &BTreeMap<(String, String), Vec<Vec<String>>>,
+) -> Result<String, Box<dyn Error>> {
+    let file = syn::parse_file(&fs::read_to_string(path)?)?;
+    let item = file.items.iter().find_map(|item| match item {
+        Item::Const(item) if item.ident == "JS_TOOL_PARAMETER_RULES" => Some(item),
+        _ => None,
+    }).ok_or("Missing canonical tool parameter rules")?;
+    let Expr::Struct(rules) = &*item.expr else { return Err("Tool parameter rules must be declared as a struct".into()); };
+    let mut fields = BTreeMap::new();
+    for field in &rules.fields {
+        let syn::Member::Named(name) = &field.member else { return Err("Parameter rule fields must be named".into()); };
+        if fields.insert(name.to_string(), &field.expr).is_some() { return Err("Duplicate parameter rule field".into()); }
+    }
+    if fields.len() != 4 { return Err("Unexpected tool parameter rule fields".into()); }
+    let text_array = |name: &str| -> Result<Vec<String>, Box<dyn Error>> {
+        let Expr::Reference(reference) = fields.get(name).ok_or("Missing parameter rule array")? else { return Err("Parameter rules must use static arrays".into()); };
+        parse_string_array(&reference.expr, name)
+    };
+    let flattened = text_array("flatten_arguments")?;
+    let suffixes = text_array("scalar_union_suffixes")?;
+    let preserved = text_array("preserve_object_namespaces")?;
+    let Expr::Reference(reference) = fields.get("argument_names").ok_or("Missing positional argument names")? else { return Err("Argument names must use a static tuple array".into()); };
+    let Expr::Array(entries) = &*reference.expr else { return Err("Argument names must be an array".into()); };
+    let mut aliases = BTreeMap::new();
+    for entry in &entries.elems {
+        let Expr::Tuple(tuple) = entry else { return Err("Argument names must contain exact four-field tuples".into()); };
+        let mut values = Vec::new();
+        for value in &tuple.elems {
+            let Expr::Lit(value) = value else { return Err("Argument names must be literals".into()); };
+            let Lit::Str(value) = &value.lit else { return Err("Argument names must be text".into()); };
+            values.push(value.value());
+        }
+        let [namespace, method, argument, wire]: [String; 4] = values.try_into().map_err(|_| "Argument aliases require exactly four fields")?;
+        let overloads = methods.get(&(namespace.clone(), method.clone())).ok_or("Argument alias references an undeclared method")?;
+        if !overloads.iter().any(|arguments| arguments.iter().any(|name| name == &argument)) { return Err("Argument alias references an undeclared positional argument".into()); }
+        if aliases.insert(format!("{namespace}.{method}.{argument}"), wire).is_some() { return Err("Duplicate positional argument alias".into()); }
+    }
+    let array = |values: &[String]| format!("[{}]", values.iter().map(|value| format!("{value:?}")).collect::<Vec<_>>().join(", "));
+    let aliases = aliases.iter().map(|(key, value)| format!("{key:?}: {value:?}")).collect::<Vec<_>>().join(", ");
+    Ok(format!("{{flattenArguments: {}, scalarUnionSuffixes: {}, preserveObjectNamespaces: {}, argumentNames: {{{aliases}}}}}", array(&flattened), array(&suffixes), array(&preserved)))
+}
+
+/// Reads each explicitly declared fixed executor parameter from the canonical binding contract.
+fn parse_fixed_parameters(expression: &Expr) -> Result<Vec<(String, String)>, Box<dyn Error>> {
+    let Expr::Reference(reference) = expression else { return Err("Fixed parameters must be a static tuple slice".into()); };
+    let Expr::Array(array) = &*reference.expr else { return Err("Fixed parameters must be an array".into()); };
+    let mut parameters = Vec::new();
+    let mut names = BTreeSet::new();
+    for entry in &array.elems {
+        let Expr::Tuple(tuple) = entry else { return Err("Fixed parameters must contain string pairs".into()); };
+        let mut fields = Vec::new();
+        for field in &tuple.elems {
+            let Expr::Lit(value) = field else { return Err("Fixed parameter fields must be string literals".into()); };
+            let Lit::Str(value) = &value.lit else { return Err("Fixed parameter fields must be text".into()); };
+            fields.push(value.value());
+        }
+        let [name, value]: [String; 2] = fields.try_into().map_err(|_| "Fixed parameters require exactly two fields")?;
+        if !names.insert(name.clone()) { return Err("Duplicate fixed executor parameter".into()); }
+        parameters.push((name, value));
+    }
+    Ok(parameters)
+}
+
 /// Generates one JavaScript function expression for a Tools API variant.
 fn generated_js_function(
     namespace: &str,
@@ -739,9 +642,11 @@ fn generated_js_function(
     tool: &str,
     signature: &str,
     overloads: &str,
+    fixed_parameters: &[(String, String)],
 ) -> String {
+    let fixed_parameters = format!("[{}]", fixed_parameters.iter().map(|(key, value)| format!("[{key:?}, {value:?}]")).collect::<Vec<_>>().join(", "));
     format!(
-        "function({signature}) {{\n    return __operitInvokeToolsBinding(\"{namespace}\", \"{method}\", \"{tool}\", [{overloads}], Array.prototype.slice.call(arguments));\n}}"
+        "function({signature}) {{\n    return __operitInvokeToolsBinding(\"{namespace}\", \"{method}\", \"{tool}\", [{overloads}], Array.prototype.slice.call(arguments), {fixed_parameters});\n}}"
     )
 }
 
@@ -815,42 +720,6 @@ fn method_arguments(signature: &syn::Signature) -> Result<Vec<String>, Box<dyn E
             .into()),
         })
         .collect()
-}
-
-/// Emits one generated host method body using the shared runtime parameter adapter.
-fn generated_method_body(
-    namespace: &str,
-    method: &str,
-    tool_variant: &str,
-    arguments: &[String],
-) -> String {
-    if namespace == "System.terminal" && method == "execStreaming" {
-        return format!(
-            "        invoke_terminal_streaming(\n            self,\n            BuiltinToolName::{tool_variant},\n            sessionId,\n            command,\n            options,\n        )\n"
-        );
-    }
-    let ignores_uninhabited_options = matches!(
-        (namespace, method),
-        ("Net", "browserNavigateBack") | ("Net", "browserClose") | ("Net", "browserCloseAll")
-    );
-    let arguments = arguments
-        .iter()
-        .map(|argument| {
-            if ignores_uninhabited_options && argument == "options" {
-                "generated_empty_argument(\"options\")".to_string()
-            } else {
-                format!("generated_argument(\"{argument}\", {argument})")
-            }
-        })
-        .collect::<Vec<_>>();
-    let arguments = if arguments.is_empty() {
-        "generated_no_arguments()".to_string()
-    } else {
-        format!("vec![{}]", arguments.join(", "))
-    };
-    format!(
-        "        invoke_generated(\n            self,\n            BuiltinToolName::{tool_variant},\n            \"{namespace}\",\n            \"{method}\",\n            {arguments},\n        )\n"
-    )
 }
 
 /// Converts one snake-case built-in name into its generated enum variant identifier.

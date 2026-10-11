@@ -13,6 +13,8 @@ class ComposeDslLazyListView extends ListView {
     required super.reverse,
     required super.shrinkWrap,
     required super.childrenDelegate,
+    super.itemExtent,
+    super.cacheExtent,
   }) : super.custom(padding: EdgeInsets.zero);
 
   /// Uses one content-measuring viewport for both list axes and sizing modes.

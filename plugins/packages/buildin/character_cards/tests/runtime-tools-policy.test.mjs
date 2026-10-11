@@ -4,16 +4,16 @@ import path from "node:path";
 import { readFile } from "node:fs/promises";
 import { createDiskHarness } from "./disk-files.mjs";
 import { loadModule, plain } from "./runtime.mjs";
-import { createSoftwareSettingsFixture } from "./software-settings-fixture.mjs";
+import { createHostDirectoriesFixture } from "./host-directories-fixture.mjs";
 import { openPlugin } from "./plugin-entry-harness.mjs";
 
 const authenticatedOwner = "com.operit.character_cards", siblingOwner = "controlled.other_package";
 // Explicit settings inputs are isolated host-boundary fixtures, not configured native-host evidence.
-const directoryInput = plain(loadModule("tests/software-settings-input.ts").softwareSettingsTestInput);
+const directoryInput = plain(loadModule("tests/host-directories-input.ts").hostDirectoriesTestInput);
 
 /** Registers real main callbacks and providers over actual temporary disk IO plus explicit host-boundary inputs. */
 async function environment(t) {
-  const disk = await createDiskHarness(t), settings = createSoftwareSettingsFixture(disk, directoryInput);
+  const disk = await createDiskHarness(t), settings = createHostDirectoriesFixture(disk, directoryInput);
   const chats = new Map(["policy-chat", "group-chat"].map(
     /** Defines actual controlled host records with an unrelated namespace that must never select this plugin's participant. */
     id => [id, { summary: { id, title: id, messageCount: 0, inputTokens: 0, outputTokens: 0, createdAt: "1760000000000", updatedAt: "1760000000000", isCurrent: false },
@@ -68,7 +68,7 @@ async function environment(t) {
       return target[property];
     },
   });
-  const Tools = new Proxy({ Files: disk.files, Storage: disk.storage, Chat, SoftwareSettings: settings.harness.globals.Tools.SoftwareSettings }, {
+  const Tools = new Proxy({ Files: disk.files, Storage: disk.storage, Chat, Models: settings.harness.globals.Tools.Models, Tts: settings.harness.globals.Tools.Tts, Catalog: settings.harness.globals.Tools.Catalog }, {
     /** Rejects all undeclared host capabilities instead of synthesizing a successful response. */
     get(target, property) {
       if (!Object.hasOwn(target, property)) throw new Error("Unsupported policy test host capability: " + String(property));

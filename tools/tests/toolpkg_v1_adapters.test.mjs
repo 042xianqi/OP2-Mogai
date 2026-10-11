@@ -44,7 +44,12 @@ function engine(version = '1.0.0') {
   }
   const tools = {
     Files: files,
-    SoftwareSettings: {},
+    SoftwareSettings: {
+      /** Returns the exact current host result for the versioned legacy variable reader. */
+      async readEnvironmentVariable(key) { calls.push({ name: 'readEnvironmentVariable', args: [key] }); return { key, value: 'configured', exists: true, toString() { return this.value; } }; },
+      /** Preserves the optional value argument and reports the actual modeled write. */
+      async writeEnvironmentVariable(key, value) { calls.push({ name: 'writeEnvironmentVariable', args: [key, value] }); return { key, requestedValue: value, value, exists: value !== undefined, cleared: value === undefined, toString() { return this.key; } }; },
+    },
     Chat: {
       /** Captures the current object-based creation contract. */
       async createNew(options) { calls.push({ name: 'Chat.createNew', args: [options] }); return { chatId: 'new-chat', createdAt: 123 }; },
@@ -270,7 +275,7 @@ test('legacy caller IDs are provider-scoped and absent from the current contract
 /** Ensures this task never registers the legacy settings-management methods. */
 test('legacy role compatibility leaves SoftwareSettings unchanged', () => {
   const { tools } = engine();
-  assert.deepEqual(Object.keys(tools.SoftwareSettings), []);
+  assert.deepEqual(Object.keys(tools.SoftwareSettings), ['readEnvironmentVariable', 'writeEnvironmentVariable']);
   assert.doesNotMatch(source('plugins/types/index.d.ts'), /function getCallerCardId\(/);
   assert.match(source('plugins/types/index.d.ts'), /function getCallerParticipantId\(\): string \| undefined/);
 });
@@ -500,4 +505,19 @@ test('legacy role callers keep the actual shared memory binding', async t => {
   assert.equal(shared.memories[0].title, 'Shared item');
   const query = await tools.Memory.query('*');
   assert.equal(query.memories[0].title, 'Shared item');
+});
+
+/** Verifies both admitted V1 contracts retain their environment-variable signatures without changing the copied declarations. */
+test('V1 environment adapters preserve exact host results and optional write arguments', async () => {
+  for (const version of ['1.0.0', '1.0.1', '2.0.0']) {
+    const { context, tools, calls } = engine(version);
+    const result = await tools.SoftwareSettings.readEnvironmentVariable('EXACT_KEY');
+    assert.equal(result.key, 'EXACT_KEY'); assert.equal(result.value, 'configured'); assert.equal(result.toString(), 'configured');
+    await tools.SoftwareSettings.writeEnvironmentVariable('EXACT_KEY');
+    assert.deepEqual(calls.map(call => call.args), [['EXACT_KEY'], ['EXACT_KEY', undefined]]);
+    const original = new Error('EXACT_HOST_REJECTION');
+    const adapter = context.__operitCreateV1SoftwareSettings({ readEnvironmentVariable: async () => { throw original; }, writeEnvironmentVariable: async () => { throw original; } });
+    await assert.rejects(adapter.readEnvironmentVariable('EXACT_KEY'), error => error === original);
+    await assert.rejects(adapter.writeEnvironmentVariable('EXACT_KEY'), error => error === original);
+  }
 });

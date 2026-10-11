@@ -2,24 +2,19 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import test from "node:test";
-import { installScopedHostRuntime } from "./fixtures/scoped_host_runtime.mjs";
-
-const source = readFileSync(new URL("../../core/crates/plugin/codegen/src/runtime_bindings.rs", import.meta.url), "utf8");
-const start = source.indexOf("function __operitReadSoftwareSettingsDirectory(method)");
-const end = source.indexOf("function __operitRequireChatJsonObject", start);
+import { installScopedHostRuntime, installGeneratedToolsRuntime } from "./fixtures/scoped_host_runtime.mjs";
 
 /** Uses the real scoped Promise protocol; only domain data completion is test-controlled. */
 function context() {
   const pending=[];
   const sandbox=vm.createContext({});
   const registry=installScopedHostRuntime(sandbox);
-  sandbox.__operitNativeReadSoftwareSettingsDirectoryAsync=registry.binding((requestId,method)=>pending.push({requestId,method}));
-  sandbox.__operitNativeApplySoftwareSettingsConfigAsync=registry.binding((requestId,method,id)=>pending.push({requestId,method,id}));
-  vm.runInContext(source.slice(start,end),sandbox);
+  sandbox.__operitNativeCallToolStructured=registry.binding((requestId,type,name,parameters)=>pending.push({requestId,method:name,id:parameters.id}));
+  installGeneratedToolsRuntime(sandbox);
   return {sandbox,pending,registry};
 }
 
-for (const call of ["__operitReadSoftwareSettingsDirectory('listModelSummaries')", "__operitApplySoftwareSettingsConfig('setCurrentTtsConfigId', 'explicit-config')"]) {
+for (const call of ["Tools.Models.listSummaries()", "Tools.Tts.setCurrentConfigId('explicit-config')"]) {
   test(`${call} restores its exact originating JS call on failure`,async()=>{
     const {sandbox,pending,registry}=context();
     const globals=Object.keys(sandbox);
@@ -35,25 +30,24 @@ for (const call of ["__operitReadSoftwareSettingsDirectory('listModelSummaries')
 
 test('out-of-order directory/configuration completions preserve their own owners',async()=>{
   const {sandbox,pending,registry}=context();
-  const directory=vm.runInContext("__operitReadSoftwareSettingsDirectory('listModelSummaries').then(value=>({owner:__operitCurrentCallId,value}))",sandbox);
+  const directory=vm.runInContext("Tools.Models.listSummaries().then(value=>({owner:__operitCurrentCallId,value}))",sandbox);
   vm.runInContext("__operitCurrentCallId='configuration-owner'",sandbox);
-  const configuration=vm.runInContext("__operitApplySoftwareSettingsConfig('setCurrentTtsConfigId','explicit-config').then(value=>({owner:__operitCurrentCallId,value}))",sandbox);
+  const configuration=vm.runInContext("Tools.Tts.setCurrentConfigId('explicit-config').then(value=>({owner:__operitCurrentCallId,value}))",sandbox);
   assert.equal(pending[1].id,'explicit-config');
-  registry.settle(pending[1].requestId,null,false);
+  registry.settle(pending[1].requestId,{success:true,data:null},false);
   assert.equal((await configuration).owner,'configuration-owner');
-  registry.settle(pending[0].requestId,[{id:'model'}],false);
+  registry.settle(pending[0].requestId,{success:true,data:[{id:'model'}]},false);
   const result=await directory;
   assert.equal(result.owner,'owner');
   assert.deepEqual(structuredClone(result.value),[{id:'model'}]);
   assert.equal(sandbox.refs,0);
 });
 
-test('invalid configuration IDs do not reach the host or retain call references',async()=>{
+test('configuration IDs require exact canonical text before retaining host references',async()=>{
   const {sandbox,pending}=context();
   for (const id of ['', ' spaced ',null]) {
     sandbox.invalidId=id;
-    await assert.rejects(vm.runInContext("__operitApplySoftwareSettingsConfig('setCurrentTtsConfigId',invalidId)",sandbox),/exact nonblank/);
+    await assert.rejects(vm.runInContext("Tools.Tts.setCurrentConfigId(invalidId)",sandbox),/exact nonblank/);
   }
-  assert.equal(pending.length,0);
-  assert.equal(sandbox.refs,0);
+  assert.equal(pending.length,0);assert.equal(sandbox.refs,0);
 });

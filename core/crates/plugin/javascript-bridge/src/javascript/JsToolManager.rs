@@ -477,9 +477,12 @@ mod tests {
     #[derive(Clone, Copy)]
     struct TestJsExecutionHost;
 
-    crate::impl_rejecting_js_tools_host!(TestJsExecutionHost);
-
     impl JsExecutionHost for TestJsExecutionHost {
+        /// Captures this fixture's shared state through the same native invocation boundary.
+        fn capture_tool_invocation_host(&self) -> Arc<dyn JsExecutionHost> { Arc::new(self.clone()) }
+
+
+
         /// Retains the explicit manager test host when an engine supplies a real package context.
         fn for_toolpkg_execution_context(
             &self,

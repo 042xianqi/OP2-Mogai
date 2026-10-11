@@ -52,6 +52,7 @@ pub type CoreRouteChangeHandler = Arc<
 pub struct RuntimePluginAsset {
     pub name: &'static str,
     pub bytes: &'static [u8],
+    pub sha256: &'static str,
 }
 
 /// Bundled external skill asset exposed by the runtime crate.
@@ -246,18 +247,18 @@ pub trait ToolRuntimeSupport: Send + Sync {
     #[allow(non_snake_case)]
     fn listModelSummaries(
         &self,
-    ) -> Result<Vec<operit_plugin_sdk::js_sdk::software_settings::SoftwareModelSummary>, String>;
+    ) -> Result<Vec<operit_plugin_sdk::js_sdk::models::ModelsSummary>, String>;
     /// Reads complete configured speech records directly from the canonical configuration manager.
     #[allow(non_snake_case)]
     fn listTtsConfigs(
         &self,
-    ) -> Result<Vec<operit_plugin_sdk::js_sdk::software_settings::SoftwareTtsConfig>, String>;
+    ) -> Result<Vec<operit_plugin_sdk::js_sdk::tts::TtsConfig>, String>;
     /// Lists complete independent named appearance snapshots from the ordinary canonical preference manager.
     #[allow(non_snake_case)]
-    fn listThemeConfigs(&self) -> Result<Vec<operit_plugin_sdk::js_sdk::software_settings::SoftwareThemeConfig>, String>;
+    fn listThemeConfigs(&self) -> Result<Vec<operit_plugin_sdk::js_sdk::theme::ThemeConfig>, String>;
     /// Applies one exact existing named appearance snapshot and its active ID in the canonical transaction.
     #[allow(non_snake_case)]
-    fn applyThemeConfig(&self, id: String) -> Result<operit_plugin_sdk::js_sdk::software_settings::SoftwareThemeConfig, String>;
+    fn applyThemeConfig(&self, id: String) -> Result<operit_plugin_sdk::js_sdk::theme::ThemeConfig, String>;
     /// Reads the actual current canonical speech ID without resolving any plugin-owned usage.
     #[allow(non_snake_case)]
     fn getCurrentTtsConfigId(&self) -> Result<String, String>;
@@ -290,7 +291,7 @@ pub trait ToolRuntimeSupport: Send + Sync {
         Box<
             dyn Future<
                     Output = Result<
-                        operit_plugin_sdk::js_sdk::software_settings::SoftwareToolSourceCatalog,
+                        operit_plugin_sdk::js_sdk::catalog::CatalogToolSources,
                         String,
                     >,
                 > + Send

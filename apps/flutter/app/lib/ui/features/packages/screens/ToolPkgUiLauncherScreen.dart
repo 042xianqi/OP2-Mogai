@@ -385,14 +385,18 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
         );
         screenPath = embeddedScreenPath;
       } else {
-        script = await _packageManager.getToolPkgComposeDslScript(
-          containerPackageName: widget.plugin.packageName,
-          uiModuleId: uiModuleId,
-        );
-        screenPath = await _packageManager.getToolPkgComposeDslScreenPath(
-          containerPackageName: widget.plugin.packageName,
-          uiModuleId: uiModuleId,
-        );
+        final entry = await Future.wait<String?>([
+          _packageManager.getToolPkgComposeDslScript(
+            containerPackageName: widget.plugin.packageName,
+            uiModuleId: uiModuleId,
+          ),
+          _packageManager.getToolPkgComposeDslScreenPath(
+            containerPackageName: widget.plugin.packageName,
+            uiModuleId: uiModuleId,
+          ),
+        ]);
+        script = entry[0];
+        screenPath = entry[1];
       }
       if (!_isCurrentRouteLoad(routeLoadGeneration)) {
         return;

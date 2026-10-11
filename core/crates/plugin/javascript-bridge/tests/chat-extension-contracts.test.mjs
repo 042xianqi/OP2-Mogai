@@ -1,3 +1,4 @@
+import { installScopedHostRuntime, installGeneratedToolsRuntime } from "../../../../../tools/tests/fixtures/scoped_host_runtime.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
@@ -11,17 +12,15 @@ function source(relative) {
 
 /** Evaluates the exact generated JavaScript helper with an explicitly simulated native transport. */
 function extensionRuntime(native) {
-  const generator = source("core/crates/plugin/codegen/src/runtime_bindings.rs");
-  const marker = "/** Validates complete JSON objects without coercing undefined values or non-finite numbers. */";
-  const start = generator.indexOf(marker);
-  const endMarker = "globalThis.__operitChatExtensionSequence = 0;";
-  const end = generator.indexOf(endMarker, start);
-  assert.ok(start >= 0 && end > start);
-  const context = vm.createContext({
-    /** Simulates only the transport boundary and never substitutes for a production record store. */
-    __operitNativeChatExtensionAsync(...args) { return native(context, ...args); },
-  });
-  vm.runInContext(generator.slice(start, end + endMarker.length), context);
+  const context = vm.createContext({}), registry = installScopedHostRuntime(context);
+  context.__operitNativeCallToolStructured = registry.binding(
+    /** Supplies only host data completion; production code owns snapshots and Promise state. */
+    (id, type, name, parameters) => {
+      assert.equal(type, 'default');
+      const methods = { chat_read_extension:'readExtension', chat_write_extension:'writeExtension', chat_delete_extension:'deleteExtension' };
+      return native({settle(requestId,value,reject) { registry.settle(requestId,reject ? value : {success:true,data:value},reject); }}, id, methods[name], parameters.target, parameters.value ?? null);
+    });
+  installGeneratedToolsRuntime(context);
   return context;
 }
 
@@ -33,7 +32,6 @@ test("typed extensions require exact targets and a native engine-bound actual ow
   const sdk = source("core/crates/plugin/sdk/src/js_sdk/chat.rs");
   const engine = source("core/crates/plugin/javascript-bridge/src/javascript/JsEngine.rs");
   const handler = source("core/crates/tool/services/src/tools/AIToolHandler.rs");
-  const toolsHost = source("core/crates/tool/services/src/tools/AIToolHandlerJsToolsHost.rs");
   const bindings = source("core/crates/plugin/sdk/src/js_sdk/runtime_bindings.rs");
   const generator = source("core/crates/plugin/codegen/src/runtime_bindings.rs");
   assert.match(sdk, /#\[serde\(tag = "kind", deny_unknown_fields\)\]/);
@@ -42,21 +40,26 @@ test("typed extensions require exact targets and a native engine-bound actual ow
     assert.match(bindings, new RegExp('namespace: "Chat",\\s*method: "' + method + '"'));
   }
   assert.match(generator, /Tools\[\\"Chat\\"\] = __operitToolPkgApi\.namespace\(\\"Tools\.Chat\\"/);
-  assert.match(generator, /arguments\.length !== \{arity\}/);
+  assert.match(generator, /return toolCall\(/);
   assert.match(engine, /host\.for_toolpkg_execution_context\(context\)\?/);
-  assert.match(engine, /let extensionContext = self\.toolPkgContext\.clone\(\)/);
-  assert.match(engine, /let \[callbackId, method, targetJson, valueJson\] = exactHostJavaScriptArguments\(\s*"__operitNativeChatExtensionAsync",\s*arguments,?\s*\)\?/);
-  assert.match(engine, /chatExtensionExecutionOwner\(extensionContext\.as_ref\(\)\)/);
+  assert.match(engine, /"__operitNativeCallToolStructured"/);
+  assert.doesNotMatch(engine, /__operitNativeChatExtensionAsync/);
+  assert.doesNotMatch(handler, /RuntimeToolExecutor|RuntimeToolRequest|executeRuntimeOperation/);
   const binding = handler.slice(handler.indexOf("fn for_toolpkg_execution_context("), handler.indexOf("fn get_tool_catalog("));
   assert.match(binding, /getToolPkgContainerRuntime\(&context\.container_package_name\)/);
-  assert.match(binding, /isPackageEnabled\(&context\.container_package_name\)/);
+  assert.match(binding, /getEnabledToolPkgContainerRuntimes\(\)\.iter\(\)[\s\S]*?runtime\.packageName == context\.container_package_name/);
   assert.match(binding, /let mut host = self\.clone\(\)/);
   assert.match(binding, /host\.authenticatedExtensionOwner = Some\(context\.container_package_name\.clone\(\)\)/);
   assert.doesNotMatch(binding, /request\.parameters|parameters\.get\(|namespace.*get\(/);
-  const direct = toolsHost.slice(toolsHost.indexOf("fn authenticated_chat_extension_owner"), toolsHost.indexOf("include!(concat!"));
-  assert.doesNotMatch(direct, /invoke_generated|execute_tool_call|ToolParameter|unwrap_or_default|SoftwareSettings\.exec/);
+  const registration = source("core/crates/tool/services/src/tools/ToolRegistration.rs");
+  const execution = source("core/crates/tool/services/src/ToolExecutionManager.rs");
+  const direct = execution.slice(execution.indexOf("pub fn requirePluginOwner("), execution.indexOf("/// Borrows the exact captured model turn"));
+  for (const method of ["read", "write", "delete"]) {
+    assert.match(registration, new RegExp("runtimeSupport\\(\\)\\." + method + "ChatExtension\\(&context\\.requirePluginOwner\\(\\)\\?"));
+  }
+  assert.doesNotMatch(direct, /execute_tool_call|ToolParameter|unwrap_or_default|SoftwareSettings\.exec/);
   assert.match(direct, /getToolPkgContainerRuntime\(owner\)/);
-  assert.match(direct, /isPackageEnabled\(owner\)/);
+  assert.match(direct, /getEnabledToolPkgContainerRuntimes\(\)\.iter\(\)[\s\S]*?runtime\.packageName == owner/);
 });
 
 /** Checks the actual package tool executor releases its registry mutex before native per-engine context authentication. */
@@ -75,24 +78,24 @@ test("Rust declaration generator covers tagged objects and keeps extension field
   assert.match(generator, /kind: \\\"message\\\"; chatId: string; messageTimestamp: number; variantIndex: number/);
 });
 
-/** Exercises write-object preservation, existing-record absence, booleans, and callback disposal in the real generated helper. */
+/** Exercises structured records, missing-record nulls, boolean results and owning-call release. */
 test("extension Promise preserves complete JSON null and false without substitute responses", async () => {
   const calls = [];
   const runtime = extensionRuntime(
-    /** Returns controlled fixture envelopes solely to validate the generated native Promise contract. */
-    (context, id, method, target, value) => {
-      calls.push({ id, method, target: JSON.parse(target), value: JSON.parse(value) });
-      const result = method === "writeExtension" ? value : method === "readExtension" ? "null" : "false";
-      context[id](result, false);
+    /** Supplies structured host results through the generated Promise contract. */
+    (registry, id, method, target, value) => {
+      calls.push({ id, method, target: structuredClone(target), value: structuredClone(value) });
+      const result = method === "writeExtension" ? value : method === "readExtension" ? null : false;
+      registry.settle(id, result, false);
     },
   );
-  const value = await vm.runInContext('__operitChatExtension("writeExtension", {kind:"message",chatId:"chat",messageTimestamp:17,variantIndex:2}, {actor:{id:"opaque"},voice:null,items:[true,2,"text"]})', runtime);
+  const value = await vm.runInContext('Tools.Chat.writeExtension({kind:"message",chatId:"chat",messageTimestamp:17,variantIndex:2}, {actor:{id:"opaque"},voice:null,items:[true,2,"text"]})', runtime);
   assert.deepEqual(plain(value), { actor: { id: "opaque" }, voice: null, items: [true, 2, "text"] });
-  assert.equal(await vm.runInContext('__operitChatExtension("readExtension", {kind:"chat",chatId:"chat"}, null)', runtime), null);
-  assert.equal(await vm.runInContext('__operitChatExtension("deleteExtension", {kind:"chat",chatId:"chat"}, null)', runtime), false);
+  assert.equal(await vm.runInContext('Tools.Chat.readExtension({kind:"chat",chatId:"chat"})', runtime), null);
+  assert.equal(await vm.runInContext('Tools.Chat.deleteExtension({kind:"chat",chatId:"chat"})', runtime), false);
   assert.equal(new Set(calls.map(call => call.id)).size, 3);
   assert.deepEqual(calls[0].target, { kind: "message", chatId: "chat", messageTimestamp: 17, variantIndex: 2 });
-  for (const { id } of calls) assert.equal(Object.hasOwn(runtime, id), false);
+  assert.equal(runtime.refs, 0);
 });
 
 /** Rejects lossy or invalid JavaScript object inputs before any native call can be scheduled. */
@@ -103,67 +106,62 @@ test("extension write rejects non-JSON values and array holes without reaching n
     () => { calls += 1; throw new Error("invalid write reached native"); },
   );
   for (const value of ["null", "[]", '"text"', "{value:undefined}", "{value:Infinity}", "{value:NaN}", "{value:()=>1}", "{value:1n}", "{value:Symbol('x')}", "{value:new Date(0)}", "{items:[,1]}", "{[Symbol('x')]:1}", "Object.defineProperty({},'secret',{value:1})", "({get value(){return 1}})"]) {
-    await assert.rejects(vm.runInContext(`__operitChatExtension("writeExtension", {kind:"chat",chatId:"chat"}, ${value})`, runtime), /non-JSON|JSON object/);
+    await assert.rejects(vm.runInContext(`Tools.Chat.writeExtension({kind:"chat",chatId:"chat"}, ${value})`, runtime), /non-JSON|JSON object/);
   }
-  await assert.rejects(vm.runInContext('const cyclic = {}; cyclic.self = cyclic; __operitChatExtension("writeExtension", {kind:"chat",chatId:"chat"}, cyclic)', runtime));
+  await assert.rejects(vm.runInContext('const cyclic = {}; cyclic.self = cyclic; Tools.Chat.writeExtension({kind:"chat",chatId:"chat"}, cyclic)', runtime));
   assert.equal(calls, 0);
-  assert.equal(runtime.__operitChatExtensionSequence, 0);
+  assert.equal(runtime.refs, 0);
 });
 
-/** Retains original native errors and transport identities and clears callback slots on every failure. */
-test("extension failures propagate unchanged and release callbacks", async () => {
+/** Preserves host errors and releases owning calls on scheduling and operation failures. */
+test("extension failures propagate unchanged and release owning calls", async () => {
   const failed = extensionRuntime(
     /** Reports an explicit canonical host rejection, including its original surrounding whitespace. */
-    (context, id) => context[id](JSON.stringify({ message: " unchanged record guard error " }), true),
+    (registry, id) => registry.settle(id, " unchanged record guard error ", true),
   );
-  await assert.rejects(vm.runInContext('__operitChatExtension("deleteExtension", {kind:"chat",chatId:"chat"}, null)', failed), { message: " unchanged record guard error " });
-  assert.equal(Object.hasOwn(failed, "__operit_chat_extension_1"), false);
-  const original = new Error("native transport original");
+  await assert.rejects(vm.runInContext('Tools.Chat.deleteExtension({kind:"chat",chatId:"chat"})', failed), { message: " unchanged record guard error " });
+  assert.equal(failed.refs, 0);
+  let original;
   const broken = extensionRuntime(
     /** Rejects scheduling with the same transport exception rather than wrapping or replacing it. */
     () => { throw original; },
   );
-  await assert.rejects(vm.runInContext('__operitChatExtension("readExtension", {kind:"chat",chatId:"chat"}, null)', broken), error => error === original);
-  assert.equal(Object.hasOwn(broken, "__operit_chat_extension_1"), false);
-  const malformed = extensionRuntime(
-    /** Sends malformed callback bytes so the real JSON parser must reject them. */
-    (context, id) => context[id]("not JSON", false),
-  );
-  await assert.rejects(vm.runInContext('__operitChatExtension("readExtension", {kind:"chat",chatId:"chat"}, null)', malformed));
-  assert.equal(Object.hasOwn(malformed, "__operit_chat_extension_1"), false);
+  original = new (vm.runInContext("Error", broken))("native transport original");
+  await assert.rejects(vm.runInContext('Tools.Chat.readExtension({kind:"chat",chatId:"chat"})', broken), error => error === original);
+  assert.equal(broken.refs, 0);
+
 });
 
 /** Uses two immutable native-bound fixture identities to test replacement isolation at the real JavaScript transport boundary. */
 test("two execution fixtures cannot choose each other's namespace through target or value", async () => {
   const record = new Map();
-  /** Creates a simulated record callback whose owner is closed over outside all JavaScript arguments. */
+  /** Creates a simulated record completion whose owner is closed over outside all JavaScript arguments. */
   function bound(owner) {
     return extensionRuntime(
       /** Models only owner dispatch and target validation, not the canonical Rust repository implementation. */
-      (context, id, method, targetJson, valueJson) => {
-        const target = JSON.parse(targetJson), value = JSON.parse(valueJson);
+      (registry, id, method, target, value) => {
         const allowed = target.kind === "chat" ? ["kind", "chatId"] : ["kind", "chatId", "messageTimestamp", "variantIndex"];
         if (Object.keys(target).some(key => !allowed.includes(key))) {
-          context[id](JSON.stringify({ message: "unknown target field" }), true); return;
+          registry.settle(id, "unknown target field", true); return;
         }
-        if (method === "writeExtension") { record.set(owner, value); context[id](JSON.stringify(value), false); }
-        else if (method === "readExtension") { context[id](JSON.stringify(record.has(owner) ? record.get(owner) : null), false); }
-        else if (method === "deleteExtension") { context[id](JSON.stringify(record.delete(owner)), false); }
+        if (method === "writeExtension") { record.set(owner, value); registry.settle(id, value, false); }
+        else if (method === "readExtension") { registry.settle(id, record.has(owner) ? record.get(owner) : null, false); }
+        else if (method === "deleteExtension") { registry.settle(id, record.delete(owner), false); }
         else throw new Error("unknown fixture operation");
       },
     );
   }
   const a = bound("org.example.a"), b = bound("org.example.b");
-  await vm.runInContext('__operitChatExtension("writeExtension", {kind:"chat",chatId:"chat"}, {actor:"a"})', a);
-  await vm.runInContext('__operitChatExtension("writeExtension", {kind:"chat",chatId:"chat"}, {actor:"b"})', b);
-  await vm.runInContext('__operitChatExtension("writeExtension", {kind:"chat",chatId:"chat"}, {owner:"org.example.b",namespace:"org.example.b",pluginId:"org.example.b",actor:"a-new"})', a);
-  assert.deepEqual(plain(await vm.runInContext('__operitChatExtension("readExtension", {kind:"chat",chatId:"chat"}, null)', b)), { actor: "b" });
+  await vm.runInContext('Tools.Chat.writeExtension({kind:"chat",chatId:"chat"}, {actor:"a"})', a);
+  await vm.runInContext('Tools.Chat.writeExtension({kind:"chat",chatId:"chat"}, {actor:"b"})', b);
+  await vm.runInContext('Tools.Chat.writeExtension({kind:"chat",chatId:"chat"}, {owner:"org.example.b",namespace:"org.example.b",pluginId:"org.example.b",actor:"a-new"})', a);
+  assert.deepEqual(plain(await vm.runInContext('Tools.Chat.readExtension({kind:"chat",chatId:"chat"})', b)), { actor: "b" });
   for (const field of ["owner", "namespace", "pluginId"]) {
-    await assert.rejects(vm.runInContext(`__operitChatExtension("readExtension", {kind:"chat",chatId:"chat",${field}:"org.example.b"}, null)`, a), { message: "unknown target field" });
+    await assert.rejects(vm.runInContext(`Tools.Chat.readExtension({kind:"chat",chatId:"chat",${field}:"org.example.b"})`, a), { message: "unknown target field" });
   }
-  assert.equal(await vm.runInContext('__operitChatExtension("deleteExtension", {kind:"chat",chatId:"chat"}, null)', a), true);
-  assert.equal(await vm.runInContext('__operitChatExtension("readExtension", {kind:"chat",chatId:"chat"}, null)', a), null);
-  assert.deepEqual(record.get("org.example.b"), { actor: "b" });
+  assert.equal(await vm.runInContext('Tools.Chat.deleteExtension({kind:"chat",chatId:"chat"})', a), true);
+  assert.equal(await vm.runInContext('Tools.Chat.readExtension({kind:"chat",chatId:"chat"})', a), null);
+  assert.deepEqual(structuredClone(record.get("org.example.b")), { actor: "b" });
 });
 
 /** Checks runtime adapters require an explicitly captured canonical store and return input only after a successful void commit. */

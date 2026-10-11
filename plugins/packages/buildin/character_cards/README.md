@@ -69,12 +69,12 @@ retain the independent theme reference picker. Extra group preview/duplicate edi
 buttons, member reordering actions and the implementation notice remain removed.
 Group rows show member names as their subtitle and only a member-count badge.
 Theme references remain editable and are preserved by persistence/interchange.
-The picker reads actual named configurations through `Tools.SoftwareSettings.listThemeConfigs()`
+The picker reads actual named configurations through `Tools.Theme.listConfigs()`
 via the main-runtime `listThemeChoices` IPC action. It opens immediately with a
 cancellable loading state and explicit retry on failure; an empty directory is
 not substituted for a failed request. Selecting stages only the editor's
 `themeConfigId`; saving persists it, and activating the character/group applies
-the exact configuration through `Tools.SoftwareSettings.applyThemeConfig(id)`.
+the exact configuration through `Tools.Theme.applyConfig(id)`.
 Null means keep the current theme, and groups never borrow a member's theme.
 Character/group creation, editing and previews are authored once in
 `src/ui-entity-native.ts`, including their binding, tag and export subpanels.

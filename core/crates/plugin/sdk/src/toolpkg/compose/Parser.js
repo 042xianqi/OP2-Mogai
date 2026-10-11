@@ -1,21 +1,31 @@
-/// Keeps the source-only parser outside the eager page runtime. The injected text
-/// is a trusted SDK asset, not plugin code; merely creating this facade must not
-/// compile or execute it. Precompiled modules never need to call parse().
-var __operitAcorn = function (parserSource) {
+/// Keeps the trusted parser source outside the eager page runtime.
+var __operitAcorn = function (readParserSource) {
   var parser = null;
+  var initializing = false;
+  var failed = false;
+  var failure;
   return {
+    /// Initializes one parser per engine and preserves exact initialization failures.
     parse: function (source, options) {
+      if (failed) throw failure;
+      if (initializing) throw new Error('Compose parser initialization was interrupted');
       if (parser === null) {
-        // Build into a local export object. A timeout or exception leaves
-        // no partially installed globals, so the next invocation can retry.
-        var exports = {};
-        new Function('exports', 'module', parserSource)(exports, {
-          exports: exports
-        });
-        if (typeof exports.parse !== 'function') throw new Error('Compose parser initialization failed');
-        parser = exports;
-        // Retain the parser per engine, but release its source after success.
-        parserSource = null;
+        initializing = true;
+        try {
+          var exports = {};
+          new Function('exports', 'module', readParserSource())(exports, {
+            exports: exports
+          });
+          if (typeof exports.parse !== 'function') throw new Error('Compose parser initialization failed');
+          parser = exports;
+        } catch (error) {
+          failed = true;
+          failure = error;
+          throw error;
+        } finally {
+          readParserSource = null;
+          initializing = false;
+        }
       }
       return parser.parse(source, options);
     }

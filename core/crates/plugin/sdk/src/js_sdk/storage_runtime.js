@@ -1,6 +1,6 @@
 /** Sends typed storage data through the same scoped host Promise transport as other SDK calls. */
 function __operitStorageRequest(request) {
-    return __operitInvokeHostAsync(__operitNativeStorageRequestAsync, [request]);
+    return Tools.Storage.request(request);
 }
 
 /** Rejects unsupported structured data instead of silently dropping values. */

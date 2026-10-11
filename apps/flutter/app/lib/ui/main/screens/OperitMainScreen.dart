@@ -569,7 +569,6 @@ class _OperitMainScreenState extends State<OperitMainScreen> {
   Future<void> _activateNotificationChat(String chatId) async {
     ChatSelectionTransition.begin(chatId);
     _activateConversationRoute();
-    await WidgetsBinding.instance.endOfFrame;
     if (!mounted) {
       return;
     }

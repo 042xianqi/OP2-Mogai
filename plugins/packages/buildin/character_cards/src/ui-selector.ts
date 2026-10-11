@@ -182,12 +182,15 @@ export function selectorView(ctx: ComposeDslContext, input: SelectorInput, state
   else if (state.data === null) body = ctx.UI.Text({ key: "selector-load-error", text: state.error, color: colors.error, paddingHorizontal: 16, paddingVertical: 18, weight: 1 });
   else if (state.data.options.length === 0) body = ctx.UI.Text({ text: input.kind === "group" ? "暂无群组" : "暂无角色卡", style: "bodySmall", color: colors.onSurfaceVariant, paddingStart: 16, paddingTop: 18, paddingEnd: 16, paddingBottom: 20, weight: 1 });
   else {
-    const rows: ComposeNode[] = [];
-    for (const option of state.data.options) {
-      if (rows.length !== 0) rows.push(ctx.UI.HorizontalDivider({ thickness: 1, color: colors.outlineVariant.copy({ alpha: 0.45 }) }));
-      rows.push(selectorRow(ctx, option, state, controller));
-    }
-    body = ctx.UI.LazyColumn({ key: "selector-records", weight: 1, fillMaxWidth: true, paddingStart: 8, paddingTop: 4, paddingEnd: 8, paddingBottom: 8 }, rows);
+    const options = state.data.options;
+    const items = ctx.lazyItems({ key: "selector-records", itemCount: options.length, itemExtent: 56, initialItemCount: 12 },
+      /** Builds one keyed row only when it enters the materialized viewport window. */
+      index => ctx.UI.Column({ key: "selector-item:" + options[index].key, fillMaxWidth: true }, [
+        selectorRow(ctx, options[index], state, controller),
+        ...(index + 1 === options.length ? [] : [ctx.UI.HorizontalDivider({ thickness: 1, color: colors.outlineVariant.copy({ alpha: 0.45 }) })]),
+      ]),
+    );
+    body = ctx.UI.LazyColumn({ key: "selector-records", weight: 1, fillMaxWidth: true, paddingStart: 8, paddingTop: 4, paddingEnd: 8, paddingBottom: 8, ...items });
   }
   return ctx.UI.Dialog({ key: "character-selection", containerColor: "surfaceContainerHigh", shape: { cornerRadius: 28 }, closeOnDismissRequest: false,
     properties: { usePlatformDefaultWidth: false, dismissOnBackPress: state.switchingKey === null, dismissOnClickOutside: state.switchingKey === null },

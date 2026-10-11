@@ -1,4 +1,5 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::future::Future;
 
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,7 @@ const PACKAGE_CALLER_OWNER_PARAM: &str = "__operit_package_caller_owner";
 
 tokio::task_local! {
     static TOOL_RUNTIME_CONTEXT: ToolRuntimeContext;
+    static TOOL_INVOCATION_CONTEXT: ToolInvocationContext;
 }
 
 /// Selects the tool surface available to a model response.
@@ -86,6 +88,158 @@ pub struct AITool {
     pub parameters: Vec<ToolParameter>,
 }
 
+/// Preserves structured parameters through the common invocation pipeline.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub name: String,
+    pub parameters: BTreeMap<String, serde_json::Value>,
+}
+
+impl ToolCall {
+    /// Resolves an explicit proxy envelope once before the sole lifecycle; nested proxies are rejected.
+    pub(crate) fn resolveTarget(&self, context: &ToolInvocationContext) -> Result<Self, String> {
+        if !matches!(self.name.as_str(), PACKAGE_PROXY_TOOL_NAME | CLI_PROXY_TOOL_NAME) { return Ok(self.clone()); }
+        if self.name == CLI_PROXY_TOOL_NAME && context.turnSnapshot().map(|turn| &turn.toolExposureMode) != Some(&ToolExposureMode::CLI) {
+            return Err(CliToolModeSupport::buildCliModeUnavailableMessage(false));
+        }
+        for key in self.parameters.keys() {
+            if !matches!(key.as_str(), "tool_name" | "params" | PACKAGE_CALLER_NAME_PARAM | PACKAGE_CHAT_ID_PARAM | PACKAGE_CALLER_PARTICIPANT_ID_PARAM | PACKAGE_CALLER_OWNER_PARAM) {
+                return Err(format!("Unexpected proxy parameter: {key}"));
+            }
+        }
+        let name = self.parameters.get("tool_name").and_then(serde_json::Value::as_str)
+            .ok_or("Proxy tool_name must be text")?;
+        if name.trim().is_empty() || name.trim() != name { return Err("Proxy tool_name must be exact nonblank text".into()); }
+        if CliToolModeSupport::isReservedProxyTarget(name) { return Err(format!("Proxy cannot target another proxy or catalog entry: {name}")); }
+        if self.name == PACKAGE_PROXY_TOOL_NAME {
+            match name.split_once(':') {
+                Some((package, method)) if !package.is_empty() && !method.is_empty() && !method.contains(':') => {},
+                _ => return Err("tool_name must use packageName:toolName format".into()),
+            }
+        }
+        let value = self.parameters.get("params").ok_or("Proxy params is required")?;
+        let object = match value {
+            serde_json::Value::String(text) => serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(text).map_err(|error| error.to_string())?,
+            serde_json::Value::Object(object) => object.clone(),
+            _ => return Err("Proxy params must be a JSON object or its legacy text encoding".into()),
+        };
+        let mut parameters = object.into_iter().collect::<BTreeMap<_, _>>();
+        for key in [PACKAGE_CALLER_NAME_PARAM, PACKAGE_CHAT_ID_PARAM, PACKAGE_CALLER_PARTICIPANT_ID_PARAM, PACKAGE_CALLER_OWNER_PARAM] {
+            parameters.remove(key);
+            if let Some(value) = self.parameters.get(key) { parameters.insert(key.to_string(), value.clone()); }
+        }
+        Ok(Self { name: name.to_string(), parameters })
+    }
+
+    /// Adapts values only at the legacy executor and text-hook contract boundary.
+    pub fn toLegacyTool(&self) -> AITool {
+        AITool {
+            name: self.name.clone(),
+            parameters: self.parameters.iter().map(|(name, value)| ToolParameter {
+                name: name.clone(),
+                value: match value {
+                    serde_json::Value::String(text) => text.clone(),
+                    value => value.to_string(),
+                },
+            }).collect(),
+        }
+    }
+}
+
+impl From<&AITool> for ToolCall {
+    /// Adapts model text without interpreting its contents as JSON or caller identity.
+    fn from(tool: &AITool) -> Self {
+        Self {
+            name: tool.name.clone(),
+            parameters: tool.parameters.iter().map(|parameter| (
+                parameter.name.clone(), serde_json::Value::String(parameter.value.clone()),
+            )).collect(),
+        }
+    }
+}
+
+/// Carries native-owned caller state independently of public tool parameters and shared registrations.
+#[derive(Clone)]
+pub struct ToolInvocationContext {
+    host: AIToolHandler,
+    snapshot: ToolInvocationSnapshot,
+}
+
+/// Captures transport-independent turn and hook state before any Host scheduling boundary.
+#[derive(Clone, Default)]
+pub(crate) struct ToolInvocationSnapshot {
+    pub turnSnapshot: Option<ToolRuntimeContext>,
+    activeHooks: BTreeSet<String>,
+}
+
+impl ToolInvocationContext {
+    /// Captures the actual caller-bound handler, turn snapshot and inherited hook scope.
+    pub(crate) fn capture(host: AIToolHandler) -> Self {
+        let snapshot = match TOOL_INVOCATION_CONTEXT.try_with(|context| context.snapshot.clone()) {
+            Ok(snapshot) => snapshot,
+            Err(_) => match TOOL_RUNTIME_CONTEXT.try_with(Clone::clone) {
+                Ok(turn) => ToolInvocationSnapshot { turnSnapshot: Some(turn), activeHooks: BTreeSet::new() },
+                Err(_) => host.invocationSnapshot.clone(),
+            },
+        };
+        Self { host, snapshot }
+    }
+
+    /// Clones the immutable snapshot for transfer to an engine-bound native host.
+    pub(crate) fn snapshot(&self) -> ToolInvocationSnapshot { self.snapshot.clone() }
+
+    /// Borrows the immutable caller-bound handler carrying its authenticated owner and storage session.
+    pub fn host(&self) -> &AIToolHandler { &self.host }
+
+    /// Requires the immutable engine-bound owner to remain registered and enabled.
+    pub fn requirePluginOwner(&self) -> Result<String, String> {
+        let owner = self.host.authenticatedExtensionOwner.as_deref()
+            .ok_or_else(|| "Plugin operations require a real ToolPkg execution owner".to_string())?;
+        if owner.trim().is_empty() || owner.trim() != owner { return Err("Plugin execution owner is not exact nonblank text".into()); }
+        let manager = self.host.getOrCreatePackageManager();
+        let registry = manager.lock().map_err(|_| "Package manager mutex poisoned")?;
+        registry.packageRegistryReadiness().require_ready()?;
+        registry.getToolPkgContainerRuntime(owner).ok_or_else(|| format!("Plugin execution owner is not registered: {owner}"))?;
+        if !registry.getEnabledToolPkgContainerRuntimes().iter().any(|runtime| runtime.packageName == owner) {
+            return Err(format!("Plugin execution owner is disabled: {owner}"));
+        }
+        Ok(owner.to_string())
+    }
+
+    /// Borrows the exact captured model turn independently of the executing plugin's ownership.
+    pub fn turnSnapshot(&self) -> Option<&ToolRuntimeContext> { self.snapshot.turnSnapshot.as_ref() }
+
+    /// Returns whether this invocation is already executing the named hook.
+    pub fn isHookActive(&self, id: &str) -> bool { self.snapshot.activeHooks.contains(id) }
+
+    /// Captures a nested scope before awaiting the named hook.
+    pub fn withHook(&self, id: &str) -> Self {
+        let mut nested = self.clone();
+        nested.snapshot.activeHooks.insert(id.to_owned());
+        nested
+    }
+
+    /// Reinstalls native caller state for synchronous hook dispatch and cancellation cleanup.
+    pub fn scopeSync<T>(self, action: impl FnOnce() -> T) -> T {
+        let turn = self.snapshot.turnSnapshot.clone();
+        let scoped = || TOOL_INVOCATION_CONTEXT.sync_scope(self, action);
+        match turn {
+            Some(turn) => TOOL_RUNTIME_CONTEXT.sync_scope(turn, scoped),
+            None => scoped(),
+        }
+    }
+
+    /// Keeps native caller state available throughout this asynchronous invocation.
+    pub async fn scope<T, F: Future<Output = T>>(self, future: F) -> T {
+        let turn = self.snapshot.turnSnapshot.clone();
+        let scoped = TOOL_INVOCATION_CONTEXT.scope(self, future);
+        match turn {
+            Some(turn) => TOOL_RUNTIME_CONTEXT.scope(turn, scoped).await,
+            None => scoped.await,
+        }
+    }
+}
+
 /// Parsed tool invocation plus its source text location in the assistant response.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolInvocation {
@@ -100,17 +254,24 @@ pub struct RouteChangeIntent {
     pub targetNodeId: String,
 }
 
-/// Resolved executable tool target and the name shown in tool results.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ResolvedToolTarget {
-    tool: AITool,
-    displayName: String,
-}
-
 /// Parses model tool calls, checks permissions, and executes tools through handlers.
 pub struct ToolExecutionManager;
 
+/// Selects native-owned admission policy without exposing permission controls to JavaScript parameters.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolExecutionPolicy {
+    /// Applies the model's declared tool exposure and AI permission preflight.
+    Ai { exposure: ToolExposureMode },
+    /// Executes an ordinary JavaScript or application request without AI permission preflight.
+    Direct,
+}
+
 impl ToolExecutionManager {
+    /// Returns the native context captured for the current invocation and its awaited hooks.
+    pub fn currentToolInvocationContext() -> Option<ToolInvocationContext> {
+        TOOL_INVOCATION_CONTEXT.try_with(Clone::clone).ok()
+    }
+
     /// Returns the runtime context for the currently executing tool batch.
     pub fn currentToolRuntimeContext() -> Option<ToolRuntimeContext> {
         TOOL_RUNTIME_CONTEXT.try_with(Clone::clone).ok()
@@ -166,26 +327,6 @@ impl ToolExecutionManager {
             ),
         );
         invocations
-    }
-
-    /// Validates and invokes one tool using the supplied executor.
-    pub fn executeToolSafely(
-        invocation: &ToolInvocation,
-        executor: &mut dyn ToolExecutor,
-    ) -> Vec<ToolResult> {
-        let validationResult = executor.validateParameters(&invocation.tool);
-        if !validationResult.valid {
-            return vec![ToolResult {
-                toolName: invocation.tool.name.clone(),
-                success: false,
-                result: stringResultData(""),
-                error: Some(format!(
-                    "Invalid parameters: {}",
-                    validationResult.errorMessage
-                )),
-            }];
-        }
-        executor.invokeAndStream(&invocation.tool)
     }
 
     /// Executes a batch and returns emitted markup and results.
@@ -263,72 +404,12 @@ impl ToolExecutionManager {
                     invocation.rawText.len()
                 ),
             );
-            if let Some(deniedResult) =
-                Self::buildToolExposureDeniedResult(&invocation, toolExposureMode.clone())
-            {
-                toolHandler.notifyToolExecutionResult(&invocation.tool, &deniedResult);
-                emitted.push(ensureEndsWithNewline(
-                    &ConversationMarkupManager::formatToolResultForMessage(&deniedResult),
-                ));
-                results.push(deniedResult);
-                AppLogger::w(
-                    TAG,
-                    &format!(
-                        "tool.execution.denied tool={} reason=exposure",
-                        displayToolName
-                    ),
-                );
-                continue;
-            }
-
-            toolHandler.notifyToolCallRequested(&invocation.tool);
-            let interception = toolHandler.checkToolInterception(&invocation.tool).await?;
-            if let operit_tools::tools::AIToolHook::AIToolHookDecision::Block(_) = interception {
-                let blockedResult =
-                    AIToolHandler::toolInterceptionResult(&invocation.tool, interception);
-                toolHandler.notifyToolExecutionResult(&invocation.tool, &blockedResult);
-                emitted.push(ensureEndsWithNewline(
-                    &ConversationMarkupManager::formatToolResultForMessage(&blockedResult),
-                ));
-                results.push(blockedResult);
-                continue;
-            }
-            if !toolHandler.getToolExecutorOrActivate(&invocation.tool.name).await {
-                let errorMessage = Self::buildToolNotAvailableErrorMessage(&invocation.tool.name);
-                let content = ConversationMarkupManager::createToolNotAvailableError(
-                    &invocation.tool.name,
-                    Some(&errorMessage),
-                );
-                let deniedResult = ToolResult {
-                    toolName: displayToolName.clone(),
-                    success: false,
-                    result: stringResultData(""),
-                    error: Some(errorMessage),
-                };
-                toolHandler.notifyToolExecutionResult(&invocation.tool, &deniedResult);
-                emitted.push(ensureEndsWithNewline(&content));
-                results.push(deniedResult);
-                AppLogger::w(
-                    TAG,
-                    &format!(
-                        "tool.execution.denied tool={} reason=unavailable",
-                        displayToolName
-                    ),
-                );
-                continue;
-            }
-            toolHandler.notifyToolExecutionStarted(&invocation.tool);
-            let Some(collected) = toolHandler
-                .executeToolSafelyWithResolvedExecutor(&invocation.tool)
-                .await
-            else {
-                toolHandler.notifyToolExecutionFinished(&invocation.tool);
-                AppLogger::w(
-                    TAG,
-                    &format!("tool.execution.no_executor_result tool={}", displayToolName),
-                );
-                continue;
-            };
+            let collected = toolHandler
+                .executeToolInvocation(
+                    &ToolCall::from(&invocation.tool),
+                    ToolExecutionPolicy::Ai { exposure: toolExposureMode.clone() },
+                )
+                .await?;
             AppLogger::d(
                 TAG,
                 &format!(
@@ -338,25 +419,11 @@ impl ToolExecutionManager {
                 ),
             );
             for result in &collected {
-                toolHandler.notifyToolExecutionResult(&invocation.tool, result);
                 emitted.push(ensureEndsWithNewline(
                     &ConversationMarkupManager::formatToolResultForMessage(result),
                 ));
             }
-            if collected.is_empty() {
-                let emptyResult = ToolResult {
-                    toolName: displayToolName.clone(),
-                    success: false,
-                    result: stringResultData(""),
-                    error: Some("The tool execution returned no results.".to_string()),
-                };
-                toolHandler.notifyToolExecutionResult(&invocation.tool, &emptyResult);
-                results.push(emptyResult);
-                AppLogger::w(
-                    TAG,
-                    &format!("tool.execution.empty_result tool={}", displayToolName),
-                );
-            } else {
+            {
                 let last = collected.last().expect("collected not empty");
                 let combinedResultString = collected
                     .iter()
@@ -385,7 +452,6 @@ impl ToolExecutionManager {
                 if let Some(intent) = Self::routeChangeIntentForResult(&invocation.tool, last) {
                     routeChangeIntent = Some(intent);
                 }
-                toolHandler.notifyToolExecutionResult(&invocation.tool, &finalResult);
                 AppLogger::d(
                     TAG,
                     &format!(
@@ -398,7 +464,6 @@ impl ToolExecutionManager {
                 );
                 results.push(finalResult);
             }
-            toolHandler.notifyToolExecutionFinished(&invocation.tool);
         }
 
         let emittedChars = emitted.iter().map(|content| content.len()).sum::<usize>();
@@ -423,7 +488,7 @@ impl ToolExecutionManager {
     /// Builds a route-change intent from the successful switch_core tool result.
     #[allow(non_snake_case)]
     fn routeChangeIntentForResult(tool: &AITool, result: &ToolResult) -> Option<RouteChangeIntent> {
-        if Self::resolveToolTarget(tool).tool.name.trim() != "switch_core"
+        if Self::resolveDisplayToolName(tool).trim() != "switch_core"
             || result.toolName.trim() != "switch_core"
             || !result.success
         {
@@ -434,45 +499,17 @@ impl ToolExecutionManager {
         })
     }
 
-    /// Returns the concrete target carried by a proxy tool invocation.
-    pub(crate) fn resolveProxyTargetTool(tool: &AITool) -> AITool {
-        Self::resolveToolTarget(tool).tool
-    }
-
-    /// Resolves one proxy wrapper into its concrete target and display name.
-    fn resolveToolTarget(tool: &AITool) -> ResolvedToolTarget {
-        if tool.name != PACKAGE_PROXY_TOOL_NAME && tool.name != CLI_PROXY_TOOL_NAME {
-            return ResolvedToolTarget {
-                tool: tool.clone(),
-                displayName: tool.name.clone(),
-            };
-        }
-
-        let targetToolName = tool
-            .parameters
-            .iter()
-            .find(|parameter| parameter.name == "tool_name")
-            .map(|parameter| parameter.value.trim().to_string())
-            .unwrap_or_default();
-        if targetToolName.is_empty() {
-            return ResolvedToolTarget {
-                tool: tool.clone(),
-                displayName: tool.name.clone(),
-            };
-        }
-
-        let forwardedParameters = Self::resolveProxyParameters(tool);
-        ResolvedToolTarget {
-            tool: AITool {
-                name: targetToolName.clone(),
-                parameters: forwardedParameters,
-            },
-            displayName: targetToolName,
-        }
-    }
-
+    /// Returns only a presentation name; execution arguments are resolved strictly by ToolCall.
     fn resolveDisplayToolName(tool: &AITool) -> String {
-        Self::resolveToolTarget(tool).displayName
+        match tool.name.as_str() {
+            PACKAGE_PROXY_TOOL_NAME | CLI_PROXY_TOOL_NAME => {
+                match tool.parameters.iter().find(|parameter| parameter.name == "tool_name") {
+                    Some(parameter) => parameter.value.clone(),
+                    None => tool.name.clone(),
+                }
+            },
+            _ => tool.name.clone(),
+        }
     }
 
     fn isJsPackageTool(toolName: &str, jsPackageNames: &BTreeSet<String>) -> bool {
@@ -503,8 +540,8 @@ impl ToolExecutionManager {
         callerChatId: Option<&str>,
         callerParticipantId: Option<&str>,
     ) -> ToolInvocation {
-        let resolvedTargetTool = Self::resolveToolTarget(&invocation.tool).tool;
-        if !Self::isJsPackageTool(&resolvedTargetTool.name, jsPackageNames) {
+        let targetName = Self::resolveDisplayToolName(&invocation.tool);
+        if !Self::isJsPackageTool(&targetName, jsPackageNames) {
             return invocation.clone();
         }
 
@@ -541,47 +578,17 @@ impl ToolExecutionManager {
             .map(|parameter| parameter.value.trim().to_string())
     }
 
-    fn resolveProxyParameters(tool: &AITool) -> Vec<ToolParameter> {
-        let paramsRaw = tool
-            .parameters
-            .iter()
-            .find(|parameter| parameter.name == "params")
-            .map(|parameter| parameter.value.trim().to_string())
-            .unwrap_or_default();
-        if paramsRaw.is_empty() {
-            return Vec::new();
-        }
-
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&paramsRaw) else {
-            return Vec::new();
-        };
-        let Some(object) = value.as_object() else {
-            return Vec::new();
-        };
-
-        object
-            .iter()
-            .map(|(key, value)| ToolParameter {
-                name: key.clone(),
-                value: match value {
-                    serde_json::Value::Null => "null".to_string(),
-                    serde_json::Value::String(text) => text.clone(),
-                    _ => value.to_string(),
-                },
-            })
-            .collect()
-    }
-
-    fn buildToolExposureDeniedResult(
-        invocation: &ToolInvocation,
+    /// Rejects tools outside the model surface before the common pipeline resolves an executor.
+    pub(crate) fn buildToolExposureDeniedResult(
+        tool: &AITool,
         toolExposureMode: ToolExposureMode,
     ) -> Option<ToolResult> {
-        let toolName = invocation.tool.name.trim();
+        let toolName = tool.name.trim();
         let denied = match toolExposureMode {
             ToolExposureMode::CLI if !Self::isCliPublicTool(toolName) => Some(format!(
                 "{}",
                 CliToolModeSupport::buildCliTopLevelRestrictionErrorMessage(
-                    &Self::resolveDisplayToolName(&invocation.tool),
+                    &Self::resolveDisplayToolName(tool),
                     true,
                 )
             )),
@@ -595,7 +602,7 @@ impl ToolExecutionManager {
             toolName: if toolExposureMode == ToolExposureMode::CLI
                 && !Self::isCliPublicTool(toolName)
             {
-                Self::resolveDisplayToolName(&invocation.tool)
+                Self::resolveDisplayToolName(tool)
             } else {
                 toolName.to_string()
             },
@@ -673,13 +680,54 @@ pub trait AsyncToolExecutor: Send {
     /// Declares the access boundary of the asynchronous tool.
     fn accessSpec(&self, tool: &AITool) -> Result<ToolAccessSpec, String>;
     /// Executes one invocation on its asynchronous result path.
-    fn invokeAndStreamAsync<'a>(&'a mut self, tool: &'a AITool) -> ToolInvocationFuture<'a>;
+    fn invokeAndStreamAsync<'a>(&'a mut self, tool: &'a AITool, context: &'a ToolInvocationContext) -> ToolInvocationFuture<'a>;
+}
+
+/// Holds one validated invocation and its optional native AI access declaration.
+pub struct PreparedToolInvocation<'a> {
+    pub access: Option<ToolAccessSpec>,
+    pub invoke: ToolInvocationFuture<'a>,
+}
+
+/// Prepares concurrent operations without retaining an exclusive registry lease.
+pub trait SharedToolExecutor: Send + Sync {
+    /// Decodes and validates once, declaring access only when native AI admission requires it.
+    fn prepare<'a>(&'a self, request: &'a ToolCall, context: &'a ToolInvocationContext, checkAccess: bool)
+        -> Result<PreparedToolInvocation<'a>, String>;
+}
+
+/// Binds a typed argument contract directly to a business function, without operation-name dispatch.
+pub struct TypedToolExecutor<T> {
+    pub decode: fn(&ToolCall) -> Result<T, String>,
+    pub effect: fn(&T) -> ToolEffect,
+    pub invoke: fn(T, ToolInvocationContext) -> operit_plugin_sdk::javascript::JsExecutionCompletion<Result<serde_json::Value, String>>,
+}
+
+impl<T: Send + 'static> SharedToolExecutor for TypedToolExecutor<T> {
+    /// Prepares the typed payload once and returns the standard result envelope after business execution.
+    fn prepare<'a>(&'a self, request: &'a ToolCall, context: &'a ToolInvocationContext, checkAccess: bool)
+        -> Result<PreparedToolInvocation<'a>, String> {
+        let arguments = (self.decode)(request)?;
+        let access = checkAccess.then(|| ToolAccessSpec { effect: (self.effect)(&arguments), boundary: ToolBoundary::None });
+        let context = context.clone();
+        Ok(PreparedToolInvocation { access, invoke: Box::pin(async move {
+            let (success, result, error) = match (self.invoke)(arguments, context).await {
+                Ok(value) => (true, operit_plugin_sdk::js_sdk::results::ToolResultData::JsonResultData(
+                    operit_plugin_sdk::js_sdk::results::JsonResultData { value }), None),
+                Err(error) => (false, stringResultData(""), Some(error)),
+            };
+            vec![ToolResult { toolName: request.name.clone(), success, result, error }]
+        }) })
+    }
 }
 
 /// Records the execution contract explicitly selected when a tool is registered.
 pub enum RegisteredToolExecutor {
+    /// Declares an invocation envelope resolved before execution, never an executable forwarding tool.
+    Alias,
     Synchronous(Box<dyn ToolExecutor>),
     Asynchronous(Box<dyn AsyncToolExecutor>),
+    Shared(Arc<dyn SharedToolExecutor>),
 }
 
 impl<T: ToolExecutor + 'static> From<Box<T>> for RegisteredToolExecutor {
@@ -697,27 +745,26 @@ impl From<Box<dyn ToolExecutor>> for RegisteredToolExecutor {
 }
 
 impl RegisteredToolExecutor {
-    /// Validates a request using its registered contract.
-    pub fn validateParameters(&self, tool: &AITool) -> ToolValidationResult {
+    /// Prepares every registered contract once; only legacy adapters convert structured arguments to text.
+    pub fn prepare<'a>(&'a mut self, request: &'a ToolCall, context: &'a ToolInvocationContext, checkAccess: bool)
+        -> Result<PreparedToolInvocation<'a>, String> {
         match self {
-            Self::Synchronous(executor) => executor.validateParameters(tool),
-            Self::Asynchronous(executor) => executor.validateParameters(tool),
-        }
-    }
-    /// Returns the declared access boundary of the registered tool.
-    pub fn accessSpec(&self, tool: &AITool) -> Result<ToolAccessSpec, String> {
-        match self {
-            Self::Synchronous(executor) => executor.accessSpec(tool),
-            Self::Asynchronous(executor) => executor.accessSpec(tool),
-        }
-    }
-    /// Dispatches exactly the contract registered for this tool, without probing or retrying.
-    pub fn invokeAndStreamAsync<'a>(&'a mut self, tool: &'a AITool) -> ToolInvocationFuture<'a> {
-        match self {
+            Self::Alias => Err("Invocation aliases must be resolved before acquiring an executor".into()),
+            Self::Shared(executor) => executor.prepare(request, context, checkAccess),
             Self::Synchronous(executor) => {
-                Box::pin(std::future::ready(executor.invokeAndStream(tool)))
-            }
-            Self::Asynchronous(executor) => executor.invokeAndStreamAsync(tool),
+                let tool = request.toLegacyTool();
+                let validation = executor.validateParameters(&tool);
+                if !validation.valid { return Err(validation.errorMessage); }
+                let access = if checkAccess { Some(executor.accessSpec(&tool)?) } else { None };
+                Ok(PreparedToolInvocation { access, invoke: Box::pin(async move { executor.invokeAndStream(&tool) }) })
+            },
+            Self::Asynchronous(executor) => {
+                let tool = request.toLegacyTool();
+                let validation = executor.validateParameters(&tool);
+                if !validation.valid { return Err(validation.errorMessage); }
+                let access = if checkAccess { Some(executor.accessSpec(&tool)?) } else { None };
+                Ok(PreparedToolInvocation { access, invoke: Box::pin(async move { executor.invokeAndStreamAsync(&tool, context).await }) })
+            },
         }
     }
 }

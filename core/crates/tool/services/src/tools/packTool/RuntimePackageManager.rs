@@ -713,6 +713,7 @@ impl RuntimePackageManager {
         Some(cacheDir)
     }
 
+    /// Validates mutable sources and reuses build-time fingerprints for immutable assets.
     #[allow(non_snake_case)]
     fn buildToolPkgCacheSignature(
         &self,
@@ -751,7 +752,7 @@ impl RuntimePackageManager {
                     "asset|{}|{}|{}|{}|{}",
                     sourcePath,
                     asset.bytes.len(),
-                    sha256Hex(asset.bytes),
+                    asset.sha256,
                     version,
                     mainEntry
                 ))
@@ -830,7 +831,7 @@ impl RuntimePackageManager {
         &self,
         containerPackageName: &str,
     ) -> Result<Arc<BTreeMap<String, String>>, String> {
-        let started = std::time::Instant::now();
+        let started = currentTimeMillis();
         let packageName = self.normalizePackageName(containerPackageName);
         let runtime = self.toolPkgManager().getToolPkgContainerRuntime(&packageName)
             .ok_or_else(|| format!("ToolPkg container package is not registered: {packageName}"))?;
@@ -859,8 +860,8 @@ impl RuntimePackageManager {
             },
         )?;
         AppLogger::i(PACKAGE_MANAGER_LOG_TAG, &format!(
-            "event=compose_text_resources package={packageName} cacheHit={cacheHit} entries={} elapsedMs={:.1}",
-            resources.len(), started.elapsed().as_secs_f64() * 1000.0,
+            "event=compose_text_resources package={packageName} cacheHit={cacheHit} entries={} elapsedMs={}",
+            resources.len(), currentTimeMillis().saturating_sub(started),
         ));
         Ok(resources)
     }
@@ -5280,7 +5281,7 @@ fn buildBundledPluginAssetSignature(asset: &RuntimePluginAsset) -> String {
         "{}|{}|{}",
         asset.name,
         asset.bytes.len(),
-        sha256Hex(asset.bytes)
+        asset.sha256
     )
 }
 

@@ -8,6 +8,7 @@ import 'package:operit2/core/link/CoreLinkProtocol.dart';
 import 'package:operit2/core/proxy/generated/CoreProxyModels.g.dart' as core;
 import 'package:operit2/data/preferences/UserPreferencesManager.dart';
 import 'package:operit2/ui/main/components/CollapsedDrawerContent.dart';
+import 'package:operit2/ui/features/chat/viewmodel/ChatSelectionTransition.dart';
 import 'package:operit2/ui/main/components/DrawerContent.dart';
 import 'package:operit2/ui/main/components/NavigationDrawerAppearance.dart';
 import 'package:operit2/ui/theme/OperitTheme.dart';
@@ -15,6 +16,24 @@ import 'package:operit2/ui/main/screens/ScreenRouteRegistry.dart';
 
 /// Verifies independent previews preserve conversation context and workspace isolation.
 void main() {
+  testWidgets(
+    'chat activation submits Core work without waiting for another frame',
+    (tester) async {
+      final bridge = _DrawerBridge();
+      await _pumpDrawer(tester, bridge, [_history('fast', 0)]);
+      final row = tester.widget<ConversationDrawerItem>(
+        find.byType(ConversationDrawerItem),
+      );
+      row.onClick();
+      expect(
+        bridge.calls.where((call) => call.methodName == 'switchChat'),
+        hasLength(1),
+      );
+      ChatSelectionTransition.complete('fast-0');
+      await tester.pump();
+    },
+  );
+
   testWidgets('brand header fits the narrow drawer beside the tab switch', (
     tester,
   ) async {
@@ -482,7 +501,7 @@ class _DrawerBridge extends OperitRuntimeBridge {
     final value = switch (request.methodName) {
       'getPreferences' => preferences,
       'getToolPkgNavigationEntries' || 'getToolPkgUiRoutes' => <Object?>[],
-      'updateChatOrderAndGroup' || 'updateChatPinned' => null,
+      'updateChatOrderAndGroup' || 'updateChatPinned' || 'switchChat' => null,
       'deleteChatHistory' => true,
       _ => throw StateError('Unexpected Core call: ${request.methodName}'),
     };

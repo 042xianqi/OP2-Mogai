@@ -1,27 +1,14 @@
 /// Compiles existing UI calls into internal generation scopes without changing plugin source APIs.
 var OperitComposeCompiler = function () {
-  // This is the generated-code ABI, not the public plugin API version. Bump it
-  // when emitted generation/reactive calls change incompatibly.
-  var artifactVersion = '1';
-  var artifactPrefix = '// @operit-compose-artifact ';
-  /// Resolves only an explicit build artifact, never a heuristic search for UI calls.
-  function compiledArtifact(source) {
-    if (!source.startsWith(artifactPrefix)) return null;
-    var end = source.indexOf('\n');
-    if (end < 0 || source.slice(artifactPrefix.length, end) !== artifactVersion) {
-      throw new Error('Unsupported Compose artifact version; rebuild the plugin with this SDK');
-    }
-    return source;
-  }
-  /// Keeps legacy/dynamic source compatible while removing lowering from artifact loads.
+  /// Lowers source inputs and validates already lowered artifacts through the same ABI.
   function prepare(source, identity) {
-    var compiled = compiledArtifact(source);
+    var compiled = OperitComposeArtifact.read(source);
     return compiled === null ? OperitComposeCompiler.compile(source, identity) : compiled;
   }
   /// Emits ordinary portable JS; no runtime objects, bytecode or user state are captured.
   function artifact(source, identity) {
-    var compiled = compiledArtifact(source);
-    return compiled === null ? artifactPrefix + artifactVersion + '\n' + compile(source, identity) : compiled;
+    var compiled = OperitComposeArtifact.read(source);
+    return compiled === null ? OperitComposeArtifact.prefix + OperitComposeArtifact.version + '\n' + compile(source, identity) : compiled;
   }
   var childNodes = new WeakMap();
   /// Visits direct ESTree child nodes without traversing locations or primitive properties.
@@ -85,7 +72,7 @@ var OperitComposeCompiler = function () {
 
   /// Transforms only parsed UI construction calls and leaves user control flow and side effects intact.
   function compile(source, identity) {
-    var compiled = compiledArtifact(source);
+    var compiled = OperitComposeArtifact.read(source);
     if (compiled !== null) return compiled;
     var ast = __operitAcorn.parse(source, {
       ecmaVersion: 2022,
@@ -268,6 +255,6 @@ var OperitComposeCompiler = function () {
     compile: compile,
     prepare: prepare,
     artifact: artifact,
-    artifactVersion: artifactVersion
+    artifactVersion: OperitComposeArtifact.version
   };
 }();

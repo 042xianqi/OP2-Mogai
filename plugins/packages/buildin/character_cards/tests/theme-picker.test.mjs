@@ -11,7 +11,8 @@ async function open(plugin, entity, id) {
 }
 
 test("one native theme picker searches exact independent IDs and stages the owner reference only until save", async t => {
-  const plugin = await selectorEnvironment(t, { async listThemeConfigs() { return themes; } });
+  const plugin = await selectorEnvironment(t, {Theme: { async listConfigs() { return themes; }
+  }});
   for (const entity of ["card", "group"]) {
     const api = entity === "card" ? "character" : "group", record = await plugin.api(api + ".create", { values: { name: "独立主题测试" } });
     let ui = await open(plugin, entity, record.id);
@@ -33,7 +34,8 @@ test("one native theme picker searches exact independent IDs and stages the owne
 });
 
 test("missing theme references stay visible; picker cancellation preserves the original record", async t => {
-  const plugin = await selectorEnvironment(t, { async listThemeConfigs() { return themes; } });
+  const plugin = await selectorEnvironment(t, {Theme: { async listConfigs() { return themes; }
+  }});
   const card = await plugin.api("character.create", { values: { name: "失效绑定", themeConfigId: "deleted-theme" } });
   const ui = await open(plugin, "card", card.id);
   assert.ok(composeNodes(ui.render().tree, node => String(node.props.text ?? "").includes("deleted-theme")).length);
@@ -44,7 +46,8 @@ test("missing theme references stay visible; picker cancellation preserves the o
 test("pending theme directory IO does not lock cancellation and late completion cannot reopen the native editor", async t => {
   for (const fail of [false, true]) {
     let resolve, reject; const pending = new Promise((yes, no) => { resolve = yes; reject = no; });
-    const plugin = await selectorEnvironment(t, { listThemeConfigs() { return pending; } });
+    const plugin = await selectorEnvironment(t, {Theme: { listConfigs() { return pending; }
+  }});
     const card = await plugin.api("character.create", { values: { name: "异步取消" } });
     const ui = await open(plugin, "card", card.id);
     assert.equal(keyedNode(ui.render().tree, "entity-cancel").props.enabled, true);
@@ -58,7 +61,8 @@ test("pending theme directory IO does not lock cancellation and late completion 
 
 test("the single native picker receives its pending real catalogue while keeping cancellation available", async t => {
   let resolve; const pending = new Promise(yes => { resolve = yes; });
-  const plugin = await selectorEnvironment(t, { listThemeConfigs() { return pending; } });
+  const plugin = await selectorEnvironment(t, {Theme: { listConfigs() { return pending; }
+  }});
   const card = await plugin.api("character.create", { values: { name: "主题异步加载" } });
   const ui = await open(plugin, "card", card.id);
   await click(ui, "entity-theme-switch", "onCheckedChange", true);

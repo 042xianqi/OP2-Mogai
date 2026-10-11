@@ -3264,7 +3264,7 @@ function createSettingsConfigurationAccess(readSettings) {
     /** Projects actual named Theme configs into the plugin's one private picker row contract. */
     readThemeChoices() {
       return __async(this, null, function* () {
-        const configs = configurationRecords(yield readSettings().listThemeConfigs(), "\u4E3B\u9898\u914D\u7F6E");
+        const configs = configurationRecords(yield readSettings().Theme.listConfigs(), "\u4E3B\u9898\u914D\u7F6E");
         return configs.map(
           /** Preserves the actual independent ID and display name without storing or rewriting its snapshot. */
           (config) => {
@@ -3278,20 +3278,20 @@ function createSettingsConfigurationAccess(readSettings) {
     /** Verifies a genuine independent Theme ID before any active selection or chat namespace write. */
     validateTheme(id2) {
       return __async(this, null, function* () {
-        requireConfiguration(yield readSettings().listThemeConfigs(), id2, "\u4E3B\u9898\u914D\u7F6E");
+        requireConfiguration(yield readSettings().Theme.listConfigs(), id2, "\u4E3B\u9898\u914D\u7F6E");
       });
     },
     /** Verifies a genuine independent TTS ID before any active selection or chat namespace write. */
     validateTts(id2) {
       return __async(this, null, function* () {
-        requireConfiguration(yield readSettings().listTtsConfigs(), id2, "TTS \u914D\u7F6E");
+        requireConfiguration(yield readSettings().Tts.listConfigs(), id2, "TTS \u914D\u7F6E");
       });
     },
     /** Awaits the canonical Theme transaction and validates its acknowledgement of this exact independent config. */
     applyTheme(id2) {
       return __async(this, null, function* () {
         requireId(id2, "\u4E3B\u9898\u914D\u7F6E\u5F15\u7528 ID");
-        const applied = yield readSettings().applyThemeConfig(id2);
+        const applied = yield readSettings().Theme.applyConfig(id2);
         assertObject(applied, "\u5DF2\u5E94\u7528\u4E3B\u9898\u914D\u7F6E");
         if (applied.id !== id2) throw new Error("\u4E3B\u9898\u914D\u7F6E\u5E94\u7528\u8FD4\u56DE\u7684 ID \u4E0E\u8BF7\u6C42\u4E0D\u4E00\u81F4\uFF1A" + id2);
       });
@@ -3300,9 +3300,9 @@ function createSettingsConfigurationAccess(readSettings) {
     applyTts(id2) {
       return __async(this, null, function* () {
         requireId(id2, "TTS \u914D\u7F6E\u5F15\u7528 ID");
-        const applied = yield readSettings().setCurrentTtsConfigId(id2);
+        const applied = yield readSettings().Tts.setCurrentConfigId(id2);
         if (applied !== id2) throw new Error("TTS \u914D\u7F6E\u63D0\u4EA4\u8FD4\u56DE\u7684 ID \u4E0E\u8BF7\u6C42\u4E0D\u4E00\u81F4\uFF1A" + id2);
-        const current = yield readSettings().getCurrentTtsConfigId();
+        const current = yield readSettings().Tts.getCurrentConfigId();
         if (current !== id2) throw new Error("TTS \u5F53\u524D\u914D\u7F6E\u8BFB\u53D6\u7ED3\u679C\u672A\u786E\u8BA4\u8BF7\u6C42\u7684 ID\uFF1A" + id2);
       });
     }
@@ -3310,8 +3310,8 @@ function createSettingsConfigurationAccess(readSettings) {
 }
 function registerSelectionSettingsAccess() {
   connectIndependentConfigurations(createSettingsConfigurationAccess(
-    /** Resolves the canonical Settings capability only when a real directory read or application is requested. */
-    () => Tools.SoftwareSettings
+    /** Resolves the canonical Theme and Tts capabilities only when a real directory read or application is requested. */
+    () => ({ Theme: Tools.Theme, Tts: Tools.Tts })
   ));
 }
 
@@ -8374,17 +8374,9 @@ function conversationSidebarScope(section) {
 function readSidebarCatalog(value) {
   return __async(this, null, function* () {
     const current = parseCurrentSidebar(value), service = yield getService();
-    const directory = yield service.sidebarDirectory();
-    const selections = [];
-    const chats = current.chatSidebar.chats;
-    for (let offset = 0; offset < chats.length; offset += 8) {
-      selections.push(...yield Promise.all(chats.slice(offset, offset + 8).map((chat) => __async(null, null, function* () {
-        const extension = yield Tools.Chat.readExtension({ kind: "chat", chatId: chat.id });
-        if (extension === null) return { chatId: chat.id, selection: null };
-        const marker = decodeChatMarker(extension);
-        requireChatSelection(marker.selection, directory.cards, directory.groups);
-        return { chatId: chat.id, selection: marker.selection };
-      }))));
+    const [directory, selections] = yield Promise.all([service.sidebarDirectory(), readSidebarSelections(current.chatSidebar.chats)]);
+    for (const selection of selections) {
+      if (selection.selection !== null) requireChatSelection(selection.selection, directory.cards, directory.groups);
     }
     const sections = characterSidebarSections(directory, selections, current.chatSidebar.chats);
     if (!sections.some(
@@ -8407,6 +8399,18 @@ function readSidebarCatalog(value) {
     return { view: "groups", scopes };
   });
 }
+function readSidebarSelections(chats) {
+  return __async(this, null, function* () {
+    const selections = [];
+    for (let offset = 0; offset < chats.length; offset += 8) {
+      selections.push(...yield Promise.all(chats.slice(offset, offset + 8).map((chat) => __async(null, null, function* () {
+        const extension = yield Tools.Chat.readExtension({ kind: "chat", chatId: chat.id });
+        return { chatId: chat.id, selection: extension === null ? null : decodeChatMarker(extension).selection };
+      }))));
+    }
+    return selections;
+  });
+}
 function registerSidebarChannel() {
   ToolPkg.ipc.on("character-sidebar.catalog", readSidebarCatalog);
 }
@@ -8414,11 +8418,11 @@ function registerSidebarChannel() {
 // src/main.ts
 connectDirectorySources({
   /** Reads the actual configured model directory only when the shared service requests it. */
-  listModels: () => Tools.SoftwareSettings.listModelSummaries(),
+  listModels: () => Tools.Models.listSummaries(),
   /** Reads the actual TTS directory without opening storage during registration. */
-  listTtsConfigs: () => Tools.SoftwareSettings.listTtsConfigs(),
-  /** Reads complete real builtin, package, skill and MCP sources through the generic settings capability. */
-  readToolCatalog: () => Tools.SoftwareSettings.readToolSourceCatalog()
+  listTtsConfigs: () => Tools.Tts.listConfigs(),
+  /** Reads complete real builtin, package, skill and MCP sources through the canonical tool-source catalog. */
+  readToolCatalog: () => Tools.Catalog.readToolSources()
 });
 registerSelectionSettingsAccess();
 registerUiRequestChannel();

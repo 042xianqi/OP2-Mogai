@@ -22,26 +22,27 @@ export function createSelectionSettingsFixture() {
     if (receipts.has(method)) return plain(receipts.get(method));
     return plain(receipt);
   }
-  const settings = {
+  const settings = {Theme: {
     /** Supplies complete controlled records in the actual SDK Theme shape, never an empty production source. */
-    async listThemeConfigs(...args) { assert.equal(args.length, 0); observe("listThemeConfigs", args); return acknowledged("listThemeConfigs", [...themes.values()]); },
-    /** Supplies complete controlled SDK speech records with both genuinely declared test IDs. */
-    async listTtsConfigs(...args) { assert.equal(args.length, 0); observe("listTtsConfigs", args); return acknowledged("listTtsConfigs", [...speech.values()]); },
+    async listConfigs(...args) { assert.equal(args.length, 0); observe("Theme.listConfigs", args); return acknowledged("Theme.listConfigs", [...themes.values()]); },
     /** Simulates only the independent owner write and exact full-record acknowledgement for a declared ID. */
-    async applyThemeConfig(...args) {
-      assert.equal(args.length, 1); observe("applyThemeConfig", args); const [id] = args;
+    async applyConfig(...args) {
+      assert.equal(args.length, 1); observe("Theme.applyConfig", args); const [id] = args;
       assert.equal(typeof id, "string"); if (!themes.has(id)) throw new Error("Controlled Theme owner rejected unknown ID: " + id);
-      current.theme = id; return acknowledged("applyThemeConfig", themes.get(id));
-    },
+      current.theme = id; return acknowledged("Theme.applyConfig", themes.get(id));
+    }
+  }, Tts: {
+    /** Supplies complete controlled SDK speech records with both genuinely declared test IDs. */
+    async listConfigs(...args) { assert.equal(args.length, 0); observe("Tts.listConfigs", args); return acknowledged("Tts.listConfigs", [...speech.values()]); },
     /** Simulates only the independent speech preference write, including explicitly planned acknowledgement failures. */
-    async setCurrentTtsConfigId(...args) {
-      assert.equal(args.length, 1); observe("setCurrentTtsConfigId", args); const [id] = args;
+    async setCurrentConfigId(...args) {
+      assert.equal(args.length, 1); observe("Tts.setCurrentConfigId", args); const [id] = args;
       assert.equal(typeof id, "string"); if (!speech.has(id)) throw new Error("Controlled TTS owner rejected unknown ID: " + id);
-      current.tts = id; return acknowledged("setCurrentTtsConfigId", id);
+      current.tts = id; return acknowledged("Tts.setCurrentConfigId", id);
     },
     /** Returns the controlled independent owner's real current test state without querying plugin usage or roles. */
-    async getCurrentTtsConfigId(...args) { assert.equal(args.length, 0); observe("getCurrentTtsConfigId", args); return acknowledged("getCurrentTtsConfigId", current.tts); },
-  };
+    async getCurrentConfigId(...args) { assert.equal(args.length, 0); observe("Tts.getCurrentConfigId", args); return acknowledged("Tts.getCurrentConfigId", current.tts); }
+  }};
   return { settings, calls, current, themes, speech,
     /** Clears only the SDK-call audit; canonical test input identities and independent state are retained. */
     clearCalls() { calls.length = 0; },
@@ -51,7 +52,7 @@ export function createSelectionSettingsFixture() {
     returnReceipt(method, receipt) { assert.equal(receipts.has(method), false); receipts.set(method, receipt); },
     /** Blocks one independent acknowledgement so tests can audit busy controls and the absence of early completion. */
     hold(method) {
-      assert.equal(Object.hasOwn(settings, method), true); assert.equal(gates.has(method), false); let release, entered;
+      const [namespace, name] = method.split("."); assert.equal(Object.hasOwn(settings[namespace], name), true); assert.equal(gates.has(method), false); let release, entered;
       const pending = new Promise(
         /** Records only a real independently controlled acknowledgement barrier. */
         resolve => { release = resolve; },

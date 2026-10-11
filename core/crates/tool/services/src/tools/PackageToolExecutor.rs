@@ -4,8 +4,7 @@ use operit_plugin_sdk::javascript::{JsPackageToolCallRequest, JsPackageToolCallR
 use operit_plugin_sdk::package::ToolPackage;
 
 use crate::tools::packTool::RuntimePackageManager::RuntimePackageManager;
-use crate::tools::AIToolHandler::AIToolHandler;
-use crate::tools::ToolJsRuntime::{JsPackageExecutor, PackageManagerJsRuntime};
+use crate::tools::ToolJsRuntime::PackageManagerJsRuntime;
 use crate::tools::ToolResultDataClasses::stringResultData;
 use crate::ConversationMarkupManager::ToolResult;
 use crate::ToolExecutionManager::{
@@ -17,7 +16,7 @@ use crate::ToolExecutionManager::{
 /// Executes one SDK package through the host JavaScript and tool runtimes.
 pub struct PackageToolExecutor {
     toolPackage: ToolPackage,
-    packageExecutor: Arc<dyn JsPackageExecutor>,
+    packageManager: Arc<Mutex<RuntimePackageManager>>,
 }
 
 impl PackageToolExecutor {
@@ -25,32 +24,10 @@ impl PackageToolExecutor {
     pub fn new(
         toolPackage: ToolPackage,
         packageManager: Arc<Mutex<RuntimePackageManager>>,
-        toolHandler: AIToolHandler,
     ) -> Self {
-        let packageRuntime = Arc::new(PackageManagerJsRuntime::new(
-            packageManager,
-            toolHandler.clone(),
-        ));
-        let runtimeDependencies = toolHandler.runtimeDependencies();
-        Self {
-            toolPackage,
-            packageExecutor: runtimeDependencies
-                .js_execution_provider()
-                .create_package_executor(packageRuntime, Arc::new(toolHandler)),
-        }
+        Self { toolPackage, packageManager }
     }
 
-    /// Delegates one qualified request to the authoritative SDK selection and execution path.
-    #[allow(non_snake_case)]
-    pub async fn invoke(&self, tool: &AITool) -> ToolResult {
-        let validation = self.validateParameters(tool);
-        if !validation.valid {
-            return failedToolResult(tool, validation.errorMessage);
-        }
-        let request = packageToolCallRequest(tool);
-        let result = self.packageExecutor.execute_package_tool(&request).await;
-        packageToolResult(result)
-    }
 }
 
 impl AsyncToolExecutor for PackageToolExecutor {
@@ -100,8 +77,15 @@ impl AsyncToolExecutor for PackageToolExecutor {
 
     /// Uses the same exact SDK request dispatch for streaming and ordinary calls.
     #[allow(non_snake_case)]
-    fn invokeAndStreamAsync<'a>(&'a mut self, tool: &'a AITool) -> ToolInvocationFuture<'a> {
-        Box::pin(async move { vec![self.invoke(tool).await] })
+    fn invokeAndStreamAsync<'a>(&'a mut self, tool: &'a AITool, context: &'a crate::ToolExecutionManager::ToolInvocationContext) -> ToolInvocationFuture<'a> {
+        let host = context.host().clone();
+        let runtime = Arc::new(PackageManagerJsRuntime::new(self.packageManager.clone(), host.clone()));
+        let executor = host.runtimeDependencies().js_execution_provider()
+            .create_package_executor(runtime, Arc::new(host));
+        Box::pin(async move {
+            let request = packageToolCallRequest(tool);
+            vec![packageToolResult(executor.execute_package_tool(&request).await)]
+        })
     }
 }
 
@@ -129,13 +113,3 @@ fn packageToolResult(result: JsPackageToolCallResult) -> ToolResult {
     }
 }
 
-/// Builds a failed tool result with an empty string payload.
-#[allow(non_snake_case)]
-fn failedToolResult(tool: &AITool, error: String) -> ToolResult {
-    ToolResult {
-        toolName: tool.name.clone(),
-        success: false,
-        result: stringResultData(""),
-        error: Some(error),
-    }
-}

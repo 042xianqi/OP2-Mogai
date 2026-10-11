@@ -200,7 +200,7 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
     #[allow(non_snake_case)]
     fn listModelSummaries(
         &self,
-    ) -> Result<Vec<operit_plugin_sdk::js_sdk::software_settings::SoftwareModelSummary>, String>
+    ) -> Result<Vec<operit_plugin_sdk::js_sdk::models::ModelsSummary>, String>
     {
         let summaries = crate::data::preferences::ModelConfigManager::ModelConfigManager::default()
             .getAllModelSummaries()
@@ -213,7 +213,7 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
     #[allow(non_snake_case)]
     fn listTtsConfigs(
         &self,
-    ) -> Result<Vec<operit_plugin_sdk::js_sdk::software_settings::SoftwareTtsConfig>, String> {
+    ) -> Result<Vec<operit_plugin_sdk::js_sdk::tts::TtsConfig>, String> {
         let configs = crate::data::preferences::TtsConfigManager::TtsConfigManager::getInstance()
             .getAllTtsConfigs()?;
         serde_json::from_value(serde_json::to_value(configs).map_err(|error| error.to_string())?)
@@ -222,7 +222,7 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
 
     /// Reads full named appearance records from the canonical ordinary preference ledger.
     #[allow(non_snake_case)]
-    fn listThemeConfigs(&self) -> Result<Vec<operit_plugin_sdk::js_sdk::software_settings::SoftwareThemeConfig>, String> {
+    fn listThemeConfigs(&self) -> Result<Vec<operit_plugin_sdk::js_sdk::theme::ThemeConfig>, String> {
         let configs = self.runtimeThemeConfigManager()?.list().map_err(|error| error.to_string())?;
         serde_json::from_value(serde_json::to_value(configs).map_err(|error| error.to_string())?)
             .map_err(|error| error.to_string())
@@ -230,7 +230,7 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
 
     /// Applies only an exact existing named theme using the canonical ordinary appearance transaction.
     #[allow(non_snake_case)]
-    fn applyThemeConfig(&self, id: String) -> Result<operit_plugin_sdk::js_sdk::software_settings::SoftwareThemeConfig, String> {
+    fn applyThemeConfig(&self, id: String) -> Result<operit_plugin_sdk::js_sdk::theme::ThemeConfig, String> {
         if id.trim().is_empty() || id.trim() != id {
             return Err("Theme configuration ID must be exact nonblank text".to_string());
         }
@@ -274,7 +274,7 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
         Box<
             dyn std::future::Future<
                     Output = Result<
-                        operit_plugin_sdk::js_sdk::software_settings::SoftwareToolSourceCatalog,
+                        operit_plugin_sdk::js_sdk::catalog::CatalogToolSources,
                         String,
                     >,
                 > + Send
@@ -282,9 +282,7 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
         >,
     > {
         Box::pin(async move {
-            use operit_plugin_sdk::js_sdk::software_settings::{
-                SoftwareToolSource, SoftwareToolSourceCatalog,
-            };
+            use operit_plugin_sdk::js_sdk::catalog::{CatalogToolSource, CatalogToolSources};
             let mut handler = self.runtimeBindings()?.toolHandler.clone();
             let manager =
                 RuntimePackageManager::readySnapshot(handler.getOrCreatePackageManager()).await?;
@@ -301,7 +299,7 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
                     if !registered.contains(&tool.name) {
                         continue;
                     }
-                    let entry = SoftwareToolSource {
+                    let entry = CatalogToolSource {
                         name: tool.name.clone(),
                         displayName: tool.name.clone(),
                         description: tool.description,
@@ -318,7 +316,7 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
                 .getAvailablePackages()
                 .into_iter()
                 .filter(|(name, _)| !manager.isToolPkgContainer(name))
-                .map(|(name, package)| SoftwareToolSource {
+                .map(|(name, package)| CatalogToolSource {
                     name,
                     displayName: package.display_name.resolve(false),
                     description: package.description.resolve(false),
@@ -331,7 +329,7 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
             }
             let skills = skillPackages
                 .into_iter()
-                .map(|(name, skill)| SoftwareToolSource {
+                .map(|(name, skill)| CatalogToolSource {
                     displayName: name.clone(),
                     name,
                     description: skill.description,
@@ -340,13 +338,13 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
             let mcpServers = manager
                 .getAvailableServerPackages()
                 .into_iter()
-                .map(|(name, server)| SoftwareToolSource {
+                .map(|(name, server)| CatalogToolSource {
                     displayName: server.name,
                     name,
                     description: server.description,
                 })
                 .collect();
-            Ok(SoftwareToolSourceCatalog {
+            Ok(CatalogToolSources {
                 builtinTools: builtinTools.into_values().collect(),
                 packages,
                 skills,
@@ -1113,6 +1111,7 @@ fn runtimeBuiltinPluginAssets() -> &'static [RuntimePluginAsset] {
                 .map(|asset| RuntimePluginAsset {
                     name: asset.name,
                     bytes: asset.bytes,
+                    sha256: asset.sha256,
                 })
                 .collect()
         })
@@ -1129,6 +1128,7 @@ fn runtimeBundledExternalPluginAssets() -> &'static [RuntimePluginAsset] {
                 .map(|asset| RuntimePluginAsset {
                     name: asset.name,
                     bytes: asset.bytes,
+                    sha256: asset.sha256,
                 })
                 .collect()
         })

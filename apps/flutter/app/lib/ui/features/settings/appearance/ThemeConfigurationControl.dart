@@ -225,7 +225,7 @@ class _ThemeConfigurationControlState extends State<ThemeConfigurationControl> {
   }
 
   /// Renames the selected configuration while retaining its current persisted appearance.
-  Future<void> _rename(core.ThemeConfig config) async {
+  Future<void> _rename(core.CoreDataPreferencesThemeConfigManagerThemeConfig config) async {
     final name = await _readName(
       AppLocalizations.of(context)!.settingsAppearanceThemeConfigRename,
       config.name,

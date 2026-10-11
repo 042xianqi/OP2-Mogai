@@ -1,3 +1,4 @@
+import { installScopedHostRuntime, installGeneratedToolsRuntime } from "../../../../../tools/tests/fixtures/scoped_host_runtime.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
@@ -12,79 +13,75 @@ function fields(text, name) {
   assert.notEqual(declaration, null, name);
   return [...declaration[1].matchAll(/pub ([A-Za-z_][A-Za-z0-9_]*):/g)].map(match => match[1]);
 }
-/** Evaluates exactly the current generated runtime helper with an explicit test native callback boundary. */
+/** Evaluates the current scoped host-directory helper using an explicit native callback boundary. */
 function directoryRuntime(native) {
-  const generator = source("core/crates/plugin/codegen/src/runtime_bindings.rs");
-  const start = generator.indexOf("/** Reads one declared SoftwareSettings directory through the existing typed host callback bridge. */");
-  const marker = "globalThis.__operitSoftwareDirectorySequence = 0;", end = generator.indexOf(marker, start);
-  assert.ok(start >= 0 && end > start);
-  const context = vm.createContext({
-    /** Runs only the simulated native transport boundary, never a substitute production manager. */
-    __operitNativeReadSoftwareSettingsDirectoryAsync(id, method) { native(context, id, method); },
+  const context = vm.createContext({}), registry = installScopedHostRuntime(context);
+  context.__operitNativeCallToolStructured = registry.binding((id, type, name, parameters) => {
+    assert.equal(type, 'default'); assert.deepEqual(structuredClone(parameters), {});
+    return native({settle(requestId,value,reject) { registry.settle(requestId,reject ? value : {success:true,data:value},reject); }}, id, name);
   });
-  vm.runInContext(generator.slice(start, end + marker.length), context);
+  installGeneratedToolsRuntime(context);
   return context;
 }
 
-/** Proves every declared settings capability uses a real narrow Rust host binding rather than a Tools or CLI dispatcher. */
-test("software directories connect SDK declaration generator callback and actual canonical runtime managers", () => {
-  const methods = ["listModelSummaries", "listTtsConfigs", "listThemeConfigs", "applyThemeConfig", "getCurrentTtsConfigId", "setCurrentTtsConfigId", "readToolSourceCatalog"];
-  const bindings = source("core/crates/plugin/sdk/src/js_sdk/runtime_bindings.rs");
-  const direct = bindings.slice(bindings.indexOf("pub const JS_DIRECT_HOST_BINDINGS"));
-  assert.deepEqual([...direct.matchAll(/namespace: "SoftwareSettings", method: "([^"]+)"/g)].map(match => match[1]), methods);
-  const sdk = source("core/crates/plugin/sdk/src/js_sdk/software_settings.rs"), runtime = source("core/crates/runtime/application/src/services/ToolRuntimeSupportService.rs");
-  const engine = source("core/crates/plugin/javascript-bridge/src/javascript/JsEngine.rs"), native = source("core/crates/tool/services/src/tools/AIToolHandlerJsToolsHost.rs");
-  for (const method of methods) {
-    assert.match(sdk, new RegExp("fn " + method + "(?:<[^>]+>)?\\("));
-    assert.match(runtime, new RegExp("fn " + method + "(?:<[^>]+>)?\\("));
-    const argument = method === "applyThemeConfig" || method === "setCurrentTtsConfigId" ? "id" : "";
-    assert.match(engine, new RegExp("executionHost\\s*\\.\\s*" + method + "\\(" + argument + "\\)"));
-    assert.match(native, new RegExp("support\\s*\\.\\s*" + method + "\\(" + argument + "\\)"));
+/** Checks each domain SDK and native binding reaches its canonical host manager. */
+test("domain directories connect declarations, scoped callbacks and canonical runtime managers", () => {
+  const paths = { "Models.listSummaries": "listModelSummaries", "Tts.listConfigs": "listTtsConfigs", "Theme.listConfigs": "listThemeConfigs", "Theme.applyConfig": "applyThemeConfig", "Tts.getCurrentConfigId": "getCurrentTtsConfigId", "Tts.setCurrentConfigId": "setCurrentTtsConfigId", "Catalog.readToolSources": "readToolSourceCatalog" };
+  const bindings = source("core/crates/plugin/sdk/src/js_sdk/runtime_bindings.rs"), runtime = source("core/crates/runtime/application/src/services/ToolRuntimeSupportService.rs");
+  const engine = source("core/crates/plugin/javascript-bridge/src/javascript/JsEngine.rs"), native = source("core/crates/tool/services/src/tools/AIToolHandler.rs");
+  for (const [path, canonical] of Object.entries(paths)) {
+    const [namespace, method] = path.split("."), sdk = source("core/crates/plugin/sdk/src/js_sdk/" + namespace.toLowerCase() + ".rs");
+    assert.ok(bindings.includes('namespace: "' + namespace + '", method: "' + method + '"'));
+    assert.ok(sdk.includes("fn " + method + "(&self"));
+
+    assert.match(runtime, new RegExp("fn " + canonical + "(?:<[^>]+>)?\\("));
   }
   assert.match(runtime, /getAllModelSummaries\(\)/); assert.match(runtime, /getAllTtsConfigs\(\)/);
-  for (const call of ["getAllToolNames", "getAvailablePackages", "getAvailableSkillsSnapshot", "getAvailableServerPackages"]) assert.match(runtime, new RegExp(call + "\\("));
-  const directoryMethod = native.slice(native.indexOf("fn invoke_software_settings_directory"));
-  assert.doesNotMatch(directoryMethod, /invoke_generated|execute_tool_call|SoftwareSettings\.exec|unwrap_or_default/);
-  assert.match(engine, /"__operitNativeReadSoftwareSettingsDirectoryAsync"/);
+  for (const call of ["getAllToolNames", "getAvailablePackages", "getAvailableSkillsSnapshot", "getAvailableServerPackages"]) assert.ok(runtime.includes(call + "("));
+  assert.match(engine, /"__operitNativeCallToolStructured"/);
+  assert.doesNotMatch(engine, /__operitNativeInvokeDomainAsync|invoke_direct_host_json/);
+  assert.match(native, /impl JsExecutionHost for AIToolHandler/);
+  for (const canonical of Object.values(paths)) assert.match(source("core/crates/tool/services/src/tools/ToolRegistration.rs"), new RegExp("runtimeSupport\\(\\)\\." + canonical + "\\("));
 });
 
-/** Confirms the wire DTOs preserve every field from the actual model and speech records. */
+/** Confirms the domain DTOs preserve every field from the actual model and speech records. */
 test("directory SDK DTOs are complete canonical model and TTS records", () => {
-  const sdk = source("core/crates/plugin/sdk/src/js_sdk/software_settings.rs");
+  const sdkModels = source("core/crates/plugin/sdk/src/js_sdk/models.rs"), sdkTts = source("core/crates/plugin/sdk/src/js_sdk/tts.rs");
   const models = source("core/crates/foundation/model/src/ModelConfigData.rs"), tts = source("core/crates/foundation/model/src/TtsConfig.rs");
-  assert.deepEqual(fields(sdk, "SoftwareModelSummary"), fields(models, "ProviderModelSummary"));
-  assert.deepEqual(fields(sdk, "SoftwareModelCapabilities"), fields(models, "ModelCapabilities"));
-  assert.deepEqual(fields(sdk, "SoftwareModelPricing"), fields(models, "ModelPricing"));
-  assert.deepEqual(fields(sdk, "SoftwareTtsConfig"), fields(tts, "TtsConfig"));
-  assert.deepEqual(fields(sdk, "SoftwareTtsHeader"), fields(tts, "TtsHttpHeader"));
-  assert.deepEqual(fields(sdk, "SoftwareTtsResponseStep"), fields(tts, "TtsHttpResponsePipelineStep"));
+  assert.deepEqual(fields(sdkModels, "ModelsSummary"), fields(models, "ProviderModelSummary"));
+  assert.deepEqual(fields(sdkModels, "ModelsCapabilities"), fields(models, "ModelCapabilities"));
+  assert.deepEqual(fields(sdkModels, "ModelsPricing"), fields(models, "ModelPricing"));
+  assert.deepEqual(fields(sdkTts, "TtsConfig"), fields(tts, "TtsConfig"));
+  assert.deepEqual(fields(sdkTts, "TtsHeader"), fields(tts, "TtsHttpHeader"));
+  assert.deepEqual(fields(sdkTts, "TtsResponseStep"), fields(tts, "TtsHttpResponsePipelineStep"));
 });
 
-/** Exercises the exact current generated Promise helper, independently of unavailable Rust compilation. */
-test("software directory callback preserves full JSON and releases every callback identity", async () => {
-  const values = new Map([["listModelSummaries", [{ providerId: "provider", modelId: "model", pricing: null }]], ["listTtsConfigs", [{ id: "speech", requestBody: "full", responsePipeline: [{ stepType: "json", path: "audio", headers: [{ name: "custom", value: "original" }] }] }]], ["readToolSourceCatalog", { builtinTools: [{ name: "read_file", displayName: "Read", description: "configured" }], packages: [{ name: "actual_package", displayName: "Package", description: "full" }], skills: [{ name: "actual_skill", displayName: "Skill", description: "full" }], mcpServers: [{ name: "actual_server", displayName: "MCP", description: "full" }] }]]);
+/** Preserves complete structured directory records and releases each scoped request. */
+test("domain directory callback preserves full records and releases callback identities", async () => {
+  const values = new Map([["models_list_summaries", [{ providerId: "provider", modelId: "model", pricing: null }]], ["tts_list_configs", [{ id: "speech", requestBody: "full", responsePipeline: [{ stepType: "json", path: "audio", headers: [{ name: "custom", value: "original" }] }] }]], ["catalog_read_tool_sources", { builtinTools: [{ name: "read_file", displayName: "Read", description: "configured" }], packages: [{ name: "actual_package", displayName: "Package", description: "full" }], skills: [{ name: "actual_skill", displayName: "Skill", description: "full" }], mcpServers: [{ name: "actual_server", displayName: "MCP", description: "full" }] }]]);
   const calls = [], context = directoryRuntime(
-    /** Supplies explicit unit-test native callback values without implementing a production host store. */
-    (runtime, id, method) => { assert.ok(values.has(method)); calls.push(id); runtime[id](JSON.stringify(values.get(method)), false); },
+    /** Supplies test-controlled host values through the production structured callback protocol. */
+    (registry, id, method) => { assert.ok(values.has(method)); calls.push(id); registry.settle(id, values.get(method), false); },
   );
-  for (const [method, value] of values) assert.deepEqual(JSON.parse(JSON.stringify(await context.__operitReadSoftwareSettingsDirectory(method))), value);
-  assert.equal(new Set(calls).size, 3);
-  for (const id of calls) assert.equal(Object.hasOwn(context, id), false);
+  const methods = [() => context.Tools.Models.listSummaries(), () => context.Tools.Tts.listConfigs(), () => context.Tools.Catalog.readToolSources()];
+  let index = 0;
+  for (const value of values.values()) assert.deepEqual(structuredClone(await methods[index++]()), value);
+  assert.equal(new Set(calls).size, 3); assert.equal(context.refs, 0);
 });
 
-/** Checks both asynchronous native failures and synchronous transport failures are retained without substitute data. */
-test("software directory Promise rejects original host and transport errors", async () => {
+/** Checks original asynchronous and synchronous transport failure messages are retained. */
+test("domain directory Promise rejects original host and transport errors", async () => {
   const context = directoryRuntime(
-    /** Delivers one explicit host failure through the actual generated error envelope. */
-    (runtime, id) => runtime[id](JSON.stringify({ message: " unchanged host failure " }), true),
+    /** Delivers an explicit native failure through the real scoped host callback. */
+    (registry, id) => registry.settle(id, " unchanged host failure ", true),
   );
-  await assert.rejects(context.__operitReadSoftwareSettingsDirectory("listTtsConfigs"), { message: " unchanged host failure " });
-  const failure = new Error("native transport original"), broken = directoryRuntime(
-    /** Rejects transport before any callback completion rather than inventing successful data. */
-    () => { throw failure; },
+  await assert.rejects(context.Tools.Tts.listConfigs(), { message: " unchanged host failure " });
+  const broken = directoryRuntime(
+    /** Rejects scheduling before callback completion without returning substitute data. */
+    () => { throw new (vm.runInContext("Error", broken))("native transport original"); },
   );
-  await assert.rejects(broken.__operitReadSoftwareSettingsDirectory("readToolSourceCatalog"), error => error === failure);
-  assert.equal(Object.hasOwn(broken, "__operit_directory_1"), false);
+  await assert.rejects(broken.Tools.Catalog.readToolSources(), { message: "native transport original" });
+  assert.equal(broken.refs, 0);
 });
 
 /** Statically checks the precise changed trait, implementation and executor boundaries without claiming Rust type checking. */
@@ -119,7 +116,8 @@ test("actual package executor delegates one request to immutable exact SDK selec
   assert.doesNotMatch(executor, /ends_with|\.tools|packageTool\.script/);
   assert.equal([...executor.matchAll(/execute_package_tool\(/g)].length, 1);
   assert.match(executor, /execute_package_tool\(&request\)\.await/);
-  assert.match(executor, /vec!\[self\.invoke\(tool\)\.await\]/);
+  assert.match(executor, /let host = context\.host\(\)\.clone\(\)/);
+  assert.doesNotMatch(executor, /packageExecutor:|self\.invoke\(/);
   const execute = manager.slice(manager.indexOf("pub async fn executeScript("), manager.indexOf("/// Releases JavaScript tool manager resources."));
   assert.equal([...execute.matchAll(/\.select_tool\(/g)].length, 1);
   assert.match(execute, /&selection\.definition\.script/);

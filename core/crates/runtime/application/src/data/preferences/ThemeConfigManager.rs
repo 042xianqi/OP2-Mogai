@@ -99,6 +99,48 @@ impl ThemeConfigManager {
         })
     }
 
+    /// Adopts verified legacy configurations with stable identities in one ordinary preference transaction.
+    pub(crate) fn importLegacyConfigurations(
+        &self,
+        configs: &[ThemeConfig],
+        active_id: Option<&str>,
+    ) -> Result<(), PreferencesDataStoreError> {
+        for config in configs {
+            validateConfig(config)?;
+        }
+        self.dataStore.try_edit_result(|preferences| {
+            let mut state = readState(preferences)?;
+            for config in configs {
+                match state.configs.iter().find(|saved| saved.id == config.id) {
+                    Some(saved) if saved != config => {
+                        return Err(PreferencesDataStoreError::Message(format!(
+                            "Legacy theme identity already stores different data: {}", config.id
+                        )));
+                    }
+                    Some(_) => {}
+                    None => state.configs.push(config.clone()),
+                }
+            }
+            // An explicit new-domain selection belongs to the user, including custom appearance.
+            if let (false, Some(active_id)) = (
+                preferences.contains(&stringPreferencesKey(ACTIVE_THEME_CONFIG_ID_KEY)), active_id,
+            ) {
+                let active = findConfig(&state, active_id)?;
+                writeThemePreferenceSnapshot(preferences, &active.snapshot)?;
+                state.activeThemeConfigId = Some(active_id.to_string());
+            }
+            writeState(preferences, &state)
+        })?;
+        for config in configs {
+            if self.get(config.id.clone())? != *config {
+                return Err(PreferencesDataStoreError::Message(format!(
+                    "Legacy theme verification failed: {}", config.id
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Updates a named theme and its active ordinary appearance in one preference commit.
     pub fn update(
         &self,

@@ -20,7 +20,8 @@ function oneSurface(tree) {
 async function click(ui, key, prop = "onClick", payload) { return ui.dispatch(keyedNode(ui.render().tree, key).props[prop], payload); }
 /** Supplies only explicitly controlled independent catalogues/native chat summaries, never entity CRUD. */
 async function environment(t, themes = []) {
-  const plugin = await selectorEnvironment(t, { async listThemeConfigs() { return themes; } }, {}, composeModules);
+  const plugin = await selectorEnvironment(t, {Theme: { async listConfigs() { return themes; }
+  }}, {}, composeModules);
   plugin.tools.Chat.listAll = async () => ({ totalCount: plugin.records.size, chats: [...plugin.records.keys()].map(id => ({ id, title: "Controlled native conversation", messageCount: 0, createdAt: "2026-10-08T12:00:00Z", updatedAt: "2026-10-08T12:00:00Z", isCurrent: true, inputTokens: 0, outputTokens: 0 })) });
   return plugin;
 }
@@ -350,8 +351,8 @@ test("native export writes the actual saved Operit and Tavern data to the explic
 
 test("the sole native editor retains model TTS shared-memory and four-category tool bindings on the real save transaction", async t => {
   const plugin = await environment(t), card = await plugin.api("character.create", { values: { name: "原生全部绑定" } });
-  const readCatalog = plugin.tools.SoftwareSettings.readToolSourceCatalog;
-  plugin.tools.SoftwareSettings.readToolSourceCatalog = async () => {
+  const readCatalog = plugin.tools.Catalog.readToolSources;
+  plugin.tools.Catalog.readToolSources = async () => {
     const catalog = await readCatalog(); catalog.builtinTools.push({ name: "use_package", displayName: "启用外部工具", description: "真实工具策略必需的显式能力" }); return catalog;
   };
   const store = await plugin.api("memory.shared.create", { name: "原生共享库" });

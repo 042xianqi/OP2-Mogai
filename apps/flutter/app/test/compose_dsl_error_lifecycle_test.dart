@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:operit2/core/logging/ClientLogger.dart';
 import 'package:operit2/ui/features/packages/screens/ToolPkgComposeDslWebView.dart';
 import 'package:operit2/ui/features/packages/screens/ToolPkgUiLauncherScreen.dart';
 
 /// Verifies action errors are visible without disposing and remounting the successful UI.
 void main() {
+  setUpAll(ClientLogger.initialize);
   testWidgets(
     'action error preserves mounted renderer and does not rerun onLoad',
     (tester) async {

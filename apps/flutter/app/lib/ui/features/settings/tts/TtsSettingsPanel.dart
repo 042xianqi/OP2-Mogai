@@ -86,7 +86,7 @@ class _TtsProviderSectionState extends State<TtsProviderSection> {
     });
   }
 
-  Future<void> _testTtsConfig(core_proxy.TtsConfig config) async {
+  Future<void> _testTtsConfig(core_proxy.CoreOperitModelTtsConfigTtsConfig config) async {
     final configId = config.id.trim();
     if (configId.isEmpty) {
       ScaffoldMessenger.of(
@@ -127,7 +127,7 @@ class _TtsProviderSectionState extends State<TtsProviderSection> {
     }
   }
 
-  Future<void> _save(core_proxy.TtsConfig config) async {
+  Future<void> _save(core_proxy.CoreOperitModelTtsConfigTtsConfig config) async {
     final manager = widget.clients.preferencesTtsConfigManager;
     if (config.id.isEmpty) {
       await manager.createTtsConfig(config: config);
@@ -139,7 +139,7 @@ class _TtsProviderSectionState extends State<TtsProviderSection> {
 
   /// Deletes an independent voice configuration while protecting the current one.
   Future<void> _delete(
-    core_proxy.TtsConfig config,
+    core_proxy.CoreOperitModelTtsConfigTtsConfig config,
     String currentConfigId,
   ) async {
     final l10n = AppLocalizations.of(context)!;
@@ -183,7 +183,7 @@ class _TtsProviderSectionState extends State<TtsProviderSection> {
 
   /// Opens the independent voice editor with current-selection deletion protection.
   Future<void> _openVoiceEditor(
-    core_proxy.TtsConfig config,
+    core_proxy.CoreOperitModelTtsConfigTtsConfig config,
     String currentConfigId,
   ) async {
     final l10n = AppLocalizations.of(context)!;
@@ -259,7 +259,7 @@ class _TtsProviderSectionState extends State<TtsProviderSection> {
   }
 
   Future<void> _createCustomTtsVoice(
-    core_proxy.TtsConfig providerConfig,
+    core_proxy.CoreOperitModelTtsConfigTtsConfig providerConfig,
   ) async {
     final result = await _CustomTtsVoiceDialog.show(
       context: context,
@@ -306,7 +306,7 @@ class _TtsProviderSectionState extends State<TtsProviderSection> {
         final now = DateTime.now().millisecondsSinceEpoch;
         for (final config in group.configs) {
           await manager.updateTtsConfig(
-            config: core_proxy.TtsConfig(
+            config: core_proxy.CoreOperitModelTtsConfigTtsConfig(
               id: config.id,
               name: values.name,
               providerType: values.providerType,

@@ -1,24 +1,34 @@
 /// Retains generation scopes separately from transport records and updates captured action closures.
 var OperitComposeGeneration = function () {
   var contexts = new WeakMap();
-  var generated = new WeakSet();
-  var observers = new WeakMap();
+  var nodes = new WeakMap();
   var actionBinding = false;
 
   /// Identifies nodes whose construction inputs are owned by the generation registry.
   function owns(node) {
-    return generated.has(node);
+    return nodes.has(node);
   }
 
   /// Attaches a retained node owner without retaining detached node graphs globally.
   function watch(node, listener) {
-    var listeners = observers.get(node);
-    if (!listeners) throw new Error('Compose node must be created by the DSL node factory');
+    var listeners = record(node).listeners;
     listeners.add(listener);
     /// Releases one retained occurrence when it leaves the composition.
     return function () {
       listeners.delete(listener);
     };
+  }
+
+  /// Resolves the factory-owned record without reading through public mutation proxies.
+  function record(node) {
+    var entry = nodes.get(node);
+    if (!entry) throw new Error('Compose node must be created by the DSL node factory');
+    return entry;
+  }
+
+  /// Supplies retained reconciliation with the observed node's underlying containers.
+  function read(node) {
+    return record(node).value;
   }
 
   /// Updates the internal callback reference without treating ownership binding as a plugin mutation.
@@ -38,7 +48,7 @@ var OperitComposeGeneration = function () {
     /// Publishes the exact mutation path without invalidating unrelated retained occurrences.
     function changed(path) {
       if (actionBinding) return;
-      observers.get(root).forEach(
+      record(root).listeners.forEach(
       /// Enqueues the affected retained occurrence instead of walking its ancestors.
       function (listener) {
         listener(path);
@@ -52,8 +62,11 @@ var OperitComposeGeneration = function () {
       var proxy = new Proxy(value, {
         /// Reads nested containers through the same mutation observer.
         get(target, key) {
-          if (path.length === 0 && key === 'type') return Reflect.get(target, key);
-          return observe(Reflect.get(target, key), path.concat(key));
+          var next = Reflect.get(target, key);
+          if (next === null || typeof next !== 'object') return next;
+          if (next !== node && next.__composeNode === true) return next;
+          if (seen.has(next)) return seen.get(next);
+          return observe(next, path.concat(key));
         },
         /// Invalidates record caching before an explicit plugin assignment.
         set(target, key, next) {
@@ -82,8 +95,7 @@ var OperitComposeGeneration = function () {
       return proxy;
     }
     root = observe(node, []);
-    generated.add(root);
-    observers.set(root, new Set());
+    nodes.set(root, { value: node, listeners: new Set() });
     return root;
   }
   function ownedContext(ctx) {
@@ -152,9 +164,13 @@ var OperitComposeGeneration = function () {
     if (seen.has(value)) throw new TypeError('Compose arguments must not contain cycles');
     seen.add(value);
     var result = Array.isArray(value) ? [] : {};
-    Object.keys(value).forEach(function (key) {
-      result[key] = snapshot(value[key], slot + '/' + key.length + ':' + key, callbacks, seen);
-    });
+    var keys = Object.keys(value);
+    for (var index = 0; index < keys.length; index += 1) {
+      var key = keys[index];
+      var child = value[key];
+      result[key] = child === null || typeof child !== 'object' && typeof child !== 'function'
+        ? child : snapshot(child, slot + '/' + key.length + ':' + key, callbacks, seen);
+    }
     seen.delete(value);
     return result;
   }
@@ -164,12 +180,14 @@ var OperitComposeGeneration = function () {
     var values = snapshot(args, '', entry.callbacks, new Set());
     if (!entry.initialized || !OperitComposeRetained.equal(entry.args, values)) {
       var next = factory.apply(undefined, values);
-      if (entry.initialized && entry.value.type === next.type && entry.value.props.key === next.props.key) {
-        // Preserve the occurrence handle so a changed leaf does not replace every ancestor.
-        if (!OperitComposeRetained.equal(entry.value.props, next.props)) entry.value.props = next.props;
-        if (!OperitComposeRetained.equal(entry.value.children, next.children)) entry.value.children = next.children;
-        if (!OperitComposeRetained.equal(entry.value.slots, next.slots)) {
-          if (Object.prototype.hasOwnProperty.call(next, 'slots')) entry.value.slots = next.slots;else delete entry.value.slots;
+      var nextValue = read(next);
+      var previous = entry.initialized ? read(entry.value) : null;
+      if (previous && previous.type === nextValue.type && previous.props.key === nextValue.props.key) {
+        // Assign raw construction containers through the public observer once, avoiding nested proxies.
+        if (!OperitComposeRetained.equal(previous.props, nextValue.props)) entry.value.props = nextValue.props;
+        if (!OperitComposeRetained.equal(previous.children, nextValue.children)) entry.value.children = nextValue.children;
+        if (!OperitComposeRetained.equal(previous.slots, nextValue.slots)) {
+          if (Object.prototype.hasOwnProperty.call(nextValue, 'slots')) entry.value.slots = nextValue.slots;else delete entry.value.slots;
         }
       } else entry.value = next;
       entry.args = values;
@@ -190,12 +208,13 @@ var OperitComposeGeneration = function () {
       return value === null || typeof value !== 'object' && typeof value !== 'function';
     });
     if (primitiveInputs && entry.initialized && OperitComposeRetained.equal(entry.deps, deps)) return entry.value;
-    entry.deps = snapshot(deps, 'deps', new Map(), new Set());
+    entry.deps = primitiveInputs ? deps.slice() : snapshot(deps, 'deps', new Map(), new Set());
     return evaluate(entry, argumentsFactory(), factory);
   }
   return {
     evaluate: evaluate,
     observeNode: observeNode,
+    read: read,
     watch: watch,
     rebind: rebind,
     owns: owns,

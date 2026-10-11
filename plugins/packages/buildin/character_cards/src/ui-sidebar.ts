@@ -221,19 +221,10 @@ export function reconcileSidebarCatalog(catalog: SidebarCatalog, current: Curren
 /** Reads the actual sidebar catalog from namespace extensions and the same database-backed service used by every other plugin surface. */
 export async function readSidebarCatalog(value: CurrentSidebar): Promise<SidebarCatalog> {
   const current = parseCurrentSidebar(value), service = await getService();
-  const directory = await service.sidebarDirectory();
-  const selections: SidebarChatSelection[] = [];
-  // Bound outstanding bridge requests instead of paying one round trip per chat in series.
-  // Read every extension afresh so rebinding the same IDs cannot leave a stale classification.
-  const chats = current.chatSidebar.chats;
-  for (let offset = 0; offset < chats.length; offset += 8) {
-    selections.push(...await Promise.all(chats.slice(offset, offset + 8).map(async chat => {
-      const extension = await Tools.Chat.readExtension({ kind: "chat", chatId: chat.id });
-      if (extension === null) return { chatId: chat.id, selection: null };
-      const marker = decodeChatMarker(extension);
-      requireChatSelection(marker.selection, directory.cards, directory.groups);
-      return { chatId: chat.id, selection: marker.selection };
-    })));
+  // Directory and extension reads are independent; validate their joined results before publishing.
+  const [directory, selections] = await Promise.all([service.sidebarDirectory(), readSidebarSelections(current.chatSidebar.chats)]);
+  for (const selection of selections) {
+    if (selection.selection !== null) requireChatSelection(selection.selection, directory.cards, directory.groups);
   }
   const sections = characterSidebarSections(directory, selections, current.chatSidebar.chats);
   if (!sections.some(
@@ -254,6 +245,17 @@ export async function readSidebarCatalog(value: CurrentSidebar): Promise<Sidebar
   const scopes = [];
   for (const section of sections) scopes.push(conversationSidebarScope(section));
   return { view: "groups", scopes };
+}
+/** Reads authoritative extensions with bounded overlap, independently of the role directory query. */
+async function readSidebarSelections(chats: readonly SidebarChatSummary[]): Promise<SidebarChatSelection[]> {
+  const selections: SidebarChatSelection[] = [];
+  for (let offset = 0; offset < chats.length; offset += 8) {
+    selections.push(...await Promise.all(chats.slice(offset, offset + 8).map(async chat => {
+      const extension = await Tools.Chat.readExtension({ kind: "chat", chatId: chat.id });
+      return { chatId: chat.id, selection: extension === null ? null : decodeChatMarker(extension).selection };
+    })));
+  }
+  return selections;
 }
 /** Registers the one actual sidebar catalog handler without reading native chats or opening the file repository. */
 export function registerSidebarChannel(): void {

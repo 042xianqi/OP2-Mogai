@@ -38,7 +38,7 @@ for (const precompile of [false, true]) {
   report.modes[mode] = { scope: raw.scope, profile: raw.profile, screens: raw.screens.map(screen => {
     const summary = { screen: screen.screen, sourceBytes: screen.sourceBytes, upserts: screen.samples[0].upserts };
     for (const key of ['engineBootstrapMs', 'scriptToCommitMs', 'coldTotalMs']) summary[key] = stats(screen.samples.map(sample => sample[key]));
-    for (const key of ['parseMs', 'compileMs', 'renderMs', 'commitMs']) summary[key] = stats(screen.samples.map(sample => sample.stages[key]));
+    for (const key of ['prepareMs', 'renderMs', 'commitMs']) summary[key] = stats(screen.samples.map(sample => sample.stages[key]));
     summary.warmInputRefreshMs = stats(screen.samples.flatMap(sample => sample.warmInputRefreshMs));
     return summary;
   }) };

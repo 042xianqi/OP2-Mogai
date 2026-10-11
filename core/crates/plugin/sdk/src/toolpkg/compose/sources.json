@@ -1,12 +1,13 @@
 {
   "context": [
-    "Compiler.js",
+    "Artifact.js",
     "Actions.js",
     "Generation.js",
     "Retained.js",
     "Reactive.js",
     "Nodes.js",
     "State.js",
+    "Lazy.js",
     "Theme.js",
     "WebView.js",
     "Host.js",
@@ -20,5 +21,6 @@
   ],
   "parser": "Parser.js",
   "parserSource": "../vendor/acorn.js",
-  "compiler": "Compiler.js"
+  "compiler": "Compiler.js",
+  "artifact": "Artifact.js"
 }

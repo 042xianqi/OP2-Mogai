@@ -51,6 +51,7 @@ rusqlite.workspace = true
 operit-host-native-storage = { path = "../../../../hosts/common/operit-host-native-storage" }
 
 [build-dependencies]
+sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 zip.workspace = true

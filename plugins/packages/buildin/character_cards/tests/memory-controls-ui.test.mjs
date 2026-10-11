@@ -26,12 +26,15 @@ test.after(async () => { await browser?.close(); if (server) await new Promise(r
 async function controlsPage(t, width = 390, view = "memory") {
   const harness = await createMemoryJobsHarness(t), presentation = fixture();
   // Only readonly independent host directories are controlled; all domain settings and job state belong to production.
-  harness.tools.SoftwareSettings = {
-    async listModelSummaries() { return plain(presentation.snapshot.models); },
-    async listTtsConfigs() { return plain(presentation.snapshot.ttsConfigs); },
-    async readToolSourceCatalog() { return plain(presentation.snapshot.toolCatalog); },
-    async listThemeConfigs() { return []; },
-  };
+  Object.assign(harness.tools, {Models: {
+    async listSummaries() { return plain(presentation.snapshot.models); }
+  }, Tts: {
+    async listConfigs() { return plain(presentation.snapshot.ttsConfigs); }
+  }, Catalog: {
+    async readToolSources() { return plain(presentation.snapshot.toolCatalog); }
+  }, Theme: {
+    async listConfigs() { return []; }
+  }});
   const runtime = harness.openRuntime(); await runtime.initialize(); await runtime.bind();
   const context = await browser.newContext({ viewport: { width, height: 844 }, timezoneId: "Asia/Shanghai" });
   t.after(() => context.close());

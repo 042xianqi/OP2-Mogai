@@ -14,7 +14,11 @@ use operit_store::RuntimeStorePaths::RuntimeStorePaths;
 use operit_store::SqliteStore::{SqliteRowGet, SqliteStore, SqliteValue};
 use operit_store::SyncOperationStore::SyncOperationStore;
 use operit_util::RuntimeStorageLayout::RUNTIME_SYNC_DIR_PATH;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use crate::data::preferences::ThemeConfigManager::{ThemeConfig, ThemeConfigManager};
+use crate::data::preferences::ThemePreferenceSnapshot::readLegacyCharacterThemeSnapshot;
+use operit_util::RuntimeStorageLayout::USER_PREFERENCES_PATH;
 use super::CharacterPluginLegacyData::*;
 use operit_util::RuntimeStorageLayout::{CHARACTER_CARDS_PREFERENCES_PATH, CHARACTER_GROUPS_PREFERENCES_PATH, PROMPT_TAGS_PREFERENCES_PATH, SHARED_MEMORY_STORES_PREFERENCES_PATH, API_PREFERENCES_PATH};
 
@@ -165,6 +169,9 @@ impl CharacterPluginWriter {
             return Ok(());
         }
         validateMigrationData(&data)?;
+        let theme_targets = data.cards.iter().map(|card| ("cards".to_string(), card.id.clone()))
+            .chain(data.groups.iter().map(|group| ("groups".to_string(), group.id.clone())))
+            .collect::<Vec<_>>();
         let existing = self.get(META_COLLECTION, "state")?;
         let mut metadata = match existing {
             Some(entry) => entry["value"].clone(),
@@ -321,7 +328,7 @@ impl CharacterPluginWriter {
             self.mutation(
                 "imports",
                 source,
-                json!({"complete":true,"cleanupPaths":data.cleanup_paths,"cleanupComplete":false}),
+                json!({"complete":true,"cleanupPaths":data.cleanup_paths,"cleanupComplete":false,"themeTargets":theme_targets}),
             )?,
         ])
     }
@@ -527,6 +534,20 @@ pub fn isRetiredCharacterOperation(
         DATA_MEMORY_CHARACTERS_DIR_PATH, DATA_MEMORY_SHARED_DIR_PATH, PROMPT_TAGS_PREFERENCES_PATH,
         SHARED_MEMORY_STORES_PREFERENCES_PATH,
     };
+    if operation.domain == "preferences"
+        && operation.payload.get("storagePath").and_then(Value::as_str)
+            == Some(operit_util::RuntimeStorageLayout::USER_PREFERENCES_PATH)
+        && operation.payload.get("key").and_then(Value::as_str).is_some_and(|key|
+            key.starts_with("character_card_theme_") || key.starts_with("character_group_theme_"))
+    {
+        return true;
+    }
+    if operation.domain == "preferences"
+        && operation.payload.get("storagePath").and_then(Value::as_str) == Some(API_PREFERENCES_PATH)
+        && operation.payload.get("key").and_then(Value::as_str) == Some("enable_memory_auto_update")
+    {
+        return true;
+    }
     let path = match operation.domain.as_str() {
         "objectbox" => return true,
         "runtime_file" => Some(operation.entityId.as_str()),
@@ -1102,6 +1123,7 @@ pub fn migrateLegacyCharacters(paths: RuntimeStorePaths) -> Result<(), String> {
         }
         writer.import("operit2-v27", data)?;
     }
+    writer.migrateCoreThemes()?;
     migrateChatBindings(paths, &writer)?;
     cleanupLegacyCharacters(&writer)
 }
@@ -1117,9 +1139,6 @@ fn cleanupLegacyCharacters(writer: &CharacterPluginWriter) -> Result<(), String>
         .get("imports", "operit2-v27")?
         .ok_or("Core character migration completion is missing")?;
     let mut marker = entry["value"].clone();
-    if marker["cleanupComplete"] == true {
-        return Ok(());
-    }
     if marker["complete"] != true {
         return Err("Cannot delete incomplete character migration sources".to_string());
     }
@@ -1155,6 +1174,23 @@ fn cleanupLegacyCharacters(writer: &CharacterPluginWriter) -> Result<(), String>
         }
         validated_paths.push((path, memory_owner));
     }
+    let api_preferences = PreferencesDataStore::newWithStorage(writer.storage.clone(), API_PREFERENCES_PATH);
+    api_preferences.try_edit_result(|saved| -> Result<(), operit_store::PreferencesDataStore::PreferencesDataStoreError> {
+        let key = stringPreferencesKey("enable_memory_auto_update");
+        if saved.contains(&key) {
+            let metadata = writer.get(META_COLLECTION, "state")
+                .map_err(operit_store::PreferencesDataStore::PreferencesDataStoreError::Message)?
+                .ok_or_else(|| operit_store::PreferencesDataStore::PreferencesDataStoreError::Message(
+                    "Migrated memory policy metadata is missing".to_string()))?;
+            validateGlobalMemoryPreferences(&metadata["value"]["memoryPreferences"])
+                .map_err(operit_store::PreferencesDataStore::PreferencesDataStoreError::Message)?;
+            saved.remove(&key);
+        }
+        Ok(())
+    }).map_err(|error| error.to_string())?;
+    if marker["cleanupComplete"] == true {
+        return Ok(());
+    }
     for (path, memory_owner) in validated_paths {
         if writer
             .storage
@@ -1186,6 +1222,270 @@ fn cleanupLegacyCharacters(writer: &CharacterPluginWriter) -> Result<(), String>
     }
     marker["cleanupComplete"] = json!(true);
     writer.commit(vec![writer.mutation("imports", "operit2-v27", marker)?])
+}
+
+/// Retains the exact source target and a complete independent theme for restartable adoption.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ThemeBinding {
+    collection: String,
+    key: String,
+    config: ThemeConfig,
+}
+
+/// Persists the conversion inputs before either configuration or role bindings are changed.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ThemeMigrationPlan {
+    bindings: Vec<ThemeBinding>,
+    activeConfigId: Option<String>,
+    sourceEntries: Vec<(String, String)>,
+    complete: bool,
+}
+
+/// Returns the exact released preference namespace for a declared role target.
+fn themePrefix(collection: &str, id: &str) -> Result<String, String> {
+    match collection {
+        "cards" => Ok(format!("character_card_theme_{id}_")),
+        "groups" => Ok(format!("character_group_theme_{id}_")),
+        _ => Err(format!(
+            "Invalid legacy theme target collection: {collection}"
+        )),
+    }
+}
+
+impl CharacterPluginWriter {
+    /// Migrates every imported role theme, verifies both owners, then removes only its exact source keys.
+    pub fn migrateThemes(
+        &self,
+        source: &str,
+        source_preferences: &Preferences,
+        targets: &[(String, String)],
+        clean_preferences: bool,
+    ) -> Result<(), String> {
+        let marker_key = format!("{source}:themes-v1");
+        let plan: ThemeMigrationPlan = match self.get("imports", &marker_key)? {
+            Some(entry) if entry["value"]["complete"] == true => return Ok(()),
+            Some(entry) => {
+                serde_json::from_value(entry["value"].clone()).map_err(|error| error.to_string())?
+            }
+            None => {
+                let plan = self.planThemes(source, source_preferences, targets)?;
+                self.commit(vec![self.mutation(
+                    "imports",
+                    &marker_key,
+                    serde_json::to_value(&plan).map_err(|error| error.to_string())?,
+                )?])?;
+                plan
+            }
+        };
+        if plan.complete {
+            return Ok(());
+        }
+        let manager = ThemeConfigManager::new(self.storage.clone());
+        let configs = plan
+            .bindings
+            .iter()
+            .map(|binding| binding.config.clone())
+            .collect::<Vec<_>>();
+        manager
+            .importLegacyConfigurations(&configs, plan.activeConfigId.as_deref())
+            .map_err(|error| error.to_string())?;
+        // Validate every retained role before publishing any binding batch.
+        let mut rows = Vec::new();
+        for binding in &plan.bindings {
+            let entry = self
+                .get(&binding.collection, &binding.key)?
+                .ok_or_else(|| format!("Migrated theme target is missing: {}", binding.key))?;
+            let mut role = entry["value"].clone();
+            match role.get("themeConfigId") {
+                Some(Value::Null) => role["themeConfigId"] = json!(binding.config.id),
+                Some(Value::String(id)) if id == &binding.config.id => {}
+                _ => {
+                    return Err(format!(
+                        "Migration would replace an existing theme binding: {}",
+                        binding.key
+                    ))
+                }
+            }
+            rows.push((binding.collection.clone(), binding.key.clone(), role));
+        }
+        for page in rows.chunks(1000) {
+            let mutations = page
+                .iter()
+                .map(|(collection, key, role)| self.mutation(collection, key, role.clone()))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
+            self.commit(mutations)?;
+        }
+        for binding in &plan.bindings {
+            let entry = self
+                .get(&binding.collection, &binding.key)?
+                .ok_or("Migrated theme target disappeared during verification")?;
+            if entry["value"]["themeConfigId"] != binding.config.id
+                || manager
+                    .get(binding.config.id.clone())
+                    .map_err(|error| error.to_string())?
+                    != binding.config
+            {
+                return Err(format!(
+                    "Migrated theme binding verification failed: {}",
+                    binding.key
+                ));
+            }
+        }
+        if clean_preferences {
+            let preferences =
+                PreferencesDataStore::newWithStorage(self.storage.clone(), USER_PREFERENCES_PATH);
+            preferences.try_edit_result(|saved| -> Result<(), operit_store::PreferencesDataStore::PreferencesDataStoreError> {
+                let source_keys = plan.sourceEntries.iter().map(|(key, _)| key.as_str()).collect::<BTreeSet<_>>();
+                for (key, _) in saved.iterEntries() {
+                    if (key.starts_with("character_card_theme_") || key.starts_with("character_group_theme_"))
+                        && !source_keys.contains(key)
+                    {
+                        return Err(operit_store::PreferencesDataStore::PreferencesDataStoreError::Message(
+                            format!("Legacy theme source added a key before cleanup: {key}")));
+                    }
+                }
+                for (key, expected) in &plan.sourceEntries {
+                    if let Some(actual) = saved.get(&stringPreferencesKey(key)) {
+                        if actual != expected {
+                            return Err(operit_store::PreferencesDataStore::PreferencesDataStoreError::Message(
+                                format!("Legacy theme source changed before cleanup: {key}")));
+                        }
+                    }
+                }
+                for (key, _) in &plan.sourceEntries {
+                    saved.remove(&stringPreferencesKey(key));
+                }
+                Ok(())
+            }).map_err(|error| error.to_string())?;
+            let saved = preferences.data().map_err(|error| error.to_string())?;
+            if plan
+                .sourceEntries
+                .iter()
+                .any(|(key, _)| saved.contains(&stringPreferencesKey(key)))
+            {
+                return Err("Legacy theme preference cleanup verification failed".to_string());
+            }
+        }
+        self.commit(vec![self.mutation("imports", &marker_key, json!({"complete":true}))?])
+    }
+
+    /// Decodes the released sparse theme schema using its declared initial values and exact target IDs.
+    fn planThemes(
+        &self,
+        source: &str,
+        preferences: &Preferences,
+        targets: &[(String, String)],
+    ) -> Result<ThemeMigrationPlan, String> {
+        let state = self
+            .get("meta", "state")?
+            .ok_or("Character selection metadata is missing")?;
+        let active = &state["value"]["active"];
+        let mut plan = ThemeMigrationPlan {
+            bindings: Vec::new(),
+            activeConfigId: None,
+            sourceEntries: Vec::new(),
+            complete: false,
+        };
+        let mut identities = BTreeSet::new();
+        for (collection, id) in targets {
+            if !identities.insert((collection, id)) {
+                return Err(format!("Duplicate legacy theme target: {collection}/{id}"));
+            }
+            let role = self
+                .get(collection, id)?
+                .ok_or_else(|| format!("Legacy theme target is missing: {id}"))?;
+            let role = &role["value"];
+            let prefix = themePrefix(collection, id)?;
+            let (snapshot, entries) = readLegacyCharacterThemeSnapshot(preferences, &prefix)
+                .map_err(|error| error.to_string())?;
+            let config = ThemeConfig {
+                id: format!("legacy-theme:{source}:{collection}:{id}"),
+                name: requiredString(role, "name")?.to_string(),
+                snapshot,
+                createdAt: role["createdAt"]
+                    .as_i64()
+                    .ok_or("Invalid legacy theme creation time")?,
+                updatedAt: role["updatedAt"]
+                    .as_i64()
+                    .ok_or("Invalid legacy theme update time")?,
+            };
+            match role.get("themeConfigId") {
+                Some(Value::Null) => {}
+                Some(Value::String(value)) if value == &config.id => {}
+                _ => {
+                    return Err(format!(
+                        "Migration would replace an existing theme binding: {id}"
+                    ))
+                }
+            }
+            if (collection == "cards" && active["CharacterCard"]["id"] == *id)
+                || (collection == "groups" && active["CharacterGroup"]["id"] == *id)
+            {
+                plan.activeConfigId = Some(config.id.clone());
+            }
+            plan.bindings.push(ThemeBinding {
+                collection: collection.clone(),
+                key: id.clone(),
+                config,
+            });
+            plan.sourceEntries.extend(entries);
+        }
+        let migrated_keys = plan
+            .sourceEntries
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect::<BTreeSet<_>>();
+        for (key, _) in preferences.iterEntries() {
+            if (key.starts_with("character_card_theme_")
+                || key.starts_with("character_group_theme_"))
+                && !migrated_keys.contains(key)
+            {
+                return Err(format!(
+                    "Legacy theme preference has no imported role target: {key}"
+                ));
+            }
+        }
+        Ok(plan)
+    }
+
+    /// Recovers the Core migration's original card IDs from its exact cleanup manifest, excluding later cards.
+    pub fn migrateCoreThemes(&self) -> Result<(), String> {
+        let marker = self
+            .get("imports", "operit2-v27")?
+            .ok_or("Core character import is missing")?;
+        let cleanup = marker["value"]["cleanupPaths"]
+            .as_array()
+            .ok_or("Core cleanup manifest is missing")?;
+        let mut targets = Vec::new();
+        if let Some(declared) = marker["value"].get("themeTargets") {
+            targets =
+                serde_json::from_value(declared.clone()).map_err(|error| error.to_string())?;
+        } else {
+            // Upgrade the completed pre-theme migration manifest using its original owner paths.
+            for entry in self.list("cards")? {
+                let id = requiredString(&entry["value"], "id")?;
+                let root = legacyMemoryRoot(&format!("character:{id}"))?;
+                if cleanup
+                    .iter()
+                    .any(|path| path.as_str() == Some(root.as_str()))
+                {
+                    targets.push(("cards".to_string(), id.to_string()));
+                }
+            }
+            for entry in self.list("groups")? {
+                targets.push((
+                    "groups".to_string(),
+                    requiredString(&entry["value"], "id")?.to_string(),
+                ));
+            }
+        }
+        let preferences =
+            PreferencesDataStore::newWithStorage(self.storage.clone(), USER_PREFERENCES_PATH)
+                .data()
+                .map_err(|error| error.to_string())?;
+        self.migrateThemes("operit2-v27", &preferences, &targets, true)
+    }
 }
 
 #[cfg(test)]

@@ -59,11 +59,13 @@ var OperitComposeRetained = function () {
           };
         }
         var result = Array.isArray(value) ? [] : {};
-        Object.keys(value).forEach(
-        /// Copies one property into the immutable transport record.
-        function (key) {
-          result[key] = bind(value[key], slot + '/' + key.length + ':' + key, oldActions, actions);
-        });
+        var keys = Object.keys(value);
+        for (var index = 0; index < keys.length; index += 1) {
+          var key = keys[index];
+          var child = value[key];
+          result[key] = child === null || typeof child !== 'object'
+            ? child : bind(child, slot + '/' + key.length + ':' + key, oldActions, actions);
+        }
         return result;
       }
 
@@ -74,8 +76,10 @@ var OperitComposeRetained = function () {
         /// Retains each child occurrence without entering an unchanged subtree.
         function (child, index) {
           stats.checkedChildReferences += 1;
-          if (!child || typeof child.type !== 'string') throw new Error('compose render must return a node');
-          var key = child.props && child.props.key;
+          if (!child) throw new Error('compose render must return a node');
+          var value = OperitComposeGeneration.read(child);
+          if (typeof value.type !== 'string') throw new Error('compose render must return a node');
+          var key = value.props.key;
           var identity;
           if (key === undefined || key === null) identity = 'i:' + index;else {
             if (typeof key !== 'string' && typeof key !== 'number') throw new Error('compose node key must be a string or number');
@@ -84,7 +88,7 @@ var OperitComposeRetained = function () {
           }
           if (identities.has(identity)) throw new Error('duplicate compose node key in ' + parent + ':' + slot);
           identities.add(identity);
-          var id = parent + '/s:' + slot.length + ':' + slot + '/' + identity + '/t:' + child.type;
+          var id = parent + '/s:' + slot.length + ':' + slot + '/' + identity + '/t:' + value.type;
           // Reattachment must reconcile even a previously skipped dirty occurrence.
           if (removalRoots.delete(id)) invalidate(id, true);
           var previous = nodes.get(id);
@@ -106,7 +110,9 @@ var OperitComposeRetained = function () {
 
       /// Updates one occurrence and records structural removals for later branch disposal.
       function visit(node, id, parent) {
-        if (!node || typeof node.type !== 'string') throw new Error('compose render must return a node');
+        if (!node) throw new Error('compose render must return a node');
+        var value = OperitComposeGeneration.read(node);
+        if (typeof value.type !== 'string') throw new Error('compose render must return a node');
         if (active.has(node)) throw new Error('compose nodes must not form a cycle');
         var previous = nodes.get(id);
         if (!previous) created.add(id);
@@ -120,16 +126,16 @@ var OperitComposeRetained = function () {
         // Callback slots belong to the mounted occurrence, not to its currently visible properties.
         // A queued event can still address a temporarily hidden slot; rebinding replaces its closure.
         var actions = Object.assign({}, oldActions);
-        var props = bind(node.props, '', oldActions, actions);
+        var props = bind(value.props, '', oldActions, actions);
         var children;
         var slots;
         if (structure) {
-          children = group(node.children, id, 'children');
+          children = group(value.children, id, 'children');
           slots = {};
-          Object.keys(node.slots || {}).forEach(
+          Object.keys(value.slots || {}).forEach(
           /// Reconciles the named groups owned by this changed occurrence.
           function (slot) {
-            slots[slot] = group(node.slots[slot], id, slot);
+            slots[slot] = group(value.slots[slot], id, slot);
           });
         } else {
           children = previous.record.children;
@@ -137,7 +143,7 @@ var OperitComposeRetained = function () {
         }
         var record = {
           id: id,
-          nodeType: node.type,
+          nodeType: value.type,
           props: props,
           children: children,
           slots: slots

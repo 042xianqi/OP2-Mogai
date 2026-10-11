@@ -569,6 +569,10 @@ extension _ComposeInteractiveNodes on _ComposeDslRendererState {
               _ => -1,
             }),
       nodes: nodes,
+      window: node.props['viewport'] == null
+          ? null
+          : _ComposeLazyWindow.parse(node.props['viewport'], nodes.length),
+      onAction: onAction,
       itemBuilder: (context, index) => _ComposeDslRenderer(
         key: nodes[index].props['key'] == null
             ? null

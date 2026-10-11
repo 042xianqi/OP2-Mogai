@@ -70,6 +70,10 @@ const MODULES: &[ModuleSpec] = &[
         ts_file: "system.d.ts",
         nullable_wire_fields: false,
     },
+    ModuleSpec { rust_file: "js_sdk/models.rs", additional_rust_file: None, ts_file: "models.d.ts", nullable_wire_fields: false },
+    ModuleSpec { rust_file: "js_sdk/tts.rs", additional_rust_file: None, ts_file: "tts.d.ts", nullable_wire_fields: false },
+    ModuleSpec { rust_file: "js_sdk/theme.rs", additional_rust_file: None, ts_file: "theme.d.ts", nullable_wire_fields: false },
+    ModuleSpec { rust_file: "js_sdk/catalog.rs", additional_rust_file: None, ts_file: "catalog.d.ts", nullable_wire_fields: false },
     ModuleSpec {
         rust_file: "js_sdk/software_settings.rs",
         additional_rust_file: None,
@@ -1467,6 +1471,10 @@ fn infer_declaration(item: ItemRef<'_>, ts_file: &str) -> Option<(Vec<String>, S
             ]),
             "SystemTerminalHost" => Some(vec!["System".to_string(), "terminal".to_string()]),
             "SystemMusicHost" => Some(vec!["System".to_string(), "music".to_string()]),
+            "ModelsHost" => Some(vec!["Models".to_string()]),
+            "TtsHost" => Some(vec!["Tts".to_string()]),
+            "ThemeHost" => Some(vec!["Theme".to_string()]),
+            "CatalogHost" => Some(vec!["Catalog".to_string()]),
             "SoftwareSettingsHost" => Some(vec!["SoftwareSettings".to_string()]),
             "UIHost" => Some(vec!["UI".to_string()]),
             "ChatHost" => Some(vec!["Chat".to_string()]),
@@ -1488,6 +1496,10 @@ fn infer_declaration(item: ItemRef<'_>, ts_file: &str) -> Option<(Vec<String>, S
         "files.d.ts" => prefixed_path(declaration_name, "Files"),
         "network.d.ts" => prefixed_path(declaration_name, "Net"),
         "system.d.ts" => prefixed_path(declaration_name, "System"),
+        "models.d.ts" => prefixed_path(declaration_name, "Models"),
+        "tts.d.ts" => prefixed_path(declaration_name, "Tts"),
+        "theme.d.ts" => prefixed_path(declaration_name, "Theme"),
+        "catalog.d.ts" => prefixed_path(declaration_name, "Catalog"),
         "software_settings.d.ts" => prefixed_path(declaration_name, "SoftwareSettings"),
         "ui.d.ts" if declaration_name.starts_with("UINode") => {
             vec![declaration_name.to_string()]

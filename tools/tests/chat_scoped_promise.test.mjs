@@ -2,23 +2,21 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
-import { installScopedHostRuntime } from './fixtures/scoped_host_runtime.mjs';
-
-const codegen=readFileSync(new URL('../../core/crates/plugin/codegen/src/runtime_bindings.rs',import.meta.url),'utf8');
-const helpers=codegen.slice(codegen.indexOf('function __operitRequireChatJsonObject'),codegen.indexOf('\n"#,',codegen.indexOf('function __operitRequireChatJsonObject')));
-const chat=readFileSync(new URL('../../core/crates/plugin/sdk/src/chat_runtime.js',import.meta.url),'utf8');
+import { installScopedHostRuntime, installGeneratedToolsRuntime } from './fixtures/scoped_host_runtime.mjs';
 
 /** Exercises production request snapshots and scoped Promise bindings, not callback-ID simulations. */
 function fixture() {
   const sandbox=vm.createContext({});
   const registry=installScopedHostRuntime(sandbox);
   const pending=[];
-  sandbox.__operitNativeChatAsync=registry.binding((requestId,method,payload)=>pending.push({requestId,method,payload}));
-  sandbox.__operitNativeChatExtensionAsync=registry.binding((requestId,method,target,value)=>pending.push({requestId,method,target,value}));
-  vm.runInContext(helpers+'\n'+chat,sandbox);
+  sandbox.__operitNativeCallToolStructured=registry.binding((requestId,type,name,parameters)=>{
+    const observation=parameters.observation;
+    pending.push({requestId,name,method:observation ? observation.op : name,payload:observation ? observation.op === 'open' ? observation.request : observation.handle : parameters.request,target:parameters.target,value:parameters.value});
+  });
+  installGeneratedToolsRuntime(sandbox);
   return {sandbox,pending,registry,
     run(code) {return vm.runInContext(code,sandbox);},
-    reply(value,reject=false) {const request=pending.shift();assert.ok(request);registry.settle(request.requestId,value,reject);return request;},
+    reply(value,reject=false) {const request=pending.shift();assert.ok(request);registry.settle(request.requestId,reject ? value : {success:true,data:value},reject);return request;},
   };
 }
 
@@ -27,7 +25,7 @@ test('Chat streaming snapshots the send request at iterator creation, without JS
   const f=fixture();
   f.run(`JSON.stringify=JSON.parse=function(){throw new Error('JSON transport used');};
     var request={chatId:'chat',input:{text:'original',attachments:[{name:'initial'}]}};
-    var stream=__operitChatStream(request);
+    var stream=Tools.Chat.sendMessageStreaming(request);
     request.input.text='changed';request.input.attachments[0].name='changed';`);
   assert.equal(f.pending.length,0);
   const next=f.run('stream.next()');
@@ -46,7 +44,7 @@ test('Chat streaming snapshots the send request at iterator creation, without JS
 });
 
 test('Chat streams reject concurrent pulls and detach completed observations without cancellation',async()=>{
-  const f=fixture();f.run("var stream=__operitChatStream({chatId:'chat'});");
+  const f=fixture();f.run("var stream=Tools.Chat.sendMessageStreaming({chatId:'chat'});");
   const next=f.run('stream.next()');
   await assert.rejects(f.run('stream.next()'),/one pending next/);
   f.reply('observation');await new Promise(resolve=>setImmediate(resolve));
@@ -59,7 +57,7 @@ test('Chat streams reject concurrent pulls and detach completed observations wit
 
 test('Chat extension requests preserve structured values and the rejection owner',async()=>{
   const f=fixture();const globals=Object.keys(f.sandbox);
-  const result=f.run("__operitChatExtension('writeExtension',{chatId:'chat'},{literal:'{\"value\":1}',nested:[null,1]}).catch(error=>({owner:__operitCurrentCallId,message:error.message}))");
+  const result=f.run("Tools.Chat.writeExtension({chatId:'chat'}, {literal:'{\"value\":1}',nested:[null,1]}).catch(error=>({owner:__operitCurrentCallId,message:error.message}))");
   assert.equal(typeof f.pending[0].requestId,'number');
   assert.deepEqual(structuredClone(f.pending[0].value),{literal:'{"value":1}',nested:[null,1]});
   f.run("__operitCurrentCallId='unrelated'");f.reply('exact native rejection',true);
@@ -70,7 +68,7 @@ test('Chat extension requests preserve structured values and the rejection owner
 test('Chat rejects cyclic, excessively deep and accessor data before retaining host requests',async()=>{
   const f=fixture();
   for (const request of ["(()=>{var x={};x.self=x;return x;})()", "(()=>{var x={},y=x;for(var i=0;i<130;i++){y.next={};y=y.next;}return x;})()", "Object.defineProperty({},'input',{enumerable:true,get(){throw new Error('getter must not execute');}})"]){
-    await assert.rejects(f.run(`__operitChatSend(${request})`),/cyclic|depth\/node|non-JSON property/);
+    await assert.rejects(f.run(`Tools.Chat.sendMessage(${request})`),/cyclic|depth\/node|non-JSON property/);
   }
   assert.equal(f.pending.length,0);assert.equal(f.sandbox.refs,0);
 });

@@ -550,6 +550,114 @@ pub(crate) fn readThemePreferenceSnapshot(
     Ok(snapshot)
 }
 
+/// Projects the released role-scoped keys and global user avatar into the ordinary snapshot codec.
+pub(crate) fn readLegacyCharacterThemeSnapshot(
+    preferences: &Preferences,
+    prefix: &str,
+) -> Result<(BTreeMap<String, Value>, Vec<(String, String)>), PreferencesDataStoreError> {
+    let mut scoped = operit_store::PreferencesDataStore::emptyPreferences();
+    let mut source_entries = Vec::new();
+    for (key, value) in preferences.iterEntries() {
+        if let Some(field) = key.strip_prefix(prefix) {
+            if !SNAPSHOT_FIELDS.iter().any(|entry| entry.preference_key == field)
+                && !matches!(field, "use_system_theme" | "custom_ai_avatar_uri")
+            {
+                return Err(invalidSnapshot(key, "unknown legacy role appearance preference"));
+            }
+            source_entries.push((key.to_string(), value.to_string()));
+            // The released resolver always reads the user avatar globally, even when a scoped key exists.
+            if field != "custom_user_avatar_uri" && field != "custom_ai_avatar_uri" {
+                scoped.set(&stringPreferencesKey(field), value.to_string());
+            }
+        }
+    }
+    if let Some(avatar) = preferences.get(&stringPreferencesKey("custom_user_avatar_uri")) {
+        scoped.set(&stringPreferencesKey("custom_user_avatar_uri"), avatar.clone());
+    }
+    // These are the released resolver's declared initial fields, independent of current global appearance.
+    let initial: BTreeMap<String, Value> = serde_json::from_str(r#"{
+  "themeMode": "system",
+  "useCustomColors": false,
+  "customPrimaryColor": null,
+  "customSecondaryColor": null,
+  "useBackgroundImage": false,
+  "backgroundImageUri": null,
+  "backgroundMediaType": "image",
+  "backgroundImageOpacity": 0.3,
+  "videoBackgroundMuted": true,
+  "videoBackgroundLoop": true,
+  "useBackgroundBlur": false,
+  "backgroundBlurRadius": 12,
+  "transparentSurfaceEnabled": false,
+  "chatInputFloating": false,
+  "inputStyle": "agent",
+  "chatStyle": "cursor",
+  "bubbleShowAvatar": true,
+  "bubbleWideLayoutEnabled": false,
+  "cursorUserBubbleColor": null,
+  "bubbleUserBubbleColor": null,
+  "bubbleAiBubbleColor": null,
+  "bubbleUserTextColor": null,
+  "bubbleAiTextColor": null,
+  "bubbleUserUseImage": false,
+  "bubbleAiUseImage": false,
+  "bubbleUserImageUri": null,
+  "bubbleAiImageUri": null,
+  "bubbleUserImageRenderMode": "tiled_nine_slice",
+  "bubbleAiImageRenderMode": "tiled_nine_slice",
+  "bubbleUserImageCropLeft": 0,
+  "bubbleUserImageCropTop": 0,
+  "bubbleUserImageCropRight": 0,
+  "bubbleUserImageCropBottom": 0,
+  "bubbleUserImageRepeatStart": 0.35,
+  "bubbleUserImageRepeatEnd": 0.65,
+  "bubbleUserImageRepeatYStart": 0.35,
+  "bubbleUserImageRepeatYEnd": 0.65,
+  "bubbleUserImageScale": 1,
+  "bubbleAiImageCropLeft": 0,
+  "bubbleAiImageCropTop": 0,
+  "bubbleAiImageCropRight": 0,
+  "bubbleAiImageCropBottom": 0,
+  "bubbleAiImageRepeatStart": 0.35,
+  "bubbleAiImageRepeatEnd": 0.65,
+  "bubbleAiImageRepeatYStart": 0.35,
+  "bubbleAiImageRepeatYEnd": 0.65,
+  "bubbleAiImageScale": 1,
+  "bubbleUserRoundedCornersEnabled": true,
+  "bubbleAiRoundedCornersEnabled": true,
+  "bubbleUserContentPaddingLeft": 12,
+  "bubbleUserContentPaddingRight": 12,
+  "bubbleAiContentPaddingLeft": 12,
+  "bubbleAiContentPaddingRight": 12,
+  "customUserAvatarUri": null,
+  "avatarShape": "circle",
+  "avatarCornerRadius": 8,
+  "useCustomFont": false,
+  "fontType": "system",
+  "systemFontName": null,
+  "customFontPath": null,
+  "fontScale": 1,
+  "bubbleUserUseCustomFont": false,
+  "bubbleUserFontType": "system",
+  "bubbleUserSystemFontName": "default",
+  "bubbleUserCustomFontPath": null,
+  "bubbleAiUseCustomFont": false,
+  "bubbleAiFontType": "system",
+  "bubbleAiSystemFontName": "default",
+  "bubbleAiCustomFontPath": null,
+  "showThinkingProcess": true,
+  "showModelProvider": false,
+  "showModelName": false,
+  "showRoleName": true,
+  "showUserName": true,
+  "showMessageTokenStats": false,
+  "showMessageTimingStats": false,
+  "showMessageTimestamp": false,
+  "showInputProcessingStatus": true
+}"#)?;
+    Ok((readThemePreferenceSnapshot(&scoped, &initial)?, source_entries))
+}
+
 /// Validates exact ordinary appearance keys before staging a partial configuration edit.
 pub(crate) fn validateThemePreferenceKeys<'a>(
     keys: impl Iterator<Item = &'a str>,

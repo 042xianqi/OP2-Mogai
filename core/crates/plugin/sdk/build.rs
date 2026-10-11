@@ -26,15 +26,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("Compose asset name must be a string")?;
         Ok(std::fs::read_to_string(compose_dir.join(name))?)
     };
-    // Escape Acorn once at build time. Page engines only initialize it for legacy source.
-    let parser_loader = asset("parser")?;
-    let parser = asset("parserSource")?;
+    // Keep trusted parser bytes outside the eagerly compiled bootstrap.
+    std::fs::write(build_output.join("compose_dsl_parser.js"), asset("parser")?)?;
     std::fs::write(
-        build_output.join("compose_dsl_parser.js"),
-        parser_loader.replace(
-            "__OPERIT_COMPOSE_PARSER_SOURCE__",
-            &serde_json::to_string(&parser)?,
-        ),
+        build_output.join("compose_dsl_parser_source.js"),
+        asset("parserSource")?,
     )?;
     let assemble = |key: &str| -> Result<String, Box<dyn std::error::Error>> {
         let names: Vec<String> = serde_json::from_value(manifest[key].clone())?;
@@ -44,6 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect::<Result<Vec<_>, _>>()?
             .join("\n"))
     };
+    std::fs::write(build_output.join("compose_dsl_compiler.js"), format!("{}\n{}", asset("artifact")?, asset("compiler")?))?;
     let context = assemble("context")?;
     std::fs::write(build_output.join("compose_dsl_context.js"), context)?;
     let execution = assemble("execution")?;

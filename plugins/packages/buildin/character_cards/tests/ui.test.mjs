@@ -418,15 +418,18 @@ function plain(value) { return JSON.parse(JSON.stringify(value)); }
 async function fileBackedPlugin(t, bundle, uiScripts = undefined, settings = null) {
   const disk = await createDiskHarness(t), readonly = fixture(), native = createNativeChatHost(new Map([["chat-dom", { extension: null }]])), hostCalls = native.calls, records = native.records;
   const apis = new Map(), channels = new Map(), commands = new Map(), routes = [], navigation = [], appHooks = [], messageHooks = [], hostHooks = [], chatLifecycleHooks = [], toolLifecycleHooks = [], toolPromptHooks = [];
-  const tools = { Files: disk.files, Storage: disk.storage, SoftwareSettings: {
+  const tools = { Files: disk.files, Storage: disk.storage, Models: {
     /** Supplies only the explicitly labelled readonly model directory required by the actual service. */
-    async listModelSummaries() { return plain(readonly.snapshot.models); },
+    async listSummaries() { return plain(readonly.snapshot.models); }
+  }, Theme: {
     /** Declares this isolated host's empty saved-theme catalog without fabricating a role binding or successful apply. */
-    async listThemeConfigs() { return []; },
+    async listConfigs() { return []; }
+  }, Tts: {
     /** Supplies only the explicitly labelled readonly TTS directory, not business records or persistence. */
-    async listTtsConfigs() { return plain(readonly.snapshot.ttsConfigs); },
+    async listConfigs() { return plain(readonly.snapshot.ttsConfigs); }
+  }, Catalog: {
     /** Supplies the complete labelled readonly tool catalog without faking a store or CRUD response. */
-    async readToolSourceCatalog() { return plain(readonly.snapshot.toolCatalog); },
+    async readToolSources() { return plain(readonly.snapshot.toolCatalog); }
   }, Chat: {
     ...native.chat,
     /** Supplies an explicit existing host chat for the service's exact identity validation, not a plugin binding. */
@@ -438,7 +441,7 @@ async function fileBackedPlugin(t, bundle, uiScripts = undefined, settings = nul
       };
     },
   } };
-  if (settings !== null) Object.assign(tools.SoftwareSettings, settings);
+  if (settings !== null) Object.assign(tools, settings);
   const registry = { ...disk.globals.ToolPkg,
     /** Captures an actual route callback from the current production main bundle. */
     registerUiRoute(value) { routes.push(value); },
