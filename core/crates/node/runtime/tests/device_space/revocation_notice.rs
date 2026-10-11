@@ -709,14 +709,19 @@ async fn a_late_learner_keeps_the_pairing_made_after_the_removal() {
         .await
         .expect("a re-paired device applies");
 
-    // The member now accepts the removal for the first time. It revokes the
-    // generation the device had while it was admitted, not the one it paired
-    // with afterwards.
+    // The member now accepts the removal for the first time, in the same order
+    // an ordinary round uses: the paired Space projection is exchanged before
+    // any control exchange. It revokes the generation the device had while it
+    // was admitted, not the one it paired with afterwards.
     let memberSync = crate::SpacePersistenceSyncService::SpacePersistenceSyncService::new(
         routers[member].localCore.clone(),
         routers[member].clone(),
         routers[member].spaceStore.clone(),
     );
+    memberSync
+        .exchangePairedDeviceSpaceProjection(&routers[remover].localNodeId())
+        .await
+        .unwrap();
     memberSync
         .synchronizeReachablePeer(routers[remover].localNodeId(), 512, false)
         .await
@@ -743,4 +748,74 @@ async fn a_late_learner_keeps_the_pairing_made_after_the_removal() {
         .await
         .expect("the fresh pairing still authorizes the application");
     assert_eq!(refreshed.requestId, request.requestId);
+}
+
+/// Verifies a member forgets the removed device in an ordinary synchronization
+/// round, where the paired Space projection is exchanged before any control
+/// exchange. That snapshot path ingests the removal into the local log, so the
+/// forget must act on the operation, not on whichever delivery carried it —
+/// otherwise every reachable member keeps the removed device's pairing.
+#[tokio::test]
+async fn a_member_forgets_the_removed_device_when_the_snapshot_arrives_first() {
+    let _guard = routeTestGlobalLock().lock().await;
+    installTestRuntimeScheduler();
+    let (routers, access, peers) = revocationMesh("revoke-round", 3, &[(0, 1), (0, 2), (1, 2)]);
+    let remover = 0;
+    let member = 1;
+    let removed = routers[2].localNodeId();
+
+    access[remover]
+        .removeDeviceSpaceMember(removed.clone())
+        .await
+        .unwrap();
+    // The member has not synchronized: it still holds the removed device.
+    assert!(routers[member]
+        .networkControlStore
+        .currentState()
+        .unwrap()
+        .memberNodeIds
+        .contains(&removed));
+    assert!(peers[member]
+        .pairedPeers()
+        .unwrap()
+        .iter()
+        .any(|peer| peer.nodeId == removed));
+
+    let memberSync = crate::SpacePersistenceSyncService::SpacePersistenceSyncService::new(
+        routers[member].localCore.clone(),
+        routers[member].clone(),
+        routers[member].spaceStore.clone(),
+    );
+    // An ordinary round exchanges the paired Space projection first, then the
+    // control exchange.
+    memberSync
+        .exchangePairedDeviceSpaceProjection(&routers[remover].localNodeId())
+        .await
+        .unwrap();
+    memberSync
+        .synchronizeReachablePeer(routers[remover].localNodeId(), 512, false)
+        .await
+        .unwrap();
+
+    assert!(!routers[member]
+        .networkControlStore
+        .currentState()
+        .unwrap()
+        .memberNodeIds
+        .contains(&removed));
+    assert!(!routers[member].spaceStore.contains(removed.clone()).unwrap());
+    assert!(
+        !peers[member]
+            .pairedPeers()
+            .unwrap()
+            .iter()
+            .any(|peer| peer.nodeId == removed),
+        "mutual forgetting must fire in an ordinary round, whichever path carried the removal"
+    );
+    // Pairings with devices that were never removed stay.
+    assert!(peers[member]
+        .pairedPeers()
+        .unwrap()
+        .iter()
+        .any(|peer| peer.nodeId == routers[remover].localNodeId()));
 }

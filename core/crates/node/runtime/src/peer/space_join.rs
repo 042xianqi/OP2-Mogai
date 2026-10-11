@@ -258,27 +258,50 @@ pub(crate) fn memberRemovalCommitted(service: &dyn NodeSpaceContext, nodeId: &st
     }))
 }
 
-/// Applies the membership consequences of removals that reached this device's
-/// control log from any path: every member shrinks its own membership
-/// projection for the removed device, exactly like the remover does, so the
-/// member table and the device list converge from the shared log instead of a
-/// peer's rewrite. The decision reads the replayed current state, never the
-/// mere presence of the historical removal: a device admitted again since is a
-/// member, so replaying old history can never eject it, and the operation is
-/// idempotent for devices whose projection already shrank.
+/// Removals whose local effects were already applied, keyed by operation id.
+/// A peer message always carries its whole log, and the same removal reaches
+/// this device through several paths — control exchange, paired snapshot,
+/// notice, business replication. Tracking the operation itself, instead of the
+/// delivery, lets every path evaluate the removal and exactly one of them act.
+pub(crate) const REMOVAL_EFFECTS_PATH: &str = "runtime/link_access/space_removal_effects.preferences.json";
+
+/// Applies the membership consequences of removals that reached this device
+/// from any path: every member shrinks its own membership projection for the
+/// removed device, exactly like the remover does, so the member table and the
+/// device list converge from the shared log instead of a peer's rewrite. The
+/// shrink is idempotent and reads the replayed current state, never the mere
+/// presence of the historical removal: a device admitted again since is a
+/// member, so replaying old history can never eject it.
+///
+/// Pairing credentials drop once per removal operation, recorded in a durable
+/// ledger by operation id: whichever path first delivers the removal acts
+/// here, and every later replay of the same command is inert. Binding the
+/// effects to the operation rather than to one delivery path is what keeps a
+/// fresh pairing for re-admission out of reach — the removal only revokes the
+/// generation it was issued against.
 pub(crate) fn applyRemovedMemberLocalEffects(service: &dyn NodeSpaceContext, operations: &[SyncOperation]) -> Result<(), String> {
     let local = service.localNodeId();
     let spaceId = service.spaceStore().space()?.spaceId;
     let state = service.networkControlStore().currentState()?;
+    let applied = removalEffectsApplied(service)?;
     let mut removed = Vec::new();
+    let mut revocations: Vec<(String, Option<String>)> = Vec::new();
+    let mut completed = Vec::new();
     for operation in operations {
         let Ok(record) = NetworkControlCommandRecord::deserialize(&operation.payload) else { continue };
         if record.spaceId != spaceId { continue; }
-        if let NetworkControlCommand::RemoveMember { nodeId, .. } = &record.command {
+        if let NetworkControlCommand::RemoveMember { nodeId, revokedIncarnation } = &record.command {
             // The local device's own removal retires the whole Space separately,
             // and a removal the replayed policy already superseded is inert.
-            if nodeId != &local && !state.memberNodeIds.contains(nodeId) && !removed.contains(nodeId) {
-                removed.push(nodeId.clone());
+            if nodeId == &local || state.memberNodeIds.contains(nodeId) { continue; }
+            if !removed.contains(nodeId) { removed.push(nodeId.clone()); }
+            // The ledger is written even when the generation check keeps the
+            // pairing: the operation was evaluated against the state it met.
+            if !applied.contains(&operation.opId) && !completed.contains(&operation.opId) {
+                completed.push(operation.opId.clone());
+                if !revocations.iter().any(|(revoked, _)| revoked == nodeId) {
+                    revocations.push((nodeId.clone(), revokedIncarnation.clone()));
+                }
             }
         }
     }
@@ -286,7 +309,16 @@ pub(crate) fn applyRemovedMemberLocalEffects(service: &dyn NodeSpaceContext, ope
         // No-op when the device is absent or was admitted again since.
         service.spaceStore().removeRemoteMember(nodeId.clone())?;
     }
-    Ok(())
+    if !revocations.is_empty() {
+        let paired = service.peers()?.pairedPeers().map_err(|error| error.to_string())?
+            .into_iter().map(|peer| (peer.nodeId, peer.pairingIncarnation)).collect::<BTreeMap<_, _>>();
+        let forgotten = revocations.into_iter().filter_map(|(nodeId, revoked)| {
+            let held = paired.get(&nodeId)?;
+            removalForgetsPairing(held.as_deref(), revoked.as_deref()).then_some(nodeId)
+        }).collect::<Vec<_>>();
+        forgetPairingRecords(service, &forgotten);
+    }
+    markRemovalEffectsApplied(service, &completed)
 }
 
 /// Decides whether one removal forgets one pairing. The removal revokes the
@@ -304,38 +336,23 @@ fn removalForgetsPairing(paired: Option<&str>, revoked: Option<&str>) -> bool {
     }
 }
 
-/// Drops pairing credentials for the removals this step first accepted into the
-/// local control log. Forgetting is bound to that first acceptance: a removal
-/// replayed by a later exchange or snapshot must never delete the pairing a
-/// device created to re-join, and a removal the replayed policy already
-/// superseded must not forget the credentials of a current member.
-pub(crate) fn forgetRemovedMemberPairings(service: &dyn NodeSpaceContext, accepted: &[SyncOperation]) -> Result<(), String> {
-    if accepted.is_empty() { return Ok(()); }
-    let local = service.localNodeId();
-    let spaceId = service.spaceStore().space()?.spaceId;
-    let state = service.networkControlStore().currentState()?;
-    let mut removed: Vec<(String, Option<String>)> = Vec::new();
-    for operation in accepted {
-        let Ok(record) = NetworkControlCommandRecord::deserialize(&operation.payload) else { continue };
-        if record.spaceId != spaceId { continue; }
-        if let NetworkControlCommand::RemoveMember { nodeId, revokedIncarnation } = &record.command {
-            if nodeId != &local && !state.memberNodeIds.contains(nodeId)
-                && !removed.iter().any(|(removed, _)| removed == nodeId)
-            {
-                removed.push((nodeId.clone(), revokedIncarnation.clone()));
-            }
-        }
+/// Reads the removal operation ids whose local effects were already applied.
+fn removalEffectsApplied(service: &dyn NodeSpaceContext) -> Result<BTreeSet<String>, String> {
+    let store = CoreNodeStateStore::newWithStorage(service.storage(), REMOVAL_EFFECTS_PATH);
+    let preferences = store.data().map_err(|error| error.to_string())?;
+    Ok(preferences.iterEntries().map(|(opId, _)| opId.to_owned()).collect())
+}
+
+/// Records removals whose local effects were applied, so no later delivery
+/// applies them a second time.
+fn markRemovalEffectsApplied(service: &dyn NodeSpaceContext, operationIds: &[String]) -> Result<(), String> {
+    if operationIds.is_empty() { return Ok(()); }
+    let store = CoreNodeStateStore::newWithStorage(service.storage(), REMOVAL_EFFECTS_PATH);
+    let mut preferences = store.data().map_err(|error| error.to_string())?;
+    for operationId in operationIds {
+        preferences.set(&stringPreferencesKey(operationId), "applied".to_string());
     }
-    if removed.is_empty() { return Ok(()); }
-    let paired = service.peers()?.pairedPeers().map_err(|error| error.to_string())?
-        .into_iter().map(|peer| (peer.nodeId, peer.pairingIncarnation)).collect::<BTreeMap<_, _>>();
-    let forgotten = removed.into_iter().filter_map(|(nodeId, revoked)| {
-        let held = paired.get(&nodeId)?;
-        removalForgetsPairing(held.as_deref(), revoked.as_deref()).then_some(nodeId)
-    }).collect::<Vec<_>>();
-    if forgotten.is_empty() { return Ok(()); }
-    forgetPairingRecords(service, &forgotten);
-    Ok(())
+    store.replaceRecoverably(preferences).map_err(|error| error.to_string())
 }
 
 /// Drops pairing credentials in the very step that changes the member state.

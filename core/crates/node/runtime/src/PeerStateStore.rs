@@ -305,6 +305,28 @@ impl PeerStateStore {
         }).map_err(|error| error.to_string())
     }
 
+    /// The device info as announced to peers: platform and model come from the
+    /// host, while the pairing generation is always read from the identity
+    /// record. A device that left a Space renewed its generation mid-run, and a
+    /// stale in-memory copy would stamp every partner with the revoked
+    /// generation — a removal of that device would then never match the pairing
+    /// it made afterwards, leaving the credential behind.
+    #[allow(non_snake_case)]
+    pub fn announcedDeviceInfo(&self, supplied: &LinkDeviceInfo) -> LinkDeviceInfo {
+        let mut info = supplied.clone();
+        match self.pairingIncarnation() {
+            Ok(Some(generation)) => info.pairingIncarnation = Some(generation),
+            Ok(None) => {}
+            Err(error) => {
+                operit_util::AppLogger::AppLogger::w(
+                    "PeerStateStore",
+                    &format!("Pairing generation read failed error={error}"),
+                );
+            }
+        }
+        info
+    }
+
     /// Returns the persisted local pairing generation, if one was minted.
     pub fn pairingIncarnation(&self) -> Result<Option<String>, String> {
         let preferences = self.preferences(RUNTIME_LINK_ACCESS_IDENTITY_PATH)?;
@@ -857,6 +879,32 @@ mod tests {
         let before = store.preferences(RUNTIME_LINK_ACCESS_IDENTITY_PATH).unwrap().entries();
         assert_eq!(store.deviceInfo(supplied, false).unwrap(), current);
         assert_eq!(before, store.preferences(RUNTIME_LINK_ACCESS_IDENTITY_PATH).unwrap().entries());
+    }
+
+    /// Announces the persisted pairing generation even when the in-memory copy
+    /// still carries the value minted at startup: a device that left a Space
+    /// mid-run renewed its generation, and partners must record the new one.
+    #[test]
+    fn announced_device_info_reflects_a_renewed_pairing_generation() {
+        let store = PeerStateStore::new(Arc::new(Storage::default()));
+        writeRecord(&store, RUNTIME_LINK_ACCESS_IDENTITY_PATH, "record", serde_json::json!({
+            "deviceId": "stable-node", "deviceInfo": { "platform": "test", "model": "test" }
+        }));
+        let startup = store.deviceInfo(
+            LinkDeviceInfo { platform: "test".into(), model: "test".into(), pairingIncarnation: None },
+            false,
+        ).unwrap();
+        let minted = startup.pairingIncarnation.clone();
+        assert!(minted.is_some());
+        let renewed = store.renewPairingIncarnation().unwrap();
+        assert_ne!(minted, Some(renewed.clone()));
+        // The startup-time copy is stale; the announcement must not be.
+        assert_eq!(
+            store.announcedDeviceInfo(&startup).pairingIncarnation,
+            Some(renewed.clone()),
+        );
+        assert_eq!(store.pairingIncarnation().unwrap(), Some(renewed));
+        assert_eq!(store.announcedDeviceInfo(&startup).platform, "test");
     }
 
     /// Rejects incomplete host metadata before creating or modifying identity preferences.

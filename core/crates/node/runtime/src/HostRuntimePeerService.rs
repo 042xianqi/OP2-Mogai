@@ -192,7 +192,8 @@ impl HostRuntimePeerService {
     ) -> Result<(Arc<Channel>, String, LinkDeviceInfo, Vec<u8>, String), CoreLinkError> {
         let (private, public) = crypto::ephemeral()?;
         let hello = Hello { version: PAIRING_SERVICE_VERSION, nodeId: self.state.nodeId.clone(),
-            expectedNodeId: raw.target().nodeId.clone(), info: self.state.info.clone(), public: public.clone(),
+            expectedNodeId: raw.target().nodeId.clone(),
+            info: self.state.store.announcedDeviceInfo(&self.state.info), public: public.clone(),
             purpose: purpose.into(), sessionId: sessionId.into() };
         let reply: HelloReply = rawCall(&raw, "hello", &hello).await?;
         let t = &reply.transcript;
@@ -426,7 +427,8 @@ impl HostRuntimePeerService {
         let dh = crypto::agree(private, &transcript.clientPublic)?;
         let root = crypto::derive(&dh, &context, b"operit-pairing-root-v1")?;
         let key = match &saved { Some(saved) => crypto::derive(&dh, saved, &context)?, None => root };
-        sendValue(&raw, helloRequest.requestId, HelloReply { transcript, info: self.state.info.clone(), tokenRequired }).await?;
+        sendValue(&raw, helloRequest.requestId, HelloReply { transcript,
+            info: self.state.store.announcedDeviceInfo(&self.state.info), tokenRequired }).await?;
         let request = self.readHandshake(&raw, "authorize").await?;
         let authorization: Authorization = fromCoreValue(request.args).map_err(|e| error(e.to_string()))?;
         let admission = (|| {
