@@ -288,7 +288,7 @@ pub fn acceptSpaceControlCall(service: &dyn NodeSpaceContext, origin: &str, requ
     // Removals take effect locally whatever path delivered them: this device
     // retires itself when the command targets it, and shrinks its own member
     // projection for every other removed device.
-    space_join::retireRemovedLocalDevice(service)?;
+    space_join::retireRemovedLocalDevice(service, None)?;
     space_join::applyRemovedMemberLocalEffects(service, &operations)?;
     toCoreValue(service.networkControlStore().currentSpaceOperations()?).map_err(|error| error.to_string())
 }

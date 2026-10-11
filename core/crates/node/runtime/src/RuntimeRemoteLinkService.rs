@@ -491,48 +491,12 @@ impl RuntimeRemoteLinkService {
         }
     }
 
-    /// Applies the one-shot consequences of a shared removal: when the policy
-    /// no longer admits this device it retires itself, and a device that
-    /// retired through any delivery path drops every pairing credential —
-    /// mutual forgetting. Duplicate deliveries are no-ops.
+    /// Retires this device once the shared policy removed it, dropping every
+    /// pairing it held at that moment. The removal forgets immediately: a
+    /// deferred delete cannot tell those pairings from ones created later by
+    /// pairing again for re-admission.
     pub(crate) async fn retireRemovedDevice(&self) -> Result<bool, String> {
-        let retired = space_join::retireRemovedLocalDevice(self)?.is_some();
-        let Some(pending) = space_join::takeRetiredLocalRemoval(self)? else {
-            return Ok(retired);
-        };
-        operit_util::AppLogger::AppLogger::i(
-            "RuntimeRemoteLinkService",
-            &format!(
-                "Device retired after Space removal previousSpaceId={}",
-                pending.previousSpaceId
-            ),
-        );
-        let paired = self
-            .pairedDevicesSnapshot()?
-            .into_keys()
-            .collect::<BTreeSet<_>>();
-        let mut remaining = Vec::new();
-        for peerNodeId in pending.devices {
-            if !paired.contains(&peerNodeId) { continue; }
-            if let Err(error) = self.nodeServices()?.peers().removePairedPeer(&peerNodeId).await {
-                remaining.push(peerNodeId.clone());
-                operit_util::AppLogger::AppLogger::w(
-                    "RuntimeRemoteLinkService",
-                    &format!("Retired removal pairing drop failed device={peerNodeId}: {error}"),
-                );
-            }
-        }
-        if !remaining.is_empty() {
-            // Keep only what still has to be dropped for the next sweep.
-            space_join::restoreRetiredLocalRemoval(
-                self,
-                &space_join::RetiredLocalRemoval {
-                    previousSpaceId: pending.previousSpaceId,
-                    devices: remaining,
-                },
-            )?;
-        }
-        Ok(retired)
+        Ok(space_join::retireRemovedLocalDevice(self, None)?.is_some())
     }
 
     /// Prohibits one device from direct connection and route transit immediately.

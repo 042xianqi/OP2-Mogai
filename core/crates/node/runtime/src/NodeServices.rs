@@ -166,6 +166,12 @@ mod tests {
             self.calls.lock().unwrap().push(format!("remove:{id}"));
             Ok(())
         }
+        fn forgetPairingRecords(&self, nodeIds: &[String]) -> Result<(), CoreLinkError> {
+            for id in nodeIds {
+                self.calls.lock().unwrap().push(format!("forget:{id}"));
+            }
+            Ok(())
+        }
         /// Declares the listener operations recorded by this injected test service.
         fn listenerCapabilities(&self) -> operit_peer_link::PeerListenerCapabilities {
             operit_peer_link::PeerListenerCapabilities { transports: vec![PeerTransport::Tcp, PeerTransport::Http, PeerTransport::WebSocket, PeerTransport::Serial, PeerTransport::Bluetooth], discoveryAdvertisement: false }

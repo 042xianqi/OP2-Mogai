@@ -74,6 +74,7 @@ impl RuntimePeerService for TestPeerService {
         if peerNodeId != self.targetNodeId { return Err(Self::unsupported()); } self.close(); Ok(())
     }
     async fn removePairedPeer(&self, _: &str) -> Result<(), CoreLinkError> { Err(Self::unsupported()) }
+    fn forgetPairingRecords(&self, _: &[String]) -> Result<(), CoreLinkError> { Err(Self::unsupported()) }
 }
 
 pub(super) struct TestPeerFixture(Arc<TestPeerService>, Arc<TestPeerService>);

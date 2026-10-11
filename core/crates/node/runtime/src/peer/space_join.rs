@@ -5,7 +5,7 @@ use super::*;
 use crate::PeerStateStore::PeerStateStore;
 use operit_store::CoreSpaceStore::CoreSpaceDeviceConnection;
 use operit_store::NetworkControlStore::{NetworkControlCommand, NetworkControlCommandRecord};
-use operit_store::PreferencesDataStore::{CoreNodeStateStore, Preferences, stringPreferencesKey};
+use operit_store::PreferencesDataStore::{CoreNodeStateStore, stringPreferencesKey};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Mutex;
 
@@ -16,12 +16,6 @@ pub(crate) const INBOX: &str = "runtime/link_access/space_merge_review_inbox.pre
 pub(crate) const RESULTS: &str = "runtime/link_access/space_merge_review_results.preferences.json";
 const LIFETIME_MS: i64 = 15 * 60 * 1000;
 const OFFLINE_GRACE_MS: i64 = 30_000;
-/// One-shot marker: this device retired because the Space removed it and the
-/// asynchronous sweep still has to drop every pairing credential.
-const RETIRED_REMOVAL_PATH: &str = "runtime/link_access/space_retired_removal.preferences.json";
-/// One-shot list: devices whose removal this replica applied but whose pairing
-/// still awaits the asynchronous sweep.
-const PENDING_FORGET_PATH: &str = "runtime/link_access/space_pending_forget.preferences.json";
 static MUTATION: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -267,9 +261,8 @@ pub(crate) fn memberRemovalCommitted(service: &dyn NodeSpaceContext, nodeId: &st
 /// Applies the local consequences of removals that just reached this device's
 /// control log: every member shrinks its own membership projection for the
 /// removed device, exactly like the remover does, so the member table and the
-/// device list converge from the shared log instead of a peer's rewrite. The
-/// pairing drop needs the peer service and is deferred to the asynchronous
-/// sweep through the pending-forget marker.
+/// device list converge from the shared log instead of a peer's rewrite, and
+/// drops its pairing credentials right here.
 pub(crate) fn applyRemovedMemberLocalEffects(service: &dyn NodeSpaceContext, operations: &[SyncOperation]) -> Result<(), String> {
     let local = service.localNodeId();
     let spaceId = service.spaceStore().space()?.spaceId;
@@ -287,48 +280,36 @@ pub(crate) fn applyRemovedMemberLocalEffects(service: &dyn NodeSpaceContext, ope
         // No-op when the device is absent or was admitted again since.
         service.spaceStore().removeRemoteMember(nodeId.clone())?;
     }
-    markPendingForgotten(service, &removed)
+    let paired = service.peers()?.pairedPeers().map_err(|error| error.to_string())?
+        .into_iter().map(|peer| peer.nodeId).collect::<BTreeSet<_>>();
+    let forgotten = removed.into_iter().filter(|nodeId| paired.contains(nodeId)).collect::<Vec<_>>();
+    forgetPairingRecords(service, &forgotten);
+    Ok(())
 }
 
-/// Records devices whose removal still awaits the asynchronous pairing sweep.
-fn markPendingForgotten(service: &dyn NodeSpaceContext, nodeIds: &[String]) -> Result<(), String> {
-    let store = CoreNodeStateStore::newWithStorage(service.storage(), PENDING_FORGET_PATH);
-    let mut preferences = store.data().map_err(|error| error.to_string())?;
-    let mut pending = readPendingForgotten(&preferences);
-    for nodeId in nodeIds {
-        if !pending.contains(nodeId) { pending.push(nodeId.clone()); }
+/// Drops pairing credentials in the very step that changes the member state.
+/// Deferring this cannot tell an old pairing from one the device created by
+/// pairing again for re-admission, because pairing records carry no instance
+/// identity, so a late sweep would delete the fresh edge as well.
+pub(crate) fn forgetPairingRecords(service: &dyn NodeSpaceContext, nodeIds: &[String]) {
+    if nodeIds.is_empty() { return; }
+    let result = service
+        .peers()
+        .map_err(|error| error.to_string())
+        .and_then(|peers| peers.forgetPairingRecords(nodeIds).map_err(|error| error.to_string()));
+    if let Err(error) = result {
+        operit_util::AppLogger::AppLogger::w(
+            "SpaceJoin",
+            &format!("Pairing credential forget failed devices={nodeIds:?} error={error}"),
+        );
     }
-    preferences.set(
-        &stringPreferencesKey("devices"),
-        serde_json::to_string(&pending).map_err(|error| error.to_string())?,
-    );
-    store.replaceRecoverably(preferences).map_err(|error| error.to_string())
-}
-
-/// Consumes every device whose removal still awaits the pairing sweep.
-pub(crate) fn takePendingForgotten(service: &dyn NodeSpaceContext) -> Result<Vec<String>, String> {
-    let store = CoreNodeStateStore::newWithStorage(service.storage(), PENDING_FORGET_PATH);
-    let mut preferences = store.data().map_err(|error| error.to_string())?;
-    let pending = readPendingForgotten(&preferences);
-    if pending.is_empty() { return Ok(Vec::new()); }
-    preferences.remove(&stringPreferencesKey("devices"));
-    store.replaceRecoverably(preferences).map_err(|error| error.to_string())?;
-    Ok(pending)
-}
-
-/// Reads the pending-forget list from one preferences snapshot.
-fn readPendingForgotten(preferences: &Preferences) -> Vec<String> {
-    preferences
-        .get(&stringPreferencesKey("devices"))
-        .and_then(|encoded| serde_json::from_str::<Vec<String>>(&encoded).ok())
-        .unwrap_or_default()
 }
 
 /// Retires this device once the shared policy removed it. The check is
 /// replay-based, never a peer's word: a removal may arrive as a direct notice,
 /// a control exchange or a snapshot, and each one only takes effect after the
 /// local log proves it. Returns the Space id it left.
-pub(crate) fn retireRemovedLocalDevice(service: &dyn NodeSpaceContext) -> Result<Option<String>, String> {
+pub(crate) fn retireRemovedLocalDevice(service: &dyn NodeSpaceContext, keepPeer: Option<&str>) -> Result<Option<String>, String> {
     let local = service.localNodeId();
     let state = service.networkControlStore().currentState()?;
     // The decision reads the replayed current state, never the mere presence of
@@ -342,69 +323,19 @@ pub(crate) fn retireRemovedLocalDevice(service: &dyn NodeSpaceContext) -> Result
     if outgoing(service)?.iter().any(|request| active(&request.status)) { return Ok(None); }
     if !memberRemovalCommitted(service, &local)? { return Ok(None); }
     let previous = service.spaceStore().space()?.spaceId;
-    // Pairings that existed at retirement are the ones the removal forgets.
-    // Capturing them here keeps a later pairing for re-admission safe even if
-    // the sweep runs after the user already paired the device again.
     let devices = service
         .peers()?
         .pairedPeers()
         .map_err(|error| error.to_string())?
         .into_iter()
         .map(|peer| peer.nodeId)
+        .filter(|nodeId| Some(nodeId.as_str()) != keepPeer)
         .collect::<Vec<_>>();
     leave(service)?;
-    // Mutual forgetting needs the peer service, which this replay-side path
-    // cannot await. Mark the retirement so the asynchronous sweep drops those
-    // pairings exactly once, wherever the removal reached this device first.
-    markRetiredLocalRemoval(service, &previous, &devices)?;
+    // Mutual forgetting happens now, not in a later sweep: a deferred delete
+    // would also match the pairing the device just made to re-join.
+    forgetPairingRecords(service, &devices);
     Ok(Some(previous))
-}
-
-/// Records one retired removal so the asynchronous sweep finishes forgetting.
-fn markRetiredLocalRemoval(service: &dyn NodeSpaceContext, previousSpaceId: &str, devices: &[String]) -> Result<(), String> {
-    let store = CoreNodeStateStore::newWithStorage(service.storage(), RETIRED_REMOVAL_PATH);
-    let mut preferences = store.data().map_err(|error| error.to_string())?;
-    preferences.set(
-        &stringPreferencesKey("previousSpaceId"),
-        previousSpaceId.to_string(),
-    );
-    preferences.set(
-        &stringPreferencesKey("devices"),
-        serde_json::to_string(devices).map_err(|error| error.to_string())?,
-    );
-    store.replaceRecoverably(preferences).map_err(|error| error.to_string())
-}
-
-/// One retired removal: the Space this device left and the pairings it held
-/// when it left.
-pub(crate) struct RetiredLocalRemoval {
-    pub previousSpaceId: String,
-    pub devices: Vec<String>,
-}
-
-/// Consumes the retired-removal marker.
-pub(crate) fn takeRetiredLocalRemoval(service: &dyn NodeSpaceContext) -> Result<Option<RetiredLocalRemoval>, String> {
-    let store = CoreNodeStateStore::newWithStorage(service.storage(), RETIRED_REMOVAL_PATH);
-    let mut preferences = store.data().map_err(|error| error.to_string())?;
-    let previous = preferences
-        .get(&stringPreferencesKey("previousSpaceId"))
-        .map(|previous| previous.to_string());
-    let Some(previousSpaceId) = previous else {
-        return Ok(None);
-    };
-    let devices = preferences
-        .get(&stringPreferencesKey("devices"))
-        .and_then(|encoded| serde_json::from_str::<Vec<String>>(&encoded).ok())
-        .unwrap_or_default();
-    preferences.remove(&stringPreferencesKey("previousSpaceId"));
-    preferences.remove(&stringPreferencesKey("devices"));
-    store.replaceRecoverably(preferences).map_err(|error| error.to_string())?;
-    Ok(Some(RetiredLocalRemoval { previousSpaceId, devices }))
-}
-
-/// Keeps the retired-removal marker after a partial sweep.
-pub(crate) fn restoreRetiredLocalRemoval(service: &dyn NodeSpaceContext, retired: &RetiredLocalRemoval) -> Result<(), String> {
-    markRetiredLocalRemoval(service, &retired.previousSpaceId, &retired.devices)
 }
 
 /// Local ownership recovery is independent of direct pairing. Serialize it
@@ -482,9 +413,9 @@ pub(crate) async fn request(service: &dyn NodeSpaceContext, deviceId: String) ->
         // never the divergent projection.
         if !retiredStaleSplit {
             retiredStaleSplit = true;
-            retireRemovedLocalDevice(service)?;
-            // The pairing this application arrived on is intentional and stays.
-            let _ = takeRetiredLocalRemoval(service)?;
+            // The pairing this application arrived on is the transport of the
+            // application itself, so the retirement keeps it.
+            retireRemovedLocalDevice(service, Some(&deviceId))?;
             continue;
         }
         return Err(format!(

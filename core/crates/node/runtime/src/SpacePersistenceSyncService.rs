@@ -265,14 +265,6 @@ impl SpacePersistenceSyncService {
             }
         }
         self.workspaceFiles().scan()?;
-        // Removals this replica already applied finish here: the pairing sweep
-        // is one-shot and never touches a later re-pairing for re-admission.
-        if let Err(error) = self.forgetPendingRemovedDevices().await {
-            operit_util::AppLogger::AppLogger::w(
-                "SpacePersistenceSyncService",
-                &format!("Removed-member forget sweep failed: {error}"),
-            );
-        }
         let services = self.state.nodeRouter.nodeServices()?;
         let activePeers = services.peers().activePeerNodeIds().map_err(|error| error.to_string())?;
         let localNodeId = self.state.nodeRouter.localNodeId();
@@ -394,42 +386,6 @@ impl SpacePersistenceSyncService {
         let service = crate::RuntimeRemoteLinkService::RuntimeRemoteLinkService::newWithRouter(
             (*self.state.localRuntime).clone(), self.state.nodeRouter.clone());
         crate::NodeSpaceService::space_join::applyRemovedMemberLocalEffects(&service, operations)
-    }
-
-    /// Drops pairings with devices whose removals this replica already applied,
-    /// consuming the one-shot pending list so a later re-pairing for
-    /// re-admission is never touched.
-    pub(crate) async fn forgetPendingRemovedDevices(&self) -> Result<(), String> {
-        let service = crate::RuntimeRemoteLinkService::RuntimeRemoteLinkService::newWithRouter(
-            (*self.state.localRuntime).clone(), self.state.nodeRouter.clone());
-        let pending = crate::NodeSpaceService::space_join::takePendingForgotten(&service)?;
-        if pending.is_empty() { return Ok(()); }
-        let paired = service
-            .pairedDevicesSnapshot()?
-            .into_keys()
-            .collect::<BTreeSet<_>>();
-        for deviceId in pending {
-            // The device may have been admitted again before this sweep ran.
-            if self.state.spaceStore.contains(deviceId.clone())? { continue; }
-            let _ = self.state.spaceStore.removeRemoteMember(deviceId.clone());
-            if !paired.contains(&deviceId) { continue; }
-            let peers = match self.state.nodeRouter.nodeServices() {
-                Ok(services) => services.peers().clone(),
-                Err(_) => continue,
-            };
-            if let Err(error) = peers.removePairedPeer(&deviceId).await {
-                operit_util::AppLogger::AppLogger::w(
-                    "SpacePersistenceSyncService",
-                    &format!("Removed-member pairing sweep failed device={deviceId}: {error}"),
-                );
-            } else {
-                operit_util::AppLogger::AppLogger::i(
-                    "SpacePersistenceSyncService",
-                    &format!("Removed member forgotten device={deviceId}"),
-                );
-            }
-        }
-        Ok(())
     }
 
     pub(crate) fn replicaBootstrapRequired(&self, spaceId: &str) -> Result<bool, String> {

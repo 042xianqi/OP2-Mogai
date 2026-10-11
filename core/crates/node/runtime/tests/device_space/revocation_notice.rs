@@ -112,21 +112,15 @@ async fn direct_removal_retires_the_removed_device_and_drops_every_pairing() {
         .memberNodeIds
         .contains(&removed));
 
-    // Dropping pairings needs the peer service, so the asynchronous sweep
-    // finishes it; the device keeps its pairing until that sweep runs.
-    assert!(peers[1]
-        .pairedPeers()
-        .unwrap()
-        .iter()
-        .any(|peer| peer.nodeId == routers[0].localNodeId()));
+    // Forgetting is immediate: the pairing credentials are gone in the same
+    // step that retired the device.
+    assert!(peers[1].pairedPeers().unwrap().is_empty());
+    // A later retirement check is idempotent and cannot fire again.
     let retired = RuntimeRemoteLinkService::newWithRouter(
         (*routers[1].localCore).clone(),
         routers[1].clone(),
     );
-    retired.retireRemovedDevice().await.unwrap();
-    assert!(peers[1].pairedPeers().unwrap().is_empty());
-    // The sweep is idempotent.
-    retired.retireRemovedDevice().await.unwrap();
+    assert!(!retired.retireRemovedDevice().await.unwrap());
     assert!(peers[1].pairedPeers().unwrap().is_empty());
 }
 
@@ -137,7 +131,7 @@ async fn direct_removal_retires_the_removed_device_and_drops_every_pairing() {
 async fn bridge_removal_reaches_the_far_side_through_the_captured_route() {
     let _guard = routeTestGlobalLock().lock().await;
     installTestRuntimeScheduler();
-    let (routers, access, _peers) = revocationMesh("revoke-bridge", 3, &[(0, 1), (1, 2)]);
+    let (routers, access, peers) = revocationMesh("revoke-bridge", 3, &[(0, 1), (1, 2)]);
     let bridge = routers[1].localNodeId();
     let leaf = routers[2].localNodeId();
 
@@ -161,14 +155,13 @@ async fn bridge_removal_reaches_the_far_side_through_the_captured_route() {
     // The bridge itself retired against its own replayed log.
     assert_eq!(routers[1].spaceStore.space().unwrap().members, vec![bridge.clone()]);
 
-    // The far side's deferred sweep finishes the mutual forgetting.
-    let leafSync = crate::SpacePersistenceSyncService::SpacePersistenceSyncService::new(
-        routers[2].localCore.clone(),
-        routers[2].clone(),
-        routers[2].spaceStore.clone(),
-    );
-    leafSync.forgetPendingRemovedDevices().await.unwrap();
-    assert!(!routers[2].spaceStore.contains(bridge).unwrap());
+    // Mutual forgetting is immediate: the far side dropped the bridge's
+    // pairing credentials in the same step that applied the removal.
+    assert!(!peers[2]
+        .pairedPeers()
+        .unwrap()
+        .iter()
+        .any(|peer| peer.nodeId == bridge));
 }
 
 /// Verifies a member forgets a removed device at the transition it observes,
@@ -224,7 +217,6 @@ async fn members_forget_a_removed_device_after_applying_the_removal() {
         .unwrap()
         .members
         .contains(&removed));
-    sync.forgetPendingRemovedDevices().await.unwrap();
     assert!(!peers[2]
         .pairedPeers()
         .unwrap()
@@ -331,16 +323,12 @@ async fn removed_device_rejoins_after_pairing_again() {
         .await
         .unwrap();
 
-    // The removed device retired into its own Space and finished forgetting.
+    // The removed device retired into its own Space and forgot its pairings
+    // in the same step.
     assert_eq!(
         routers[3].spaceStore.space().unwrap().members,
         vec![removed.clone()]
     );
-    let removedService = RuntimeRemoteLinkService::newWithRouter(
-        (*routers[3].localCore).clone(),
-        routers[3].clone(),
-    );
-    removedService.retireRemovedDevice().await.unwrap();
     assert!(peers[3].pairedPeers().unwrap().is_empty());
 
     // Pairing again (the fixture models the handshake by linking) and applying.
