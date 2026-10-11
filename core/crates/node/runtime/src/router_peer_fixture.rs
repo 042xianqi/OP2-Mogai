@@ -62,7 +62,7 @@ impl RuntimePeerService for TestPeerService {
         self.endpoint(nextNodeId)?.routedOpenPush(self.localNodeId.clone(), request).await
     }
     fn pairedPeers(&self) -> Result<Vec<PairedPeer>, CoreLinkError> {
-        Ok(vec![PairedPeer { nodeId: self.targetNodeId.clone(), displayName: "Test peer".into(), inbound: true, outbound: true }])
+        Ok(vec![PairedPeer { nodeId: self.targetNodeId.clone(), displayName: "Test peer".into(), inbound: true, outbound: true, pairingIncarnation: None }])
     }
     fn outboundPeerNodeIds(&self) -> Result<BTreeSet<String>, CoreLinkError> { Ok([self.targetNodeId.clone()].into()) }
     fn activePeerNodeIds(&self) -> Result<BTreeSet<String>, CoreLinkError> {
@@ -74,6 +74,7 @@ impl RuntimePeerService for TestPeerService {
         if peerNodeId != self.targetNodeId { return Err(Self::unsupported()); } self.close(); Ok(())
     }
     async fn removePairedPeer(&self, _: &str) -> Result<(), CoreLinkError> { Err(Self::unsupported()) }
+    fn forgetPairingRecords(&self, _: &[String]) -> Result<(), CoreLinkError> { Err(Self::unsupported()) }
 }
 
 pub(super) struct TestPeerFixture(Arc<TestPeerService>, Arc<TestPeerService>);

@@ -1,9 +1,14 @@
 /// Exercises approvalService through isolated runtime stores.
 fn approvalService(node: &str) -> (CoreNodeRouter, RuntimeRemoteLinkService) {
     let router = testCoreNodeRouterWithoutBinding(node);
+    // Every fixture device mints its pairing generation up front, exactly like
+    // a real runtime identity does before it announces itself.
+    let incarnation = crate::PeerStateStore::PeerStateStore::new(router.localCore.runtimeStorageHost())
+        .ensurePairingIncarnation()
+        .unwrap();
     router
         .spaceStore
-        .writeLocalDeviceProfile(node.into(), "test".into(), "test".into(), "1".into())
+        .writeLocalDeviceProfile(node.into(), "test".into(), "test".into(), "1".into(), Some(incarnation))
         .unwrap();
     router.networkControlStore.initializeCurrentSpace().unwrap();
     let service =
@@ -20,6 +25,9 @@ struct ApprovalMeshPeer {
     local: String,
     endpoints: StdMutex<BTreeMap<String, Arc<dyn TestRouteTarget>>>,
     active: StdMutex<BTreeSet<String>>,
+    /// The peer's announced pairing generation per paired node, captured at the
+    /// modeled handshake exactly like a real pairing record does.
+    incarnations: StdMutex<BTreeMap<String, Option<String>>>,
     changes: tokio::sync::broadcast::Sender<()>,
     faults: StdMutex<BTreeMap<String, CallFault>>,
     calls: StdMutex<Vec<(String, String)>>,
@@ -32,15 +40,23 @@ impl ApprovalMeshPeer {
             local,
             endpoints: StdMutex::new(BTreeMap::new()),
             active: StdMutex::new(BTreeSet::new()),
+            incarnations: StdMutex::new(BTreeMap::new()),
             changes: tokio::sync::broadcast::channel(16).0,
             faults: StdMutex::new(BTreeMap::new()),
             calls: StdMutex::new(Vec::new()),
         })
     }
-    /// Exercises link through the device-space contract fixture.
+    /// Exercises link through the device-space contract fixture. The handshake
+    /// carries the peer's current pairing generation, so a re-pairing made
+    /// after a reset is stamped with the peer's next generation.
     fn link(&self, router: &CoreNodeRouter) {
+        let node = router.localNodeId();
+        let incarnation = crate::PeerStateStore::PeerStateStore::new(router.localCore.runtimeStorageHost())
+            .pairingIncarnation()
+            .unwrap();
+        self.incarnations.lock().unwrap().insert(node.clone(), incarnation);
         self.endpoints.lock().unwrap().insert(
-            router.localNodeId(),
+            node,
             TestCoreNodeRouterEndpoint::new(router.clone()),
         );
         self.active.lock().unwrap().insert(router.localNodeId());
@@ -166,6 +182,7 @@ impl RuntimePeerService for ApprovalMeshPeer {
                 displayName: node.clone(),
                 inbound: true,
                 outbound: true,
+                pairingIncarnation: self.incarnations.lock().unwrap().get(node).cloned().flatten(),
             })
             .collect())
     }
@@ -191,8 +208,19 @@ impl RuntimePeerService for ApprovalMeshPeer {
         Ok(())
     }
     /// Exercises removePairedPeer through the device-space contract fixture.
-    async fn removePairedPeer(&self, _: &str) -> Result<(), CoreLinkError> {
-        unreachable!()
+    async fn removePairedPeer(&self, node: &str) -> Result<(), CoreLinkError> {
+        // Unpairing drops both the pairing record and the live link.
+        self.forgetPairingRecords(&[node.to_string()])?;
+        Ok(())
+    }
+    /// Exercises forgetPairingRecords through the device-space contract fixture.
+    fn forgetPairingRecords(&self, nodeIds: &[String]) -> Result<(), CoreLinkError> {
+        for node in nodeIds {
+            self.endpoints.lock().unwrap().remove(node);
+            self.active.lock().unwrap().remove(node);
+            self.incarnations.lock().unwrap().remove(node);
+        }
+        Ok(())
     }
 }
 

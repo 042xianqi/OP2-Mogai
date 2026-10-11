@@ -5,6 +5,7 @@ use super::*;
 use crate::PeerStateStore::PeerStateStore;
 use operit_store::CoreSpaceStore::CoreSpaceDeviceConnection;
 use operit_store::NetworkControlStore::{NetworkControlCommand, NetworkControlCommandRecord};
+use operit_store::PreferencesDataStore::{CoreNodeStateStore, stringPreferencesKey};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Mutex;
 
@@ -243,6 +244,172 @@ pub(crate) fn reconcile(service: &dyn NodeSpaceContext, record: &mut Record) -> 
     assign(service, record, now)
 }
 
+/// Reports whether the replayed control log already carries a removal command
+/// for one device. The log is the authority: every replica that can read it
+/// decides this identically, which is what makes self-retirement verifiable on
+/// the receiving side instead of trusting a peer's claim.
+pub(crate) fn memberRemovalCommitted(service: &dyn NodeSpaceContext, nodeId: &str) -> Result<bool, String> {
+    let spaceId = service.spaceStore().space()?.spaceId;
+    Ok(service.networkControlStore().currentSpaceOperations()?.into_iter().any(|operation| {
+        NetworkControlCommandRecord::deserialize(&operation.payload).is_ok_and(|command| {
+            command.spaceId == spaceId
+                && matches!(&command.command, NetworkControlCommand::RemoveMember { nodeId: removed, .. } if removed == nodeId)
+        })
+    }))
+}
+
+/// Removals whose local effects were already applied, keyed by operation id.
+/// A peer message always carries its whole log, and the same removal reaches
+/// this device through several paths — control exchange, paired snapshot,
+/// notice, business replication. Tracking the operation itself, instead of the
+/// delivery, lets every path evaluate the removal and exactly one of them act.
+pub(crate) const REMOVAL_EFFECTS_PATH: &str = "runtime/link_access/space_removal_effects.preferences.json";
+
+/// Applies the membership consequences of removals that reached this device
+/// from any path: every member shrinks its own membership projection for the
+/// removed device, exactly like the remover does, so the member table and the
+/// device list converge from the shared log instead of a peer's rewrite. The
+/// shrink is idempotent and reads the replayed current state, never the mere
+/// presence of the historical removal: a device admitted again since is a
+/// member, so replaying old history can never eject it.
+///
+/// Pairing credentials drop once per removal operation, recorded in a durable
+/// ledger by operation id: whichever path first delivers the removal acts
+/// here, and every later replay of the same command is inert. Binding the
+/// effects to the operation rather than to one delivery path is what keeps a
+/// fresh pairing for re-admission out of reach — the removal only revokes the
+/// generation it was issued against.
+pub(crate) fn applyRemovedMemberLocalEffects(service: &dyn NodeSpaceContext, operations: &[SyncOperation]) -> Result<(), String> {
+    let local = service.localNodeId();
+    let spaceId = service.spaceStore().space()?.spaceId;
+    let state = service.networkControlStore().currentState()?;
+    let applied = removalEffectsApplied(service)?;
+    let mut removed = Vec::new();
+    // Every unprocessed removal of one device contributes its revoked
+    // generation: a device that missed remove -> re-join -> remove receives
+    // them in one batch, and the pairing is revoked when any of them revoked
+    // the generation it was made under.
+    let mut revocations: BTreeMap<String, Vec<Option<String>>> = BTreeMap::new();
+    let mut completed = Vec::new();
+    for operation in operations {
+        let Ok(record) = NetworkControlCommandRecord::deserialize(&operation.payload) else { continue };
+        if record.spaceId != spaceId { continue; }
+        if let NetworkControlCommand::RemoveMember { nodeId, revokedIncarnation } = &record.command {
+            // The local device's own removal retires the whole Space separately,
+            // and a removal the replayed policy already superseded is inert.
+            if nodeId == &local || state.memberNodeIds.contains(nodeId) { continue; }
+            if !removed.contains(nodeId) { removed.push(nodeId.clone()); }
+            if !applied.contains(&operation.opId) && !completed.contains(&operation.opId) {
+                completed.push(operation.opId.clone());
+                revocations.entry(nodeId.clone()).or_default().push(revokedIncarnation.clone());
+            }
+        }
+    }
+    for nodeId in &removed {
+        // No-op when the device is absent or was admitted again since.
+        service.spaceStore().removeRemoteMember(nodeId.clone())?;
+    }
+    if !revocations.is_empty() {
+        let paired = service.peers()?.pairedPeers().map_err(|error| error.to_string())?
+            .into_iter().map(|peer| (peer.nodeId, peer.pairingIncarnation)).collect::<BTreeMap<_, _>>();
+        let forgotten = revocations.into_iter().filter_map(|(nodeId, revoked)| {
+            let held = paired.get(&nodeId)?;
+            removalForgetsPairing(held.as_deref(), &revoked).then_some(nodeId)
+        }).collect::<Vec<_>>();
+        if !forgotten.is_empty() {
+            // Dropping credentials is the step the ledger records: a failed
+            // forget leaves the removals unprocessed for the next round.
+            let peers = service.peers()?;
+            peers.forgetPairingRecords(&forgotten).map_err(|error| error.to_string())?;
+        }
+    }
+    markRemovalEffectsApplied(service, &completed)
+}
+
+/// Decides whether the evaluated removals forget one pairing. Each removal
+/// revokes the pairing generation the device announced while it was admitted:
+/// a pairing stamped with any revoked generation (or carrying no generation at
+/// all, from an older core) is forgotten, while a pairing made under a
+/// generation none of them revoked — the device left, reset and paired again
+/// to re-apply — survives. This is the only check that tells "the credential
+/// the removals revoked" from "the credential a re-admission made", because
+/// pairing records carry no other version of themselves.
+fn removalForgetsPairing(paired: Option<&str>, revoked: &[Option<String>]) -> bool {
+    paired.is_none() || revoked.iter().any(|revoked| {
+        revoked.as_deref().is_none() || revoked.as_deref() == paired
+    })
+}
+
+/// Reads the removal operation ids whose local effects were already applied.
+fn removalEffectsApplied(service: &dyn NodeSpaceContext) -> Result<BTreeSet<String>, String> {
+    let store = CoreNodeStateStore::newWithStorage(service.storage(), REMOVAL_EFFECTS_PATH);
+    let preferences = store.data().map_err(|error| error.to_string())?;
+    Ok(preferences.iterEntries().map(|(opId, _)| opId.to_owned()).collect())
+}
+
+/// Records removals whose local effects were applied, so no later delivery
+/// applies them a second time.
+fn markRemovalEffectsApplied(service: &dyn NodeSpaceContext, operationIds: &[String]) -> Result<(), String> {
+    if operationIds.is_empty() { return Ok(()); }
+    let store = CoreNodeStateStore::newWithStorage(service.storage(), REMOVAL_EFFECTS_PATH);
+    let mut preferences = store.data().map_err(|error| error.to_string())?;
+    for operationId in operationIds {
+        preferences.set(&stringPreferencesKey(operationId), "applied".to_string());
+    }
+    store.replaceRecoverably(preferences).map_err(|error| error.to_string())
+}
+
+/// Drops pairing credentials in the very step that changes the member state.
+/// Deferring this cannot tell an old pairing from one the device created by
+/// pairing again for re-admission, because pairing records carry no instance
+/// identity, so a late sweep would delete the fresh edge as well.
+pub(crate) fn forgetPairingRecords(service: &dyn NodeSpaceContext, nodeIds: &[String]) {
+    if nodeIds.is_empty() { return; }
+    let result = service
+        .peers()
+        .map_err(|error| error.to_string())
+        .and_then(|peers| peers.forgetPairingRecords(nodeIds).map_err(|error| error.to_string()));
+    if let Err(error) = result {
+        operit_util::AppLogger::AppLogger::w(
+            "SpaceJoin",
+            &format!("Pairing credential forget failed devices={nodeIds:?} error={error}"),
+        );
+    }
+}
+
+/// Retires this device once the shared policy removed it. The check is
+/// replay-based, never a peer's word: a removal may arrive as a direct notice,
+/// a control exchange or a snapshot, and each one only takes effect after the
+/// local log proves it. Returns the Space id it left.
+pub(crate) fn retireRemovedLocalDevice(service: &dyn NodeSpaceContext, keepPeer: Option<&str>) -> Result<Option<String>, String> {
+    let local = service.localNodeId();
+    let state = service.networkControlStore().currentState()?;
+    // The decision reads the replayed current state, never the mere presence of
+    // a removal in history: a device that was admitted again after an earlier
+    // removal is a member, so recovering the shared log can never retire it
+    // again. The same rule makes re-read history harmless after a re-join.
+    if state.memberNodeIds.contains(&local) { return Ok(None); }
+    // A device with an application in flight is re-joining on purpose: the join
+    // flow reconciles the freshest truth (and retires at that point), while a
+    // partially recovered log can transiently look like a removal.
+    if outgoing(service)?.iter().any(|request| active(&request.status)) { return Ok(None); }
+    if !memberRemovalCommitted(service, &local)? { return Ok(None); }
+    let previous = service.spaceStore().space()?.spaceId;
+    let devices = service
+        .peers()?
+        .pairedPeers()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|peer| peer.nodeId)
+        .filter(|nodeId| Some(nodeId.as_str()) != keepPeer)
+        .collect::<Vec<_>>();
+    leave(service)?;
+    // Mutual forgetting happens now, not in a later sweep: a deferred delete
+    // would also match the pairing the device just made to re-join.
+    forgetPairingRecords(service, &devices);
+    Ok(Some(previous))
+}
+
 /// Local ownership recovery is independent of direct pairing. Serialize it
 /// with approval mutations so a decision cannot restore the Space being left.
 pub(crate) fn leave(service: &dyn NodeSpaceContext) -> Result<CoreSpace, String> {
@@ -281,10 +448,37 @@ pub(crate) fn leave(service: &dyn NodeSpaceContext) -> Result<CoreSpace, String>
             store(service).deleteRecord(OUTBOUND, &id)?;
         }
     }
+    // The pairing world resets with the Space: this device takes a new pairing
+    // generation. A removal still in flight revokes the generation it was
+    // issued against, so it can never match the credentials this device pairs
+    // again with, and the profile announces the new generation from now on.
+    // Failures keep the previous generation and only prolong the known benign
+    // window, so they never fail an already-completed leave.
+    match store(service).renewPairingIncarnation() {
+        Ok(incarnation) => {
+            if let Some(profile) = service.spaceStore().deviceProfiles()?.remove(&service.localNodeId()) {
+                if let Some(coreVersion) = profile.coreVersion.clone() {
+                    if let Err(error) = service.spaceStore().writeLocalDeviceProfile(
+                        profile.displayName.clone(), profile.platform.clone(), profile.model.clone(),
+                        coreVersion, Some(incarnation),
+                    ) {
+                        operit_util::AppLogger::AppLogger::w("SpaceJoin",
+                            &format!("Pairing generation profile refresh failed error={error}"));
+                    }
+                }
+            }
+        }
+        Err(error) => {
+            operit_util::AppLogger::AppLogger::w("SpaceJoin",
+                &format!("Pairing generation renewal failed error={error}"));
+        }
+    }
     Ok(space)
 }
 
 pub(crate) async fn request(service: &dyn NodeSpaceContext, deviceId: String) -> Result<SpaceJoinRequest, String> {
+    let mut retiredStaleSplit = false;
+    loop {
     paired(service, &deviceId, false)?;
     if let Some(old) = outgoing(service)?.into_iter().find(|r| r.targetDeviceId == deviceId && active(&r.status)) {
         return refresh(service, old.requestId).await;
@@ -306,6 +500,20 @@ pub(crate) async fn request(service: &dyn NodeSpaceContext, deviceId: String) ->
         let converged: PeerSpaceSnapshot = callPeerSpace(service, &deviceId, "snapshot", CoreValue::Null).await?;
         if converged.space.members.contains(&localId) {
             return Err("This device is already a member of the target Space".into());
+        }
+        // The converged truth excludes this device: its records still named
+        // the shared Space while the shared log does not admit it. The
+        // reconcile already retires that stale membership; apply again as the
+        // independent Space this device now is, so a removed device submits
+        // its request on this attempt instead of retrying by hand. The
+        // submission that follows carries the retired single-device source,
+        // never the divergent projection.
+        if !retiredStaleSplit {
+            retiredStaleSplit = true;
+            // The pairing this application arrived on is the transport of the
+            // application itself, so the retirement keeps it.
+            retireRemovedLocalDevice(service, Some(&deviceId))?;
+            continue;
         }
         return Err(format!(
             "Membership split with {deviceId} reconciled; the shared Space control log admits {} \
@@ -330,7 +538,8 @@ pub(crate) async fn request(service: &dyn NodeSpaceContext, deviceId: String) ->
     };
     saveRecord(service, OUTBOUND, &record.request.requestId, &record)?;
     // refresh also handles a result already approved after a lost initial reply.
-    refresh(service, record.request.requestId).await
+    return refresh(service, record.request.requestId).await;
+    }
 }
 async fn sendSubmission(service: &dyn NodeSpaceContext, record: &Record) -> Result<Record, String> {
     callPeerSpace(service, &record.request.targetDeviceId, "requestJoin", toCoreValue(Submission {
@@ -890,4 +1099,26 @@ async fn callPeerSpace<T: serde::de::DeserializeOwned>(service: &dyn NodeSpaceCo
         format!("node-space-{method}-{}", currentTimeMillis()), NODE_SPACE_TARGET, method, args,
     )).await;
     fromCoreValue(response.result.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod pairing_generation_tests {
+    use super::removalForgetsPairing;
+
+    /// One removal revokes exactly the generation it was issued against: a
+    /// credential stamped with a later generation — the device left, reset and
+    /// paired again to re-apply — always survives, while records and removals
+    /// from older cores carry no generation and keep the previous semantics.
+    #[test]
+    fn removal_forgets_only_the_generation_it_revokes() {
+        assert!(removalForgetsPairing(Some("inc-a"), &[Some("inc-a".into())]));
+        assert!(!removalForgetsPairing(Some("inc-b"), &[Some("inc-a".into())]));
+        assert!(removalForgetsPairing(None, &[Some("inc-a".into())]));
+        assert!(removalForgetsPairing(Some("inc-a"), &[None]));
+        assert!(removalForgetsPairing(None, &[None]));
+        // Several removals arrive in one batch: any revoked generation locks
+        // its own pairing, and the older revocation never shadows the newer.
+        assert!(removalForgetsPairing(Some("inc-b"), &[Some("inc-a".into()), Some("inc-b".into())]));
+        assert!(!removalForgetsPairing(Some("inc-c"), &[Some("inc-a".into()), Some("inc-b".into())]));
+    }
 }

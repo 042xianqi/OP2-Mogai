@@ -72,9 +72,9 @@ fn node_from_storage(storage: Arc<Storage>) -> (Arc<Storage>, Arc<EdgePeerRouter
         runtimeStorageHost: Some(storage.clone()), tcpHost: Some(Arc::new(NativeTcpHost)),
         hostRuntimeTaskSchedulerHost: Some(Arc::new(NativeHostRuntimeTaskSchedulerHost)), ..HostManager::default()
     });
-    let peer = HostRuntimePeerService::new(host.clone(), &router, operit_link::protocol::LinkDeviceInfo { platform: "test".into(), model: "test".into() }).unwrap();
+    let peer = HostRuntimePeerService::new(host.clone(), &router, operit_link::protocol::LinkDeviceInfo { platform: "test".into(), model: "test".into() , pairingIncarnation: None }).unwrap();
     let space = NodeSpaceService::new(storage.clone(), peer.clone()).unwrap();
-    space.initialize(CoreSpaceDeviceProfile { nodeId: id, displayName: if bounded { "ESP32-2432S028" } else { "HAN-DESKTOP (Windows)" }.into(), userName: String::new(), platform: if bounded { "esp32" } else { "windows" }.into(), model: if bounded { "ESP32-2432S028" } else { "Windows desktop" }.into(), coreVersion: None, updatedAt: 1 }).unwrap();
+    space.initialize(CoreSpaceDeviceProfile { nodeId: id, displayName: if bounded { "ESP32-2432S028" } else { "HAN-DESKTOP (Windows)" }.into(), userName: String::new(), platform: if bounded { "esp32" } else { "windows" }.into(), model: if bounded { "ESP32-2432S028" } else { "Windows desktop" }.into(), coreVersion: None, pairingIncarnation: None, updatedAt: 1 }).unwrap();
     router.installSpace(space.clone()).unwrap();
     router.install(Arc::new(EdgeNode::fromHostManager((*host).clone()).withNodeServices(NodeServices::new(peer.clone())))).unwrap();
     if configureListener {
@@ -448,7 +448,8 @@ mod core_edge {
         let info = operit_link::protocol::LinkDeviceInfo {
             platform: "windows".into(),
             model: "Windows desktop".into(),
-        };
+        pairingIncarnation: None,
+    };
         let peers =
             HostRuntimePeerService::new(host(storage.clone()), &router, info.clone()).unwrap();
         router
@@ -488,7 +489,8 @@ mod core_edge {
             operit_link::protocol::LinkDeviceInfo {
                 platform: "esp32".into(),
                 model: "ESP32-2432S028".into(),
-            },
+            pairingIncarnation: None,
+        },
         )
         .unwrap();
         let service = NodeSpaceService::new(storage.clone(), peers.clone()).unwrap();
@@ -501,7 +503,8 @@ mod core_edge {
                 model: "ESP32-2432S028".into(),
                 coreVersion: None,
                 updatedAt: 1,
-            })
+            pairingIncarnation: None,
+        })
             .unwrap();
         inner.installSpace(service.clone()).unwrap();
         inner
@@ -975,6 +978,7 @@ mod core_edge {
                 new_store.importDeviceProfiles(vec![CoreSpaceDeviceProfile {
                     nodeId: format!("previous-space-peer-{index}"), displayName: format!("Unrelated desktop {index}"),
                     userName: String::new(), platform: "windows".into(), model: "Previous desktop".into(), coreVersion: None, updatedAt: 1,
+                    pairingIncarnation: None,
                 }]).unwrap();
             }
             pair(&edge.peers, &old.peers, &old.storage, old_id.clone()).await;

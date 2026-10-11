@@ -66,7 +66,8 @@ pub(crate) fn startup_device_info(
     Ok(LinkDeviceInfo {
         platform: context.hostEnvironment.id.clone(),
         model: model.clone(),
-    })
+    pairingIncarnation: None,
+})
 }
 
 /// Requires Android to receive storage roots from its application owner.

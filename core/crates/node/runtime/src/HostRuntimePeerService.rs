@@ -192,7 +192,8 @@ impl HostRuntimePeerService {
     ) -> Result<(Arc<Channel>, String, LinkDeviceInfo, Vec<u8>, String), CoreLinkError> {
         let (private, public) = crypto::ephemeral()?;
         let hello = Hello { version: PAIRING_SERVICE_VERSION, nodeId: self.state.nodeId.clone(),
-            expectedNodeId: raw.target().nodeId.clone(), info: self.state.info.clone(), public: public.clone(),
+            expectedNodeId: raw.target().nodeId.clone(),
+            info: self.state.store.announcedDeviceInfo(&self.state.info), public: public.clone(),
             purpose: purpose.into(), sessionId: sessionId.into() };
         let reply: HelloReply = rawCall(&raw, "hello", &hello).await?;
         let t = &reply.transcript;
@@ -426,7 +427,8 @@ impl HostRuntimePeerService {
         let dh = crypto::agree(private, &transcript.clientPublic)?;
         let root = crypto::derive(&dh, &context, b"operit-pairing-root-v1")?;
         let key = match &saved { Some(saved) => crypto::derive(&dh, saved, &context)?, None => root };
-        sendValue(&raw, helloRequest.requestId, HelloReply { transcript, info: self.state.info.clone(), tokenRequired }).await?;
+        sendValue(&raw, helloRequest.requestId, HelloReply { transcript,
+            info: self.state.store.announcedDeviceInfo(&self.state.info), tokenRequired }).await?;
         let request = self.readHandshake(&raw, "authorize").await?;
         let authorization: Authorization = fromCoreValue(request.args).map_err(|e| error(e.to_string()))?;
         let admission = (|| {
@@ -675,7 +677,8 @@ impl RuntimePeerService for HostRuntimePeerService {
             self.state.active.lock().unwrap().insert(pending.peerNodeId.clone());
         }
         self.changed();
-        Ok(PairedPeer { nodeId: pending.peerNodeId, displayName: pending.info.displayName(), inbound: false, outbound: true })
+        Ok(PairedPeer { nodeId: pending.peerNodeId, displayName: pending.info.displayName(),
+            inbound: false, outbound: true, pairingIncarnation: pending.info.pairingIncarnation.clone() })
     }
     async fn cancelPairing(&self, id: &str) -> Result<(), CoreLinkError> {
         let _guard = self.state.mutation.lock().unwrap();
@@ -825,8 +828,21 @@ impl RuntimePeerService for HostRuntimePeerService {
         self.state.active.lock().unwrap().remove(node); self.changed(); Ok(())
     }
     async fn removePairedPeer(&self, node: &str) -> Result<(), CoreLinkError> {
-        { let _guard = self.state.mutation.lock().unwrap(); self.state.store.removePairedPeer(node).map_err(error)?; self.removeSpaceChannels(node)?; }
+        self.forgetPairingRecords(&[node.to_string()])?;
         self.disconnectPeer(node).await
+    }
+
+    fn forgetPairingRecords(&self, nodeIds: &[String]) -> Result<(), CoreLinkError> {
+        if nodeIds.is_empty() { return Ok(()); }
+        {
+            let _guard = self.state.mutation.lock().unwrap();
+            for nodeId in nodeIds {
+                self.state.store.removePairedPeer(nodeId).map_err(error)?;
+                self.removeSpaceChannels(nodeId)?;
+            }
+        }
+        self.changed();
+        Ok(())
     }
 }
 

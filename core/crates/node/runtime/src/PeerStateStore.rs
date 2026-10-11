@@ -294,8 +294,92 @@ impl PeerStateStore {
                 PreferencesDataStoreError::Message("Device info is not an object".into()))?;
             object.insert("platform".into(), current.platform.clone().into());
             object.insert("model".into(), current.model.clone().into());
+            // The pairing generation is minted once and changes only when the
+            // device resets its pairing world (leaving a Space).
+            let generation = object.get("pairingIncarnation").and_then(Value::as_str)
+                .map(str::to_owned).unwrap_or_else(newPairingIncarnation);
+            object.insert("pairingIncarnation".into(), generation.clone().into());
+            current.pairingIncarnation = Some(generation);
             preferences.set(&key, serde_json::to_string(&record)?);
             Ok::<_, PreferencesDataStoreError>(current)
+        }).map_err(|error| error.to_string())
+    }
+
+    /// The device info as announced to peers: platform and model come from the
+    /// host, while the pairing generation is always read from the identity
+    /// record. A device that left a Space renewed its generation mid-run, and a
+    /// stale in-memory copy would stamp every partner with the revoked
+    /// generation — a removal of that device would then never match the pairing
+    /// it made afterwards, leaving the credential behind.
+    #[allow(non_snake_case)]
+    pub fn announcedDeviceInfo(&self, supplied: &LinkDeviceInfo) -> LinkDeviceInfo {
+        let mut info = supplied.clone();
+        match self.pairingIncarnation() {
+            Ok(Some(generation)) => info.pairingIncarnation = Some(generation),
+            Ok(None) => {}
+            Err(error) => {
+                operit_util::AppLogger::AppLogger::w(
+                    "PeerStateStore",
+                    &format!("Pairing generation read failed error={error}"),
+                );
+            }
+        }
+        info
+    }
+
+    /// Returns the persisted local pairing generation, if one was minted.
+    pub fn pairingIncarnation(&self) -> Result<Option<String>, String> {
+        let preferences = self.preferences(RUNTIME_LINK_ACCESS_IDENTITY_PATH)?;
+        let encoded = preferences
+            .get(&stringPreferencesKey("record"))
+            .ok_or_else(|| "Node identity is missing".to_string())?;
+        let record: Value = serde_json::from_str(encoded).map_err(|error| error.to_string())?;
+        Ok(record.get("deviceInfo")
+            .and_then(|info| info.get("pairingIncarnation"))
+            .and_then(Value::as_str).map(str::to_owned))
+    }
+
+    /// Returns the local pairing generation, minting and persisting one on
+    /// first use.
+    #[allow(non_snake_case)]
+    pub fn ensurePairingIncarnation(&self) -> Result<String, String> {
+        self.editPairingIncarnation(None)
+    }
+
+    /// Replaces the local pairing generation with a fresh value. Called in the
+    /// step that resets the pairing world (leaving a Space), so a removal that
+    /// revoked the previous generation can never match credentials made after
+    /// the reset.
+    #[allow(non_snake_case)]
+    pub fn renewPairingIncarnation(&self) -> Result<String, String> {
+        self.editPairingIncarnation(Some(newPairingIncarnation()))
+    }
+
+    /// Applies one replacement to the persisted pairing generation: an explicit
+    /// value replaces it, `None` keeps an existing one or mints.
+    fn editPairingIncarnation(&self, replacement: Option<String>) -> Result<String, String> {
+        use operit_store::CoreNodeIdentityStore::CoreNodeIdentityStore;
+        use operit_store::PreferencesDataStore::PreferencesDataStoreError;
+        let identity = CoreNodeIdentityStore::new(self.storage.clone()).initialize()?;
+        self.store(RUNTIME_LINK_ACCESS_IDENTITY_PATH).try_edit_result(|preferences| {
+            let key = stringPreferencesKey("record");
+            let encoded = preferences.get(&key).ok_or_else(||
+                PreferencesDataStoreError::Message("Node identity is missing".into()))?;
+            let mut record: Value = serde_json::from_str(encoded)?;
+            if record.get("deviceId").and_then(Value::as_str) != Some(identity.nodeId.as_str()) {
+                return Err(PreferencesDataStoreError::Message("Node identity changed".into()));
+            }
+            let info = record.as_object_mut().ok_or_else(||
+                PreferencesDataStoreError::Message("Node identity is not an object".into()))?
+                .entry("deviceInfo").or_insert_with(|| serde_json::json!({}));
+            let object = info.as_object_mut().ok_or_else(||
+                PreferencesDataStoreError::Message("Device info is not an object".into()))?;
+            let generation = replacement.clone()
+                .or_else(|| object.get("pairingIncarnation").and_then(Value::as_str).map(str::to_owned))
+                .unwrap_or_else(newPairingIncarnation);
+            object.insert("pairingIncarnation".into(), generation.clone().into());
+            preferences.set(&key, serde_json::to_string(&record)?);
+            Ok::<_, PreferencesDataStoreError>(generation)
         }).map_err(|error| error.to_string())
     }
 
@@ -507,6 +591,13 @@ fn validateCredential(version: u32, secret: &str) -> Result<(), String> {
     }
     Ok(())
 }
+/// Mints one pairing generation. It only has to be fresh, not ordered: the
+/// control log orders authority, and this value only separates the credentials
+/// a device held while admitted from the ones it made after resetting.
+fn newPairingIncarnation() -> String {
+    format!("inc-{}", uuid::Uuid::new_v4().simple())
+}
+
 fn mergePeer(
     peers: &mut BTreeMap<String, PairedPeer>,
     nodeId: &str,
@@ -521,9 +612,15 @@ fn mergePeer(
         displayName: info.displayName(),
         inbound: false,
         outbound: false,
+        pairingIncarnation: info.pairingIncarnation.clone(),
     });
     if peer.displayName != info.displayName() {
         return Err("Conflicting paired device metadata".into());
+    }
+    // Re-pairing requires an unpaired device on both ends, so the newest
+    // handshake is the generation a later removal must match.
+    if info.pairingIncarnation.is_some() {
+        peer.pairingIncarnation = info.pairingIncarnation.clone();
     }
     match direction {
         StoredDirection::Inbound => peer.inbound = true,
@@ -745,7 +842,7 @@ mod tests {
             "deviceId": "stable-node", "future": "preserved",
             "deviceInfo": { "platform": "old", "model": "old-name", "extra": 7 }
         }));
-        let supplied = LinkDeviceInfo { platform: "new".into(), model: "new-name".into() };
+        let supplied = LinkDeviceInfo { platform: "new".into(), model: "new-name".into(), pairingIncarnation: None };
         let initialized = store.deviceInfo(supplied.clone(), false).unwrap();
         assert_eq!(initialized.model, "old-name");
         assert_eq!(initialized.platform, "new");
@@ -758,7 +855,7 @@ mod tests {
             "deviceId": "stable-node", "deviceInfo": "broken"
         }));
         let before = store.preferences(RUNTIME_LINK_ACCESS_IDENTITY_PATH).unwrap().entries();
-        assert!(store.deviceInfo(LinkDeviceInfo { platform: "new".into(), model: "name".into() }, true).is_err());
+        assert!(store.deviceInfo(LinkDeviceInfo { platform: "new".into(), model: "name".into(), pairingIncarnation: None }, true).is_err());
         assert_eq!(before, store.preferences(RUNTIME_LINK_ACCESS_IDENTITY_PATH).unwrap().entries());
     }
 
@@ -770,7 +867,7 @@ mod tests {
             "deviceId": "stable-node", "future": "preserved",
             "deviceInfo": { "platform": "", "model": "wasm32", "extra": 7 }
         }));
-        let supplied = LinkDeviceInfo { platform: "web".into(), model: "Chrome 154".into() };
+        let supplied = LinkDeviceInfo { platform: "web".into(), model: "Chrome 154".into(), pairingIncarnation: None };
         let current = store.deviceInfo(supplied.clone(), false).unwrap();
         assert_eq!(current.platform, "web");
         assert_eq!(current.model, "wasm32");
@@ -784,14 +881,40 @@ mod tests {
         assert_eq!(before, store.preferences(RUNTIME_LINK_ACCESS_IDENTITY_PATH).unwrap().entries());
     }
 
+    /// Announces the persisted pairing generation even when the in-memory copy
+    /// still carries the value minted at startup: a device that left a Space
+    /// mid-run renewed its generation, and partners must record the new one.
+    #[test]
+    fn announced_device_info_reflects_a_renewed_pairing_generation() {
+        let store = PeerStateStore::new(Arc::new(Storage::default()));
+        writeRecord(&store, RUNTIME_LINK_ACCESS_IDENTITY_PATH, "record", serde_json::json!({
+            "deviceId": "stable-node", "deviceInfo": { "platform": "test", "model": "test" }
+        }));
+        let startup = store.deviceInfo(
+            LinkDeviceInfo { platform: "test".into(), model: "test".into(), pairingIncarnation: None },
+            false,
+        ).unwrap();
+        let minted = startup.pairingIncarnation.clone();
+        assert!(minted.is_some());
+        let renewed = store.renewPairingIncarnation().unwrap();
+        assert_ne!(minted, Some(renewed.clone()));
+        // The startup-time copy is stale; the announcement must not be.
+        assert_eq!(
+            store.announcedDeviceInfo(&startup).pairingIncarnation,
+            Some(renewed.clone()),
+        );
+        assert_eq!(store.pairingIncarnation().unwrap(), Some(renewed));
+        assert_eq!(store.announcedDeviceInfo(&startup).platform, "test");
+    }
+
     /// Rejects incomplete host metadata before creating or modifying identity preferences.
     #[test]
     fn empty_host_device_metadata_never_changes_identity_storage() {
         let storage = Arc::new(Storage::default());
         let store = PeerStateStore::new(storage.clone());
         let invalid = [
-            LinkDeviceInfo { platform: "".into(), model: "wasm32".into() },
-            LinkDeviceInfo { platform: "web".into(), model: " ".into() },
+            LinkDeviceInfo { platform: "".into(), model: "wasm32".into(), pairingIncarnation: None },
+            LinkDeviceInfo { platform: "web".into(), model: " ".into(), pairingIncarnation: None },
         ];
         for supplied in &invalid {
             assert!(store.deviceInfo(supplied.clone(), false).is_err());

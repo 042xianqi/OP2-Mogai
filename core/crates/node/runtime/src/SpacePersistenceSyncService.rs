@@ -251,6 +251,19 @@ impl SpacePersistenceSyncService {
     /// Exchanges Space projections through direct pairings, then synchronizes every reachable member.
     pub async fn synchronizeOnce(&self) -> Result<(), String> {
         self.state.spaceStore.initialize()?;
+        // A shared removal takes effect before any exchange: when the replayed
+        // policy no longer admits this device it retires itself here, and a
+        // duplicate delivery of the same command is a no-op.
+        {
+            let service = crate::RuntimeRemoteLinkService::RuntimeRemoteLinkService::newWithRouter(
+                (*self.state.localRuntime).clone(), self.state.nodeRouter.clone());
+            if let Err(error) = service.retireRemovedDevice().await {
+                operit_util::AppLogger::AppLogger::w(
+                    "SpacePersistenceSyncService",
+                    &format!("Removed-device retirement check failed: {error}"),
+                );
+            }
+        }
         self.workspaceFiles().scan()?;
         let services = self.state.nodeRouter.nodeServices()?;
         let activePeers = services.peers().activePeerNodeIds().map_err(|error| error.to_string())?;
@@ -344,6 +357,7 @@ impl SpacePersistenceSyncService {
         let response = self.state.nodeRouter.callNode(targetNodeId.clone(), request).await;
         let remote = crate::NodeSpaceService::decodeControlExchange(response.result)?;
         control.projectPeerControlOperations(&targetNodeId, &remote)?;
+        self.applyRemovedMemberEffects(&remote)?;
         // Admission is not a storage grant. No business RPC, blob transfer or
         // bootstrap reset may run unless both endpoints currently have it.
         if !self.storageReplicationAllowed(&targetNodeId)? { return Ok(()); }
@@ -363,6 +377,17 @@ impl SpacePersistenceSyncService {
     fn replicaMarker(&self) -> CoreNodeStateStore {
         CoreNodeStateStore::newWithStorage(self.state.localRuntime.runtimeStorageHost(),
             "runtime/link_access/storage_replica.preferences.json")
+    }
+
+    /// Applies the local effects of removals that just reached this device
+    /// through any path: the member projection shrinks for devices the
+    /// replayed policy still excludes, and each removal operation forgets the
+    /// pairing credentials it revoked exactly once, whichever delivery
+    /// carried it here.
+    fn applyRemovedMemberEffects(&self, operations: &[SyncOperation]) -> Result<(), String> {
+        let service = crate::RuntimeRemoteLinkService::RuntimeRemoteLinkService::newWithRouter(
+            (*self.state.localRuntime).clone(), self.state.nodeRouter.clone());
+        crate::NodeSpaceService::space_join::applyRemovedMemberLocalEffects(&service, operations)
     }
 
     pub(crate) fn replicaBootstrapRequired(&self, spaceId: &str) -> Result<bool, String> {
@@ -561,9 +586,11 @@ impl SpacePersistenceSyncService {
             &self.state.nodeRouter, peerNodeId,
             crate::RuntimeRemoteLinkService::NODE_SPACE_TARGET, "snapshot", Value::Null,
         ).await?;
+        let snapshotControlOperations = remote.controlOperations.clone();
         let service = crate::RuntimeRemoteLinkService::RuntimeRemoteLinkService::newWithRouter(
             (*self.state.localRuntime).clone(), self.state.nodeRouter.clone());
         service.observePeerSpaceSnapshot(peerNodeId, remote)?;
+        self.applyRemovedMemberEffects(&snapshotControlOperations)?;
         let local = service.peerSpaceSnapshot()?;
         let remoteSpace: CoreSpace = callRemoteService(
             &self.state.nodeRouter, peerNodeId,

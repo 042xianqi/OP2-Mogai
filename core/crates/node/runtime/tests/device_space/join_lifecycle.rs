@@ -355,11 +355,12 @@ async fn lost_submission_reply_reuses_request_and_does_not_duplicate_receiver_in
 }
 
 /// Exercises a target advertising the applicant's own space identity without
-/// the applicant as a member is a membership split: the join attempt
-/// reconciles both control logs, retires the stale local membership when the
-/// converged policy excludes this device, and never submits a request.
+/// the applicant as a member: the join attempt reconciles both control logs,
+/// retires the stale local membership when the converged policy excludes this
+/// device, and then applies as the independent Space it now is, on the same
+/// attempt.
 #[tokio::test]
-async fn join_request_rejects_target_advertising_the_local_space_without_membership() {
+async fn join_request_retires_stale_membership_and_applies_as_its_own_space() {
     let _guard = routeTestGlobalLock().lock().await;
     installTestRuntimeScheduler();
     let pair = IndependentPair::new("split-join");
@@ -376,29 +377,25 @@ async fn join_request_rejects_target_advertising_the_local_space_without_members
             members: vec![pair.a.localNodeId()],
         })
         .unwrap();
-    let error = pair
+    let request = pair
         .applicant
         .requestDeviceSpaceJoin(pair.b.localNodeId())
         .await
-        .unwrap_err();
-    assert!(
-        error.contains("Membership split") && error.contains("not a member"),
-        "unexpected error: {error}"
-    );
-    // A same-identity target must not leave behind a durable join request.
-    assert!(pair
-        .applicant
-        .outgoingDeviceSpaceJoins()
-        .unwrap()
-        .is_empty());
-    assert!(protocolRecords(&pair.b, INBOUND_RECORDS).is_empty());
-    // The merged log excludes this device, so the stale membership record was
-    // retired exactly like an explicit leave, and the shared Space's history
-    // is now present locally for any later review.
+        .expect("the retired applicant applies as its own Space on the same attempt");
+    assert_eq!(request.targetDeviceId, pair.b.localNodeId());
+    // The stale membership was retired exactly like an explicit leave before
+    // the request was built, so the application carries a clean single-device
+    // source instead of the divergent projection.
     assert_ne!(
         pair.a.spaceStore.space().unwrap().spaceId,
         receiverSpace.spaceId
     );
+    assert_eq!(
+        pair.a.spaceStore.space().unwrap().members,
+        vec![pair.a.localNodeId()]
+    );
+    // The merged log excludes this device but keeps the shared history for
+    // any later review.
     let merged = pair
         .a
         .networkControlStore
@@ -407,6 +404,12 @@ async fn join_request_rejects_target_advertising_the_local_space_without_members
     assert!(merged
         .iter()
         .any(|operation| operation.originDeviceId == pair.b.localNodeId()));
+    // The receiver sees the application and its own Space stays untouched.
+    assert_eq!(protocolRecords(&pair.b, INBOUND_RECORDS).len(), 1);
+    assert_eq!(
+        pair.receiver.incomingDeviceSpaceJoins().await.unwrap().len(),
+        1
+    );
     assert_eq!(
         pair.b.spaceStore.space().unwrap().members,
         vec![pair.b.localNodeId()]

@@ -533,7 +533,7 @@ mod tests {
         let router=Arc::new(Router {node:node.into(),scope:Mutex::new(Some("space".into())),calls:AtomicUsize::new(0)});
         let service=HostRuntimePeerService { state:Arc::new(State { limits:PeerRuntimeLimits::default(),
             host:Arc::new(HostManager {runtimeStorageHost:Some(storage.clone()),..HostManager::default()}),link:HostPeerLink::default(),
-            store:PeerStateStore::new(storage),nodeId:node.into(),info:LinkDeviceInfo {platform:"test".into(),model:"test".into()},router:Arc::downgrade(&(router.clone() as Arc<dyn PeerRouter>)),
+            store:PeerStateStore::new(storage),nodeId:node.into(),info:LinkDeviceInfo {platform:"test".into(),model:"test".into(), pairingIncarnation: None },router:Arc::downgrade(&(router.clone() as Arc<dyn PeerRouter>)),
             listeners:AsyncMutex::default(),connections:Mutex::default(),pooledChannels:Mutex::default(),liveChannels:Mutex::default(),advertisements:Mutex::default(),slots:Arc::new(tokio::sync::Semaphore::new(2)),
             active:Mutex::default(),changes:broadcast::channel(32).0,availability:Mutex::new(None),lifecycle:AsyncMutex::new(()),mutation:Mutex::new(()),
             connectLocks:Mutex::default(),sharedSessions:Mutex::default(),
@@ -543,7 +543,7 @@ mod tests {
     fn space_client_uses_network_return_grant_and_rechecks_scope() {
         let (service, router) = service("edge");
         service.state.store.putRecord(RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH, "pairing", &StoredInbound {
-            deviceId: "core".into(), deviceInfo: LinkDeviceInfo {platform:"test".into(),model:"Core".into()}, sessionSecret: BASE64.encode([1;32]),
+            deviceId: "core".into(), deviceInfo: LinkDeviceInfo {platform:"test".into(),model:"Core".into(), pairingIncarnation: None }, sessionSecret: BASE64.encode([1;32]),
             pairingServiceVersion: PAIRING_SERVICE_VERSION,
         }).unwrap();
         let grant = space_channel::Grant { id: "return".into(), spaceId: "space".into(), peer: "core".into(),

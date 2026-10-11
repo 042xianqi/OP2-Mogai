@@ -128,4 +128,9 @@ pub trait RuntimePeerService: Send + Sync {
     /// 按设备撤销全部入站/出站授权、所有传输渠道及关联凭证；不让用户选择方向。
     /// 这是需要本地管理权限的操作，不属于匿名配对入口。
     async fn removePairedPeer(&self, peerNodeId: &str) -> Result<(), CoreLinkError>;
+
+    /// 同步撤销这些设备的配对凭证（入站/出站授权与关联会话），不等待关闭在用渠道。
+    /// 遗忘必须发生在成员状态变化的那一刻：延迟执行无法区分旧配对与重新配对产生的
+    /// 新配对（记录里没有实例标识），会把重新入网时刚建立的边一起删掉。
+    fn forgetPairingRecords(&self, nodeIds: &[String]) -> Result<(), CoreLinkError>;
 }

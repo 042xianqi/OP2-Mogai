@@ -110,7 +110,8 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
     let deviceInfo = LinkDeviceInfo {
         platform: "esp32".into(),
         model: "ESP32-2432S028-SIM".into(),
-    };
+    pairingIncarnation: None,
+};
     let edgeRouter = EdgePeerRouter::new(nodeId.clone());
     let scenePlugin = Arc::new(operit_edge_scene::ScenePlugin::new(320, 240, 24, true));
     let mut edgeNode = operit_node_edge::EdgeNode::fromHostManager(hostManager.clone())
@@ -156,7 +157,8 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
         model: deviceInfo.model.clone(),
         coreVersion: None,
         updatedAt: operit_host_api::TimeUtils::currentTimeMillis(),
-    })?;
+    pairingIncarnation: None,
+})?;
     edgeRouter.installSpace(spaceService.clone())?;
     edgeNode = edgeNode
         .withPlugin(scenePlugin.clone())
