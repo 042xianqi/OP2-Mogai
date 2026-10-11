@@ -8,13 +8,13 @@ import '../../../../core/proxy/generated/CoreProxyClients.g.dart';
 import '../../../../core/proxy/generated/CoreProxyModels.g.dart' as generated;
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../common/components/M3LoadingIndicator.dart';
-import '../../../theme/OperitFormStyles.dart';
 import 'SpaceIdentityLabels.dart';
 
 /// Shows the local identity and the administrator controls it unlocks.
 ///
-/// The panel owns identities, assignment, and audit only: devices and their
-/// commands live in the device section, so no device list is duplicated here.
+/// The panel owns identity definitions and audit only: devices and their
+/// commands - identity assignment included - live in the device section, so
+/// no device list is duplicated here.
 class NetworkControlPanel extends StatefulWidget {
   /// Creates the identity and permission panel over the generated runtime clients.
   const NetworkControlPanel({
@@ -141,24 +141,9 @@ class _NetworkControlPanelState extends State<NetworkControlPanel> {
       topology,
       'network.identity.manage',
     );
-    final canAssignIdentities = _hasCapability(
-      topology,
-      'network.identity.assign',
-    );
     final canReadAudit = _hasCapability(topology, 'network.audit.read');
     return <Widget>[
       _selfIdentity(l10n, topology),
-      if (canAssignIdentities) ...<Widget>[
-        const SizedBox(height: 12),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: FilledButton.icon(
-            onPressed: () => _assignIdentity(l10n),
-            icon: const Icon(Icons.assignment_ind_outlined),
-            label: Text(l10n.settingsRuntimeControlAssignIdentity),
-          ),
-        ),
-      ],
       if (canManageIdentities)
         _CollapsibleSection(
           title: l10n.settingsRuntimeControlIdentityDefinitions,
@@ -324,54 +309,6 @@ class _NetworkControlPanelState extends State<NetworkControlPanel> {
     );
   }
 
-  /// Opens the administrator assignment editor for one device identity.
-  Future<void> _assignIdentity(AppLocalizations l10n) async {
-    final state = _state;
-    final topology = _topology;
-    if (state == null || topology == null) {
-      return;
-    }
-    final directory = _DeviceDirectory(topology.devices);
-    final result = await _IdentityAssignmentEditor.show(
-      context,
-      title: l10n.settingsRuntimeControlAssignIdentity,
-      devices: topology.devices
-          .map(
-            (device) => _Choice(
-              label: directory.optionLabel(device.deviceId),
-              value: device.deviceId,
-            ),
-          )
-          .toList(growable: false),
-      identities: state.roles.values
-          .where(
-            (role) => spaceCapabilityValues(
-              role.capabilities,
-            ).every((capability) => _hasCapability(topology, capability)),
-          )
-          .map(
-            (role) => _Choice(
-              label: spaceIdentityDisplayName(role.displayName, l10n),
-              value: role.roleId,
-            ),
-          )
-          .toList(growable: false),
-    );
-    if (result == null) {
-      return;
-    }
-    await _runCommand(
-      () => widget.clients.server.runtimeRemoteLinkService
-          .setDeviceSpaceIdentity(
-            assignment: generated.NetworkControlIdentityAssignment(
-              nodeId: result.deviceId,
-              roleId: result.identityId,
-            ),
-          ),
-      feedback: l10n.settingsRuntimeControlIdentityAssignment,
-    );
-  }
-
   /// Runs one administrator command and refreshes the synchronized state.
   Future<void> _runCommand(
     Future<void> Function() command, {
@@ -459,15 +396,6 @@ class _CollapsibleSection extends StatelessWidget {
   }
 }
 
-/// Represents one human-facing dropdown option and its internal value.
-class _Choice {
-  /// Creates one choice.
-  const _Choice({required this.label, required this.value});
-
-  final String label;
-  final String value;
-}
-
 /// Represents the submitted identity definition form.
 class _IdentityDefinition {
   /// Creates one identity definition result.
@@ -475,15 +403,6 @@ class _IdentityDefinition {
 
   final String name;
   final List<String> capabilities;
-}
-
-/// Represents the submitted device identity assignment.
-class _IdentityAssignment {
-  /// Creates one identity assignment result.
-  const _IdentityAssignment({required this.deviceId, required this.identityId});
-
-  final String deviceId;
-  final String identityId;
 }
 
 /// Edits an identity name and its human-readable capabilities.
@@ -604,180 +523,6 @@ class _IdentityEditorState extends State<_IdentityEditor> {
       ],
     );
   }
-}
-
-/// Selects one device and one identity without exposing internal identifiers.
-class _IdentityAssignmentEditor extends StatefulWidget {
-  /// Creates the assignment editor.
-  const _IdentityAssignmentEditor({
-    required this.title,
-    required this.devices,
-    required this.identities,
-  });
-
-  final String title;
-  final List<_Choice> devices;
-  final List<_Choice> identities;
-
-  /// Opens the assignment editor.
-  static Future<_IdentityAssignment?> show(
-    BuildContext context, {
-    required String title,
-    required List<_Choice> devices,
-    required List<_Choice> identities,
-  }) {
-    return showDialog<_IdentityAssignment>(
-      context: context,
-      builder: (_) => _IdentityAssignmentEditor(
-        title: title,
-        devices: devices,
-        identities: identities,
-      ),
-    );
-  }
-
-  /// Creates the assignment editor state.
-  @override
-  State<_IdentityAssignmentEditor> createState() =>
-      _IdentityAssignmentEditorState();
-}
-
-/// Owns the assignment dropdown selections.
-class _IdentityAssignmentEditorState extends State<_IdentityAssignmentEditor> {
-  String? _deviceId;
-  String? _identityId;
-
-  /// Submits a complete device identity assignment.
-  void _submit() {
-    final deviceId = _deviceId;
-    final identityId = _identityId;
-    if (deviceId == null || identityId == null) {
-      return;
-    }
-    Navigator.of(
-      context,
-    ).pop(_IdentityAssignment(deviceId: deviceId, identityId: identityId));
-  }
-
-  /// Builds the assignment dialog.
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.title),
-      content: SizedBox(
-        width: 420,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            OperitFormStyles.dropdownButtonFormField<String>(
-              context,
-              initialValue: _deviceId,
-              isExpanded: true,
-              decoration: InputDecoration(
-                labelText: AppLocalizations.of(
-                  context,
-                )!.settingsRuntimeControlDevice,
-                border: OutlineInputBorder(),
-              ),
-              items: widget.devices
-                  .map(
-                    (choice) => DropdownMenuItem<String>(
-                      value: choice.value,
-                      child: Text(
-                        choice.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  )
-                  .toList(growable: false),
-              onChanged: (value) => setState(() => _deviceId = value),
-            ),
-            const SizedBox(height: 12),
-            OperitFormStyles.dropdownButtonFormField<String>(
-              context,
-              initialValue: _identityId,
-              isExpanded: true,
-              decoration: InputDecoration(
-                labelText: AppLocalizations.of(
-                  context,
-                )!.settingsRuntimeControlIdentities,
-                border: OutlineInputBorder(),
-              ),
-              items: widget.identities
-                  .map(
-                    (choice) => DropdownMenuItem<String>(
-                      value: choice.value,
-                      child: Text(
-                        choice.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  )
-                  .toList(growable: false),
-              onChanged: (value) => setState(() => _identityId = value),
-            ),
-          ],
-        ),
-      ),
-      actions: <Widget>[
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Text(MaterialLocalizations.of(context).cancelButtonLabel),
-        ),
-        FilledButton(
-          onPressed: _submit,
-          child: Text(MaterialLocalizations.of(context).okButtonLabel),
-        ),
-      ],
-    );
-  }
-}
-
-/// Maps device identifiers to readable labels while preserving duplicate names.
-class _DeviceDirectory {
-  /// Builds the directory from one device snapshot.
-  _DeviceDirectory(Iterable<generated.RuntimeDeviceSpaceDevice> devices) {
-    final counts = <String, int>{};
-    final occurrences = <String, int>{};
-    final values = devices.toList(growable: false);
-    for (final device in values) {
-      final base = _deviceBaseName(device);
-      counts[base] = (counts[base] ?? 0) + 1;
-    }
-    for (final device in values) {
-      final base = _deviceBaseName(device);
-      final occurrence = (occurrences[base] ?? 0) + 1;
-      occurrences[base] = occurrence;
-      _labels[device.deviceId] = counts[base] == 1
-          ? base
-          : '$base · 设备 $occurrence';
-      _ids[device.deviceId] = device.deviceId;
-    }
-  }
-
-  final Map<String, String> _labels = <String, String>{};
-  final Map<String, String> _ids = <String, String>{};
-
-  /// Returns the readable label for one device.
-  String label(String deviceId) => _labels[deviceId]!;
-
-  /// Returns the stable runtime identifier shown beside one device name.
-  String id(String deviceId) => _ids[deviceId]!;
-
-  /// Returns a selection label that disambiguates duplicate device names.
-  String optionLabel(String deviceId) => '${label(deviceId)} (${id(deviceId)})';
-}
-
-/// Builds a readable device label without protocol identifiers.
-String _deviceBaseName(generated.RuntimeDeviceSpaceDevice device) {
-  return <String>[
-    device.deviceName,
-    if (device.userName.trim().isNotEmpty) device.userName,
-    if (device.platform.trim().isNotEmpty) device.platform,
-    if (device.model.trim().isNotEmpty) device.model,
-  ].join(' · ');
 }
 
 /// Returns the identity of the current device, when the Space assigned one.

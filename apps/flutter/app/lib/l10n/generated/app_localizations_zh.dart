@@ -2548,6 +2548,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimePairToken => '连接 Token';
 
   @override
+  String get settingsRuntimePairTokenHint => '跨网配对时必填；同网段设备可留空';
+
+  @override
   String get settingsRuntimePairCode => '配对码';
 
   @override
@@ -3670,9 +3673,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeControlRoles => '角色';
 
   @override
-  String get settingsRuntimeControlIdentities => '身份';
-
-  @override
   String get settingsRuntimeControlAudit => '审计';
 
   @override
@@ -3700,9 +3700,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeControlIdentityName => '身份名称';
 
   @override
-  String get settingsRuntimeControlDevice => '设备';
-
-  @override
   String get settingsRuntimeControlDeviceId => '设备 ID';
 
   @override
@@ -3726,16 +3723,16 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeControlRemoveDevice => '移除设备';
 
   @override
-  String get settingsRuntimeControlDisconnectDevice => '断开设备';
+  String get settingsRuntimeControlDisconnectDevice => '隔离设备';
 
   @override
   String get settingsRuntimeControlRemoved => '已移除';
 
   @override
-  String get settingsRuntimeControlDisconnected => '已断开';
+  String get settingsRuntimeControlDisconnected => '已隔离';
 
   @override
-  String get settingsRuntimeControlAdmitDevice => '重新接纳设备';
+  String get settingsRuntimeControlAdmitDevice => '解除隔离设备';
 
   @override
   String get settingsRuntimeControlAllDevices => '全部设备';
@@ -3759,7 +3756,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeControlClearIdentity => '重置为默认身份';
 
   @override
-  String get settingsRuntimeControlDeviceAdmitted => '已解除连接限制，等待设备重连';
+  String get settingsRuntimeControlDeviceAdmitted => '已解除隔离，等待设备重连';
 
   @override
   String get settingsRuntimeControlIdentityResetDone => '身份已重置为默认用户';

@@ -79,7 +79,7 @@ Map<String, Object?> _topology({
 }
 
 /// Builds one synchronized control state with the two built-in identities.
-Map<String, Object?> _control() {
+Map<String, Object?> _control({List<String> disconnectedNodeIds = const []}) {
   return <String, Object?>{
     'spaceId': 'space',
     'initialized': true,
@@ -101,7 +101,7 @@ Map<String, Object?> _control() {
       'tablet': 'relay',
       'relay': 'user',
     },
-    'disconnectedNodeIds': <Object?>[],
+    'disconnectedNodeIds': <Object?>[...disconnectedNodeIds],
     'policies': <String, String>{},
   };
 }
@@ -291,7 +291,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.widgetWithText(MenuItemButton, '建立直连'), findsOneWidget);
       expect(find.widgetWithText(MenuItemButton, '移除设备'), findsNothing);
-      expect(find.widgetWithText(MenuItemButton, '断开设备'), findsNothing);
+      expect(find.widgetWithText(MenuItemButton, '隔离设备'), findsNothing);
       expect(tester.takeException(), isNull);
       await unmount(tester, bridge);
     },
@@ -337,12 +337,41 @@ void main() {
     await tester.tap(menus.first);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
-    expect(find.widgetWithText(MenuItemButton, '重新接纳设备'), findsOneWidget);
+    // Isolation is one slot: an unrestricted device offers the isolate
+    // command only, never the lift action alongside it.
+    expect(find.widgetWithText(MenuItemButton, '隔离设备'), findsOneWidget);
     expect(find.widgetWithText(MenuItemButton, '重置为默认身份'), findsOneWidget);
     expect(find.widgetWithText(MenuItemButton, '设置设备身份'), findsOneWidget);
-    expect(find.widgetWithText(MenuItemButton, '断开设备'), findsOneWidget);
+    expect(find.widgetWithText(MenuItemButton, '解除隔离设备'), findsNothing);
     expect(find.widgetWithText(MenuItemButton, '移除设备'), findsOneWidget);
     expect(find.widgetWithText(MenuItemButton, '建立直连'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await unmount(tester, bridge);
+  });
+
+  testWidgets('a quarantined member only offers the lift-isolation command', (
+    tester,
+  ) async {
+    final bridge = DeviceSpacePanelBridge(
+      topology: _topology(
+        selfCapabilities: _administratorCapabilities,
+        selfIdentityName: 'Administrator',
+      ),
+      control: _control(disconnectedNodeIds: <String>['tablet']),
+    );
+    await mountPanel(tester, bridge);
+    expect(find.text('中继节点'), findsOneWidget);
+    final menus = find.byIcon(Icons.more_vert_outlined);
+    expect(menus, findsWidgets);
+    await tester.tap(menus.first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.widgetWithText(MenuItemButton, '解除隔离设备'), findsOneWidget);
+    expect(find.widgetWithText(MenuItemButton, '隔离设备'), findsNothing);
+    // The direct-link entry stays hidden while the policy quarantines the
+    // member: lifting the isolation comes first.
+    expect(find.widgetWithText(MenuItemButton, '建立直连'), findsNothing);
+    expect(find.widgetWithText(MenuItemButton, '移除设备'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await unmount(tester, bridge);
   });
@@ -397,7 +426,7 @@ void main() {
     await tester.tap(menus.first);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
-    expect(find.widgetWithText(MenuItemButton, '断开设备'), findsOneWidget);
+    expect(find.widgetWithText(MenuItemButton, '隔离设备'), findsOneWidget);
     expect(find.widgetWithText(MenuItemButton, '移除设备'), findsOneWidget);
     expect(find.widgetWithText(MenuItemButton, '重置为默认身份'), findsOneWidget);
     expect(find.widgetWithText(MenuItemButton, '解除配对'), findsOneWidget);
@@ -437,7 +466,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.widgetWithText(MenuItemButton, '解除配对'), findsOneWidget);
     expect(find.widgetWithText(MenuItemButton, '加入设备空间'), findsOneWidget);
-    expect(find.widgetWithText(MenuItemButton, '断开设备'), findsNothing);
+    expect(find.widgetWithText(MenuItemButton, '隔离设备'), findsNothing);
     expect(find.widgetWithText(MenuItemButton, '移除设备'), findsNothing);
     expect(tester.takeException(), isNull);
     await unmount(tester, bridge);
@@ -471,7 +500,9 @@ void main() {
     await mountNetworkPanel(tester, bridge);
     expect(find.text('当前身份: 管理员'), findsOneWidget);
     expect(find.text('当前能力: 全部权限'), findsWidgets);
-    expect(find.text('设置设备身份'), findsOneWidget);
+    // Identity assignment is a per-device command: it lives in each device
+    // row's menu, never as a device picker on this card.
+    expect(find.text('设置设备身份'), findsNothing);
     // Both long lists start collapsed and only advertise their size.
     expect(find.text('身份定义'), findsOneWidget);
     expect(find.text('共 2 个身份'), findsOneWidget);
