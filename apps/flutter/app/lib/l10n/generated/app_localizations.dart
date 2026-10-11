@@ -4798,6 +4798,12 @@ abstract class AppLocalizations {
   /// **'Connection token'**
   String get settingsRuntimePairToken;
 
+  /// No description provided for @settingsRuntimePairTokenHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Required off-LAN; leave empty for devices on the same network'**
+  String get settingsRuntimePairTokenHint;
+
   /// No description provided for @settingsRuntimePairCode.
   ///
   /// In en, this message translates to:
@@ -6837,12 +6843,6 @@ abstract class AppLocalizations {
   /// **'Roles'**
   String get settingsRuntimeControlRoles;
 
-  /// No description provided for @settingsRuntimeControlIdentities.
-  ///
-  /// In en, this message translates to:
-  /// **'Identities'**
-  String get settingsRuntimeControlIdentities;
-
   /// No description provided for @settingsRuntimeControlAudit.
   ///
   /// In en, this message translates to:
@@ -6897,12 +6897,6 @@ abstract class AppLocalizations {
   /// **'Identity name'**
   String get settingsRuntimeControlIdentityName;
 
-  /// No description provided for @settingsRuntimeControlDevice.
-  ///
-  /// In en, this message translates to:
-  /// **'Device'**
-  String get settingsRuntimeControlDevice;
-
   /// No description provided for @settingsRuntimeControlDeviceId.
   ///
   /// In en, this message translates to:
@@ -6948,7 +6942,7 @@ abstract class AppLocalizations {
   /// No description provided for @settingsRuntimeControlDisconnectDevice.
   ///
   /// In en, this message translates to:
-  /// **'Disconnect device'**
+  /// **'Isolate device'**
   String get settingsRuntimeControlDisconnectDevice;
 
   /// No description provided for @settingsRuntimeControlRemoved.
@@ -6960,13 +6954,13 @@ abstract class AppLocalizations {
   /// No description provided for @settingsRuntimeControlDisconnected.
   ///
   /// In en, this message translates to:
-  /// **'Disconnected'**
+  /// **'Isolated'**
   String get settingsRuntimeControlDisconnected;
 
   /// No description provided for @settingsRuntimeControlAdmitDevice.
   ///
   /// In en, this message translates to:
-  /// **'Readmit device'**
+  /// **'Lift isolation'**
   String get settingsRuntimeControlAdmitDevice;
 
   /// No description provided for @settingsRuntimeControlAllDevices.
@@ -7014,7 +7008,7 @@ abstract class AppLocalizations {
   /// No description provided for @settingsRuntimeControlDeviceAdmitted.
   ///
   /// In en, this message translates to:
-  /// **'Connection restriction lifted; waiting for the device to reconnect'**
+  /// **'Isolation lifted; waiting for the device to reconnect'**
   String get settingsRuntimeControlDeviceAdmitted;
 
   /// No description provided for @settingsRuntimeControlIdentityResetDone.
