@@ -331,7 +331,15 @@ fn readPendingForgotten(preferences: &Preferences) -> Vec<String> {
 pub(crate) fn retireRemovedLocalDevice(service: &dyn NodeSpaceContext) -> Result<Option<String>, String> {
     let local = service.localNodeId();
     let state = service.networkControlStore().currentState()?;
+    // The decision reads the replayed current state, never the mere presence of
+    // a removal in history: a device that was admitted again after an earlier
+    // removal is a member, so recovering the shared log can never retire it
+    // again. The same rule makes re-read history harmless after a re-join.
     if state.memberNodeIds.contains(&local) { return Ok(None); }
+    // A device with an application in flight is re-joining on purpose: the join
+    // flow reconciles the freshest truth (and retires at that point), while a
+    // partially recovered log can transiently look like a removal.
+    if outgoing(service)?.iter().any(|request| active(&request.status)) { return Ok(None); }
     if !memberRemovalCommitted(service, &local)? { return Ok(None); }
     let previous = service.spaceStore().space()?.spaceId;
     // Pairings that existed at retirement are the ones the removal forgets.

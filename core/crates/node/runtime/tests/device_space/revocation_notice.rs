@@ -417,3 +417,84 @@ async fn stale_removed_device_heals_into_its_own_space_when_reapplying() {
         vec![removed]
     );
 }
+
+/// Verifies re-reading the shared history after a re-join cannot retire the
+/// device again: the removal stays in the log forever, but the replayed state
+/// admits the device, so the retirement check never fires.
+#[tokio::test]
+async fn readmitted_device_survives_its_own_removal_record_in_history() {
+    let _guard = routeTestGlobalLock().lock().await;
+    installTestRuntimeScheduler();
+    let (routers, access, peers) = revocationMesh("revoke-readmit", 3, &[(0, 1), (0, 2), (1, 2)]);
+    let target = 0;
+    let removed = routers[2].localNodeId();
+
+    // Remove, then admit the device again through the ordinary policy path.
+    access[target]
+        .removeDeviceSpaceMember(removed.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        routers[2].spaceStore.space().unwrap().members,
+        vec![removed.clone()]
+    );
+    routers[target]
+        .networkControlStore
+        .admitMember(removed.clone())
+        .unwrap();
+    assert!(routers[target]
+        .networkControlStore
+        .currentState()
+        .unwrap()
+        .memberNodeIds
+        .contains(&removed));
+
+    // The shared Space history still carries the removal, and the device
+    // recovers the whole log while re-joining.
+    let operations = routers[target]
+        .networkControlStore
+        .currentSpaceOperations()
+        .unwrap();
+    assert!(operations.iter().any(|operation| {
+        serde_json::to_string(operation).unwrap().contains("remove_member")
+    }));
+    for operation in &operations {
+        routers[2]
+            .networkControlStore
+            .applyBootstrapOperation(operation)
+            .unwrap();
+    }
+    let mut sharedSpace = routers[target].spaceStore.space().unwrap();
+    sharedSpace.spaceRevision = routers[2].spaceStore.space().unwrap().spaceRevision + 10;
+    routers[2].spaceStore.adopt(sharedSpace).unwrap();
+
+    // The retirement check sees a member and a history with its removal; the
+    // device must stay in the Space.
+    let service = RuntimeRemoteLinkService::newWithRouter(
+        (*routers[2].localCore).clone(),
+        routers[2].clone(),
+    );
+    assert!(!service.retireRemovedDevice().await.unwrap());
+    assert!(routers[2]
+        .networkControlStore
+        .currentState()
+        .unwrap()
+        .memberNodeIds
+        .contains(&removed));
+    assert!(routers[2]
+        .spaceStore
+        .space()
+        .unwrap()
+        .members
+        .contains(&removed));
+    // Re-pairing for the re-admission survives every later sweep: the
+    // retirement marker was consumed once and cannot fire again.
+    peers[2].link(&routers[1]);
+    peers[1].link(&routers[2]);
+    assert!(!service.retireRemovedDevice().await.unwrap());
+    assert!(peers[2]
+        .pairedPeers()
+        .unwrap()
+        .iter()
+        .any(|peer| peer.nodeId == routers[1].localNodeId()));
+}
