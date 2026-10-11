@@ -1,10 +1,8 @@
 //! Deterministic, paced PCM input for the editor. This is a simulated device,
-//! installed through the same optional Host capability used by real microphones.
+//! registered directly on the Edge Node, like a hardware audio source.
 use async_trait::async_trait;
-use operit_host_api::{
-    AudioCaptureHost, AudioCaptureSession, AudioInputDevice, AudioInputFormat, HostError,
-    HostResult,
-};
+use operit_edge_contract::audio::{AudioInputDevice, AudioInputFormat};
+use operit_node_edge::audio::{EdgeAudioSession, EdgeAudioSource};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -73,8 +71,8 @@ struct Recording {
     started: Instant,
 }
 #[async_trait]
-impl AudioCaptureHost for SimulatorMicrophone {
-    fn listInputs(&self) -> HostResult<Vec<AudioInputDevice>> {
+impl EdgeAudioSource for SimulatorMicrophone {
+    fn listInputs(&self) -> Result<Vec<AudioInputDevice>, String> {
         Ok(vec![AudioInputDevice {
             inputId: "sim-pcm".into(),
             name: "Simulated PCM microphone (440 Hz)".into(),
@@ -85,15 +83,13 @@ impl AudioCaptureHost for SimulatorMicrophone {
         &self,
         input: &str,
         format: &AudioInputFormat,
-    ) -> HostResult<Box<dyn AudioCaptureSession>> {
+    ) -> Result<Box<dyn EdgeAudioSession>, String> {
         if input != "sim-pcm" || format != &AudioInputFormat::default() {
-            return Err(HostError::new(
-                "Unsupported simulator audio input or format",
-            ));
+            return Err("Unsupported simulator audio input or format".into());
         }
         let mut state = self.state.lock().unwrap();
         if state.active {
-            return Err(HostError::new("Simulator microphone already active"));
+            return Err("Simulator microphone already active".into());
         }
         state.active = true;
         state.blocks = 0;
@@ -108,12 +104,12 @@ impl AudioCaptureHost for SimulatorMicrophone {
     }
 }
 #[async_trait]
-impl AudioCaptureSession for Recording {
-    async fn read(&mut self) -> HostResult<Option<Vec<u8>>> {
+impl EdgeAudioSession for Recording {
+    async fn read(&mut self) -> Result<Option<Vec<u8>>, String> {
         if self.offset == self.settings.blocks {
             if self.settings.fail {
                 self.state.lock().unwrap().error = Some("Simulated microphone overrun".into());
-                return Err(HostError::new("Simulated microphone overrun"));
+                return Err("Simulated microphone overrun".into());
             }
             return Ok(None);
         }

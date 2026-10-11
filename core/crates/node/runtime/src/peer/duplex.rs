@@ -310,7 +310,7 @@ impl operit_link::CoreLinkSpacePushClient for SessionSpaceClient {
         let transport = self.service.cachedSession(&self.identity.peerNodeId).map(|channel| channel.raw.transport())
             .or_else(|| self.service.spaceOutbound(&self.identity.peerNodeId).ok().map(|grant| grant.transport))
             .or_else(|| self.service.outbound(&self.identity.peerNodeId).ok().and_then(|record| parseTransport(&record.transport).ok()))?;
-        if transport == PeerTransport::Serial { Some(self.service.state.host.peerSerialBaudRate.unwrap_or(115200) / 10) }
+        if transport == PeerTransport::Serial { Some(115200 / 10) }
         else { None }
     }
 

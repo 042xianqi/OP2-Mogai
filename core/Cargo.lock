@@ -1881,7 +1881,6 @@ dependencies = [
 name = "operit-edge-contract"
 version = "0.1.0"
 dependencies = [
- "operit-host-api",
  "operit-link",
  "serde",
  "serde_json",

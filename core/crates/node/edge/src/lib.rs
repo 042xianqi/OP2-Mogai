@@ -78,11 +78,17 @@ impl EdgeNode {
 
     /// Creates an Edge Node with device services supplied by one Host Manager.
     pub fn fromHostManager(hostManager: HostManager) -> Self {
-        let audioService = hostManager.audioCaptureHost.clone().zip(hostManager.hostRuntimeTaskSchedulerHost.clone())
-            .map(|(host, scheduler)| Arc::new(audio::EdgeAudioService::new(host, scheduler)));
-        let mut node = Self::new(createDeviceIoService(hostManager));
-        node.audioService = audioService;
-        node
+        Self::new(createDeviceIoService(hostManager))
+    }
+
+    /// Registers device-owned audio input using the existing task scheduler.
+    pub fn withAudioSource(
+        mut self,
+        source: Arc<dyn audio::EdgeAudioSource>,
+        scheduler: Arc<dyn operit_host_api::HostRuntimeTaskSchedulerHost>,
+    ) -> Self {
+        self.audioService = Some(Arc::new(audio::EdgeAudioService::new(source, scheduler)));
+        self
     }
 
     /// Registers a typed robot face service with this Edge Node.
@@ -382,7 +388,7 @@ impl EdgeNode {
     pub(crate) async fn dispatchAudioCall(&self, request: CoreCallRequest, origin: &str) -> CoreCallResponse {
         let id = request.requestId.clone();
         let result = async {
-            let audio = self.audioService.as_ref().ok_or_else(|| CoreLinkError::new("AUDIO_UNAVAILABLE", "Audio capture Host is not installed"))?;
+            let audio = self.audioService.as_ref().ok_or_else(|| CoreLinkError::new("AUDIO_UNAVAILABLE", "Edge audio source is not registered"))?;
             match request.methodName.as_str() {
                 "listInputs" => audio.listInputs(),
                 "startInput" => audio.start(request.args, origin, self.nodeServices().map_err(serviceError)?).await,

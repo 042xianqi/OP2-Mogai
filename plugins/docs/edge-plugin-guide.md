@@ -116,7 +116,7 @@ main 导出 `on_edge_event(event)`，其 `event.eventPayload` 是
 
 `Tools.Edge.listAudioInputs/openAudioInput/readAudioInput/closeAudioInput` 在 Core 的同一
 ToolPkg 工具运行时调用，经已有设备空间路由控制 Edge，二进制音频沿 Link Push 返回。
-麦克风不要求屏幕、ESP32 或 STT 配置；设备 Host 需安装其平台的 `AudioCaptureHost`。
+麦克风不要求屏幕、ESP32 或 STT 配置；设备通过 `EdgeNode.withAudioSource` 注册自身的 `EdgeAudioSource`。
 
 [流式识别适配示例](../packages/examples/edge_audio_stream/README.md) 可作为插件源码引用，
 接入作者自己的 STT 会话；它逐块等待识别器消费，并在正常 EOF、采集错误或插件失败时释放资源。

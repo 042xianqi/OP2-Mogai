@@ -362,7 +362,7 @@ ${JSON.stringify(fixtureMetadata)}
     }
     t.diagnostic('Real Core JS package -> Tools.device(nodeId).Edge/Io -> existing tool runtime -> authenticated Edge action passed');
 
-    // The editor supplies a paced Host microphone. A real Core market-style JS
+    // The editor registers a paced Edge microphone. A real Core market-style JS
     // package consumes every block over admitted TCP, with no configured STT.
     const ts = (await import('../../node_modules/typescript/lib/typescript.js')).default;
     const adapterSource = await readFile(new URL('../../../../plugins/packages/examples/edge_audio_stream/src/stream.ts', import.meta.url), 'utf8');

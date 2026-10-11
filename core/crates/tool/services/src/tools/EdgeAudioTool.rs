@@ -5,7 +5,7 @@ use crate::ToolExecutionManager::{
     AITool, AsyncToolExecutor, ToolAccessSpec, ToolBoundary, ToolEffect, ToolInvocationFuture,
     ToolValidationResult,
 };
-use operit_host_api::AudioInputFormat;
+use operit_edge_contract::audio::AudioInputFormat;
 use operit_link::{toCoreValue, CoreCallRequest};
 use operit_plugin_sdk::js_sdk::{edge::EdgeAudioInputOptions, results::*};
 use std::sync::Arc;

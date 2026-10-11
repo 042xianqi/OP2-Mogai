@@ -80,15 +80,19 @@ Edge 从共享 `NodeServices` 取得捕获了准入代次的 `CoreLinkSpacePushC
 未关闭的会话在录音时长后留出 30 秒排空时间，随后不可继续读取；过期记录在
 后续打开操作中回收。插件必须在 `finally` 中关闭，避免占用有限的会话配额。
 
-## Host 采集适配
+## Edge 音频源
 
-`HostManager.withAudioCaptureHost(host)` 注入可选 `AudioCaptureHost`，同时要有
-现有 `HostRuntimeTaskSchedulerHost`。未安装能力时返回 `AUDIO_UNAVAILABLE`。
-Host 实现 `listInputs()`、`openInput(inputId, format)`；采集会话实现
-`read() -> Option<Vec<u8>>`，`None` 表示正常结束。单块必须有界，硬件缓冲区
-溢出必须返回错误。采集会话 Drop 必须关闭麦克风并释放资源。
+设备实现 `operit_node_edge::audio::EdgeAudioSource`，通过
+`EdgeNode.withAudioSource(source, scheduler)` 注册；scheduler 复用现有的
+`HostRuntimeTaskSchedulerHost`，无需扩展 `HostManager` 或 Host API。
+未注册音频源时返回 `AUDIO_UNAVAILABLE`。
 
-当前实现包含通用能力接口和模拟麦克风测试，尚未实现具体 ESP I2S/ADC 麦克风驱动。
+音频源实现 `listInputs()`、`openInput(inputId, format)`；`EdgeAudioSession`
+实现 `read() -> Result<Option<Vec<u8>>, String>`，`None` 表示正常结束。
+音频格式和输入设备描述定义在 `operit_edge_contract::audio`。单块必须有界，
+硬件缓冲区溢出必须返回错误。采集会话 Drop 必须关闭麦克风并释放资源。
+
+当前实现包含 Edge 音频源接口和模拟麦克风测试，尚未实现具体 ESP I2S/ADC 麦克风驱动。
 音频接口不依赖显示系统。
 
 ## 串口带宽
@@ -97,11 +101,10 @@ Host 实现 `listInputs()`、`openInput(inputId, format)`；采集会话实现
 11520 字节/秒，还要扣除加密、分帧和 ACK 开销，因此默认串口配置会明确拒绝
 开始这种录音。
 
-现有串口适配的波特率可用 `HostManager.withPeerSerialBaudRate(921600)` 配置；
-两端必须配置一致，Host/硬件必须支持该速率。未配置时继续使用 115200。
+本接口保持既有串口的 115200 baud 配置，不新增 Host 波特率配置。
 Edge 对已知串口容量保留至少 25% 余量；这是开始前的容量检查，不能保证真实
-硬件、其他共享流或后续中转链路的实时吞吐。每个采集 Host 仍要报告实际过载。
-TCP 和串口的连接及分帧协议相同于改动之前。
+硬件、其他共享流或后续中转链路的实时吞吐。音频源仍要报告实际过载。
+TCP 和串口的连接、波特率及分帧协议相同于改动之前。
 
 ## 验证范围
 

@@ -8,7 +8,6 @@ description = "Shared address contract for Operit Edge Services."
 
 
 [dependencies]
-operit-host-api = { path = "../../foundation/host-api" }
 operit-link = { path = "../../foundation/link" }
 serde.workspace = true
 serde_json.workspace = true

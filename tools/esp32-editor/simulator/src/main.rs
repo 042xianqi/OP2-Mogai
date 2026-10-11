@@ -100,7 +100,6 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
     ));
     let microphone = Arc::new(audio::SimulatorMicrophone::new());
     let hostManager = operit_host_api::HostManager::HostManager::default()
-        .withAudioCaptureHost(microphone.clone())
         .withTcpHost(Arc::new(operit_host_native_common::NativeTcpHost))
         .withServiceDiscoveryHost(Arc::new(
             operit_host_native_common::ServiceDiscovery::ServiceDiscoveryProvider::default(),
@@ -122,6 +121,7 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
     let edgeRouter = EdgePeerRouter::new(nodeId.clone());
     let scenePlugin = Arc::new(operit_edge_scene::ScenePlugin::new(320, 240, 24, true));
     let mut edgeNode = operit_node_edge::EdgeNode::fromHostManager(hostManager.clone())
+        .withAudioSource(microphone.clone(), scheduler.clone())
         .withPlugin(Arc::new(SimulatorStatusPlugin {
             address: configuredAddress.clone(),
         }))

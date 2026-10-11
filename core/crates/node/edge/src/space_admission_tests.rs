@@ -477,7 +477,7 @@ mod core_edge {
         }
     }
     fn edge_node(storage: Arc<Storage>) -> EdgeFixture { edge_node_with_audio(storage, None) }
-    fn edge_node_with_audio(storage: Arc<Storage>, audio: Option<Arc<dyn operit_host_api::AudioCaptureHost>>) -> EdgeFixture {
+    fn edge_node_with_audio(storage: Arc<Storage>, audio: Option<Arc<dyn crate::audio::EdgeAudioSource>>) -> EdgeFixture {
         configure_listener(&storage);
         let id = operit_store::CoreNodeIdentityStore::CoreNodeIdentityStore::new(storage.clone())
             .initialize()
@@ -488,9 +488,7 @@ mod core_edge {
             inner: inner.clone(),
             traffic: Mutex::default(),
         });
-        let mut host = (*host(storage.clone())).clone();
-        host.audioCaptureHost = audio;
-        let host = Arc::new(host);
+        let host = host(storage.clone());
         let peers = HostRuntimePeerService::new(
             host.clone(),
             &router,
@@ -515,12 +513,12 @@ mod core_edge {
         })
             .unwrap();
         inner.installSpace(service.clone()).unwrap();
-        inner
-            .install(Arc::new(
-                EdgeNode::fromHostManager((*host).clone())
-                    .withNodeServices(NodeServices::new(peers.clone())),
-            ))
-            .unwrap();
+        let mut edge = EdgeNode::fromHostManager((*host).clone())
+            .withNodeServices(NodeServices::new(peers.clone()));
+        if let Some(source) = audio {
+            edge = edge.withAudioSource(source, host.hostRuntimeTaskSchedulerHost.clone().unwrap());
+        }
+        inner.install(Arc::new(edge)).unwrap();
         EdgeFixture {
             storage,
             router,

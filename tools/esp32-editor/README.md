@@ -269,7 +269,7 @@ Core 插件通过 `Tools.Edge.listAudioInputs/openAudioInput/readAudioInput/clos
 测试使用流式消费验证器，不把测试音伪装为语音识别成功。浏览器检查可同时使用现有
 `/api/simulator/debug/snapshot`、`/api/simulator/debug/tap` 观察共享 C/Wasm 审批页面。
 
-此输入是模拟设备的 Host 适配，未安装真实 ESP 麦克风驱动，不能据此判断 I2S/ADC
+此输入直接注册为模拟设备的 Edge 音频源，未安装真实 ESP 麦克风驱动，不能据此判断 I2S/ADC
 采集性能。协议、插件示例及硬件边界见 [流式音频接口](../../docs/edge-streaming-audio.md)。
 
 模拟麦克风接入：展开“ESP32 模拟设备”，在“向 Core 申请接入”填写 Core 节点 ID、TCP 监听地址与 Token，点击“发送接入请求”。输入 Core 显示的配对码后，模拟器会主动申请加入 Core 的设备空间；在 Core 上批准，再点击“刷新申请状态”。已有出向配对会直接提交权限申请。随后插件通过 `Tools.Edge` 打开 `sim-pcm`，在原有 TCP 连接上接收 16 kHz 单声道 PCM。这个入口只发起申请，审批沿用节点的现有权限流程。

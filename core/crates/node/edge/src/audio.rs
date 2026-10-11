@@ -1,7 +1,8 @@
 //! Optional capture/upload service. Uses the existing admitted PeerLink Push,
 //! with one capture and bounded PCM items. No socket or carrier is created here.
+use async_trait::async_trait;
 use operit_edge_contract::audio::*;
-use operit_host_api::{AudioCaptureHost, HostRuntimeTaskSchedulerHost};
+use operit_host_api::HostRuntimeTaskSchedulerHost;
 use operit_link::{CoreLinkError, CorePushRequest, CoreValue};
 use operit_node_runtime::NodeServices::NodeServices;
 use std::{
@@ -11,30 +12,49 @@ use std::{
 };
 use tokio::sync::watch;
 
+/// Device-owned audio input registered directly on an Edge Node.
+/// Reject unsupported formats and report lost samples as errors.
+#[async_trait]
+pub trait EdgeAudioSource: Send + Sync {
+    fn listInputs(&self) -> Result<Vec<AudioInputDevice>, String>;
+    async fn openInput(
+        &self,
+        inputId: &str,
+        format: &AudioInputFormat,
+    ) -> Result<Box<dyn EdgeAudioSession>, String>;
+}
+
+/// Dropping a capture must stop recording and release the device.
+#[async_trait]
+pub trait EdgeAudioSession: Send {
+    /// Bounded PCM block, clean EOF, or an error for capture failure/overrun.
+    async fn read(&mut self) -> Result<Option<Vec<u8>>, String>;
+}
+
 struct Capture {
     receiver: String,
     cancel: watch::Sender<bool>,
 }
 pub struct EdgeAudioService {
-    host: Arc<dyn AudioCaptureHost>,
+    source: Arc<dyn EdgeAudioSource>,
     scheduler: Arc<dyn HostRuntimeTaskSchedulerHost>,
     captures: Arc<Mutex<HashMap<String, Capture>>>,
 }
 impl EdgeAudioService {
     pub fn new(
-        host: Arc<dyn AudioCaptureHost>,
+        source: Arc<dyn EdgeAudioSource>,
         scheduler: Arc<dyn HostRuntimeTaskSchedulerHost>,
     ) -> Self {
         Self {
-            host,
+            source,
             scheduler,
             captures: Arc::new(Mutex::new(HashMap::new())),
         }
     }
     pub fn listInputs(&self) -> Result<CoreValue, CoreLinkError> {
-        let inputs = self.host.listInputs().map_err(|e| error(e.to_string()))?;
+        let inputs = self.source.listInputs().map_err(|e| error(e.to_string()))?;
         if inputs.len() > 16 {
-            return Err(error("Audio host returned too many inputs"));
+            return Err(error("Audio source returned too many inputs"));
         }
         let value = operit_link::toCoreValue(inputs).map_err(|e| error(e.to_string()))?;
         if operit_link::encodeLink(&value)
@@ -108,10 +128,10 @@ impl EdgeAudioService {
             .await?;
         let opened = tokio::time::timeout(
             Duration::from_secs(10),
-            self.host.openInput(&request.inputId, &request.format),
+            self.source.openInput(&request.inputId, &request.format),
         )
         .await
-        .unwrap_or_else(|_| Err(operit_host_api::HostError::new("Microphone open timed out")));
+        .unwrap_or_else(|_| Err("Microphone open timed out".into()));
         let source = match opened {
             Ok(source) => source,
             Err(e) => {
@@ -207,13 +227,15 @@ fn end(error: Option<String>) -> CoreValue {
 }
 
 fn requireAudioCapacity(
-    format: &operit_host_api::AudioInputFormat,
+    format: &AudioInputFormat,
     capacity: Option<u32>,
 ) -> Result<(), CoreLinkError> {
     if let Some(capacity) = capacity {
         let bytesPerSecond = format.sampleRateHz * format.channels as u32 * 2;
         if bytesPerSecond as u64 * 4 > capacity as u64 * 3 {
-            return Err(error("Serial capacity is insufficient for this PCM format; configure matching higher PeerLink baud rates on both Hosts"));
+            return Err(error(
+                "Existing serial capacity is insufficient for this PCM format",
+            ));
         }
     }
     Ok(())
@@ -222,16 +244,16 @@ fn requireAudioCapacity(
 mod tests {
     use super::*;
     #[test]
-    fn audio_capacity_rejects_legacy_uart_and_preserves_headroom() {
-        let format = operit_host_api::AudioInputFormat::default();
+    fn audio_capacity_rejects_existing_uart_and_preserves_headroom() {
+        let format = AudioInputFormat::default();
         assert!(requireAudioCapacity(&format, Some(115200 / 10)).is_err());
-        assert!(requireAudioCapacity(&format, Some(921600 / 10)).is_ok());
+        assert!(requireAudioCapacity(&format, Some(100_000)).is_ok());
         assert!(requireAudioCapacity(&format, None).is_ok());
-        let stereo = operit_host_api::AudioInputFormat {
+        let stereo = AudioInputFormat {
             sampleRateHz: 48000,
             channels: 2,
             ..Default::default()
         };
-        assert!(requireAudioCapacity(&stereo, Some(921600 / 10)).is_err());
+        assert!(requireAudioCapacity(&stereo, Some(100_000)).is_err());
     }
 }

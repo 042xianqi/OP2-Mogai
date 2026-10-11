@@ -25,8 +25,9 @@ Link request and event types out of the device app layer.
 
 ## Streaming microphone input
 
-An optional `AudioCaptureHost` installed in `HostManager` supplies microphone
-inputs. Core plugins use `Tools.Edge.listAudioInputs`, `openAudioInput`,
+An optional device-owned `audio::EdgeAudioSource` registered with
+`EdgeNode::withAudioSource(source, scheduler)` supplies microphone inputs.
+It reuses the existing runtime task scheduler without extending Host APIs. Core plugins use `Tools.Edge.listAudioInputs`, `openAudioInput`,
 `readAudioInput`, and `closeAudioInput`; Edge uploads bounded binary PCM through
 its existing admitted TCP/serial Link Push connection. Hardware capture drivers
 must report overruns and release recording resources on Drop.

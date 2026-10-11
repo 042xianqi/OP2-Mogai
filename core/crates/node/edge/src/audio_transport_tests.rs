@@ -1,7 +1,7 @@
 use super::*;
+use crate::audio::{EdgeAudioSession, EdgeAudioSource};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use operit_edge_contract::audio::*;
-use operit_host_api::{AudioCaptureHost, AudioCaptureSession, AudioInputDevice, AudioInputFormat};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct TestMic {
@@ -17,8 +17,8 @@ struct TestRecording {
     drops: Arc<AtomicUsize>,
 }
 #[async_trait]
-impl AudioCaptureHost for TestMic {
-    fn listInputs(&self) -> HostResult<Vec<AudioInputDevice>> {
+impl EdgeAudioSource for TestMic {
+    fn listInputs(&self) -> Result<Vec<AudioInputDevice>, String> {
         Ok(vec![AudioInputDevice {
             inputId: "test-mic".into(),
             name: "Simulated microphone".into(),
@@ -29,9 +29,9 @@ impl AudioCaptureHost for TestMic {
         &self,
         input: &str,
         format: &AudioInputFormat,
-    ) -> HostResult<Box<dyn AudioCaptureSession>> {
+    ) -> Result<Box<dyn EdgeAudioSession>, String> {
         if input != "test-mic" || format != &AudioInputFormat::default() {
-            return Err(HostError::new("Unsupported test input"));
+            return Err("Unsupported test input".into());
         }
         Ok(Box::new(TestRecording {
             blocks: self.blocks.clone().into(),
@@ -42,8 +42,8 @@ impl AudioCaptureHost for TestMic {
     }
 }
 #[async_trait]
-impl AudioCaptureSession for TestRecording {
-    async fn read(&mut self) -> HostResult<Option<Vec<u8>>> {
+impl EdgeAudioSession for TestRecording {
+    async fn read(&mut self) -> Result<Option<Vec<u8>>, String> {
         tokio::task::yield_now().await;
         if self.repeat {
             return Ok(Some(vec![3; 640]));
@@ -52,7 +52,7 @@ impl AudioCaptureSession for TestRecording {
             return Ok(Some(block));
         }
         if self.failure {
-            Err(HostError::new("microphone overrun"))
+            Err("microphone overrun".into())
         } else {
             Ok(None)
         }
