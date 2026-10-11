@@ -15,7 +15,7 @@ class RuntimeDeviceInfoProvider {
       throw FormatException('browser platform is not available');
     }
     final browser = _browserName(userAgent);
-    return generated.LinkDeviceInfo(platform: platform, model: browser);
+    return generated.LinkDeviceInfo(platform: platform, model: browser, pairingIncarnation: null);
   }
 }
 
