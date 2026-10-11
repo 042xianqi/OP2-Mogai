@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use operit_host_api::PluginStorage::{StorageKind, StorageMutation, StorageRequest};
+use operit_host_api::PluginStorage::{StorageKind, StorageMutation, StorageRequest, StorageResponse};
 use operit_host_api::{RuntimeSqliteHost, RuntimeStorageHost};
 use operit_store::PluginStorage::PluginStorageSession;
 use operit_store::PreferencesDataStore::{stringPreferencesKey, Preferences, PreferencesDataStore};
@@ -74,7 +74,10 @@ impl CharacterPluginWriter {
                 &device_id,
             )
             .map_err(|error| error.to_string())?;
-        let handle = requiredString(&response, "handle")?.to_string();
+        let StorageResponse::Open(response) = response else {
+            return Err("Storage open returned a different operation result".to_string());
+        };
+        let handle = response.handle;
         Ok(Self {
             session,
             sqlite,
@@ -95,6 +98,7 @@ impl CharacterPluginWriter {
                 &self.device_id,
             )
             .map_err(|error| error.to_string())
+            .and_then(|response| serde_json::to_value(response).map_err(|error| error.to_string()))
     }
 
     /// Reads an exact object entry, preserving the distinction between absence and a stored value.

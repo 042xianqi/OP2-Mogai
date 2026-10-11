@@ -1,6 +1,18 @@
 /** Sends typed storage data through the same scoped host Promise transport as other SDK calls. */
 function __operitStorageRequest(request) {
-    return Tools.Storage.request(request);
+    return Tools.Storage.request(request).then(function(result) {
+        switch (result.op) {
+            case 'open': return { handle: result.handle, path: result.path };
+            case 'close': return null;
+            case 'query': return result.rows;
+            case 'execute': case 'transaction': return result.results;
+            case 'define_table': return { changed: result.changed };
+            case 'get': return result.entry;
+            case 'list': case 'changes': return result.entries;
+            case 'commit': return { version: result.version };
+            default: throw new Error('Unknown Storage tool result operation');
+        }
+    });
 }
 
 /** Rejects unsupported structured data instead of silently dropping values. */

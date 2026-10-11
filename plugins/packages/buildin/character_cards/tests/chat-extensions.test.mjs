@@ -56,11 +56,11 @@ async function extensionHarness(t) {
       };
     },
     /** Returns null only for an existing record with no executing-owner namespace. */
-    async readExtension(target) { attempted("readExtension", target); const record = targetRecord(target); return record.extension === null ? null : plain(record.extension); },
+    async readExtension(target) { attempted("readExtension", target); const record = targetRecord(target); return { extension: record.extension === null ? null : plain(record.extension) }; },
     /** Replaces only the executing-owner object on the exact existing record and returns its stored value. */
-    async writeExtension(target, value) { attempted("writeExtension", target, value); const record = targetRecord(target); record.extension = plain(value); return plain(record.extension); },
+    async writeExtension(target, value) { attempted("writeExtension", target, value); const record = targetRecord(target); record.extension = plain(value); return { extension: plain(record.extension) }; },
     /** Removes only the executing-owner namespace and does not delete a host chat or plugin group. */
-    async deleteExtension(target) { attempted("deleteExtension", target); const record = targetRecord(target), existed = record.extension !== null; record.extension = null; return existed; },
+    async deleteExtension(target) { attempted("deleteExtension", target); const record = targetRecord(target), existed = record.extension !== null; record.extension = null; return { deleted: existed }; },
   });
   const globals = { ...disk.globals, Tools: strictMethods("Tools", { Files: disk.files, Storage: disk.storage, Chat: chat }) };
   const files = loadModule("src/storage/database.ts", globals), repository = await files.DatabaseCharacterRepository.open();

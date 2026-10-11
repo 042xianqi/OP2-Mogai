@@ -43,3 +43,35 @@ export function installGeneratedToolsRuntime(sandbox, version = '2.0.0') {
   vm.runInContext(api.slice(start, api.indexOf('"#', start)), sandbox);
   vm.runInContext(generatedToolsSource(), sandbox);
 }
+
+/** Builds explicit native tool result fields for tests supplying business data completions. */
+export function domainToolResult(name, payload, request) {
+  const fields = {
+    models_list_summaries:'models', tts_list_configs:'configs',
+    tts_get_current_config_id:'configId', tts_set_current_config_id:'configId',
+    theme_list_configs:'configs', chat_read_extension:'extension',
+    chat_write_extension:'extension', chat_delete_extension:'deleted',
+  };
+  if (fields[name]) return { [fields[name]]:payload };
+  if (name === 'chat_observe') {
+    const op = request.observation.op;
+    if (op === 'open') return {op,handle:payload};
+    if (op === 'next') return {op,event:payload};
+    return {op};
+  }
+  if (name === 'storage_request') {
+    const op = request.request.op;
+    switch (op) {
+      case 'open': return {op,...payload};
+      case 'close': return {op};
+      case 'query': return {op,rows:payload};
+      case 'execute': case 'transaction': return {op,results:payload};
+      case 'define_table': return {op,...payload};
+      case 'get': return {op,entry:payload};
+      case 'list': case 'changes': return {op,entries:payload};
+      case 'commit': return {op,...payload};
+      default: throw new Error('Unexpected test Storage operation: ' + op);
+    }
+  }
+  return payload;
+}

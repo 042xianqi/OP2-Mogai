@@ -329,15 +329,15 @@ pub trait ChatHost: Send + Sync {
     /// @returns The identity and timestamp of the actually persisted conversation.
     fn createNew(&self, options: Option<ChatCreateOptions>) -> JsFuture<ChatCreationResultData>;
     /// Reads only the authenticated executing package's extension on an existing target.
-    fn readExtension(&self, target: ChatExtensionTarget) -> JsFuture<JsNullable<JsonObject>>;
+    fn readExtension(&self, target: ChatExtensionTarget) -> JsFuture<ChatReadExtensionResultData>;
     /// Replaces only the authenticated executing package's object extension on an existing target.
     fn writeExtension(
         &self,
         target: ChatExtensionTarget,
         value: JsonObject,
-    ) -> JsFuture<JsonObject>;
+    ) -> JsFuture<ChatWriteExtensionResultData>;
     /// Deletes only the authenticated executing package's extension on an existing target.
-    fn deleteExtension(&self, target: ChatExtensionTarget) -> JsFuture<bool>;
+    fn deleteExtension(&self, target: ChatExtensionTarget) -> JsFuture<ChatDeleteExtensionResultData>;
     ///
     ///List all chat conversations
     ///@returns Promise resolving to the list of all chats
@@ -378,11 +378,11 @@ pub trait ChatHost: Send + Sync {
     ///
     fn deleteChat(&self, chatId: String) -> JsFuture<ChatDeleteResultData>;
     /// Sends one request and resolves only after its real receipt and native cleanup are complete.
-    fn sendMessage(&self, request: ChatSendRequest) -> JsFuture<MessageSendResultData>;
+    fn sendMessage(&self, request: ChatSendRequest) -> JsFuture<ChatSendMessageResultData>;
     /// Streams authoritative parsed part snapshots and the real terminal receipt through one async iterator.
     fn sendMessageStreaming(&self, request: ChatSendRequest) -> JsAsyncIterable<ChatSendEvent>;
     /// Cancels only the calling plugin's execution captured in the specified conversation.
-    fn cancel(&self, chatId: String) -> JsFuture<ChatCancelResult>;
+    fn cancel(&self, chatId: String) -> JsFuture<ChatCancelResultData>;
     ///
     ///Get messages from a specific chat
     ///@param chatId - The ID of the chat to read

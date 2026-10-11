@@ -1,5 +1,6 @@
 //! Configured model summaries exposed to plugins.
 use super::{JsFuture, JsNullable};
+use super::results::ModelsListSummariesResultData;
 use serde::{Deserialize, Serialize};
 
 /// Describes the actual configured model capability flags.
@@ -50,5 +51,5 @@ pub struct ModelsSummary {
 /// Reads configured model summaries from the canonical host manager.
 pub trait ModelsHost: Send + Sync {
     /// Returns complete provider/model summaries, capabilities and pricing.
-    fn listSummaries(&self) -> JsFuture<Vec<ModelsSummary>>;
+    fn listSummaries(&self) -> JsFuture<ModelsListSummariesResultData>;
 }

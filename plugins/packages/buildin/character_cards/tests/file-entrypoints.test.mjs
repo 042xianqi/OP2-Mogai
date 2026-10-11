@@ -213,12 +213,12 @@ test("explicit host directory test inputs preserve values and reject undeclared 
   supplied.models[0].capabilities.toolCall = false;
   supplied.ttsConfigs[0].headers[0].value = "mutated-supplied-header";
   supplied.toolCatalog.mcpServers[0].description = "mutated-supplied-source";
-  const models = await api.Models.listSummaries(), speech = await api.Tts.listConfigs(), catalog = await api.Catalog.readToolSources();
+  const models = (await api.Models.listSummaries()).models, speech = (await api.Tts.listConfigs()).configs, catalog = await api.Catalog.readToolSources();
   assert.deepEqual(models, directoryInput.models); assert.deepEqual(speech, directoryInput.ttsConfigs); assert.deepEqual(catalog, directoryInput.toolCatalog);
   models[0].providerName = "mutated-returned-model"; speech[0].responsePipeline[0].path = "mutated-returned-path";
   catalog.builtinTools[0].name = "mutated-returned-tool";
-  assert.deepEqual(await api.Models.listSummaries(), directoryInput.models);
-  assert.deepEqual(await api.Tts.listConfigs(), directoryInput.ttsConfigs);
+  assert.deepEqual((await api.Models.listSummaries()).models, directoryInput.models);
+  assert.deepEqual((await api.Tts.listConfigs()).configs, directoryInput.ttsConfigs);
   assert.deepEqual(await api.Catalog.readToolSources(), directoryInput.toolCatalog);
   assertDirectoryCalls(settings, [...snapshotDirectoryMethods, ...snapshotDirectoryMethods]);
   assert.equal(disk.calls.length, 0, "Directory test inputs must not initialize or manufacture plugin records");
@@ -350,7 +350,7 @@ test("sidebar preparation reads real plugin data and avatars without opening a U
   await writeFile(avatar, Buffer.from("iVBORw0KGgo=", "base64"));
   const extensionReads = [];
   const harness = { ...settings.harness, globals: { ...settings.harness.globals,
-    Tools: { ...settings.harness.globals.Tools, Chat: { readExtension: async request => { extensionReads.push(request); return null; } } },
+    Tools: { ...settings.harness.globals.Tools, Chat: { readExtension: async request => { extensionReads.push(request); return { extension: null }; } } },
     ToolPkg: { ...settings.harness.globals.ToolPkg, readResource: async (key, file) => {
       assert.equal(key, "character_default_avatar"); assert.equal(file, "operit-avatar.png"); return avatar;
     } },

@@ -33,7 +33,7 @@ export async function groupEnvironment(t, transport) {
       if (target.kind !== "chat" || target.chatId !== chatId) throw new Error("Controlled chat record does not exist");
       const record = records.get(target.chatId); if (record === undefined) throw new Error("Controlled chat record does not exist");
       extensionCalls.push({ owner, target: plain(target) });
-      return Object.hasOwn(record, owner) ? plain(record[owner]) : null;
+      return { extension: Object.hasOwn(record, owner) ? plain(record[owner]) : null };
     },
     /** Executes only the explicitly queued functional planner result and rejects all missing fixture capabilities. */
     async call(input) {
@@ -55,9 +55,9 @@ export async function groupEnvironment(t, transport) {
   const globals = { ...disk.globals, Tools: tools };
   const repository = await loadModule("src/storage/database.ts", globals).DatabaseCharacterRepository.open({
     /** Reads only the explicitly supplied complete controlled model directory. */
-    listModels: () => tools.Models.listSummaries(),
+    listModels: async () => (await tools.Models.listSummaries()).models,
     /** Reads only the explicitly supplied complete controlled voice directory. */
-    listTtsConfigs: () => tools.Tts.listConfigs(),
+    listTtsConfigs: async () => (await tools.Tts.listConfigs()).configs,
     /** Reads only the explicitly supplied complete controlled tool-source catalog. */
     readToolCatalog: () => tools.Catalog.readToolSources(),
   });

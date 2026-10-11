@@ -3,13 +3,13 @@ import type { Tts } from "../../../../types/tts";
 import type { Catalog } from "../../../../types/catalog";
 import type { CharacterDirectories } from "../src/model";
 
-/** Restricts controlled directory inputs to the existing generated SDK method results. */
+/** Derives controlled directory payloads from the generated tool result fields. */
 type DirectoryApis = { models: typeof Models.listSummaries; tts: typeof Tts.listConfigs; tools: typeof Catalog.readToolSources };
 
 /** Supplies explicit unit-test dependencies, not configured native-host directories or production defaults. */
 export interface HostDirectoriesTestInput {
-  models: Awaited<ReturnType<DirectoryApis["models"]>>;
-  ttsConfigs: Awaited<ReturnType<DirectoryApis["tts"]>>;
+  models: Awaited<ReturnType<DirectoryApis["models"]>>["models"];
+  ttsConfigs: Awaited<ReturnType<DirectoryApis["tts"]>>["configs"];
   toolCatalog: Awaited<ReturnType<DirectoryApis["tools"]>>;
 }
 

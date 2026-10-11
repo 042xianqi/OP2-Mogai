@@ -1,5 +1,7 @@
 // Generated from operit-plugin-sdk Rust declarations.
 
+import type { ModelsListSummariesResultData } from "./results";
+
 /**
  * Reads configured model summaries from the canonical host manager.
  */
@@ -53,5 +55,5 @@ export namespace Models {
   /**
    * Returns complete provider/model summaries, capabilities and pricing.
    */
-  function listSummaries(): Promise<Summary[]>;
+  function listSummaries(): Promise<ModelsListSummariesResultData>;
 }

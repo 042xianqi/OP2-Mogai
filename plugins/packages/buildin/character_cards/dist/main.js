@@ -1066,7 +1066,7 @@ var extractionTemplate = '\u4F60\u8981\u4ECE\u5BF9\u8BDD\u4E2D\u6784\u5EFA\u957F
 function readChatExtensionBinding(chatId) {
   return __async(this, null, function* () {
     requireId(chatId, "chat id");
-    const extension = yield Tools.Chat.readExtension({ kind: "chat", chatId });
+    const extension = (yield Tools.Chat.readExtension({ kind: "chat", chatId })).extension;
     if (extension === null) throw new Error("Chat has no character selection in this plugin's namespace: " + chatId);
     const marker = decodeChatMarker(extension);
     return { chatId, selection: marker.selection };
@@ -1078,7 +1078,7 @@ function readMessageExtensionMarker(chatId, messageTimestamp, variantIndex) {
     assertInteger(messageTimestamp, "message timestamp", 0);
     assertInteger(variantIndex, "message variant index", 0);
     if (variantIndex > 2147483647) throw new Error("Message variant index exceeds the host's i32 range");
-    const extension = yield Tools.Chat.readExtension({ kind: "message", chatId, messageTimestamp, variantIndex });
+    const extension = (yield Tools.Chat.readExtension({ kind: "message", chatId, messageTimestamp, variantIndex })).extension;
     if (extension === null) throw new Error("Message revision has no saved character identity in this plugin's namespace: " + chatId + "/" + messageTimestamp + "/" + variantIndex);
     return decodeMessageMarker(extension);
   });
@@ -1093,7 +1093,7 @@ function listChatExtensionBindings() {
       const chatId = requireId(chat.id, "host chat id");
       if (ids.has(chatId)) throw new Error("Duplicate host chat identity: " + chatId);
       ids.add(chatId);
-      const extension = yield Tools.Chat.readExtension({ kind: "chat", chatId });
+      const extension = (yield Tools.Chat.readExtension({ kind: "chat", chatId })).extension;
       if (extension === null) continue;
       const marker = decodeChatMarker(extension);
       bindings.push({ chatId, selection: marker.selection });
@@ -1105,8 +1105,8 @@ function writeChatExtensionBinding(binding) {
   return __async(this, null, function* () {
     requireId(binding.chatId, "chat id");
     const target = { kind: "chat", chatId: binding.chatId };
-    const existing = yield Tools.Chat.readExtension(target), value = encodeChatMarker(binding.selection, existing === null ? null : markerObject(existing, "existing chat extension"));
-    const stored = yield Tools.Chat.writeExtension(target, value), marker = decodeChatMarker(stored);
+    const existing = (yield Tools.Chat.readExtension(target)).extension, value = encodeChatMarker(binding.selection, existing === null ? null : markerObject(existing, "existing chat extension"));
+    const stored = (yield Tools.Chat.writeExtension(target, value)).extension, marker = decodeChatMarker(stored);
     if (marker.selection !== binding.selection) throw new Error("Stored chat extension selection differs from the submitted value");
     return { chatId: binding.chatId, selection: marker.selection };
   });
@@ -1114,7 +1114,7 @@ function writeChatExtensionBinding(binding) {
 function deleteChatExtensionBinding(chatId) {
   return __async(this, null, function* () {
     requireId(chatId, "chat id");
-    const deleted = yield Tools.Chat.deleteExtension({ kind: "chat", chatId });
+    const deleted = (yield Tools.Chat.deleteExtension({ kind: "chat", chatId })).deleted;
     assertBoolean(deleted, "chat extension deleted");
     return { chatId, deleted };
   });
@@ -3264,7 +3264,7 @@ function createSettingsConfigurationAccess(readSettings) {
     /** Projects actual named Theme configs into the plugin's one private picker row contract. */
     readThemeChoices() {
       return __async(this, null, function* () {
-        const configs = configurationRecords(yield readSettings().Theme.listConfigs(), "\u4E3B\u9898\u914D\u7F6E");
+        const configs = configurationRecords((yield readSettings().Theme.listConfigs()).configs, "\u4E3B\u9898\u914D\u7F6E");
         return configs.map(
           /** Preserves the actual independent ID and display name without storing or rewriting its snapshot. */
           (config) => {
@@ -3278,13 +3278,13 @@ function createSettingsConfigurationAccess(readSettings) {
     /** Verifies a genuine independent Theme ID before any active selection or chat namespace write. */
     validateTheme(id2) {
       return __async(this, null, function* () {
-        requireConfiguration(yield readSettings().Theme.listConfigs(), id2, "\u4E3B\u9898\u914D\u7F6E");
+        requireConfiguration((yield readSettings().Theme.listConfigs()).configs, id2, "\u4E3B\u9898\u914D\u7F6E");
       });
     },
     /** Verifies a genuine independent TTS ID before any active selection or chat namespace write. */
     validateTts(id2) {
       return __async(this, null, function* () {
-        requireConfiguration(yield readSettings().Tts.listConfigs(), id2, "TTS \u914D\u7F6E");
+        requireConfiguration((yield readSettings().Tts.listConfigs()).configs, id2, "TTS \u914D\u7F6E");
       });
     },
     /** Awaits the canonical Theme transaction and validates its acknowledgement of this exact independent config. */
@@ -3301,9 +3301,9 @@ function createSettingsConfigurationAccess(readSettings) {
       return __async(this, null, function* () {
         requireId(id2, "TTS \u914D\u7F6E\u5F15\u7528 ID");
         const applied = yield readSettings().Tts.setCurrentConfigId(id2);
-        if (applied !== id2) throw new Error("TTS \u914D\u7F6E\u63D0\u4EA4\u8FD4\u56DE\u7684 ID \u4E0E\u8BF7\u6C42\u4E0D\u4E00\u81F4\uFF1A" + id2);
+        if (applied.configId !== id2) throw new Error("TTS \u914D\u7F6E\u63D0\u4EA4\u8FD4\u56DE\u7684 ID \u4E0E\u8BF7\u6C42\u4E0D\u4E00\u81F4\uFF1A" + id2);
         const current = yield readSettings().Tts.getCurrentConfigId();
-        if (current !== id2) throw new Error("TTS \u5F53\u524D\u914D\u7F6E\u8BFB\u53D6\u7ED3\u679C\u672A\u786E\u8BA4\u8BF7\u6C42\u7684 ID\uFF1A" + id2);
+        if (current.configId !== id2) throw new Error("TTS \u5F53\u524D\u914D\u7F6E\u8BFB\u53D6\u7ED3\u679C\u672A\u786E\u8BA4\u8BF7\u6C42\u7684 ID\uFF1A" + id2);
       });
     }
   };
@@ -3659,7 +3659,7 @@ function parseOwner(ownerKey) {
 function menuMemoryOwner(chatId, host) {
   return __async(this, null, function* () {
     requireId(chatId, "memory menu chat id");
-    const extension = yield Tools.Chat.readExtension({ kind: "chat", chatId });
+    const extension = (yield Tools.Chat.readExtension({ kind: "chat", chatId })).extension;
     const selection = extension === null ? null : parseChatSelection(decodeChatMarker(extension).selection);
     if (selection?.kind === "card") return resolveMemoryOwner(selection.id, host);
     const active = yield host.readActive();
@@ -5404,7 +5404,7 @@ function chatContextActionsApi(event) {
       const active = yield service.dispatchDomain("activePrompt.get", {});
       return contextActions(chatUiRoutes, { chatId: null, selection: encodeSelection(active) }, directory);
     }
-    const extension = yield Tools.Chat.readExtension({ kind: "chat", chatId: input.chatId });
+    const extension = (yield Tools.Chat.readExtension({ kind: "chat", chatId: input.chatId })).extension;
     const selection = extension === null ? null : decodeChatMarker(extension).selection;
     return contextActions(chatUiRoutes, { chatId: input.chatId, selection }, directory);
   });
@@ -5415,7 +5415,7 @@ function chatListSectionsApi(event) {
     const input = parseSectionsRequest(event.payload), service = yield getService(), directory = yield service.snapshot();
     const bindings = [];
     for (const chat of input.chats) {
-      const extension = yield Tools.Chat.readExtension({ kind: "chat", chatId: chat.id });
+      const extension = (yield Tools.Chat.readExtension({ kind: "chat", chatId: chat.id })).extension;
       if (extension !== null) bindings.push({ chatId: chat.id, selection: decodeChatMarker(extension).selection });
     }
     return listSections(chatUiRoutes.editor, directory, bindings, input.chats.map(
@@ -7930,7 +7930,7 @@ function sequenceKey(chatId, submissionId) {
 }
 function verifySnapshot(chatId, selected, assistant2) {
   return __async(this, null, function* () {
-    const extension = yield Tools.Chat.readExtension({ kind: "message", chatId, messageTimestamp: assistant2.messageTimestamp, variantIndex: assistant2.variantIndex });
+    const extension = (yield Tools.Chat.readExtension({ kind: "message", chatId, messageTimestamp: assistant2.messageTimestamp, variantIndex: assistant2.variantIndex })).extension;
     if (extension === null) throw new Error("Committed group assistant has no participant message extension");
     const marker = decodeMessageMarker(extension);
     if (marker.selection !== selected.selection || marker.profile.id !== selected.participantId || marker.promptFunctionType !== "CHAT") {
@@ -8101,7 +8101,7 @@ function onGroupInputSubmit(event) {
     const payload = event.eventPayload;
     if (payload.source === "Sequence") return null;
     const chatId = requireId(payload.chatId, "submitted chatId");
-    const extension = yield Tools.Chat.readExtension({ kind: "chat", chatId });
+    const extension = (yield Tools.Chat.readExtension({ kind: "chat", chatId })).extension;
     if (extension === null) return null;
     const binding = decodeChatMarker(extension);
     if (parseChatSelection(binding.selection).kind !== "group") return null;
@@ -8404,7 +8404,7 @@ function readSidebarSelections(chats) {
     const selections = [];
     for (let offset = 0; offset < chats.length; offset += 8) {
       selections.push(...yield Promise.all(chats.slice(offset, offset + 8).map((chat) => __async(null, null, function* () {
-        const extension = yield Tools.Chat.readExtension({ kind: "chat", chatId: chat.id });
+        const extension = (yield Tools.Chat.readExtension({ kind: "chat", chatId: chat.id })).extension;
         return { chatId: chat.id, selection: extension === null ? null : decodeChatMarker(extension).selection };
       }))));
     }
@@ -8418,9 +8418,13 @@ function registerSidebarChannel() {
 // src/main.ts
 connectDirectorySources({
   /** Reads the actual configured model directory only when the shared service requests it. */
-  listModels: () => Tools.Models.listSummaries(),
+  listModels: () => __async(null, null, function* () {
+    return (yield Tools.Models.listSummaries()).models;
+  }),
   /** Reads the actual TTS directory without opening storage during registration. */
-  listTtsConfigs: () => Tools.Tts.listConfigs(),
+  listTtsConfigs: () => __async(null, null, function* () {
+    return (yield Tools.Tts.listConfigs()).configs;
+  }),
   /** Reads complete real builtin, package, skill and MCP sources through the canonical tool-source catalog. */
   readToolCatalog: () => Tools.Catalog.readToolSources()
 });

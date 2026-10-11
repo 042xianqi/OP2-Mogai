@@ -112,7 +112,7 @@ impl Drop for ToolExecutorLease {
     }
 }
 
-/// Ends the invocation lifecycle even when its future is cancelled or unwinds.
+/// Ends an AI invocation lifecycle even when its future is cancelled or unwinds.
 struct ToolInvocationLifecycle {
     context: ToolInvocationContext,
     tool: AITool,
@@ -983,7 +983,7 @@ impl AIToolHandler {
         )));
     }
 
-    /// Executes every caller through one lifecycle, with AI permissions selected only by native policy.
+    /// Executes every caller through one pipeline, with hooks and permissions selected by native AI policy.
     #[allow(non_snake_case)]
     pub async fn executeToolInvocation(
         &mut self,
@@ -994,18 +994,24 @@ impl AIToolHandler {
         context.clone().scope(self.executeInvocationInContext(request, policy, &context)).await
     }
 
-    /// Owns the sole lifecycle under the caller context established by the native entry adapter.
+    /// Executes under the native caller context and dispatches lifecycle hooks only for AI requests.
     async fn executeInvocationInContext(&mut self, request: &ToolCall, policy: ToolExecutionPolicy, context: &ToolInvocationContext) -> Result<Vec<ToolResult>, String> {
         let entryTool = request.toLegacyTool();
         let resolved = request.resolveTarget(context)?;
         let request = &resolved;
         let tool = request.toLegacyTool();
         let tool = &tool;
-        let _lifecycle = ToolInvocationLifecycle {
-            context: context.clone(),
-            tool: tool.clone(),
+        let isAiInvocation = matches!(policy, ToolExecutionPolicy::Ai { .. });
+        let _lifecycle = if isAiInvocation {
+            let lifecycle = ToolInvocationLifecycle {
+                context: context.clone(),
+                tool: tool.clone(),
+            };
+            self.notifyToolCallRequested(tool);
+            Some(lifecycle)
+        } else {
+            None
         };
-        self.notifyToolCallRequested(tool);
         let startMs = operit_host_api::TimeUtils::currentTimeMillis();
         ChainLogger::info(
             TOOL_CHAIN,
@@ -1017,26 +1023,28 @@ impl AIToolHandler {
                 if let Some(denied) = ToolExecutionManager::buildToolExposureDeniedResult(&entryTool, exposure.clone()) {
                     return Ok(vec![denied]);
                 }
-            }
-            let interception = self.checkToolInterception(tool).await?;
-            if let AIToolHookDecision::Block(_) = interception {
-                return Ok(vec![Self::toolInterceptionResult(tool, interception)]);
+                let interception = self.checkToolInterception(tool).await?;
+                if let AIToolHookDecision::Block(_) = interception {
+                    return Ok(vec![Self::toolInterceptionResult(tool, interception)]);
+                }
             }
             if !self.getToolExecutorOrActivate(&tool.name).await? {
                 return Ok(vec![Self::failedInvocation(tool, format!("Tool not found: {}", tool.name))]);
             }
             let mut executor = self.takeToolExecutorForExecution(&tool.name).await
                 .ok_or_else(|| format!("Registered executor disappeared: {}", tool.name))?;
-            let prepared = match executor.prepare(request, context, matches!(policy, ToolExecutionPolicy::Ai { .. })) {
+            let prepared = match executor.prepare(request, context, isAiInvocation) {
                 Ok(prepared) => prepared,
                 Err(error) => return Ok(vec![Self::failedInvocation(tool, format!("Invalid tool invocation: {error}"))]),
             };
-            if let Some(access) = prepared.access {
-                if let Err(denied) = self.executeAccessPreflightAsync(tool, access).await {
-                    return Ok(vec![denied]);
+            if isAiInvocation {
+                if let Some(access) = prepared.access {
+                    if let Err(denied) = self.executeAccessPreflightAsync(tool, access).await {
+                        return Ok(vec![denied]);
+                    }
                 }
+                self.notifyToolExecutionStarted(tool);
             }
-            self.notifyToolExecutionStarted(tool);
             let collected = prepared.invoke.await;
             if let Some(name) = BuiltinToolName::from_name(&request.name) {
                 for result in &collected {
@@ -1054,8 +1062,10 @@ impl AIToolHandler {
         }.await;
         match &execution {
             Ok(results) => {
-                for result in results {
-                    self.notifyToolExecutionResult(tool, result);
+                if isAiInvocation {
+                    for result in results {
+                        self.notifyToolExecutionResult(tool, result);
+                    }
                 }
                 ChainLogger::info(
                     TOOL_CHAIN,
@@ -1065,7 +1075,9 @@ impl AIToolHandler {
                 );
             }
             Err(error) => {
-                self.notifyToolExecutionError(tool, error);
+                if isAiInvocation {
+                    self.notifyToolExecutionError(tool, error);
+                }
                 ChainLogger::error(TOOL_CHAIN, "tool.execute.error", &[("tool", tool.name.clone()), ("error", error.clone())]);
             }
         }
@@ -1599,7 +1611,7 @@ impl ToolExecutor for FnToolExecutor {
 mod tests {
     use super::*;
     use crate::runtime_support::*;
-    use crate::ToolExecutionManager::{ToolExposureMode, ToolRuntimeContext};
+    use crate::ToolExecutionManager::{PreparedToolInvocation, ToolExposureMode, ToolRuntimeContext};
     use operit_model::ToolPrompt::SystemToolPromptCategory;
     use std::future::Future;
     use std::pin::Pin;
@@ -1614,11 +1626,11 @@ mod tests {
             let relative = format!("plugin_data/{scope_path}");
             let expected = format!("runtime/{relative}");
             for path in [format!("/app/data/{relative}"), expected.clone(), format!("storage-root/runtime/{relative}")] {
-                assert_eq!(crate::tools::defaultTool::standard::StandardFileSystemTools::resolve_plugin_storage_path(&path, &roots).unwrap(), expected);
+                assert_eq!(crate::tools::defaultTool::standard::StandardStorageTools::resolve_plugin_storage_path(&path, &roots).unwrap(), expected);
             }
         }
         for path in ["/app/workspaces/example/cache.sqlite", "/app/data/../../escape.sqlite", "storage-root/other/cache.sqlite", "/app/database/cache.sqlite"] {
-            assert!(crate::tools::defaultTool::standard::StandardFileSystemTools::resolve_plugin_storage_path(path, &roots).is_err(), "{path}");
+            assert!(crate::tools::defaultTool::standard::StandardStorageTools::resolve_plugin_storage_path(path, &roots).is_err(), "{path}");
         }
     }
 
@@ -1930,7 +1942,7 @@ mod tests {
         assert_eq!(probe.accessCalls.load(Ordering::SeqCst), 1);
         assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
         assert_eq!(approvals.load(Ordering::SeqCst), 1);
-        assert_eq!(hooks.take(), ["requested","intercept","started","result","finished"]);
+        assert!(hooks.take().is_empty());
     }
 
     /// Proves a pending shared pull cannot occupy the registry and prevent the same executor's close call.
@@ -1945,9 +1957,9 @@ mod tests {
         assert!(futures_util::poll!(&mut next).is_ready());
     }
 
-    /// Proves cancellation releases an exclusive executor and preserves cleanup's native hook scope.
+    /// Proves Direct cancellation releases an exclusive executor without dispatching lifecycle hooks.
     #[tokio::test]
-    async fn cancellation_restores_exclusive_executor_and_finishes_once() {
+    async fn direct_cancellation_restores_exclusive_executor_without_hooks() {
         let mut fixture = PipelineFixture::new();
         let hooks = Arc::new(LifecycleProbe::default());
         fixture.handler.addToolHook(hooks.clone());
@@ -1962,7 +1974,7 @@ mod tests {
             drop(pending);
             assert!(fixture.handler.inner.lock().unwrap().availableTools.contains_key("pipeline_probe"));
             assert!(fixture.handler.inner.lock().unwrap().executingTools.is_empty());
-            assert_eq!(hooks.take(), ["requested","intercept","started","finished"]);
+            assert!(hooks.take().is_empty());
         }
         assert!(ToolExecutionManager::currentToolInvocationContext().is_none());
     }
@@ -1971,6 +1983,8 @@ mod tests {
     #[tokio::test]
     async fn captured_callers_share_executors_without_sharing_identity_or_snapshot() {
         let mut fixture = PipelineFixture::new();
+        let hooks = Arc::new(LifecycleProbe::default());
+        fixture.handler.addToolHook(hooks.clone());
         fixture.handler.registerSharedTool("pipeline_probe".into(), Arc::new(SharedProbe::default()), ToolRegistrationVisibility::INTERNAL);
         let turn = ToolRuntimeContext { callerChatId: Some("chat-A".into()), callerParticipantId:None,
             workspacePath:None,workspaceFolders:Vec::new(),toolExposureMode:ToolExposureMode::FULL,
@@ -1997,6 +2011,7 @@ mod tests {
             assert_eq!(value["owner"],owner);
             assert_eq!(value["turn"],expectedTurn);
             assert_eq!(value["hookActive"],activeHook);
+            assert!(hooks.take().is_empty());
         }
     }
 
@@ -2012,14 +2027,19 @@ mod tests {
         fixture.handler.getToolPermissionSystem().setAsyncPermissionRequester(|_, _, _| async {
             crate::tools::ToolPermissionSystem::PermissionRequestResult::DENY
         });
-        fixture.handler.registerSharedTool("typed_probe".into(), Arc::new(crate::ToolExecutionManager::TypedToolExecutor {
-            decode: |request| { DECODED.fetch_add(1, Ordering::SeqCst); Ok(request.parameters.clone()) },
-            effect: |_| ToolEffect::WRITE,
-            invoke: |args, _| {
-                EXECUTED.fetch_add(1, Ordering::SeqCst);
-                Box::pin(async move { Ok(serde_json::to_value(args).unwrap()) })
-            },
-        }), ToolRegistrationVisibility::INTERNAL);
+        struct TypedProbe;
+        impl SharedToolExecutor for TypedProbe {
+            fn prepare<'a>(&'a self, request: &'a ToolCall, _: &'a ToolInvocationContext, checkAccess: bool)
+                -> Result<PreparedToolInvocation<'a>, String> {
+                DECODED.fetch_add(1, Ordering::SeqCst);
+                let args = request.parameters.clone();
+                Ok(crate::tools::ToolInvocation::prepareInvocation(request, checkAccess, ToolEffect::WRITE, async move {
+                    EXECUTED.fetch_add(1, Ordering::SeqCst);
+                    Ok(ToolResultData::JsonResultData(operit_plugin_sdk::js_sdk::results::JsonResultData { value: serde_json::to_value(args).unwrap() }))
+                }))
+            }
+        }
+        fixture.handler.registerSharedTool("typed_probe".into(), Arc::new(TypedProbe), ToolRegistrationVisibility::INTERNAL);
         let request = ToolCall { name:"typed_probe".into(),parameters:BTreeMap::from([("value".into(),Value::Null)]) };
         let denied = fixture.handler.executeToolInvocation(&request, ToolExecutionPolicy::Ai { exposure:ToolExposureMode::FULL }).await.unwrap();
         assert!(!denied[0].success);
@@ -2030,24 +2050,38 @@ mod tests {
         assert!(allowed[0].success);
         assert_eq!(DECODED.load(Ordering::SeqCst),2);
         assert_eq!(EXECUTED.load(Ordering::SeqCst),1);
-        assert_eq!(hooks.take(),["requested","intercept","started","result","finished"]);
+        assert!(hooks.take().is_empty());
     }
 
-    /// Proves every SDK structured binding has exactly one real executor registration and no dispatcher.
+    /// Ensures every Tools method selects a built-in checked by the registration build contract.
     #[test]
-    fn sdk_structured_bindings_match_concrete_registrations() {
-        use operit_plugin_sdk::js_sdk::runtime_bindings::{JsToolTarget, JS_TOOL_BINDINGS};
-        let mut fixture = PipelineFixture::new();
-        crate::tools::ToolRegistration::registerStructuredTools(&mut fixture.handler);
-        let expected = JS_TOOL_BINDINGS.iter().filter_map(|binding| match binding.target {
-            JsToolTarget::Runtime(name) => Some(name.registry_name()), JsToolTarget::Builtin(_) => None,
-        }).collect::<BTreeSet<_>>();
-        let state = fixture.handler.inner.lock().unwrap();
-        assert_eq!(expected,state.availableTools.keys().cloned().collect());
-        assert!(state.availableTools.values().all(|executor| matches!(executor, RegisteredToolExecutor::Shared(_))));
+    fn sdk_bindings_use_the_canonical_builtin_catalog() {
+        use operit_plugin_sdk::js_sdk::runtime_bindings::JS_TOOL_BINDINGS;
+        for binding in JS_TOOL_BINDINGS {
+            assert_eq!(BuiltinToolName::from_name(binding.target.as_str()), Some(binding.target));
+        }
     }
 
-    /// Proves CLI aliases select the real target before the one lifecycle and retain AI permission admission.
+    /// A Direct SDK call reaches the common executor validation without dispatching AI hooks.
+    #[tokio::test]
+    async fn sdk_builtin_tools_use_common_validation_without_ai_hooks() {
+        let mut fixture = PipelineFixture::new();
+        let hooks = Arc::new(LifecycleProbe::default());
+        fixture.handler.addToolHook(hooks.clone());
+        fixture.handler.registerBuiltinTool(BuiltinToolName::TtsSetCurrentConfigId,
+            RegisteredToolExecutor::Shared(Arc::new(crate::tools::defaultTool::standard::StandardTtsTools::TtsToolExecutor { operation: crate::tools::defaultTool::standard::StandardTtsTools::TtsToolOperation::SetCurrentConfigId })),
+            ToolRegistrationVisibility::INTERNAL);
+        let result = fixture.handler.execute_tool_call(JsToolCallRequest {
+            tool_type: "default".into(), tool_name: "tts_set_current_config_id".into(),
+            parameters: BTreeMap::from([("id".into(), json!({"nested":[null,true]}))]),
+        }).await;
+        assert!(!result.success);
+        assert!(result.error.unwrap().contains("Invalid tool invocation"));
+        assert!(hooks.take().is_empty());
+        assert!(fixture.handler.hasToolExecutor("tts_set_current_config_id"));
+    }
+
+    /// Proves CLI aliases resolve once, with hooks and permission admission restricted to AI calls.
     #[tokio::test]
     async fn proxy_resolution_does_not_execute_a_second_lifecycle() {
         let mut fixture = PipelineFixture::new();
@@ -2072,7 +2106,7 @@ mod tests {
         assert_eq!(probe.calls.load(Ordering::SeqCst),0);
         let allowed = ToolExecutionManager::scopeToolRuntimeContext(turn, fixture.handler.executeToolInvocation(&request,ToolExecutionPolicy::Direct)).await.unwrap();
         assert!(allowed[0].success);
-        assert_eq!(hooks.take(),["requested","intercept","started","result","finished"]);
+        assert!(hooks.take().is_empty());
         assert_eq!(probe.calls.load(Ordering::SeqCst),1);
         assert_eq!(probe.accessCalls.load(Ordering::SeqCst),1);
     }

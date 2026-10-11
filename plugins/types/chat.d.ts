@@ -1,7 +1,7 @@
 // Generated from operit-plugin-sdk Rust declarations.
 
 import type { JsonObject } from "./core";
-import type { AgentStatusResultData, ChatCallResultData, ChatCreationResultData, ChatDeleteResultData, ChatFindResultData, ChatListResultData, ChatMessagesResultData, ChatServiceStartResultData, ChatSwitchResultData, ChatTitleUpdateResultData, MessageSendResultData } from "./results";
+import type { AgentStatusResultData, ChatCallResultData, ChatCancelResultData, ChatCreationResultData, ChatDeleteExtensionResultData, ChatDeleteResultData, ChatFindResultData, ChatListResultData, ChatMessagesResultData, ChatReadExtensionResultData, ChatSendMessageResultData, ChatServiceStartResultData, ChatSwitchResultData, ChatTitleUpdateResultData, ChatWriteExtensionResultData, MessageSendResultData } from "./results";
 
 /**
  * Starts the chat service and manages generic conversations and execution participants.
@@ -244,7 +244,7 @@ export namespace Chat {
   /**
    * Cancels only the calling plugin's execution captured in the specified conversation.
    */
-  function cancel(chatId: string): Promise<CancelResult>;
+  function cancel(chatId: string): Promise<ChatCancelResultData>;
   /**
    * Creates a workspace conversation through the registered creation hooks.
    * @param options - Current-chat control, an explicit source chat, and opaque plugin input.
@@ -258,7 +258,7 @@ export namespace Chat {
   /**
    * Deletes only the authenticated executing package's extension on an existing target.
    */
-  function deleteExtension(target: ExtensionTarget): Promise<boolean>;
+  function deleteExtension(target: ExtensionTarget): Promise<ChatDeleteExtensionResultData>;
   /**
    * Find a chat by title or id
    */
@@ -287,7 +287,7 @@ export namespace Chat {
   /**
    * Reads only the authenticated executing package's extension on an existing target.
    */
-  function readExtension(target: ExtensionTarget): Promise<JsonObject | null>;
+  function readExtension(target: ExtensionTarget): Promise<ChatReadExtensionResultData>;
   /**
    * Persists the supplied unique existing chat identifiers in display order.
    */
@@ -295,7 +295,7 @@ export namespace Chat {
   /**
    * Sends one request and resolves only after its real receipt and native cleanup are complete.
    */
-  function sendMessage(request: SendRequest): Promise<MessageSendResultData>;
+  function sendMessage(request: SendRequest): Promise<ChatSendMessageResultData>;
   /**
    * Streams authoritative parsed part snapshots and the real terminal receipt through one async iterator.
    */
@@ -333,7 +333,7 @@ export namespace Chat {
   /**
    * Replaces only the authenticated executing package's object extension on an existing target.
    */
-  function writeExtension(target: ExtensionTarget, value: JsonObject): Promise<JsonObject>;
+  function writeExtension(target: ExtensionTarget, value: JsonObject): Promise<ChatWriteExtensionResultData>;
   /**
    * Selects the application surface that owns a chat turn.
    */

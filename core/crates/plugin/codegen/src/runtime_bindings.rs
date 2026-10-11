@@ -3,7 +3,6 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use quote::quote;
 use syn::{Expr, FnArg, Item, Lit, Pat, TraitItem};
 use tree_sitter::Parser;
 
@@ -43,7 +42,7 @@ const HOST_TRAITS: &[(&str, &str, &str)] = &[
 #[derive(Clone, Debug)]
 struct JsToolBindingSpec {
     tool: String,
-    runtime: bool,
+    strict_arguments: bool,
     facade: String,
     fixed_parameters: Vec<(String, String)>,
     api_variants: Vec<JsToolApiVariantSpec>,
@@ -82,7 +81,7 @@ fn parse_rust_tool_bindings(
         let mut namespace = None;
         let mut method = None;
         let mut tool = None;
-        let mut runtime = false;
+        let mut strict_arguments = false;
         let mut facade = None;
         let mut fixed_parameters = None;
         for field in &binding.fields {
@@ -100,13 +99,16 @@ fn parse_rust_tool_bindings(
                         method = Some(value.value());
                     }
                 }
-                ("target", Expr::Call(value)) => {
-                    let Expr::Path(target) = &*value.func else { return Err("Tool target must be an explicit contract variant".into()); };
-                    let kind = target.path.segments.last().ok_or("Tool target kind is missing")?.ident.to_string();
-                    runtime = match kind.as_str() { "Builtin" => false, "Runtime" => true, _ => return Err("Unknown executor target kind".into()) };
-                    if value.args.len() != 1 { return Err("Tool target requires exactly one executor identity".into()); }
-                    let Expr::Path(identity) = &value.args[0] else { return Err("Tool executor identity must be an enum variant".into()); };
-                    tool = Some(pascal_case_to_snake_case(&identity.path.segments.last().ok_or("Executor identity is missing")?.ident.to_string()));
+                ("target", Expr::Path(value)) => {
+                    let segments = &value.path.segments;
+                    if segments.len() != 2 || segments[0].ident != "BuiltinToolName" {
+                        return Err("Tools must target a canonical BuiltinToolName".into());
+                    }
+                    tool = Some(pascal_case_to_snake_case(&segments[1].ident.to_string()));
+                }
+                ("strict_arguments", Expr::Lit(value)) => {
+                    let Lit::Bool(value) = &value.lit else { return Err("Argument validation must be a boolean".into()); };
+                    strict_arguments = value.value;
                 }
                 ("facade", Expr::Path(value)) => facade = Some(value.path.segments.last().ok_or("Result facade is missing")?.ident.to_string()),
                 ("fixed_parameters", expression) => fixed_parameters = Some(parse_fixed_parameters(expression)?),
@@ -122,7 +124,7 @@ fn parse_rust_tool_bindings(
                 key.clone(),
                 JsToolBindingSpec {
                     tool: tool.ok_or("JsToolBinding target is missing")?,
-                    runtime,
+                    strict_arguments,
                     facade: facade.ok_or("JsToolBinding result facade is missing")?,
                     fixed_parameters: fixed_parameters.ok_or("Builtin binding fixed parameters must be declared")?,
                     api_variants: Vec::new(),
@@ -385,6 +387,7 @@ function __operitInvokeToolsBinding(namespace, method, toolName, overloads, args
     return toolCall(toolName, __operitToolsBuildParameters(namespace, method, overloads, args, fixedParameters));
 }
 
+
 "#,
     );
     let mut initialized_namespaces = BTreeSet::new();
@@ -431,97 +434,46 @@ function __operitInvokeToolsBinding(namespace, method, toolName, overloads, args
             })
             .collect::<Vec<_>>()
             .join(", ");
-        if binding.runtime {
-            let function = match binding.facade.as_str() {
-                "AsyncIterator" => format!("function({canonical_signature}) {{ if (arguments.length !== 1) throw new Error(\"{namespace}.{method} requires exactly one request\"); return __operitCreateToolStream(\"{}\", {canonical_signature}); }}", binding.tool),
+        // Argument checks and result facades never select another native execution path.
+        let make_function = |signature: &str, overloads: &str| -> Result<String, Box<dyn Error>> {
+            match binding.facade.as_str() {
+                "AsyncIterator" => Ok(format!("function({signature}) {{ if (arguments.length !== 1) throw new Error(\"{namespace}.{method} requires exactly one request\"); return __operitCreateToolStream(\"{}\", {signature}); }}", binding.tool)),
                 "Promise" | "Storage" => {
-                    let names = &overloads[0];
-                    let fields = names.iter().map(|name| format!("\"{name}\": {name}")).collect::<Vec<_>>().join(", ");
-                    let validation = runtime_argument_checks(sdk_src, &namespace, &method)?;
-                    format!("function({canonical_signature}) {{ if (arguments.length !== {}) return Promise.reject(new Error(\"{namespace}.{method} requires exactly {} arguments\")); try {{ {validation} return toolCall(\"{}\", {{{fields}}}); }} catch (error) {{ return Promise.reject(error); }} }}", names.len(), names.len(), binding.tool)
+                    let validation = if binding.strict_arguments {
+                        Some(argument_checks(sdk_src, &namespace, &method)?)
+                    } else { None };
+                    Ok(generated_js_function(&namespace, &method, &binding.tool, signature, overloads, &binding.fixed_parameters, validation.as_deref()))
                 }
-                _ => return Err(format!("Unknown result facade: {}", binding.facade).into()),
-            };
-            if namespace == "Chat" {
-                if !chat_namespace_open {
-                    output.push_str("Tools[\"Chat\"] = __operitToolPkgApi.namespace(\"Tools.Chat\", {\n");
-                    chat_namespace_open = true;
-                }
-                output.push_str(&format!("\"{method}\": {function},\n"));
-            } else {
-                output.push_str(&format!("{expression}[\"{method}\"] = __operitToolPkgApi.method().since(\"2.0.0\", {function}).build(\"Tools.{namespace}.{method}\");\n"));
+                _ => Err(format!("Unknown result facade: {}", binding.facade).into()),
             }
-            if binding.facade == "Storage" { output.push_str("__operitInstallStorageFacade();\n"); }
-            continue;
-        }
+        };
+        let function = if binding.api_variants.is_empty() {
+            make_function(&canonical_signature, &canonical_overloads)?
+        } else {
+            let mut expression = "__operitToolPkgApi.method()".to_string();
+            for variant in &binding.api_variants {
+                let signature = variant.arguments.as_ref().map(|args| args.join(", ")).unwrap_or_else(|| canonical_signature.clone());
+                let overloads = variant.arguments.as_ref().map(|args| format!("[{}]", args.iter().map(|arg| format!("{arg:?}")).collect::<Vec<_>>().join(", "))).unwrap_or_else(|| canonical_overloads.clone());
+                let function = make_function(&signature, &overloads)?;
+                if let Some(until) = &variant.until {
+                    expression.push_str(&format!(".between(\"{}\", \"{}\", {})", variant.since, until, function));
+                } else {
+                    expression.push_str(&format!(".since(\"{}\", {})", variant.since, function));
+                }
+            }
+            expression
+        };
         if namespace == "Chat" {
             if !chat_namespace_open {
-                output
-                    .push_str("Tools[\"Chat\"] = __operitToolPkgApi.namespace(\"Tools.Chat\", {\n");
+                output.push_str("Tools[\"Chat\"] = __operitToolPkgApi.namespace(\"Tools.Chat\", {\n");
                 chat_namespace_open = true;
             }
-            output.push_str(&format!("\"{method}\": "));
-            if binding.api_variants.is_empty() {
-                output.push_str(&generated_js_function(
-                    &namespace,
-                    &method,
-                    &binding.tool,
-                    &canonical_signature,
-                    &canonical_overloads,
-                    &binding.fixed_parameters,
-                ));
-            } else {
-                output.push_str("__operitToolPkgApi.method()");
-                for variant in &binding.api_variants {
-                    let signature = variant
-                        .arguments
-                        .as_ref()
-                        .map(|arguments| arguments.join(", "))
-                        .unwrap_or_else(|| canonical_signature.clone());
-                    let variant_overloads = variant
-                        .arguments
-                        .as_ref()
-                        .map(|arguments| {
-                            format!(
-                                "[{}]",
-                                arguments
-                                    .iter()
-                                    .map(|argument| format!("\"{argument}\""))
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            )
-                        })
-                        .unwrap_or_else(|| canonical_overloads.clone());
-                    let function = generated_js_function(
-                        &namespace,
-                        &method,
-                        &binding.tool,
-                        &signature,
-                        &variant_overloads,
-                        &binding.fixed_parameters,
-                    );
-                    if let Some(until) = &variant.until {
-                        output.push_str(&format!(
-                            ".between(\"{}\", \"{}\", {})",
-                            variant.since, until, function
-                        ));
-                    } else {
-                        output.push_str(&format!(".since(\"{}\", {})", variant.since, function));
-                    }
-                }
-            }
-            output.push_str(",\n");
+            output.push_str(&format!("\"{method}\": {function},\n"));
         } else {
-            let function = generated_js_function(
-                &namespace,
-                &method,
-                &binding.tool,
-                &canonical_signature,
-                &canonical_overloads,
-                &binding.fixed_parameters,
-            );
+            let function = if binding.api_variants.is_empty() { function } else { format!("{function}.build(\"Tools.{namespace}.{method}\")") };
             output.push_str(&format!("{expression}[\"{method}\"] = {function};\n"));
         }
+        if binding.facade == "Storage" { output.push_str("__operitInstallStorageFacade();\n"); }
     }
     if chat_namespace_open {
         output.push_str("});\n");
@@ -543,8 +495,13 @@ function __operitInvokeToolsBinding(namespace, method, toolName, overloads, args
     Ok(())
 }
 
+/// Counts the exact positional arguments required by a validated SDK method.
+fn overloads_count(signature: &str) -> usize {
+    if signature.is_empty() { 0 } else { signature.split(',').count() }
+}
+
 /// Derives public argument checks from canonical Rust types without selecting a separate transport.
-fn runtime_argument_checks(sdk_src: &Path, namespace: &str, method: &str) -> Result<String, Box<dyn Error>> {
+fn argument_checks(sdk_src: &Path, namespace: &str, method: &str) -> Result<String, Box<dyn Error>> {
     let mut checks = Vec::new();
     for (path, trait_name, declared_namespace) in HOST_TRAITS {
         if *declared_namespace != namespace { continue; }
@@ -557,12 +514,12 @@ fn runtime_argument_checks(sdk_src: &Path, namespace: &str, method: &str) -> Res
         }).ok_or("Canonical Tools method is missing")?;
         for argument in &operation.sig.inputs {
             let FnArg::Typed(argument) = argument else { continue; };
-            let Pat::Ident(name) = &*argument.pat else { return Err("Runtime arguments require named fields".into()); };
+            let Pat::Ident(name) = &*argument.pat else { return Err("Tool arguments require named fields".into()); };
             let name = name.ident.to_string();
             match &*argument.ty {
                 syn::Type::Path(path) if path.path.is_ident("String") => checks.push(format!("if (typeof {name} !== 'string' || {name}.trim() === '' || {name}.trim() !== {name}) throw new TypeError('Identifier must be exact nonblank text');")),
                 syn::Type::Path(_) => checks.push(format!("{name} = __operitSnapshotJsonObject({name});")),
-                _ => return Err("Unsupported structured runtime argument type".into()),
+                _ => return Err("Unsupported validated tool argument type".into()),
             }
         }
     }
@@ -643,11 +600,17 @@ fn generated_js_function(
     signature: &str,
     overloads: &str,
     fixed_parameters: &[(String, String)],
+    validation: Option<&str>,
 ) -> String {
     let fixed_parameters = format!("[{}]", fixed_parameters.iter().map(|(key, value)| format!("[{key:?}, {value:?}]")).collect::<Vec<_>>().join(", "));
-    format!(
-        "function({signature}) {{\n    return __operitInvokeToolsBinding(\"{namespace}\", \"{method}\", \"{tool}\", [{overloads}], Array.prototype.slice.call(arguments), {fixed_parameters});\n}}"
-    )
+    let invoke = format!("return __operitInvokeToolsBinding(\"{namespace}\", \"{method}\", \"{tool}\", [{overloads}], Array.prototype.slice.call(arguments), {fixed_parameters});");
+    match validation {
+        Some(validation) => {
+            let count = overloads_count(signature);
+            format!("function({signature}) {{ if (arguments.length !== {count}) return Promise.reject(new Error(\"{namespace}.{method} requires exactly {count} arguments\")); try {{ {validation} {invoke} }} catch (error) {{ return Promise.reject(error); }} }}")
+        }
+        None => format!("function({signature}) {{\n    {invoke}\n}}"),
+    }
 }
 
 /// Reads every overload's ordered argument names from active Rust host traits.
@@ -723,6 +686,7 @@ fn method_arguments(signature: &syn::Signature) -> Result<Vec<String>, Box<dyn E
 }
 
 /// Converts one snake-case built-in name into its generated enum variant identifier.
+#[cfg(test)]
 fn rust_variant_name(name: &str) -> String {
     name.split('_')
         .filter(|segment| !segment.is_empty())

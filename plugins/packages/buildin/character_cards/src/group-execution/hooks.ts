@@ -54,7 +54,7 @@ export async function onGroupInputSubmit(event: ToolPkgTypes.ChatInputHookEvent)
   // Native plugin sends already carry an explicit turn; this hook never recursively replans those sends.
   if (payload.source === "Sequence") return null;
   const chatId = requireId(payload.chatId, "submitted chatId");
-  const extension = await Tools.Chat.readExtension({ kind: "chat", chatId });
+  const extension = (await Tools.Chat.readExtension({ kind: "chat", chatId })).extension;
   // An unassociated chat is outside this plugin's ownership, not an unsuccessful group lookup.
   if (extension === null) return null;
   const binding = decodeChatMarker(extension);

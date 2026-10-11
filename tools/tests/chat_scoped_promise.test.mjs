@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
-import { installScopedHostRuntime, installGeneratedToolsRuntime } from './fixtures/scoped_host_runtime.mjs';
+import { installScopedHostRuntime, installGeneratedToolsRuntime, domainToolResult } from './fixtures/scoped_host_runtime.mjs';
 
 /** Exercises production request snapshots and scoped Promise bindings, not callback-ID simulations. */
 function fixture() {
@@ -11,12 +11,12 @@ function fixture() {
   const pending=[];
   sandbox.__operitNativeCallToolStructured=registry.binding((requestId,type,name,parameters)=>{
     const observation=parameters.observation;
-    pending.push({requestId,name,method:observation ? observation.op : name,payload:observation ? observation.op === 'open' ? observation.request : observation.handle : parameters.request,target:parameters.target,value:parameters.value});
+    pending.push({requestId,name,parameters,method:observation ? observation.op : name,payload:observation ? observation.op === 'open' ? observation.request : observation.handle : parameters.request,target:parameters.target,value:parameters.value});
   });
   installGeneratedToolsRuntime(sandbox);
   return {sandbox,pending,registry,
     run(code) {return vm.runInContext(code,sandbox);},
-    reply(value,reject=false) {const request=pending.shift();assert.ok(request);registry.settle(request.requestId,reject ? value : {success:true,data:value},reject);return request;},
+    reply(value,reject=false) {const request=pending.shift();assert.ok(request);registry.settle(request.requestId,reject ? value : {success:true,data:domainToolResult(request.name,value,request.parameters)},reject);return request;},
   };
 }
 

@@ -1014,6 +1014,9 @@ impl<'a> EmitContext<'a> {
             "JsObject" => "object".to_string(),
             "JsNever" => "never".to_string(),
             "Vec" => format!("{}[]", self.emit_first_argument(arguments, scope)),
+            "Option" if self.nullable_wire_fields => {
+                format!("{} | null", self.emit_first_argument(arguments, scope))
+            }
             "Option" | "JsUndefined" => {
                 format!("{} | undefined", self.emit_first_argument(arguments, scope))
             }
@@ -1164,6 +1167,9 @@ impl<'a> EmitContext<'a> {
             .iter()
             .map(|variant| {
                 if matches!(variant.fields, Fields::Unit) && serde_tag(&item.attrs).is_none() {
+                    if has_serde_untagged(&item.attrs) {
+                        return "null".to_string();
+                    }
                     match variant.ident.to_string().as_str() {
                         "Null" => return "null".to_string(),
                         "Undefined" => return "undefined".to_string(),
@@ -1742,6 +1748,25 @@ fn serde_content(attrs: &[Attribute]) -> Option<String> {
     None
 }
 
+/// Reports whether enum variants serialize directly as their payloads.
+fn has_serde_untagged(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attribute| {
+        if !attribute.path().is_ident("serde") {
+            return false;
+        }
+        let mut untagged = false;
+        let _ = attribute.parse_nested_meta(|meta| {
+            if meta.path.is_ident("untagged") {
+                untagged = true;
+            } else if meta.input.peek(syn::Token![=]) {
+                let _: syn::Expr = meta.value()?.parse()?;
+            }
+            Ok(())
+        });
+        untagged
+    })
+}
+
 /// Reports whether serde flatten metadata exists on a Rust field.
 fn has_serde_flatten(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|attribute| {
@@ -1918,6 +1943,8 @@ mod tests {
             context.emit_enum_union(&item, &[]),
             "{ kind: \"null\"; } | { kind: \"integer\"; value: string; } | { kind: \"blob\"; value: number[]; }"
         );
+        let nullable: Type = syn::parse_quote! { Option<String> };
+        assert_eq!(context.emit_type(&nullable, &[]), "string | null");
         let item: ItemStruct = syn::parse_quote! { pub struct Mutation { #[serde(rename = "expectedVersion")] expected_version: Option<String> } };
         assert_eq!(
             context.emit_inline_struct(&item, &[]),

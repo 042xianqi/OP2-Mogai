@@ -45,7 +45,7 @@ export async function readSelectorData(input: SelectorInput): Promise<SelectorDa
   let selected: string | null;
   if (input.chatId === null) selected = encodeSelection(await callMainDomain("activePrompt.get", {}));
   else {
-    const extension = await Tools.Chat.readExtension({ kind: "chat", chatId: input.chatId });
+    const extension = (await Tools.Chat.readExtension({ kind: "chat", chatId: input.chatId })).extension;
     selected = extension === null ? null : decodeChatMarker(extension).selection;
   }
   if (selected !== null) requireChatSelection(selected, cards, groups);

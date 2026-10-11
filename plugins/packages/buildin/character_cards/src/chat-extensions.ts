@@ -6,7 +6,7 @@ import { assertBoolean, assertInteger, requireId } from "./validation";
 /** Reads the executing package's actual record namespace and requires an explicit valid selection marker. */
 export async function readChatExtensionBinding(chatId: string): Promise<ChatBinding> {
   requireId(chatId, "chat id");
-  const extension = await Tools.Chat.readExtension({ kind: "chat", chatId });
+  const extension = (await Tools.Chat.readExtension({ kind: "chat", chatId })).extension;
   if (extension === null) throw new Error("Chat has no character selection in this plugin's namespace: " + chatId);
   const marker = decodeChatMarker(extension);
   return { chatId, selection: marker.selection };
@@ -15,7 +15,7 @@ export async function readChatExtensionBinding(chatId: string): Promise<ChatBind
 export async function readMessageExtensionMarker(chatId: string, messageTimestamp: number, variantIndex: number): Promise<MessageMarker> {
   requireId(chatId, "chat id"); assertInteger(messageTimestamp, "message timestamp", 0); assertInteger(variantIndex, "message variant index", 0);
   if (variantIndex > 2147483647) throw new Error("Message variant index exceeds the host's i32 range");
-  const extension = await Tools.Chat.readExtension({ kind: "message", chatId, messageTimestamp, variantIndex });
+  const extension = (await Tools.Chat.readExtension({ kind: "message", chatId, messageTimestamp, variantIndex })).extension;
   if (extension === null) throw new Error("Message revision has no saved character identity in this plugin's namespace: " + chatId + "/" + messageTimestamp + "/" + variantIndex);
   return decodeMessageMarker(extension);
 }
@@ -27,7 +27,7 @@ export async function listChatExtensionBindings(): Promise<ChatBinding[]> {
   for (const chat of result.chats) {
     const chatId = requireId(chat.id, "host chat id");
     if (ids.has(chatId)) throw new Error("Duplicate host chat identity: " + chatId); ids.add(chatId);
-    const extension = await Tools.Chat.readExtension({ kind: "chat", chatId });
+    const extension = (await Tools.Chat.readExtension({ kind: "chat", chatId })).extension;
     if (extension === null) continue;
     const marker = decodeChatMarker(extension); bindings.push({ chatId, selection: marker.selection });
   }
@@ -37,14 +37,14 @@ export async function listChatExtensionBindings(): Promise<ChatBinding[]> {
 export async function writeChatExtensionBinding(binding: ChatBinding): Promise<ChatBinding> {
   requireId(binding.chatId, "chat id");
   const target = { kind: "chat" as const, chatId: binding.chatId };
-  const existing = await Tools.Chat.readExtension(target), value = encodeChatMarker(binding.selection, existing === null ? null : markerObject(existing, "existing chat extension"));
-  const stored = await Tools.Chat.writeExtension(target, value), marker = decodeChatMarker(stored);
+  const existing = (await Tools.Chat.readExtension(target)).extension, value = encodeChatMarker(binding.selection, existing === null ? null : markerObject(existing, "existing chat extension"));
+  const stored = (await Tools.Chat.writeExtension(target, value)).extension, marker = decodeChatMarker(stored);
   if (marker.selection !== binding.selection) throw new Error("Stored chat extension selection differs from the submitted value");
   return { chatId: binding.chatId, selection: marker.selection };
 }
 /** Removes this plugin's namespace from an existing record without touching file-owned group membership or deleting chats. */
 export async function deleteChatExtensionBinding(chatId: string): Promise<{ chatId: string; deleted: boolean }> {
   requireId(chatId, "chat id");
-  const deleted = await Tools.Chat.deleteExtension({ kind: "chat", chatId }); assertBoolean(deleted, "chat extension deleted");
+  const deleted = (await Tools.Chat.deleteExtension({ kind: "chat", chatId })).deleted; assertBoolean(deleted, "chat extension deleted");
   return { chatId, deleted };
 }

@@ -1,4 +1,4 @@
-import { installScopedHostRuntime, installGeneratedToolsRuntime } from '../../../../../tools/tests/fixtures/scoped_host_runtime.mjs';
+import { installScopedHostRuntime, installGeneratedToolsRuntime, domainToolResult } from '../../../../../tools/tests/fixtures/scoped_host_runtime.mjs';
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -24,6 +24,7 @@ function transport(version = "2.0.0") {
   }
   const registry=installScopedHostRuntime(context);
   const identities = { models_list_summaries:'Models.listSummaries', tts_list_configs:'Tts.listConfigs', theme_list_configs:'Theme.listConfigs', tts_get_current_config_id:'Tts.getCurrentConfigId', catalog_read_tool_sources:'Catalog.readToolSources', theme_apply_config:'Theme.applyConfig', tts_set_current_config_id:'Tts.setCurrentConfigId' };
+  const toolNames = Object.fromEntries(Object.entries(identities).map(([name,path])=>[path,name]));
   context.__operitNativeCallToolStructured=registry.binding((requestId,type,name,parameters)=>{ assert.equal(type,'default'); enqueue(requestId,identities[name],parameters.id); });
   installGeneratedToolsRuntime(context,version);
   for (const path of [...directoryNames, ...setterNames]) {
@@ -33,7 +34,7 @@ function transport(version = "2.0.0") {
     /** Delivers only an actually pending native callback and asserts that its JS receiver is removed exactly once. */
     complete(call, result, isError = false) {
       assert.equal(pending.delete(call.requestId), true);
-      registry.settle(call.requestId,isError ? result : {success:true,data:result},isError);
+      registry.settle(call.requestId,isError ? result : {success:true,data:domainToolResult(toolNames[call.method],result)},isError);
     },
     /** Schedules an exact original native scheduling failure rather than fabricating callback success. */
     failSchedule(error) { assert.equal(scheduledError, null); scheduledError = new (vm.runInContext("Error",context))(error.message); },
@@ -56,8 +57,9 @@ test("static: ordinary Theme/TTS SDK methods have real typed bindings and canoni
     const [namespace, name] = path.split(".");
     const sdk = source("core/crates/plugin/sdk/src/js_sdk/" + namespace.toLowerCase() + ".rs");
     assert.ok(sdk.includes("fn " + name + "(&self"));
-    assert.ok(bindings.includes('namespace: "' + namespace + '", method: "' + name + '", target: JsToolTarget::Runtime('));
-    assert.match(source("core/crates/tool/services/src/tools/ToolRegistration.rs"), new RegExp("runtimeSupport\\(\\)\\." + canonical[path] + "\\("));
+    assert.ok(bindings.includes('namespace: "' + namespace + '", method: "' + name + '", target: BuiltinToolName::'));
+    const toolModule = {Models: 'StandardModelTools', Tts: 'StandardTtsTools', Theme: 'StandardThemeTools', Catalog: 'StandardCatalogTools'}[namespace];
+    assert.match(source("core/crates/tool/services/src/tools/defaultTool/standard/" + toolModule + ".rs"), new RegExp("runtimeSupport\\(\\)\\s*\\." + canonical[path] + "\\("));
 
     assert.ok(runtime.includes("fn " + canonical[path] + "(" ) || runtime.includes("fn " + canonical[path] + "<'a>"));
   }
@@ -79,7 +81,7 @@ test("JS channel: listThemeConfigs waits for native and preserves full returned 
   const record = { id: "ordinary.theme", name: "Named appearance", snapshot: { appearanceField: false, explicitNull: null }, createdAt: 123, updatedAt: 456 };
   // This JSON tests transport only; the canonical appearance validator and disk are not replaced or claimed by this fixture.
   io.complete(io.calls[0], [record]);
-  assert.deepEqual(JSON.parse(JSON.stringify(await result)), [record]);
+  assert.deepEqual(JSON.parse(JSON.stringify(await result)), {configs: [record]});
   assert.equal(io.pendingRequests(), 0);
 });
 
@@ -102,7 +104,7 @@ test("JS channel: current TTS get/set preserve actual IDs and distinct callbacks
   const io = transport(), current = io.methods["Tts.getCurrentConfigId"](), changed = io.methods["Tts.setCurrentConfigId"]("speech.exact");
   assert.equal(io.calls.length, 2); assert.notEqual(io.calls[0].requestId, io.calls[1].requestId);
   io.complete(io.calls[1], "speech.exact"); io.complete(io.calls[0], "speech.before");
-  assert.equal(await current, "speech.before"); assert.equal(await changed, "speech.exact");
+  assert.deepEqual(structuredClone(await current), {configId:"speech.before"}); assert.deepEqual(structuredClone(await changed), {configId:"speech.exact"});
 });
 
 /** Rejects unsupported arity and malformed IDs before any native or canonical-setting operation is attempted. */

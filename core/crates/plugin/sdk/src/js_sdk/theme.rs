@@ -1,5 +1,6 @@
 //! Named appearance configurations exposed to plugins.
 use super::JsFuture;
+use super::results::{ThemeListConfigsResultData, ThemeApplyConfigResultData};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -18,7 +19,7 @@ pub struct ThemeConfig {
 /// Reads and applies named themes through the canonical appearance manager.
 pub trait ThemeHost: Send + Sync {
     /// Lists independent named appearance configurations.
-    fn listConfigs(&self) -> JsFuture<Vec<ThemeConfig>>;
+    fn listConfigs(&self) -> JsFuture<ThemeListConfigsResultData>;
     /// Applies an exact named snapshot and active ID in the canonical transaction.
-    fn applyConfig(&self, id: String) -> JsFuture<ThemeConfig>;
+    fn applyConfig(&self, id: String) -> JsFuture<ThemeApplyConfigResultData>;
 }

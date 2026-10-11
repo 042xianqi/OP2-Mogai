@@ -1,5 +1,7 @@
 // Generated from operit-plugin-sdk Rust declarations.
 
+import type { CatalogReadToolSourcesResultData } from "./results";
+
 /**
  * Reads tool-source identities from their canonical registries.
  */
@@ -26,5 +28,5 @@ export namespace Catalog {
   /**
    * Returns actual builtin, package, skill and MCP source identities.
    */
-  function readToolSources(): Promise<ToolSources>;
+  function readToolSources(): Promise<CatalogReadToolSourcesResultData>;
 }

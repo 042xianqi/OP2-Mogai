@@ -186,7 +186,7 @@ export async function chatContextActionsApi(event: ToolPkg.PublicApiEvent<{ chat
     const active = await service.dispatchDomain("activePrompt.get", {});
     return contextActions(chatUiRoutes, { chatId: null, selection: encodeSelection(active) }, directory);
   }
-  const extension = await Tools.Chat.readExtension({ kind: "chat", chatId: input.chatId });
+  const extension = (await Tools.Chat.readExtension({ kind: "chat", chatId: input.chatId })).extension;
   const selection = extension === null ? null : decodeChatMarker(extension).selection;
   return contextActions(chatUiRoutes, { chatId: input.chatId, selection }, directory);
 }
@@ -197,7 +197,7 @@ export async function chatListSectionsApi(event: ToolPkg.PublicApiEvent<{ chats:
   const input = parseSectionsRequest(event.payload), service = await getService(), directory = await service.snapshot();
   const bindings = [];
   for (const chat of input.chats) {
-    const extension = await Tools.Chat.readExtension({ kind: "chat", chatId: chat.id });
+    const extension = (await Tools.Chat.readExtension({ kind: "chat", chatId: chat.id })).extension;
     if (extension !== null) bindings.push({ chatId: chat.id, selection: decodeChatMarker(extension).selection });
   }
   return listSections(chatUiRoutes.editor, directory, bindings, input.chats.map(

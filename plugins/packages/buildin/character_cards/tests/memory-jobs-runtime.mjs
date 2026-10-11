@@ -75,22 +75,22 @@ export async function createMemoryJobsHarness(testContext) {
     async readExtension(target) {
       extensionCalls.push({ method: "readExtension", target: plain(target) });
       const key = extensionTarget(target);
-      if (key === null) return chatExtension === null ? null : plain(chatExtension);
-      return messageExtensions.has(key) ? plain(messageExtensions.get(key)) : null;
+      if (key === null) return { extension: chatExtension === null ? null : plain(chatExtension) };
+      return { extension: messageExtensions.has(key) ? plain(messageExtensions.get(key)) : null };
     },
     /** Writes the exact supplied namespace object without implementing any plugin-domain association rules. */
     async writeExtension(target, value) {
       extensionCalls.push({ method: "writeExtension", target: plain(target), value: plain(value) });
       const key = extensionTarget(target);
       if (key === null) chatExtension = plain(value); else messageExtensions.set(key, plain(value));
-      return plain(value);
+      return { extension: plain(value) };
     },
     /** Deletes only the controlled owner namespace and does not synthesize a missing-record success. */
     async deleteExtension(target) {
       extensionCalls.push({ method: "deleteExtension", target: plain(target) });
       const key = extensionTarget(target);
-      if (key !== null) return messageExtensions.delete(key);
-      const existed = chatExtension !== null; chatExtension = null; return existed;
+      if (key !== null) return { deleted: messageExtensions.delete(key) };
+      const existed = chatExtension !== null; chatExtension = null; return { deleted: existed };
     },
     /** Implements only the exact ID lookup used by production, with the current real SDK result fields. */
     async findChat(options) {

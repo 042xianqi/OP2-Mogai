@@ -12,7 +12,7 @@ use operit_tools::tools::defaultTool::standard::StandardBrowserAutomationTools::
     BrowserAutomationToolExecutor, StandardBrowserAutomationTools,
 };
 use operit_tools::tools::defaultTool::standard::StandardChatManagerTool::{
-    ChatManagerToolExecutor, ChatManagerToolOperation, StandardChatManagerTool,
+    ChatManagerToolExecutor, ChatManagerToolOperation, StandardChatManagerTool, PluginChatToolExecutor, PluginChatToolOperation,
 };
 use operit_tools::tools::defaultTool::standard::StandardFileSystemTools::{
     FileSystemToolExecutor, FileSystemToolOperation, StandardFileSystemTools,
@@ -40,7 +40,15 @@ use operit_tools::tools::ToolResultDataClasses::{
 };
 use operit_tools::ConversationMarkupManager::ToolResult;
 use operit_tools::ToolExecutionManager::{
-    AITool, ToolEffect, ToolExecutionManager, ToolParameter, ToolValidationResult,
+    AITool, ToolEffect, ToolExecutionManager, ToolParameter, ToolValidationResult, RegisteredToolExecutor,
+};
+
+use crate::tools::defaultTool::standard::{
+    StandardModelTools::ModelToolExecutor,
+    StandardTtsTools::{TtsToolExecutor, TtsToolOperation},
+    StandardThemeTools::{ThemeToolExecutor, ThemeToolOperation},
+    StandardCatalogTools::CatalogToolExecutor,
+    StandardStorageTools::StorageToolExecutor,
 };
 
 /// Registers every built-in public and internal tool on the handler.
@@ -48,7 +56,6 @@ use operit_tools::ToolExecutionManager::{
 pub fn registerAllTools(handler: &mut AIToolHandler, context: &HostManager) {
     registerPublicTools(handler, context);
     registerInternalTools(handler, context);
-    registerStructuredTools(handler);
 }
 
 #[allow(non_snake_case)]
@@ -444,6 +451,37 @@ fn registerChatTools(handler: &mut AIToolHandler, chatTools: StandardChatManager
         BuiltinToolName::GetChatMessagesRange,
         ChatManagerToolOperation::GetChatMessagesRange,
     );
+    handler.registerBuiltinTool(
+        BuiltinToolName::ChatSendMessage,
+        RegisteredToolExecutor::Shared(Arc::new(PluginChatToolExecutor { operation: PluginChatToolOperation::SendMessage })),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+    handler.registerBuiltinTool(
+        BuiltinToolName::ChatObserve,
+        RegisteredToolExecutor::Shared(Arc::new(PluginChatToolExecutor { operation: PluginChatToolOperation::Observe })),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+    handler.registerBuiltinTool(
+        BuiltinToolName::ChatCancel,
+        RegisteredToolExecutor::Shared(Arc::new(PluginChatToolExecutor { operation: PluginChatToolOperation::Cancel })),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+    handler.registerBuiltinTool(
+        BuiltinToolName::ChatReadExtension,
+        RegisteredToolExecutor::Shared(Arc::new(PluginChatToolExecutor { operation: PluginChatToolOperation::ReadExtension })),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+    handler.registerBuiltinTool(
+        BuiltinToolName::ChatWriteExtension,
+        RegisteredToolExecutor::Shared(Arc::new(PluginChatToolExecutor { operation: PluginChatToolOperation::WriteExtension })),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+    handler.registerBuiltinTool(
+        BuiltinToolName::ChatDeleteExtension,
+        RegisteredToolExecutor::Shared(Arc::new(PluginChatToolExecutor { operation: PluginChatToolOperation::DeleteExtension })),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+
 }
 
 #[allow(non_snake_case)]
@@ -1050,6 +1088,71 @@ fn registerInternalTools(handler: &mut AIToolHandler, context: &HostManager) {
         }),
         ToolRegistrationVisibility::INTERNAL,
     );
+    registerModelTools(handler);
+    registerTtsTools(handler);
+    registerThemeTools(handler);
+    registerCatalogTools(handler);
+}
+
+#[allow(non_snake_case)]
+fn registerModelTools(handler: &mut AIToolHandler) {
+    handler.registerBuiltinTool(
+        BuiltinToolName::ModelsListSummaries,
+        RegisteredToolExecutor::Shared(Arc::new(ModelToolExecutor)),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+}
+
+#[allow(non_snake_case)]
+fn registerTtsTools(handler: &mut AIToolHandler) {
+    handler.registerBuiltinTool(
+        BuiltinToolName::TtsListConfigs,
+        RegisteredToolExecutor::Shared(Arc::new(TtsToolExecutor {
+            operation: TtsToolOperation::ListConfigs,
+        })),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+    handler.registerBuiltinTool(
+        BuiltinToolName::TtsGetCurrentConfigId,
+        RegisteredToolExecutor::Shared(Arc::new(TtsToolExecutor {
+            operation: TtsToolOperation::GetCurrentConfigId,
+        })),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+    handler.registerBuiltinTool(
+        BuiltinToolName::TtsSetCurrentConfigId,
+        RegisteredToolExecutor::Shared(Arc::new(TtsToolExecutor {
+            operation: TtsToolOperation::SetCurrentConfigId,
+        })),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+}
+
+#[allow(non_snake_case)]
+fn registerThemeTools(handler: &mut AIToolHandler) {
+    handler.registerBuiltinTool(
+        BuiltinToolName::ThemeListConfigs,
+        RegisteredToolExecutor::Shared(Arc::new(ThemeToolExecutor {
+            operation: ThemeToolOperation::ListConfigs,
+        })),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+    handler.registerBuiltinTool(
+        BuiltinToolName::ThemeApplyConfig,
+        RegisteredToolExecutor::Shared(Arc::new(ThemeToolExecutor {
+            operation: ThemeToolOperation::ApplyConfig,
+        })),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+}
+
+#[allow(non_snake_case)]
+fn registerCatalogTools(handler: &mut AIToolHandler) {
+    handler.registerBuiltinTool(
+        BuiltinToolName::CatalogReadToolSources,
+        RegisteredToolExecutor::Shared(Arc::new(CatalogToolExecutor)),
+        ToolRegistrationVisibility::INTERNAL,
+    );
 }
 
 #[allow(non_snake_case)]
@@ -1278,6 +1381,12 @@ fn registerFileSystemTools(handler: &mut AIToolHandler, fileSystemTools: Standar
         }),
         ToolRegistrationVisibility::INTERNAL,
     );
+    handler.registerBuiltinTool(
+        BuiltinToolName::StorageRequest,
+        RegisteredToolExecutor::Shared(Arc::new(StorageToolExecutor)),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+
 }
 
 #[allow(non_snake_case)]
@@ -1374,143 +1483,4 @@ mod switch_core_tests {
             .expect("unreachable target must be rejected")
             .contains("not currently reachable"));
     }
-}
-
-/// Rejects undeclared arguments for zero-argument business operations.
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct EmptyArguments {}
-
-/// Carries one exact ordinary configuration identifier.
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ConfigArguments { id: String }
-
-/// Carries the existing public chat cancellation argument.
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ChatIdArguments { #[serde(rename = "chatId")] chat_id: String }
-
-/// Preserves a typed structured request without serializing nested values to text.
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RequestArguments<T> { request: T }
-
-/// Carries the typed chat extension target without any caller identity parameter.
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ExtensionArguments { target: operit_plugin_sdk::js_sdk::chat::ChatExtensionTarget }
-
-/// Carries a complete owner-scoped extension replacement value.
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ExtensionWriteArguments {
-    target: operit_plugin_sdk::js_sdk::chat::ChatExtensionTarget,
-    value: operit_plugin_sdk::js_sdk::core::JsonObject,
-}
-
-/// Carries one observation resource operation through the common tool entry.
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ObservationArguments {
-    observation: crate::tools::defaultTool::standard::StandardChatManagerTool::ChatObservationRequest,
-}
-
-/// Decodes the declared argument contract once before execution and permission admission.
-fn decodeArguments<T: serde::de::DeserializeOwned>(request: &crate::ToolExecutionManager::ToolCall) -> Result<T, String> {
-    serde_json::from_value(serde_json::to_value(&request.parameters).map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())
-}
-
-/// Requires identifiers to retain their exact nonblank representation.
-fn requireExactIdentifier(value: &str) -> Result<(), String> {
-    if value.trim().is_empty() || value.trim() != value { return Err("Identifier must be exact nonblank text".into()); }
-    Ok(())
-}
-
-/// Serializes a typed business result into the common structured result protocol.
-fn resultValue<T: serde::Serialize>(value: T) -> Result<serde_json::Value, String> {
-    serde_json::to_value(value).map_err(|error| error.to_string())
-}
-
-/// Registers each structured tool directly against its business operation, not a runtime dispatcher.
-pub(crate) fn registerStructuredTools(handler: &mut AIToolHandler) {
-    use crate::ToolExecutionManager::TypedToolExecutor;
-    use operit_plugin_sdk::js_sdk::runtime_bindings::RuntimeToolName;
-    use crate::tools::defaultTool::standard::StandardChatManagerTool::{ChatObservationRequest, executePluginChatObservation, executePluginChatSend};
-    use crate::tools::defaultTool::standard::StandardFileSystemTools::executePluginStorage;
-    use operit_plugin_sdk::js_sdk::chat::ChatSendRequest;
-    use operit_plugin_sdk::js_sdk::storage::StorageRequest;
-
-    handler.registerSharedTool(RuntimeToolName::ModelsListSummaries.registry_name(), Arc::new(TypedToolExecutor {
-        decode: decodeArguments::<EmptyArguments>, effect: |_| ToolEffect::READ,
-        invoke: |_, context| Box::pin(async move { resultValue(context.host().runtimeSupport().listModelSummaries()?) }),
-    }), ToolRegistrationVisibility::INTERNAL);
-    handler.registerSharedTool(RuntimeToolName::TtsListConfigs.registry_name(), Arc::new(TypedToolExecutor {
-        decode: decodeArguments::<EmptyArguments>, effect: |_| ToolEffect::READ,
-        invoke: |_, context| Box::pin(async move { resultValue(context.host().runtimeSupport().listTtsConfigs()?) }),
-    }), ToolRegistrationVisibility::INTERNAL);
-    handler.registerSharedTool(RuntimeToolName::TtsGetCurrentConfigId.registry_name(), Arc::new(TypedToolExecutor {
-        decode: decodeArguments::<EmptyArguments>, effect: |_| ToolEffect::READ,
-        invoke: |_, context| Box::pin(async move { resultValue(context.host().runtimeSupport().getCurrentTtsConfigId()?) }),
-    }), ToolRegistrationVisibility::INTERNAL);
-    handler.registerSharedTool(RuntimeToolName::TtsSetCurrentConfigId.registry_name(), Arc::new(TypedToolExecutor {
-        decode: |request| { let args: ConfigArguments = decodeArguments(request)?; requireExactIdentifier(&args.id)?; Ok(args) },
-        effect: |_| ToolEffect::WRITE,
-        invoke: |args, context| Box::pin(async move { resultValue(context.host().runtimeSupport().setCurrentTtsConfigId(args.id)?) }),
-    }), ToolRegistrationVisibility::INTERNAL);
-    handler.registerSharedTool(RuntimeToolName::ThemeListConfigs.registry_name(), Arc::new(TypedToolExecutor {
-        decode: decodeArguments::<EmptyArguments>, effect: |_| ToolEffect::READ,
-        invoke: |_, context| Box::pin(async move { resultValue(context.host().runtimeSupport().listThemeConfigs()?) }),
-    }), ToolRegistrationVisibility::INTERNAL);
-    handler.registerSharedTool(RuntimeToolName::ThemeApplyConfig.registry_name(), Arc::new(TypedToolExecutor {
-        decode: |request| { let args: ConfigArguments = decodeArguments(request)?; requireExactIdentifier(&args.id)?; Ok(args) },
-        effect: |_| ToolEffect::WRITE,
-        invoke: |args, context| Box::pin(async move { resultValue(context.host().runtimeSupport().applyThemeConfig(args.id)?) }),
-    }), ToolRegistrationVisibility::INTERNAL);
-    handler.registerSharedTool(RuntimeToolName::CatalogReadToolSources.registry_name(), Arc::new(TypedToolExecutor {
-        decode: decodeArguments::<EmptyArguments>, effect: |_| ToolEffect::READ,
-        invoke: |_, context| Box::pin(async move { resultValue(context.host().runtimeSupport().readToolSourceCatalog().await?) }),
-    }), ToolRegistrationVisibility::INTERNAL);
-    handler.registerSharedTool(RuntimeToolName::ChatCancel.registry_name(), Arc::new(TypedToolExecutor {
-        decode: |request| { let args: ChatIdArguments = decodeArguments(request)?; requireExactIdentifier(&args.chat_id)?; Ok(args) },
-        effect: |_| ToolEffect::WRITE,
-        invoke: |args, context| Box::pin(async move { resultValue(context.host().runtimeSupport().requestPluginChatCancellation(&context.requirePluginOwner()?, &args.chat_id)?) }),
-    }), ToolRegistrationVisibility::INTERNAL);
-    handler.registerSharedTool(RuntimeToolName::ChatReadExtension.registry_name(), Arc::new(TypedToolExecutor {
-        decode: |request| { let args: ExtensionArguments = decodeArguments(request)?; args.target.validate()?; Ok(args) },
-        effect: |_| ToolEffect::READ,
-        invoke: |args, context| Box::pin(async move { resultValue(context.host().runtimeSupport().readChatExtension(&context.requirePluginOwner()?, &args.target)?) }),
-    }), ToolRegistrationVisibility::INTERNAL);
-    handler.registerSharedTool(RuntimeToolName::ChatWriteExtension.registry_name(), Arc::new(TypedToolExecutor {
-        decode: |request| { let args: ExtensionWriteArguments = decodeArguments(request)?; args.target.validate()?; Ok(args) },
-        effect: |_| ToolEffect::WRITE,
-        invoke: |args, context| Box::pin(async move { resultValue(context.host().runtimeSupport().writeChatExtension(&context.requirePluginOwner()?, &args.target, args.value)?) }),
-    }), ToolRegistrationVisibility::INTERNAL);
-    handler.registerSharedTool(RuntimeToolName::ChatDeleteExtension.registry_name(), Arc::new(TypedToolExecutor {
-        decode: |request| { let args: ExtensionArguments = decodeArguments(request)?; args.target.validate()?; Ok(args) },
-        effect: |_| ToolEffect::WRITE,
-        invoke: |args, context| Box::pin(async move { resultValue(context.host().runtimeSupport().deleteChatExtension(&context.requirePluginOwner()?, &args.target)?) }),
-    }), ToolRegistrationVisibility::INTERNAL);
-    handler.registerSharedTool(RuntimeToolName::ChatSendMessage.registry_name(), Arc::new(TypedToolExecutor {
-        decode: |request| { let args: RequestArguments<ChatSendRequest> = decodeArguments(request)?; args.request.validate()?; Ok(args) },
-        effect: |_| ToolEffect::WRITE,
-        invoke: |args, context| Box::pin(executePluginChatSend(args.request, context)),
-    }), ToolRegistrationVisibility::INTERNAL);
-    handler.registerSharedTool(RuntimeToolName::ChatObserve.registry_name(), Arc::new(TypedToolExecutor {
-        decode: |request| {
-            let args: ObservationArguments = decodeArguments(request)?;
-            match &args.observation {
-                ChatObservationRequest::Open { request } => request.validate()?,
-                ChatObservationRequest::Next { handle } | ChatObservationRequest::Close { handle } => requireExactIdentifier(handle)?,
-            }
-            Ok(args)
-        },
-        effect: |args| match args.observation { ChatObservationRequest::Open { .. } => ToolEffect::WRITE, _ => ToolEffect::READ },
-        invoke: |args, context| Box::pin(executePluginChatObservation(args.observation, context)),
-    }), ToolRegistrationVisibility::INTERNAL);
-    handler.registerSharedTool(RuntimeToolName::StorageRequest.registry_name(), Arc::new(TypedToolExecutor {
-        decode: decodeArguments::<RequestArguments<StorageRequest>>, effect: |_| ToolEffect::WRITE,
-        invoke: |args, context| Box::pin(executePluginStorage(args.request, context)),
-    }), ToolRegistrationVisibility::INTERNAL);
 }

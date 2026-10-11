@@ -1,6 +1,6 @@
 // Generated from operit-plugin-sdk Rust declarations.
 
-import type { AgentStatusResultData, AppListData, AppOperationData, AppUsageTimeResultData, BinaryFileContentData, BluetoothBleNotificationData, BluetoothBleServicesData, BluetoothBondedDevicesData, BluetoothReadData, BluetoothScanResultData, BluetoothSessionData, BluetoothStateData, BluetoothTransferData, ChatCallResultData, ChatCreationResultData, ChatDeleteResultData, ChatFindResultData, ChatListResultData, ChatMessagesResultData, ChatServiceStartResultData, ChatSwitchResultData, ChatTitleUpdateResultData, DeviceInfoResultData, DirectoryListingData, EdgePortResultData, EnvironmentVariableReadResultData, EnvironmentVariableWriteResultData, FileApplyResultData, FileContentData, FileExistsData, FileInfoData, FileOperationData, FilePartContentData, FindFilesResultData, GrepResultData, HiddenTerminalCommandResultData, HttpResponseData, LocationData, MessageSendResultData, MusicPlaybackResultData, NotificationData, SleepResultData, SystemSettingData, TerminalCommandResultData, TerminalInfoResultData, TerminalSessionCloseResultData, TerminalSessionCreationResultData, TerminalSessionScreenResultData, ToolResultData, VisitWebResultData } from "./results";
+import type { AgentStatusResultData, AppListData, AppOperationData, AppUsageTimeResultData, BinaryFileContentData, BluetoothBleNotificationData, BluetoothBleServicesData, BluetoothBondedDevicesData, BluetoothReadData, BluetoothScanResultData, BluetoothSessionData, BluetoothStateData, BluetoothTransferData, CatalogReadToolSourcesResultData, ChatCallResultData, ChatCancelResultData, ChatCreationResultData, ChatDeleteExtensionResultData, ChatDeleteResultData, ChatFindResultData, ChatListResultData, ChatMessagesResultData, ChatObservationResultData, ChatReadExtensionResultData, ChatSendMessageResultData, ChatServiceStartResultData, ChatSwitchResultData, ChatTitleUpdateResultData, ChatWriteExtensionResultData, DeviceInfoResultData, DirectoryListingData, EdgePortResultData, EnvironmentVariableReadResultData, EnvironmentVariableWriteResultData, FileApplyResultData, FileContentData, FileExistsData, FileInfoData, FileOperationData, FilePartContentData, FindFilesResultData, GrepResultData, HiddenTerminalCommandResultData, HttpResponseData, LocationData, MessageSendResultData, ModelsListSummariesResultData, MusicPlaybackResultData, NotificationData, SleepResultData, StorageRequestResultData, SystemSettingData, TerminalCommandResultData, TerminalInfoResultData, TerminalSessionCloseResultData, TerminalSessionCreationResultData, TerminalSessionScreenResultData, ThemeApplyConfigResultData, ThemeListConfigsResultData, ToolResultData, TtsGetCurrentConfigIdResultData, TtsListConfigsResultData, TtsSetCurrentConfigIdResultData, VisitWebResultData } from "./results";
 
 /**
  * Maps every built-in tool name to its concrete public result type.
@@ -32,6 +32,7 @@ export interface ToolResultMap {
   apply_file: FileApplyResultData;
   create_file: FileApplyResultData;
   edit_file: FileApplyResultData;
+  storage_request: StorageRequestResultData;
   http_request: HttpResponseData;
   visit_web: VisitWebResultData;
   browser_click: string;
@@ -95,7 +96,14 @@ export interface ToolResultMap {
   read_environment_variable: EnvironmentVariableReadResultData;
   write_environment_variable: EnvironmentVariableWriteResultData;
   execute_cli_command: unknown;
+  models_list_summaries: ModelsListSummariesResultData;
+  tts_list_configs: TtsListConfigsResultData;
+  tts_get_current_config_id: TtsGetCurrentConfigIdResultData;
+  tts_set_current_config_id: TtsSetCurrentConfigIdResultData;
+  theme_list_configs: ThemeListConfigsResultData;
+  theme_apply_config: ThemeApplyConfigResultData;
   use_package: string;
+  catalog_read_tool_sources: CatalogReadToolSourcesResultData;
   list_core_nodes: string;
   switch_core: string;
   package_proxy: ToolResultData;
@@ -129,6 +137,12 @@ export interface ToolResultMap {
   delete_chat: ChatDeleteResultData;
   send_message_to_ai: MessageSendResultData;
   send_message_to_ai_streaming: MessageSendResultData;
+  chat_send_message: ChatSendMessageResultData;
+  chat_observe: ChatObservationResultData;
+  chat_cancel: ChatCancelResultData;
+  chat_read_extension: ChatReadExtensionResultData;
+  chat_write_extension: ChatWriteExtensionResultData;
+  chat_delete_extension: ChatDeleteExtensionResultData;
   call_chat_model: ChatCallResultData;
   get_chat_messages: ChatMessagesResultData;
   get_chat_messages_range: ChatMessagesResultData;

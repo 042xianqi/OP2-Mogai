@@ -20,7 +20,7 @@ function sequenceKey(chatId: string, submissionId: string): string { return JSON
 
 /** Requires the real persisted assistant snapshot to identify the participant selected by this exact turn. */
 async function verifySnapshot(chatId: string, selected: GroupSelectedTurn, assistant: GroupMessageLocator): Promise<void> {
-  const extension = await Tools.Chat.readExtension({ kind: "message", chatId, messageTimestamp: assistant.messageTimestamp, variantIndex: assistant.variantIndex });
+  const extension = (await Tools.Chat.readExtension({ kind: "message", chatId, messageTimestamp: assistant.messageTimestamp, variantIndex: assistant.variantIndex })).extension;
   if (extension === null) throw new Error("Committed group assistant has no participant message extension");
   const marker = decodeMessageMarker(extension);
   if (marker.selection !== selected.selection || marker.profile.id !== selected.participantId || marker.promptFunctionType !== "CHAT") {

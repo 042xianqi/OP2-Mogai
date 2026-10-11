@@ -17,15 +17,15 @@ export function createNativeChatHost(records) {
   }
   const chat = {
     /** Reads the declared owner namespace without creating a binding or substituting any active selection. */
-    async readExtension(target) { observe("readExtension", target); const record = recordFor(target); return record.extension === null ? null : plain(record.extension); },
+    async readExtension(target) { observe("readExtension", target); const record = recordFor(target); return { extension: record.extension === null ? null : plain(record.extension) }; },
     /** Stores exactly the actual plugin-submitted JSON after the explicit controlled native write barrier. */
     async writeExtension(target, value) {
       observe("writeExtension", target, value); const record = recordFor(target);
       if (writeGate !== null) await writeGate;
-      record.extension = plain(value); return plain(record.extension);
+      record.extension = plain(value); return { extension: plain(record.extension) };
     },
     /** Deletes only the executing owner's namespace without deleting chats or plugin metadata. */
-    async deleteExtension(target) { observe("deleteExtension", target); const record = recordFor(target), existed = record.extension !== null; record.extension = null; return existed; },
+    async deleteExtension(target) { observe("deleteExtension", target); const record = recordFor(target), existed = record.extension !== null; record.extension = null; return { deleted: existed }; },
   };
   return {
     records, calls, chat, observe,

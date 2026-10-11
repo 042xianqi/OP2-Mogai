@@ -1,5 +1,6 @@
 //! Canonical tool-source identities exposed to plugins.
 use super::JsFuture;
+use super::results::CatalogReadToolSourcesResultData;
 use serde::{Deserialize, Serialize};
 
 /// Identifies one actual configured tool source or registered built-in tool.
@@ -23,5 +24,5 @@ pub struct CatalogToolSources {
 /// Reads tool-source identities from their canonical registries.
 pub trait CatalogHost: Send + Sync {
     /// Returns actual builtin, package, skill and MCP source identities.
-    fn readToolSources(&self) -> JsFuture<CatalogToolSources>;
+    fn readToolSources(&self) -> JsFuture<CatalogReadToolSourcesResultData>;
 }

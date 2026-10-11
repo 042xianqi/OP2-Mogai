@@ -2,6 +2,16 @@
 
 #![allow(non_snake_case)]
 pub use crate::js_sdk::{JsNullable, JsOptional};
+use super::catalog::CatalogToolSource;
+use super::chat::ChatSendEvent;
+use super::core::JsonObject;
+use super::models::ModelsSummary;
+use super::storage::{
+    StorageChangeEntry, StorageKeyValueEntry, StorageResponse, StorageSqlExecutionResult,
+    StorageSqlRow, StorageValueEntry,
+};
+use super::theme::ThemeConfig;
+use super::tts::TtsConfig;
 use chrono::{Local, TimeZone};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -21,6 +31,12 @@ pub enum ToolResultData {
     SleepResultData(SleepResultData),
     EnvironmentVariableReadResultData(EnvironmentVariableReadResultData),
     EnvironmentVariableWriteResultData(EnvironmentVariableWriteResultData),
+    ModelsListSummariesResultData(ModelsListSummariesResultData),
+    TtsListConfigsResultData(TtsListConfigsResultData),
+    TtsGetCurrentConfigIdResultData(TtsGetCurrentConfigIdResultData),
+    TtsSetCurrentConfigIdResultData(TtsSetCurrentConfigIdResultData),
+    ThemeListConfigsResultData(ThemeListConfigsResultData),
+    ThemeApplyConfigResultData(ThemeApplyConfigResultData),
     IntResultData(IntResultData),
     BinaryResultData(BinaryResultData),
     FilePartContentData(FilePartContentData),
@@ -31,6 +47,7 @@ pub enum ToolResultData {
     FileInfoData(FileInfoData),
     FileOperationData(FileOperationData),
     FileApplyResultData(FileApplyResultData),
+    StorageRequestResultData(StorageRequestResultData),
     HttpResponseData(HttpResponseData),
     HttpStreamEventData(HttpStreamEventData),
     SystemSettingData(SystemSettingData),
@@ -49,6 +66,12 @@ pub enum ToolResultData {
     ChatTitleUpdateResultData(ChatTitleUpdateResultData),
     ChatDeleteResultData(ChatDeleteResultData),
     MessageSendResultData(MessageSendResultData),
+    ChatSendMessageResultData(ChatSendMessageResultData),
+    ChatObservationResultData(ChatObservationResultData),
+    ChatCancelResultData(ChatCancelResultData),
+    ChatReadExtensionResultData(ChatReadExtensionResultData),
+    ChatWriteExtensionResultData(ChatWriteExtensionResultData),
+    ChatDeleteExtensionResultData(ChatDeleteExtensionResultData),
     ChatCallResultData(ChatCallResultData),
     ChatMessagesResultData(ChatMessagesResultData),
     VisitWebResultData(VisitWebResultData),
@@ -68,6 +91,7 @@ pub enum ToolResultData {
     BluetoothReadData(BluetoothReadData),
     BluetoothBleServicesData(BluetoothBleServicesData),
     BluetoothBleNotificationData(BluetoothBleNotificationData),
+    CatalogReadToolSourcesResultData(CatalogReadToolSourcesResultData),
     FindFilesResultData(FindFilesResultData),
     GrepResultData(GrepResultData),
 }
@@ -90,6 +114,12 @@ impl ToolResultData {
             Self::SleepResultData(data) => data.toString(),
             Self::EnvironmentVariableReadResultData(data) => data.toString(),
             Self::EnvironmentVariableWriteResultData(data) => data.toString(),
+            Self::ModelsListSummariesResultData(data) => data.toString(),
+            Self::TtsListConfigsResultData(data) => data.toString(),
+            Self::TtsGetCurrentConfigIdResultData(data) => data.toString(),
+            Self::TtsSetCurrentConfigIdResultData(data) => data.toString(),
+            Self::ThemeListConfigsResultData(data) => data.toString(),
+            Self::ThemeApplyConfigResultData(data) => data.toString(),
             Self::IntResultData(data) => data.value.to_string(),
             Self::BinaryResultData(data) => format!("Binary data ({} bytes)", data.value.len()),
             Self::FilePartContentData(data) => data.toString(),
@@ -100,6 +130,7 @@ impl ToolResultData {
             Self::FileInfoData(data) => data.toString(),
             Self::FileOperationData(data) => data.toString(),
             Self::FileApplyResultData(data) => data.toString(),
+            Self::StorageRequestResultData(data) => data.toString(),
             Self::HttpResponseData(data) => data.toString(),
             Self::HttpStreamEventData(data) => data.toString(),
             Self::SystemSettingData(data) => data.toString(),
@@ -128,6 +159,12 @@ impl ToolResultData {
             }
             Self::ChatDeleteResultData(data) => format!("Deleted chat: {}", data.chatId),
             Self::MessageSendResultData(data) => data.toString(),
+            Self::ChatSendMessageResultData(data) => data.toString(),
+            Self::ChatObservationResultData(data) => data.toString(),
+            Self::ChatCancelResultData(data) => data.toString(),
+            Self::ChatReadExtensionResultData(data) => data.toString(),
+            Self::ChatWriteExtensionResultData(data) => data.toString(),
+            Self::ChatDeleteExtensionResultData(data) => data.toString(),
             Self::ChatCallResultData(data) => data.toString(),
             Self::ChatMessagesResultData(data) => {
                 let rangeInfo = match (data.start, data.end) {
@@ -160,6 +197,7 @@ impl ToolResultData {
             Self::BluetoothReadData(data) => data.toString(),
             Self::BluetoothBleServicesData(data) => data.toString(),
             Self::BluetoothBleNotificationData(data) => data.toString(),
+            Self::CatalogReadToolSourcesResultData(data) => data.toString(),
             Self::FindFilesResultData(data) => data.toString(),
             Self::GrepResultData(data) => data.toString(),
         }
@@ -498,6 +536,100 @@ pub struct EnvironmentVariableWriteResultData {
     #[serde(rename = "cleared")]
     pub cleared: bool,
 }
+/// Returns the complete configured model summaries.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelsListSummariesResultData {
+    pub models: Vec<ModelsSummary>,
+}
+impl ModelsListSummariesResultData {
+    /// Formats the concrete tool fields for the common text result path.
+    pub fn toString(&self) -> String {
+        serde_json::to_string(self).expect("ModelsListSummariesResultData serialization failed")
+    }
+}
+
+/// Returns the complete configured speech records.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TtsListConfigsResultData {
+    pub configs: Vec<TtsConfig>,
+}
+impl TtsListConfigsResultData {
+    /// Formats the concrete tool fields for the common text result path.
+    pub fn toString(&self) -> String {
+        serde_json::to_string(self).expect("TtsListConfigsResultData serialization failed")
+    }
+}
+
+/// Returns the current application speech configuration identity.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TtsGetCurrentConfigIdResultData {
+    pub configId: String,
+}
+impl TtsGetCurrentConfigIdResultData {
+    /// Formats the concrete tool fields for the common text result path.
+    pub fn toString(&self) -> String {
+        serde_json::to_string(self).expect("TtsGetCurrentConfigIdResultData serialization failed")
+    }
+}
+
+/// Returns the committed application speech configuration identity.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TtsSetCurrentConfigIdResultData {
+    pub configId: String,
+}
+impl TtsSetCurrentConfigIdResultData {
+    /// Formats the concrete tool fields for the common text result path.
+    pub fn toString(&self) -> String {
+        serde_json::to_string(self).expect("TtsSetCurrentConfigIdResultData serialization failed")
+    }
+}
+
+/// Returns the complete named appearance configurations.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThemeListConfigsResultData {
+    pub configs: Vec<ThemeConfig>,
+}
+impl ThemeListConfigsResultData {
+    /// Formats the concrete tool fields for the common text result path.
+    pub fn toString(&self) -> String {
+        serde_json::to_string(self).expect("ThemeListConfigsResultData serialization failed")
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+/// Returns the actual named appearance record committed by the tool.
+pub struct ThemeApplyConfigResultData {
+    pub id: String,
+    pub name: String,
+    pub snapshot: BTreeMap<String, serde_json::Value>,
+    pub createdAt: i64,
+    pub updatedAt: i64,
+}
+
+impl From<ThemeConfig> for ThemeApplyConfigResultData {
+    fn from(config: ThemeConfig) -> Self {
+        Self {
+            id: config.id,
+            name: config.name,
+            snapshot: config.snapshot,
+            createdAt: config.createdAt,
+            updatedAt: config.updatedAt,
+        }
+    }
+}
+
+impl ThemeApplyConfigResultData {
+    /// Formats the concrete tool fields for the common text result path.
+    pub fn toString(&self) -> String {
+        serde_json::to_string(self).expect("ThemeApplyConfigResultData serialization failed")
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 /// Wraps an integer value returned by a built-in tool.
 pub struct IntResultData {
@@ -626,6 +758,84 @@ pub struct FileApplyResultData {
     pub aiDiffInstructions: String,
     pub diffContent: Option<String>,
 }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+/// Returns the concrete result fields of the selected Storage tool operation.
+pub enum StorageRequestResultData {
+    #[serde(rename = "open")]
+    Open {
+        handle: String,
+        path: String,
+    },
+    #[serde(rename = "close")]
+    Close,
+    #[serde(rename = "query")]
+    Query {
+        rows: Vec<StorageSqlRow>,
+    },
+    #[serde(rename = "execute")]
+    Execute {
+        results: Vec<StorageSqlExecutionResult>,
+    },
+    #[serde(rename = "transaction")]
+    Transaction {
+        results: Vec<StorageSqlExecutionResult>,
+    },
+    #[serde(rename = "define_table")]
+    DefineTable {
+        changed: bool,
+    },
+    #[serde(rename = "get")]
+    Get {
+        entry: JsNullable<StorageValueEntry>,
+    },
+    #[serde(rename = "list")]
+    List {
+        entries: Vec<StorageKeyValueEntry>,
+    },
+    #[serde(rename = "commit")]
+    Commit {
+        version: String,
+    },
+    #[serde(rename = "changes")]
+    Changes {
+        entries: Vec<StorageChangeEntry>,
+    },
+}
+
+impl From<StorageResponse> for StorageRequestResultData {
+    fn from(response: StorageResponse) -> Self {
+        match response {
+            StorageResponse::Open(opened) => Self::Open {
+                handle: opened.handle,
+                path: opened.path,
+            },
+            StorageResponse::Close => Self::Close,
+            StorageResponse::Query(rows) => Self::Query { rows },
+            StorageResponse::Execute(results) => Self::Execute { results },
+            StorageResponse::Transaction(results) => Self::Transaction { results },
+            StorageResponse::DefineTable(result) => Self::DefineTable {
+                changed: result.changed,
+            },
+            StorageResponse::Get(entry) => Self::Get {
+                entry: JsNullable::from_option(entry),
+            },
+            StorageResponse::List(entries) => Self::List { entries },
+            StorageResponse::Commit(result) => Self::Commit {
+                version: result.version,
+            },
+            StorageResponse::Changes(entries) => Self::Changes { entries },
+        }
+    }
+}
+
+impl StorageRequestResultData {
+    /// Formats the concrete tool fields for the common text result path.
+    pub fn toString(&self) -> String {
+        serde_json::to_string(self).expect("StorageRequestResultData serialization failed")
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 /// Contains an HTTP response status, headers, cookies, media type, and decoded or Base64 body.
 pub struct HttpResponseData {
@@ -1017,6 +1227,125 @@ pub struct MessageSendResultData {
     pub outcome: MessageSendOutcome,
 
 }
+#[derive(Clone, Serialize, Deserialize)]
+/// Records the authenticated Chat tool's actual originating send and committed outcome.
+pub struct ChatSendMessageResultData {
+    ///The ID of the chat the message was sent to
+    #[serde(rename = "chatId")]
+    pub chatId: String,
+    ///The message content that was sent
+    #[serde(rename = "message")]
+    pub message: String,
+    #[serde(default, skip_serializing_if = "JsOptional::is_undefined")]
+    ///Final AI response content when available
+    #[serde(rename = "aiResponse")]
+    pub aiResponse: JsOptional<String>,
+    #[serde(default, skip_serializing_if = "JsOptional::is_undefined")]
+    ///Reply receive timestamp when available
+    #[serde(rename = "receivedAt")]
+    pub receivedAt: JsOptional<i64>,
+    ///Sent timestamp
+    #[serde(rename = "sentAt")]
+    pub sentAt: i64,
+    /// Reports actual persistence or input ownership without looking up unrelated recent messages.
+    pub outcome: MessageSendOutcome,
+}
+impl From<MessageSendResultData> for ChatSendMessageResultData {
+    fn from(receipt: MessageSendResultData) -> Self {
+        Self {
+            chatId: receipt.chatId,
+            message: receipt.message,
+            aiResponse: receipt.aiResponse,
+            receivedAt: receipt.receivedAt,
+            sentAt: receipt.sentAt,
+            outcome: receipt.outcome,
+        }
+    }
+}
+
+impl ChatSendMessageResultData {
+    /// Formats the concrete tool fields for the common text result path.
+    pub fn toString(&self) -> String {
+        serde_json::to_string(self).expect("ChatSendMessageResultData serialization failed")
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+/// Describes the concrete resource result for an observation operation.
+pub enum ChatObservationResultData {
+    #[serde(rename = "open")]
+    Open {
+        handle: String,
+    },
+    #[serde(rename = "next")]
+    Next {
+        event: JsNullable<ChatSendEvent>,
+    },
+    #[serde(rename = "close")]
+    Close,
+}
+
+impl ChatObservationResultData {
+    /// Formats the concrete tool fields for the common text result path.
+    pub fn toString(&self) -> String {
+        serde_json::to_string(self).expect("ChatObservationResultData serialization failed")
+    }
+}
+
+/// Reports cancellation of the calling owner's active Chat execution.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatCancelResultData {
+    pub chatId: String,
+    pub cancelRequested: bool,
+}
+impl ChatCancelResultData {
+    /// Formats the concrete tool fields for the common text result path.
+    pub fn toString(&self) -> String {
+        serde_json::to_string(self).expect("ChatCancelResultData serialization failed")
+    }
+}
+
+/// Returns an owner-scoped Chat extension or its explicit absence.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatReadExtensionResultData {
+    pub extension: JsNullable<JsonObject>,
+}
+impl ChatReadExtensionResultData {
+    /// Formats the concrete tool fields for the common text result path.
+    pub fn toString(&self) -> String {
+        serde_json::to_string(self).expect("ChatReadExtensionResultData serialization failed")
+    }
+}
+
+/// Returns the exact owner-scoped Chat extension that was persisted.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatWriteExtensionResultData {
+    pub extension: JsonObject,
+}
+impl ChatWriteExtensionResultData {
+    /// Formats the concrete tool fields for the common text result path.
+    pub fn toString(&self) -> String {
+        serde_json::to_string(self).expect("ChatWriteExtensionResultData serialization failed")
+    }
+}
+
+/// Reports whether an owner-scoped Chat extension was removed.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatDeleteExtensionResultData {
+    pub deleted: bool,
+}
+impl ChatDeleteExtensionResultData {
+    /// Formats the concrete tool fields for the common text result path.
+    pub fn toString(&self) -> String {
+        serde_json::to_string(self).expect("ChatDeleteExtensionResultData serialization failed")
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 /// Contains the output of one non-persistent functional model call.
 pub struct ChatCallResultData {
@@ -1477,6 +1806,22 @@ pub struct LinkData {
     pub url: String,
     pub text: String,
 }
+/// Returns the actual registered built-in, package, skill and MCP tool sources.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogReadToolSourcesResultData {
+    pub builtinTools: Vec<CatalogToolSource>,
+    pub packages: Vec<CatalogToolSource>,
+    pub skills: Vec<CatalogToolSource>,
+    pub mcpServers: Vec<CatalogToolSource>,
+}
+impl CatalogReadToolSourcesResultData {
+    /// Formats the concrete tool fields for the common text result path.
+    pub fn toString(&self) -> String {
+        serde_json::to_string(self).expect("CatalogReadToolSourcesResultData serialization failed")
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 /// Contains file paths matching a pattern beneath a requested search path.
 pub struct FindFilesResultData {

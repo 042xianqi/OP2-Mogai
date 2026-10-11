@@ -251,7 +251,7 @@ async function readSidebarSelections(chats: readonly SidebarChatSummary[]): Prom
   const selections: SidebarChatSelection[] = [];
   for (let offset = 0; offset < chats.length; offset += 8) {
     selections.push(...await Promise.all(chats.slice(offset, offset + 8).map(async chat => {
-      const extension = await Tools.Chat.readExtension({ kind: "chat", chatId: chat.id });
+      const extension = (await Tools.Chat.readExtension({ kind: "chat", chatId: chat.id })).extension;
       return { chatId: chat.id, selection: extension === null ? null : decodeChatMarker(extension).selection };
     })));
   }

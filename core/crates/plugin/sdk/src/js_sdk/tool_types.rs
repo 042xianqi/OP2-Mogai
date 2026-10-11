@@ -30,6 +30,7 @@ pub struct ToolResultMap {
     pub apply_file: FileApplyResultData,
     pub create_file: FileApplyResultData,
     pub edit_file: FileApplyResultData,
+    pub storage_request: StorageRequestResultData,
     pub http_request: HttpResponseData,
     pub visit_web: VisitWebResultData,
     pub browser_click: String,
@@ -93,7 +94,14 @@ pub struct ToolResultMap {
     pub read_environment_variable: EnvironmentVariableReadResultData,
     pub write_environment_variable: EnvironmentVariableWriteResultData,
     pub execute_cli_command: serde_json::Value,
+    pub models_list_summaries: ModelsListSummariesResultData,
+    pub tts_list_configs: TtsListConfigsResultData,
+    pub tts_get_current_config_id: TtsGetCurrentConfigIdResultData,
+    pub tts_set_current_config_id: TtsSetCurrentConfigIdResultData,
+    pub theme_list_configs: ThemeListConfigsResultData,
+    pub theme_apply_config: ThemeApplyConfigResultData,
     pub use_package: String,
+    pub catalog_read_tool_sources: CatalogReadToolSourcesResultData,
     pub list_core_nodes: String,
     pub switch_core: String,
     pub package_proxy: ToolResultData,
@@ -127,6 +135,12 @@ pub struct ToolResultMap {
     pub delete_chat: ChatDeleteResultData,
     pub send_message_to_ai: MessageSendResultData,
     pub send_message_to_ai_streaming: MessageSendResultData,
+    pub chat_send_message: ChatSendMessageResultData,
+    pub chat_observe: ChatObservationResultData,
+    pub chat_cancel: ChatCancelResultData,
+    pub chat_read_extension: ChatReadExtensionResultData,
+    pub chat_write_extension: ChatWriteExtensionResultData,
+    pub chat_delete_extension: ChatDeleteExtensionResultData,
     pub call_chat_model: ChatCallResultData,
     pub get_chat_messages: ChatMessagesResultData,
     pub get_chat_messages_range: ChatMessagesResultData,
@@ -186,4 +200,71 @@ mod tests {
 
         assert!(BuiltinToolName::ListCoreNodes.accepts_runtime_result(&result));
     }
+    /// Every new tool uses its own enum variant and serializes the actual tool fields.
+    #[test]
+    fn domain_results_use_dedicated_tool_result_variants() {
+        use super::*;
+        use serde_json::json;
+        let results = [
+            (BuiltinToolName::ModelsListSummaries, ToolResultData::ModelsListSummariesResultData(ModelsListSummariesResultData { models: vec![] }), "models"),
+            (BuiltinToolName::TtsListConfigs, ToolResultData::TtsListConfigsResultData(TtsListConfigsResultData { configs: vec![] }), "configs"),
+            (BuiltinToolName::TtsGetCurrentConfigId, ToolResultData::TtsGetCurrentConfigIdResultData(TtsGetCurrentConfigIdResultData { configId: "tts".into() }), "configId"),
+            (BuiltinToolName::TtsSetCurrentConfigId, ToolResultData::TtsSetCurrentConfigIdResultData(TtsSetCurrentConfigIdResultData { configId: "tts".into() }), "configId"),
+            (BuiltinToolName::ThemeListConfigs, ToolResultData::ThemeListConfigsResultData(ThemeListConfigsResultData { configs: vec![] }), "configs"),
+            (BuiltinToolName::ThemeApplyConfig, ToolResultData::ThemeApplyConfigResultData(ThemeApplyConfigResultData { id: "theme".into(), name: "Theme".into(), snapshot: Default::default(), createdAt: 1, updatedAt: 2 }), "id"),
+            (BuiltinToolName::ChatCancel, ToolResultData::ChatCancelResultData(ChatCancelResultData { chatId: "chat".into(), cancelRequested: true }), "chatId"),
+            (BuiltinToolName::ChatReadExtension, ToolResultData::ChatReadExtensionResultData(ChatReadExtensionResultData { extension: JsNullable::Null }), "extension"),
+            (BuiltinToolName::ChatWriteExtension, ToolResultData::ChatWriteExtensionResultData(ChatWriteExtensionResultData { extension: Default::default() }), "extension"),
+            (BuiltinToolName::ChatDeleteExtension, ToolResultData::ChatDeleteExtensionResultData(ChatDeleteExtensionResultData { deleted: false }), "deleted"),
+            (BuiltinToolName::CatalogReadToolSources, ToolResultData::CatalogReadToolSourcesResultData(CatalogReadToolSourcesResultData { builtinTools: vec![], packages: vec![], skills: vec![], mcpServers: vec![] }), "builtinTools"),
+            (BuiltinToolName::ChatObserve, ToolResultData::ChatObservationResultData(ChatObservationResultData::Open { handle: "observation".into() }), "handle"),
+            (BuiltinToolName::StorageRequest, ToolResultData::StorageRequestResultData(StorageRequestResultData::Open { handle: "database".into(), path: "runtime/data.db".into() }), "handle"),
+        ];
+        for (name, result, field) in results {
+            assert!(name.accepts_runtime_result(&result), "{name}");
+            let value = serde_json::to_value(&result).unwrap();
+            assert!(value[field] != json!(null) || field == "extension");
+            assert!(value["__type"].as_str().unwrap().ends_with("ResultData"));
+            let decoded: ToolResultData = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(decoded).unwrap(), value);
+            assert!(!result.toString().is_empty());
+        }
+        let wrong = ToolResultData::StringResultData(StringResultData { value: "tts".into() });
+        assert!(!BuiltinToolName::TtsGetCurrentConfigId.accepts_runtime_result(&wrong));
+    }
+
+    /// A Chat send keeps committed identities and optional values without a receipt wrapper.
+    #[test]
+    fn chat_send_tool_result_preserves_the_originating_receipt() {
+        use super::*;
+        use serde_json::json;
+        let receipt = MessageSendResultData {
+            chatId: "chat".into(), message: "message".into(), aiResponse: JsOptional::Undefined,
+            receivedAt: JsOptional::Undefined, sentAt: 123,
+            outcome: MessageSendOutcome::Committed { status: MessageSendStatus::Completed, userMessageTimestamp: Some(100), assistant: Some(ChatCommittedMessage { messageTimestamp: 101, variantIndex: 2 }) },
+        };
+        let expected = serde_json::to_value(&receipt).unwrap();
+        let result = ToolResultData::ChatSendMessageResultData(receipt.into());
+        assert!(BuiltinToolName::ChatSendMessage.accepts_runtime_result(&result));
+        let mut value = serde_json::to_value(&result).unwrap();
+        assert_eq!(value.as_object_mut().unwrap().remove("__type"), Some(json!("ChatSendMessageResultData")));
+        assert_eq!(value, expected);
+        assert!(value.get("receipt").is_none());
+        assert!(value.get("aiResponse").is_none());
+    }
+
+    /// Operation-specific results keep null distinct from missing and never use arbitrary JSON payloads.
+    #[test]
+    fn observation_and_storage_results_preserve_operation_fields() {
+        use super::*;
+        use super::super::storage::StorageResponse;
+        use serde_json::json;
+        let next = ToolResultData::ChatObservationResultData(ChatObservationResultData::Next { event: JsNullable::Null });
+        assert_eq!(serde_json::to_value(next).unwrap(), json!({"__type":"ChatObservationResultData","op":"next","event":null}));
+        let close = ToolResultData::ChatObservationResultData(ChatObservationResultData::Close);
+        assert_eq!(serde_json::to_value(close).unwrap(), json!({"__type":"ChatObservationResultData","op":"close"}));
+        let result = StorageRequestResultData::from(StorageResponse::Get(None));
+        assert_eq!(serde_json::to_value(result).unwrap(), json!({"op":"get","entry":null}));
+    }
+
 }

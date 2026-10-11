@@ -1,5 +1,7 @@
 // Generated from operit-plugin-sdk Rust declarations.
 
+import type { ThemeApplyConfigResultData, ThemeListConfigsResultData } from "./results";
+
 /**
  * Reads and applies named themes through the canonical appearance manager.
  */
@@ -21,9 +23,9 @@ export namespace Theme {
   /**
    * Applies an exact named snapshot and active ID in the canonical transaction.
    */
-  function applyConfig(id: string): Promise<Config>;
+  function applyConfig(id: string): Promise<ThemeApplyConfigResultData>;
   /**
    * Lists independent named appearance configurations.
    */
-  function listConfigs(): Promise<Config[]>;
+  function listConfigs(): Promise<ThemeListConfigsResultData>;
 }

@@ -24,7 +24,7 @@ export function createSelectionSettingsFixture() {
   }
   const settings = {Theme: {
     /** Supplies complete controlled records in the actual SDK Theme shape, never an empty production source. */
-    async listConfigs(...args) { assert.equal(args.length, 0); observe("Theme.listConfigs", args); return acknowledged("Theme.listConfigs", [...themes.values()]); },
+    async listConfigs(...args) { assert.equal(args.length, 0); observe("Theme.listConfigs", args); return { configs: await acknowledged("Theme.listConfigs", [...themes.values()]) }; },
     /** Simulates only the independent owner write and exact full-record acknowledgement for a declared ID. */
     async applyConfig(...args) {
       assert.equal(args.length, 1); observe("Theme.applyConfig", args); const [id] = args;
@@ -33,15 +33,15 @@ export function createSelectionSettingsFixture() {
     }
   }, Tts: {
     /** Supplies complete controlled SDK speech records with both genuinely declared test IDs. */
-    async listConfigs(...args) { assert.equal(args.length, 0); observe("Tts.listConfigs", args); return acknowledged("Tts.listConfigs", [...speech.values()]); },
+    async listConfigs(...args) { assert.equal(args.length, 0); observe("Tts.listConfigs", args); return { configs: await acknowledged("Tts.listConfigs", [...speech.values()]) }; },
     /** Simulates only the independent speech preference write, including explicitly planned acknowledgement failures. */
     async setCurrentConfigId(...args) {
       assert.equal(args.length, 1); observe("Tts.setCurrentConfigId", args); const [id] = args;
       assert.equal(typeof id, "string"); if (!speech.has(id)) throw new Error("Controlled TTS owner rejected unknown ID: " + id);
-      current.tts = id; return acknowledged("Tts.setCurrentConfigId", id);
+      current.tts = id; return { configId: await acknowledged("Tts.setCurrentConfigId", id) };
     },
     /** Returns the controlled independent owner's real current test state without querying plugin usage or roles. */
-    async getCurrentConfigId(...args) { assert.equal(args.length, 0); observe("Tts.getCurrentConfigId", args); return acknowledged("Tts.getCurrentConfigId", current.tts); }
+    async getCurrentConfigId(...args) { assert.equal(args.length, 0); observe("Tts.getCurrentConfigId", args); return { configId: await acknowledged("Tts.getCurrentConfigId", current.tts) }; }
   }};
   return { settings, calls, current, themes, speech,
     /** Clears only the SDK-call audit; canonical test input identities and independent state are retained. */

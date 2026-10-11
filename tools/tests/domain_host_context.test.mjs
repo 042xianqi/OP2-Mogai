@@ -34,12 +34,12 @@ test('out-of-order directory/configuration completions preserve their own owners
   vm.runInContext("__operitCurrentCallId='configuration-owner'",sandbox);
   const configuration=vm.runInContext("Tools.Tts.setCurrentConfigId('explicit-config').then(value=>({owner:__operitCurrentCallId,value}))",sandbox);
   assert.equal(pending[1].id,'explicit-config');
-  registry.settle(pending[1].requestId,{success:true,data:null},false);
+  registry.settle(pending[1].requestId,{success:true,data:{configId:"explicit-config"}},false);
   assert.equal((await configuration).owner,'configuration-owner');
-  registry.settle(pending[0].requestId,{success:true,data:[{id:'model'}]},false);
+  registry.settle(pending[0].requestId,{success:true,data:{models:[{id:'model'}]}},false);
   const result=await directory;
   assert.equal(result.owner,'owner');
-  assert.deepEqual(structuredClone(result.value),[{id:'model'}]);
+  assert.deepEqual(structuredClone(result.value),{models:[{id:'model'}]});
   assert.equal(sandbox.refs,0);
 });
 

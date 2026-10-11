@@ -16,7 +16,7 @@ function __operitCreateToolStream(toolName, request) {
         if (opening === null) {
             opening = toolCall(toolName, { observation: { op: 'open', request: requestValue } }).then(
                 /** Retains only the private native observation identity. */
-                function(id) { streamId = id; return id; }
+                function(result) { var id = result.handle; streamId = id; return id; }
             );
         }
         return opening;
@@ -57,7 +57,8 @@ function __operitCreateToolStream(toolName, request) {
         try {
             var id = await open();
             if (closed) { await dispose(); return { done: true, value: undefined }; }
-            var event = await toolCall(toolName, { observation: { op: 'next', handle: id } });
+            var result = await toolCall(toolName, { observation: { op: 'next', handle: id } });
+            var event = result.event;
             if (closed || event === null) { await dispose(); return { done: true, value: undefined }; }
             if (event.type === 'completed') await dispose();
             return { done: false, value: event };

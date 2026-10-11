@@ -8,8 +8,7 @@ use crate::SyncOperationStore::{
 use operit_host_api::PluginStorage::*;
 use operit_host_api::{RuntimeSqliteHost, RuntimeStorageHost, SqliteValue};
 use operit_util::RuntimeStorageLayout::{runtimeStorageOwnership, RuntimeStorageOwnership, PLUGIN_DATA_SPACE_DIR_PATH, PLUGIN_DATA_DEVICE_DIR_PATH};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlparser::{
     ast::{Ident, Statement, Visit, Visitor},
@@ -53,34 +52,9 @@ struct Database {
     origin: String,
 }
 
-/// Preserves one durable data namespace and database identity for synchronization and file exclusion.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Manifest {
-    path: String,
-    owner: String,
-    kind: StorageKind,
-    sync: bool,
-}
-
-/// Transports declarative row values rather than executable SQL or database file bytes.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Change {
-    collection: String,
-    key: String,
-    value: Value,
-    deleted: bool,
-}
-
-/// Preserves a bounded transaction as one atomic remote commit.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Payload {
-    manifest: Manifest,
-    tables: Vec<StorageTable>,
-    changes: Vec<Change>,
-}
+type Manifest = StorageManifest;
+type Change = StorageRecordChange;
+type Payload = StorageChangeTransaction;
 
 /// Maps a store validation failure into its original explicit error channel.
 fn failure(message: impl Into<String>) -> SqliteStoreError {
@@ -584,14 +558,16 @@ impl PluginStorageSession {
         storage: Arc<dyn RuntimeStorageHost>,
         request: StorageRequest,
         deviceId: &str,
-    ) -> Result<Value, SqliteStoreError> {
+    ) -> Result<StorageResponse, SqliteStoreError> {
         if let StorageRequest::Open { path, kind } = &request {
             let path = resolveStoragePath(path)?;
             let sync = match runtimeStorageOwnership(&path).map_err(failure)? {
                 RuntimeStorageOwnership::Space => true,
                 RuntimeStorageOwnership::CoreNode => false,
                 RuntimeStorageOwnership::Ephemeral => {
-                    return Err(failure("Plugin databases require durable storage ownership"));
+                    return Err(failure(
+                        "Plugin databases require durable storage ownership",
+                    ));
                 }
             };
             let manifest = Manifest {
@@ -613,7 +589,7 @@ impl PluginStorageSession {
                 .lock()
                 .map_err(|_| failure("Storage handles poisoned"))?
                 .insert(handle.clone(), database);
-            return Ok(json!({"handle":handle,"path":path}));
+            return Ok(StorageResponse::Open(StorageOpenResult { handle, path }));
         }
         let handle = match &request {
             StorageRequest::Close { handle }
@@ -639,7 +615,7 @@ impl PluginStorageSession {
                 .lock()
                 .map_err(|_| failure("Storage handles poisoned"))?
                 .remove(handle);
-            return Ok(Value::Null);
+            return Ok(StorageResponse::Close);
         }
         resolveStoragePath(&database.path)?;
         if !storage.exists(&database.path)? || !ownsFile(storage.clone(), &database.path)? {
@@ -657,20 +633,24 @@ impl PluginStorageSession {
                 if database.kind != StorageKind::Sqlite { return Err(failure("SQL access requires a SQLite handle")); }
                 validateStatement(&statement,true,database.sync)?;
                 let rows = tx.queryRows(&statement.sql,statement.params.into_iter().map(sqlValue).collect::<Result<Vec<_>,_>>()?)?;
-                Ok(json!(rows.into_iter().map(|r| json!({"columns":r.columns,"values":r.values.into_iter().map(wireValue).collect::<Vec<_>>()})).collect::<Vec<_>>()))
+                Ok(StorageResponse::Query(rows.into_iter().map(|row| StorageSqlRow { columns: row.columns, values: row.values.into_iter().map(wireValue).collect() }).collect()))
             }
-            StorageRequest::Execute {statement,..} => executeStatements(&database, tx, vec![statement]),
-            StorageRequest::Transaction {statements,..} => executeStatements(&database, tx, statements),
+            StorageRequest::Execute {statement,..} => executeStatements(&database, tx, vec![statement]).map(StorageResponse::Execute),
+            StorageRequest::Transaction {statements,..} => executeStatements(&database, tx, statements).map(StorageResponse::Transaction),
             StorageRequest::DefineTable {table,..} => {
                 if database.kind != StorageKind::Sqlite { return Err(failure("Table declarations require a SQLite handle")); }
                 let changed = defineTable(tx,&table)?;
                 if changed { database.record(tx,Some(table),Vec::new())?; }
-                Ok(json!({"changed":changed}))
+                Ok(StorageResponse::DefineTable(StorageTableDefinitionResult { changed }))
             }
             StorageRequest::Get {collection,key,..} => {
                 validateCollection(&database, &collection)?;
                 let row = tx.queryOne("SELECT value,version FROM _operit_values WHERE collection=?1 AND key=?2", vec![SqliteValue::Text(collection),SqliteValue::Text(key)])?;
-                match row { Some(r) => Ok(json!({"value":serde_json::from_str::<Value>(&r.get::<_,String>(0)?).map_err(|e| failure(e.to_string()))?,"version":r.get::<_,String>(1)?})), None => Ok(Value::Null) }
+                let entry = row.map(|row| -> Result<StorageValueEntry, SqliteStoreError> { Ok(StorageValueEntry {
+                    value: serde_json::from_str(&row.get::<_, String>(0)?).map_err(|error| failure(error.to_string()))?,
+                    version: row.get::<_, String>(1)?,
+                }) }).transpose()?;
+                Ok(StorageResponse::Get(entry))
             }
             StorageRequest::List {collection,after,limit,..} => {
                 validateCollection(&database, &collection)?; bounded(limit)?;
@@ -678,14 +658,21 @@ impl PluginStorageSession {
                     Some(after) => tx.queryRows("SELECT key,value,version FROM _operit_values WHERE collection=?1 AND key>?2 ORDER BY key LIMIT ?3",vec![SqliteValue::Text(collection),SqliteValue::Text(after),SqliteValue::Integer(i64::from(limit))])?,
                     None => tx.queryRows("SELECT key,value,version FROM _operit_values WHERE collection=?1 ORDER BY key LIMIT ?2",vec![SqliteValue::Text(collection),SqliteValue::Integer(i64::from(limit))])?,
                 };
-                rows.into_iter().map(|r| Ok(json!({"key":r.get::<_,String>(0)?,"value":serde_json::from_str::<Value>(&r.get::<_,String>(1)?).map_err(|e| failure(e.to_string()))?,"version":r.get::<_,String>(2)?}))).collect::<Result<Vec<_>,SqliteStoreError>>().map(|v| json!(v))
+                rows.into_iter().map(|row| Ok(StorageKeyValueEntry {
+                    key: row.get::<_, String>(0)?,
+                    value: serde_json::from_str(&row.get::<_, String>(1)?).map_err(|error| failure(error.to_string()))?,
+                    version: row.get::<_, String>(2)?,
+                })).collect::<Result<Vec<_>, SqliteStoreError>>().map(StorageResponse::List)
             }
-            StorageRequest::Commit {mutations,..} => commitValues(&database,tx,mutations),
+            StorageRequest::Commit {mutations,..} => commitValues(&database,tx,mutations).map(StorageResponse::Commit),
             StorageRequest::Changes {after,limit,..} => {
                 bounded(limit)?; let after = after.parse::<i64>().map_err(|_| failure("Invalid change cursor"))?;
                 if after < 0 { return Err(failure("Negative change cursor")); }
                 let rows = tx.queryRows("SELECT revision,payload FROM _operit_log WHERE revision>?1 ORDER BY revision LIMIT ?2",vec![SqliteValue::Integer(after),SqliteValue::Integer(i64::from(limit))])?;
-                rows.into_iter().map(|r| Ok(json!({"cursor":r.get::<_,i64>(0)?.to_string(),"transaction":serde_json::from_str::<Value>(&r.get::<_,String>(1)?).map_err(|e| failure(e.to_string()))?}))).collect::<Result<Vec<_>,SqliteStoreError>>().map(|v| json!(v))
+                rows.into_iter().map(|row| Ok(StorageChangeEntry {
+                    cursor: row.get::<_, i64>(0)?.to_string(),
+                    transaction: serde_json::from_str(&row.get::<_, String>(1)?).map_err(|error| failure(error.to_string()))?,
+                })).collect::<Result<Vec<_>, SqliteStoreError>>().map(StorageResponse::Changes)
             }
             StorageRequest::Open {..} | StorageRequest::Close {..} => unreachable!(),
         })?;
@@ -725,7 +712,7 @@ fn executeStatements(
     database: &Database,
     tx: &mut SqliteTransaction<'_>,
     statements: Vec<StorageStatement>,
-) -> Result<Value, SqliteStoreError> {
+) -> Result<Vec<StorageSqlExecutionResult>, SqliteStoreError> {
     if database.kind != StorageKind::Sqlite {
         return Err(failure("SQL writes require a SQLite handle"));
     }
@@ -743,9 +730,10 @@ fn executeStatements(
                 .map(sqlValue)
                 .collect::<Result<Vec<_>, _>>()?,
         )?;
-        results.push(
-            json!({"affectedRows":affected,"lastInsertId":tx.lastInsertRowId()?.to_string()}),
-        );
+        results.push(StorageSqlExecutionResult {
+            affected_rows: affected as u64,
+            last_insert_id: tx.lastInsertRowId()?.to_string(),
+        });
     }
     let dirty = tx
         .queryOne("SELECT COUNT(*) FROM _operit_dirty", Vec::new())?
@@ -758,7 +746,7 @@ fn executeStatements(
     if !changes.is_empty() {
         database.record(tx, None, changes)?;
     }
-    Ok(json!(results))
+    Ok(results)
 }
 
 /// Checks all versions and stages all key mutations inside one transaction.
@@ -766,7 +754,7 @@ fn commitValues(
     database: &Database,
     tx: &mut SqliteTransaction<'_>,
     mutations: Vec<StorageMutation>,
-) -> Result<Value, SqliteStoreError> {
+) -> Result<StorageCommitResult, SqliteStoreError> {
     if mutations.is_empty() || mutations.len() > 1000 {
         return Err(failure("Object commit requires 1..1000 mutations"));
     }
@@ -822,7 +810,7 @@ fn commitValues(
         });
     }
     let version = database.record(tx, None, changes)?;
-    Ok(json!({"version":version}))
+    Ok(StorageCommitResult { version })
 }
 
 /// Discovers exact registered databases, never traversing plugin data files.

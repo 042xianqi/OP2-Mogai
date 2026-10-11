@@ -394,7 +394,7 @@ export function parseOwner(ownerKey: string): MemoryOwner {
 /** Matches the original menu's explicit-card and active-card memory owner rules entirely in the plugin. */
 async function menuMemoryOwner(chatId: string, host: CharacterRepository): Promise<string> {
   requireId(chatId, "memory menu chat id");
-  const extension = await Tools.Chat.readExtension({ kind: "chat", chatId });
+  const extension = (await Tools.Chat.readExtension({ kind: "chat", chatId })).extension;
   const selection = extension === null ? null : parseChatSelection(decodeChatMarker(extension).selection);
   if (selection?.kind === "card") return resolveMemoryOwner(selection.id, host);
   const active = await host.readActive();

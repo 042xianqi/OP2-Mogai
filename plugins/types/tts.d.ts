@@ -1,5 +1,7 @@
 // Generated from operit-plugin-sdk Rust declarations.
 
+import type { TtsGetCurrentConfigIdResultData, TtsListConfigsResultData, TtsSetCurrentConfigIdResultData } from "./results";
+
 /**
  * Reads and selects speech configurations through the canonical host manager.
  */
@@ -46,13 +48,13 @@ export namespace Tts {
   /**
    * Reads the current application-wide speech configuration ID.
    */
-  function getCurrentConfigId(): Promise<string>;
+  function getCurrentConfigId(): Promise<TtsGetCurrentConfigIdResultData>;
   /**
    * Returns complete configured speech records.
    */
-  function listConfigs(): Promise<Config[]>;
+  function listConfigs(): Promise<TtsListConfigsResultData>;
   /**
    * Selects an exact existing speech configuration ID.
    */
-  function setCurrentConfigId(id: string): Promise<string>;
+  function setCurrentConfigId(id: string): Promise<TtsSetCurrentConfigIdResultData>;
 }

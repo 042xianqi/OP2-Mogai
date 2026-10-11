@@ -1,5 +1,6 @@
 //! Speech configuration selection exposed to plugins.
 use super::JsFuture;
+use super::results::{TtsListConfigsResultData, TtsGetCurrentConfigIdResultData, TtsSetCurrentConfigIdResultData};
 use serde::{Deserialize, Serialize};
 
 /// Preserves one configured speech request or response-pipeline header.
@@ -40,9 +41,9 @@ pub struct TtsConfig {
 /// Reads and selects speech configurations through the canonical host manager.
 pub trait TtsHost: Send + Sync {
     /// Returns complete configured speech records.
-    fn listConfigs(&self) -> JsFuture<Vec<TtsConfig>>;
+    fn listConfigs(&self) -> JsFuture<TtsListConfigsResultData>;
     /// Reads the current application-wide speech configuration ID.
-    fn getCurrentConfigId(&self) -> JsFuture<String>;
+    fn getCurrentConfigId(&self) -> JsFuture<TtsGetCurrentConfigIdResultData>;
     /// Selects an exact existing speech configuration ID.
-    fn setCurrentConfigId(&self, id: String) -> JsFuture<String>;
+    fn setCurrentConfigId(&self, id: String) -> JsFuture<TtsSetCurrentConfigIdResultData>;
 }

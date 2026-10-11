@@ -1,5 +1,13 @@
 // Generated from operit-plugin-sdk Rust declarations.
 
+import type { Catalog } from "./catalog";
+import type { Chat } from "./chat";
+import type { JsonObject } from "./core";
+import type { Models } from "./models";
+import type { StorageChangeEntry, StorageKeyValueEntry, StorageSqlExecutionResult, StorageSqlRow, StorageValueEntry } from "./storage.generated";
+import type { Theme } from "./theme";
+import type { Tts } from "./tts";
+
 /**
  * Preserves an arbitrary JSON result without interpreting strings or discarding null values.
  */
@@ -10,7 +18,7 @@ export interface JsonResultData {
 /**
  * Contains every concrete payload returned by the built-in tool runtime.
  */
-export type ToolResultData = JsonResultData | EdgePortResultData | BooleanResultData | StringResultData | SleepResultData | EnvironmentVariableReadResultData | EnvironmentVariableWriteResultData | IntResultData | BinaryResultData | FilePartContentData | DirectoryListingData | FileContentData | BinaryFileContentData | FileExistsData | FileInfoData | FileOperationData | FileApplyResultData | HttpResponseData | HttpStreamEventData | SystemSettingData | AppOperationData | AppListData | AppUsageTimeResultData | NotificationData | LocationData | DeviceInfoResultData | ChatServiceStartResultData | ChatCreationResultData | ChatListResultData | ChatFindResultData | AgentStatusResultData | ChatSwitchResultData | ChatTitleUpdateResultData | ChatDeleteResultData | MessageSendResultData | ChatCallResultData | ChatMessagesResultData | VisitWebResultData | TerminalInfoResultData | TerminalCommandResultData | TerminalStreamEventData | HiddenTerminalCommandResultData | TerminalSessionCreationResultData | TerminalSessionCloseResultData | TerminalSessionScreenResultData | MusicPlaybackResultData | BluetoothStateData | BluetoothBondedDevicesData | BluetoothScanResultData | BluetoothSessionData | BluetoothTransferData | BluetoothReadData | BluetoothBleServicesData | BluetoothBleNotificationData | FindFilesResultData | GrepResultData;
+export type ToolResultData = JsonResultData | EdgePortResultData | BooleanResultData | StringResultData | SleepResultData | EnvironmentVariableReadResultData | EnvironmentVariableWriteResultData | ModelsListSummariesResultData | TtsListConfigsResultData | TtsGetCurrentConfigIdResultData | TtsSetCurrentConfigIdResultData | ThemeListConfigsResultData | ThemeApplyConfigResultData | IntResultData | BinaryResultData | FilePartContentData | DirectoryListingData | FileContentData | BinaryFileContentData | FileExistsData | FileInfoData | FileOperationData | FileApplyResultData | StorageRequestResultData | HttpResponseData | HttpStreamEventData | SystemSettingData | AppOperationData | AppListData | AppUsageTimeResultData | NotificationData | LocationData | DeviceInfoResultData | ChatServiceStartResultData | ChatCreationResultData | ChatListResultData | ChatFindResultData | AgentStatusResultData | ChatSwitchResultData | ChatTitleUpdateResultData | ChatDeleteResultData | MessageSendResultData | ChatSendMessageResultData | ChatObservationResultData | ChatCancelResultData | ChatReadExtensionResultData | ChatWriteExtensionResultData | ChatDeleteExtensionResultData | ChatCallResultData | ChatMessagesResultData | VisitWebResultData | TerminalInfoResultData | TerminalCommandResultData | TerminalStreamEventData | HiddenTerminalCommandResultData | TerminalSessionCreationResultData | TerminalSessionCloseResultData | TerminalSessionScreenResultData | MusicPlaybackResultData | BluetoothStateData | BluetoothBondedDevicesData | BluetoothScanResultData | BluetoothSessionData | BluetoothTransferData | BluetoothReadData | BluetoothBleServicesData | BluetoothBleNotificationData | CatalogReadToolSourcesResultData | FindFilesResultData | GrepResultData;
 
 /**
  * Captures the UI node and Android surface reached when an automation run finishes.
@@ -234,6 +242,76 @@ export interface EnvironmentVariableWriteResultData {
 }
 
 /**
+ * Returns the complete configured model summaries.
+ */
+export interface ModelsListSummariesResultData {
+  models: Models.Summary[];
+  /**
+   * Formats the concrete tool fields for the common text result path.
+   */
+  toString(): string;
+}
+
+/**
+ * Returns the complete configured speech records.
+ */
+export interface TtsListConfigsResultData {
+  configs: Tts.Config[];
+  /**
+   * Formats the concrete tool fields for the common text result path.
+   */
+  toString(): string;
+}
+
+/**
+ * Returns the current application speech configuration identity.
+ */
+export interface TtsGetCurrentConfigIdResultData {
+  configId: string;
+  /**
+   * Formats the concrete tool fields for the common text result path.
+   */
+  toString(): string;
+}
+
+/**
+ * Returns the committed application speech configuration identity.
+ */
+export interface TtsSetCurrentConfigIdResultData {
+  configId: string;
+  /**
+   * Formats the concrete tool fields for the common text result path.
+   */
+  toString(): string;
+}
+
+/**
+ * Returns the complete named appearance configurations.
+ */
+export interface ThemeListConfigsResultData {
+  configs: Theme.Config[];
+  /**
+   * Formats the concrete tool fields for the common text result path.
+   */
+  toString(): string;
+}
+
+/**
+ * Returns the actual named appearance record committed by the tool.
+ */
+export interface ThemeApplyConfigResultData {
+  id: string;
+  name: string;
+  snapshot: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+  /**
+   * Formats the concrete tool fields for the common text result path.
+   */
+  toString(): string;
+}
+
+/**
  * Wraps an integer value returned by a built-in tool.
  */
 export interface IntResultData {
@@ -378,6 +456,11 @@ export interface FileApplyResultData {
    */
   toString(): string;
 }
+
+/**
+ * Returns the concrete result fields of the selected Storage tool operation.
+ */
+export type StorageRequestResultData = { op: "open"; handle: string; path: string; } | { op: "close"; } | { op: "query"; rows: StorageSqlRow[]; } | { op: "execute"; results: StorageSqlExecutionResult[]; } | { op: "transaction"; results: StorageSqlExecutionResult[]; } | { op: "define_table"; changed: boolean; } | { op: "get"; entry: StorageValueEntry | null; } | { op: "list"; entries: StorageKeyValueEntry[]; } | { op: "commit"; version: string; } | { op: "changes"; entries: StorageChangeEntry[]; };
 
 /**
  * Contains an HTTP response status, headers, cookies, media type, and decoded or Base64 body.
@@ -831,6 +914,90 @@ export interface MessageSendResultData {
   outcome: MessageSendOutcome;
   /**
    * Formats bounded previews of the sent message and optional AI reply.
+   */
+  toString(): string;
+}
+
+/**
+ * Records the authenticated Chat tool's actual originating send and committed outcome.
+ */
+export interface ChatSendMessageResultData {
+  /**
+   * The ID of the chat the message was sent to
+   */
+  chatId: string;
+  /**
+   * The message content that was sent
+   */
+  message: string;
+  /**
+   * Final AI response content when available
+   */
+  aiResponse?: string | null;
+  /**
+   * Reply receive timestamp when available
+   */
+  receivedAt?: number | null;
+  /**
+   * Sent timestamp
+   */
+  sentAt: number;
+  /**
+   * Reports actual persistence or input ownership without looking up unrelated recent messages.
+   */
+  outcome: MessageSendOutcome;
+  /**
+   * Formats the concrete tool fields for the common text result path.
+   */
+  toString(): string;
+}
+
+/**
+ * Describes the concrete resource result for an observation operation.
+ */
+export type ChatObservationResultData = { op: "open"; handle: string; } | { op: "next"; event: Chat.SendEvent | null; } | { op: "close"; };
+
+/**
+ * Reports cancellation of the calling owner's active Chat execution.
+ */
+export interface ChatCancelResultData {
+  chatId: string;
+  cancelRequested: boolean;
+  /**
+   * Formats the concrete tool fields for the common text result path.
+   */
+  toString(): string;
+}
+
+/**
+ * Returns an owner-scoped Chat extension or its explicit absence.
+ */
+export interface ChatReadExtensionResultData {
+  extension: JsonObject | null;
+  /**
+   * Formats the concrete tool fields for the common text result path.
+   */
+  toString(): string;
+}
+
+/**
+ * Returns the exact owner-scoped Chat extension that was persisted.
+ */
+export interface ChatWriteExtensionResultData {
+  extension: JsonObject;
+  /**
+   * Formats the concrete tool fields for the common text result path.
+   */
+  toString(): string;
+}
+
+/**
+ * Reports whether an owner-scoped Chat extension was removed.
+ */
+export interface ChatDeleteExtensionResultData {
+  deleted: boolean;
+  /**
+   * Formats the concrete tool fields for the common text result path.
    */
   toString(): string;
 }
@@ -1425,6 +1592,20 @@ export interface VisitWebResultData {
 export interface LinkData {
   url: string;
   text: string;
+}
+
+/**
+ * Returns the actual registered built-in, package, skill and MCP tool sources.
+ */
+export interface CatalogReadToolSourcesResultData {
+  builtinTools: Catalog.ToolSource[];
+  packages: Catalog.ToolSource[];
+  skills: Catalog.ToolSource[];
+  mcpServers: Catalog.ToolSource[];
+  /**
+   * Formats the concrete tool fields for the common text result path.
+   */
+  toString(): string;
 }
 
 /**

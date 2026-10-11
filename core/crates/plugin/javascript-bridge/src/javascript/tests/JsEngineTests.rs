@@ -3709,7 +3709,9 @@ fn storageTestRequest(host: &TestPluginConfigExecutionHost, request: operit_plug
     let fixture = host.storage.clone();
     Box::pin(async move {
         let fixture = fixture.ok_or_else(|| operit_plugin_sdk::js_sdk::JsHostError::new("Storage fixture is not installed"))?;
-        fixture.session.request(fixture.host.clone(), fixture.host, request, "native-js-test")
+        let response = fixture.session.request(fixture.host.clone(), fixture.host, request, "native-js-test")
+            .map_err(|error| operit_plugin_sdk::js_sdk::JsHostError::new(error.to_string()))?;
+        serde_json::to_value(operit_plugin_sdk::js_sdk::results::ToolResultData::StorageRequestResultData(response.into()))
             .map_err(|error| operit_plugin_sdk::js_sdk::JsHostError::new(error.to_string()))
     })
 }

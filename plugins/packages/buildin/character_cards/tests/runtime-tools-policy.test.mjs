@@ -42,17 +42,17 @@ async function environment(t) {
     /** Returns only the authenticated owner's JSON object; null means an existing record has no such namespace. */
     async readExtension(target) {
       attempted("readExtension", target); const chat = chatTarget(target);
-      return chat.extensions.has(authenticatedOwner) ? plain(chat.extensions.get(authenticatedOwner)) : null;
+      return { extension: chat.extensions.has(authenticatedOwner) ? plain(chat.extensions.get(authenticatedOwner)) : null };
     },
     /** Persists the exact supplied JSON object only in the authenticated namespace without plugin binding rules. */
     async writeExtension(target, value) {
       attempted("writeExtension", target); const chat = chatTarget(target);
       assert.ok(value !== null && typeof value === "object" && !Array.isArray(value));
-      chat.extensions.set(authenticatedOwner, plain(value)); return plain(chat.extensions.get(authenticatedOwner));
+      chat.extensions.set(authenticatedOwner, plain(value)); return { extension: plain(chat.extensions.get(authenticatedOwner)) };
     },
     /** Deletes only the authenticated namespace of an actual record and leaves sibling namespaces intact. */
     async deleteExtension(target) {
-      attempted("deleteExtension", target); return chatTarget(target).extensions.delete(authenticatedOwner);
+      attempted("deleteExtension", target); return { deleted: chatTarget(target).extensions.delete(authenticatedOwner) };
     },
     /** Enumerates every explicitly controlled host summary, not a file-backed binding mirror. */
     async listAll() {
@@ -90,7 +90,7 @@ async function environment(t) {
     /** Invokes the actual main-registered provider instead of injecting domain responses or directory defaults. */
     dispatchDomain(operation, input) { return entry.api(operation, input); },
     /** Supplies the generic native resolver's actual owner-scoped input from the controlled host record. */
-    readChatExtension(chatId) { return Chat.readExtension({ kind: "chat", chatId }); },
+    async readChatExtension(chatId) { return (await Chat.readExtension({ kind: "chat", chatId })).extension; },
     /** Schedules an exact original generic-host error for the next explicit invocation, never an automatic retry. */
     failNextHost(method, error) { assert.equal(hostFaults.has(method), false); hostFaults.set(method, error); },
   };

@@ -62,7 +62,7 @@ export function createSettingsConfigurationAccess(readSettings: () => Configurat
   return {
     /** Projects actual named Theme configs into the plugin's one private picker row contract. */
     async readThemeChoices(): Promise<ThemeChoice[]> {
-      const configs = configurationRecords<Theme.Config>(await readSettings().Theme.listConfigs(), "主题配置");
+      const configs = configurationRecords<Theme.Config>((await readSettings().Theme.listConfigs()).configs, "主题配置");
       return configs.map(
         /** Preserves the actual independent ID and display name without storing or rewriting its snapshot. */
         config => {
@@ -74,11 +74,11 @@ export function createSettingsConfigurationAccess(readSettings: () => Configurat
     },
     /** Verifies a genuine independent Theme ID before any active selection or chat namespace write. */
     async validateTheme(id: string): Promise<void> {
-      requireConfiguration<Theme.Config>(await readSettings().Theme.listConfigs(), id, "主题配置");
+      requireConfiguration<Theme.Config>((await readSettings().Theme.listConfigs()).configs, id, "主题配置");
     },
     /** Verifies a genuine independent TTS ID before any active selection or chat namespace write. */
     async validateTts(id: string): Promise<void> {
-      requireConfiguration<Tts.Config>(await readSettings().Tts.listConfigs(), id, "TTS 配置");
+      requireConfiguration<Tts.Config>((await readSettings().Tts.listConfigs()).configs, id, "TTS 配置");
     },
     /** Awaits the canonical Theme transaction and validates its acknowledgement of this exact independent config. */
     async applyTheme(id: string): Promise<void> {
@@ -90,9 +90,9 @@ export function createSettingsConfigurationAccess(readSettings: () => Configurat
     async applyTts(id: string): Promise<void> {
       requireId(id, "TTS 配置引用 ID");
       const applied = await readSettings().Tts.setCurrentConfigId(id);
-      if (applied !== id) throw new Error("TTS 配置提交返回的 ID 与请求不一致：" + id);
+      if (applied.configId !== id) throw new Error("TTS 配置提交返回的 ID 与请求不一致：" + id);
       const current = await readSettings().Tts.getCurrentConfigId();
-      if (current !== id) throw new Error("TTS 当前配置读取结果未确认请求的 ID：" + id);
+      if (current.configId !== id) throw new Error("TTS 当前配置读取结果未确认请求的 ID：" + id);
     },
   };
 }

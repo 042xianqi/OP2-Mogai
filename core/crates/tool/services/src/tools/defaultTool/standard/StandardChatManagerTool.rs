@@ -6,24 +6,35 @@ use std::sync::Arc;
 use crate::runtime_support::{
     RuntimeChatCallRequest, RuntimeChatSendRequest, RuntimeChatSlot, ToolRuntimeSupport,
 };
+use crate::tools::ToolInvocation::prepareInvocation;
 use crate::tools::ToolResultDataClasses::{
     stringResultData, AgentStatusResultData, ChatCallResultData, ChatCallTurnData,
-    ChatCreationResultData, ChatDeleteResultData, ChatFindResultData, ChatInfo, ChatListResultData,
-    ChatMessageInfo, ChatMessagesResultData, ChatServiceStartResultData, ChatSwitchResultData,
-    ChatTitleUpdateResultData, JsNullable, JsOptional, MessageSendResultData, ToolResultData,
+    ChatCancelResultData, ChatCreationResultData, ChatDeleteExtensionResultData,
+    ChatDeleteResultData, ChatFindResultData, ChatInfo, ChatListResultData, ChatMessageInfo,
+    ChatMessagesResultData, ChatObservationResultData, ChatReadExtensionResultData,
+    ChatSendMessageResultData, ChatServiceStartResultData, ChatSwitchResultData,
+    ChatTitleUpdateResultData, ChatWriteExtensionResultData, JsNullable, JsOptional,
+    MessageSendResultData, ToolResultData,
 };
 use crate::ConversationMarkupManager::ToolResult;
 use crate::ToolExecutionManager::{
-    AITool, AsyncToolExecutor, ToolAccessSpec, ToolBoundary, ToolEffect, ToolInvocationFuture,
-    ToolValidationResult,
+    AITool, AsyncToolExecutor, PreparedToolInvocation, SharedToolExecutor, ToolAccessSpec,
+    ToolBoundary, ToolCall, ToolEffect, ToolExecutionManager, ToolInvocationContext,
+    ToolInvocationFuture, ToolValidationResult,
 };
+use operit_model::AttachmentInfo::AttachmentInfo;
 use operit_model::ChatHistory::ChatHistory;
 use operit_model::ChatTurnOptions::{ChatTurnContinuation, ChatTurnOptions};
-use operit_model::AttachmentInfo::AttachmentInfo;
 use operit_model::FunctionType::FunctionType;
 use operit_model::PromptTurn::{PromptTurn, PromptTurnKind};
 use operit_store::repository::ChatHistoryManager::ChatHistoryManager;
 use serde_json::{json, Value};
+
+use super::ToolArguments::{decodeArguments, requireExactIdentifier, RequestArguments};
+use operit_plugin_sdk::js_sdk::chat::{
+    ChatExtensionTarget, ChatSendAttachment, ChatSendEvent, ChatSendRequest,
+};
+use operit_plugin_sdk::js_sdk::core::JsonObject;
 
 #[derive(Clone)]
 /// Defines built-in chat management tool names and runtime holder state.
@@ -751,11 +762,11 @@ impl AsyncToolExecutor for ChatManagerToolExecutor {
     }
 
     /// Creates local runtime futures on their owning scheduler and awaits only a Send receipt.
-    fn invokeAndStreamAsync<'a>(&'a mut self, tool: &'a AITool, context: &'a crate::ToolExecutionManager::ToolInvocationContext) -> ToolInvocationFuture<'a> {
+    fn invokeAndStreamAsync<'a>(&'a mut self, tool: &'a AITool, context: &'a ToolInvocationContext) -> ToolInvocationFuture<'a> {
         let tools = self.tools.clone();
         let operation = self.operation;
         let request = tool.clone();
-        let context = crate::ToolExecutionManager::ToolExecutionManager::currentToolRuntimeContext();
+        let context = ToolExecutionManager::currentToolRuntimeContext();
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let scheduled = operit_host_api::HostManager::defaultHostRuntimeTaskSchedulerHost()
             .scheduleHostRuntimeAsyncTask("chat-tool-invocation", Box::new(move || {
@@ -789,7 +800,7 @@ impl AsyncToolExecutor for ChatManagerToolExecutor {
                         result
                     };
                     let result = match context {
-                        Some(context) => crate::ToolExecutionManager::ToolExecutionManager::scopeToolRuntimeContext(context, invocation).await,
+                        Some(context) => ToolExecutionManager::scopeToolRuntimeContext(context, invocation).await,
                         None => invocation.await,
                     };
                     let _ = sender.send(result);
@@ -1239,7 +1250,7 @@ fn parseSendAttachments(tool: &AITool) -> Result<Vec<AttachmentInfo>, String> {
     match optionalParameterValue(tool, "attachments") {
         None => Ok(Vec::new()),
         Some(value) => {
-            let records: Vec<operit_plugin_sdk::js_sdk::chat::ChatSendAttachment> = serde_json::from_str(&value)
+            let records: Vec<ChatSendAttachment> = serde_json::from_str(&value)
                 .map_err(|error| format!("attachments must be a complete attachment array: {error}"))?;
             Ok(records.into_iter().map(|record| AttachmentInfo {
                 filePath: record.filePath, nodeId: record.nodeId.as_value().cloned(), fileName: record.fileName,
@@ -1427,24 +1438,211 @@ fn toolError(tool: &AITool, message: String) -> ToolResult {
     }
 }
 
-/// Describes operations on a single engine-owned chat observation, not a separate invocation route.
+/// Carries the existing public chat cancellation argument.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChatIdArguments {
+    #[serde(rename = "chatId")]
+    chat_id: String,
+}
+
+/// Carries the typed chat extension target without any caller identity parameter.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExtensionArguments {
+    target: ChatExtensionTarget,
+}
+
+/// Carries a complete owner-scoped extension replacement value.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExtensionWriteArguments {
+    target: ChatExtensionTarget,
+    value: JsonObject,
+}
+
+/// Carries one observation resource operation through the common tool entry.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservationArguments {
+    observation: ChatObservationRequest,
+}
+
+/// Selects one owner-scoped Chat operation registered on the common tool pipeline.
+#[derive(Clone, Copy)]
+pub(crate) enum PluginChatToolOperation {
+    SendMessage,
+    Observe,
+    Cancel,
+    ReadExtension,
+    WriteExtension,
+    DeleteExtension,
+}
+
+/// Allows an observation close to run while another invocation awaits its next event.
+pub(crate) struct PluginChatToolExecutor {
+    pub operation: PluginChatToolOperation,
+}
+
+impl SharedToolExecutor for PluginChatToolExecutor {
+    fn prepare<'a>(
+        &'a self,
+        request: &'a ToolCall,
+        context: &'a ToolInvocationContext,
+        checkAccess: bool,
+    ) -> Result<PreparedToolInvocation<'a>, String> {
+        match self.operation {
+            PluginChatToolOperation::SendMessage => {
+                let args: RequestArguments<ChatSendRequest> = decodeArguments(request)?;
+                args.request.validate()?;
+                Ok(prepareInvocation(
+                    request,
+                    checkAccess,
+                    ToolEffect::WRITE,
+                    async move {
+                        let receipt = executePluginChatSend(args.request, context).await?;
+                        Ok(ToolResultData::ChatSendMessageResultData(
+                            ChatSendMessageResultData::from(receipt),
+                        ))
+                    },
+                ))
+            }
+            PluginChatToolOperation::Observe => {
+                let args: ObservationArguments = decodeArguments(request)?;
+                let effect = match &args.observation {
+                    ChatObservationRequest::Open { request } => {
+                        request.validate()?;
+                        ToolEffect::WRITE
+                    }
+                    ChatObservationRequest::Next { handle }
+                    | ChatObservationRequest::Close { handle } => {
+                        requireExactIdentifier(handle)?;
+                        ToolEffect::READ
+                    }
+                };
+                Ok(prepareInvocation(
+                    request,
+                    checkAccess,
+                    effect,
+                    async move {
+                        let result =
+                            executePluginChatObservation(args.observation, context).await?;
+                        Ok(ToolResultData::ChatObservationResultData(result))
+                    },
+                ))
+            }
+            PluginChatToolOperation::Cancel => {
+                let args: ChatIdArguments = decodeArguments(request)?;
+                requireExactIdentifier(&args.chat_id)?;
+                Ok(prepareInvocation(
+                    request,
+                    checkAccess,
+                    ToolEffect::WRITE,
+                    async move {
+                        let result = context
+                            .host()
+                            .runtimeSupport()
+                            .requestPluginChatCancellation(
+                                &context.requirePluginOwner()?,
+                                &args.chat_id,
+                            )?;
+                        Ok(ToolResultData::ChatCancelResultData(ChatCancelResultData {
+                            chatId: result.chatId,
+                            cancelRequested: result.cancelRequested,
+                        }))
+                    },
+                ))
+            }
+            PluginChatToolOperation::ReadExtension => {
+                let args: ExtensionArguments = decodeArguments(request)?;
+                args.target.validate()?;
+                Ok(prepareInvocation(
+                    request,
+                    checkAccess,
+                    ToolEffect::READ,
+                    async move {
+                        let extension = context
+                            .host()
+                            .runtimeSupport()
+                            .readChatExtension(&context.requirePluginOwner()?, &args.target)?;
+                        Ok(ToolResultData::ChatReadExtensionResultData(
+                            ChatReadExtensionResultData {
+                                extension: JsNullable::from_option(extension),
+                            },
+                        ))
+                    },
+                ))
+            }
+            PluginChatToolOperation::WriteExtension => {
+                let args: ExtensionWriteArguments = decodeArguments(request)?;
+                args.target.validate()?;
+                Ok(prepareInvocation(
+                    request,
+                    checkAccess,
+                    ToolEffect::WRITE,
+                    async move {
+                        let extension = context.host().runtimeSupport().writeChatExtension(
+                            &context.requirePluginOwner()?,
+                            &args.target,
+                            args.value,
+                        )?;
+                        Ok(ToolResultData::ChatWriteExtensionResultData(
+                            ChatWriteExtensionResultData { extension },
+                        ))
+                    },
+                ))
+            }
+            PluginChatToolOperation::DeleteExtension => {
+                let args: ExtensionArguments = decodeArguments(request)?;
+                args.target.validate()?;
+                Ok(prepareInvocation(
+                    request,
+                    checkAccess,
+                    ToolEffect::WRITE,
+                    async move {
+                        let deleted = context
+                            .host()
+                            .runtimeSupport()
+                            .deleteChatExtension(&context.requirePluginOwner()?, &args.target)?;
+                        Ok(ToolResultData::ChatDeleteExtensionResultData(
+                            ChatDeleteExtensionResultData { deleted },
+                        ))
+                    },
+                ))
+            }
+        }
+    }
+}
+
+/// Describes operations on a single engine-owned chat observation.
 #[derive(serde::Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ChatObservationRequest {
-    Open { request: operit_plugin_sdk::js_sdk::chat::ChatSendRequest },
-    Next { handle: String },
-    Close { handle: String },
+    Open {
+        request: ChatSendRequest,
+    },
+    Next {
+        handle: String,
+    },
+    Close {
+        handle: String,
+    },
 }
 
 /// Sends through the canonical native chat service and drains its actual terminal receipt.
-pub(crate) async fn executePluginChatSend(request: operit_plugin_sdk::js_sdk::chat::ChatSendRequest, context: crate::ToolExecutionManager::ToolInvocationContext) -> Result<Value, String> {
-    use operit_plugin_sdk::js_sdk::chat::ChatSendEvent;
+pub(crate) async fn executePluginChatSend(
+    request: ChatSendRequest,
+    context: &ToolInvocationContext,
+) -> Result<MessageSendResultData, String> {
     let owner = context.requirePluginOwner()?;
-    let stream = context.host().runtimeSupport().openPluginChatMessage(&owner, request, false)?;
+    let stream = context
+        .host()
+        .runtimeSupport()
+        .openPluginChatMessage(&owner, request, false)?;
     let result = loop {
         match stream.next().await {
-            Ok(Some(ChatSendEvent::Part { .. })) => {},
-            Ok(Some(ChatSendEvent::Completed { result })) => break serde_json::to_value(result).map_err(|error| error.to_string()),
+            Ok(Some(ChatSendEvent::Part { .. })) => {}
+            Ok(Some(ChatSendEvent::Completed { result })) => break Ok(result),
             Ok(None) => break Err("Chat send ended without its terminal receipt".into()),
             Err(error) => break Err(error.to_string()),
         }
@@ -1453,32 +1651,55 @@ pub(crate) async fn executePluginChatSend(request: operit_plugin_sdk::js_sdk::ch
     match (result, closed) {
         (Ok(result), Ok(())) => Ok(result),
         (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
-        (Err(error), Err(close)) => Err(format!("{error}; chat observation disposal failed: {close}")),
+        (Err(error), Err(close)) => Err(format!(
+            "{error}; chat observation disposal failed: {close}"
+        )),
     }
 }
 
 /// Operates on the authenticated caller's observation without holding the registry lock across a pull.
-pub(crate) async fn executePluginChatObservation(request: ChatObservationRequest, context: crate::ToolExecutionManager::ToolInvocationContext) -> Result<Value, String> {
+pub(crate) async fn executePluginChatObservation(
+    request: ChatObservationRequest,
+    context: &ToolInvocationContext,
+) -> Result<ChatObservationResultData, String> {
     let owner = context.requirePluginOwner()?;
     let host = context.host();
     match request {
         ChatObservationRequest::Open { request } => {
-            let stream = host.runtimeSupport().openPluginChatMessage(&owner, request, true)?;
+            let stream = host
+                .runtimeSupport()
+                .openPluginChatMessage(&owner, request, true)?;
             let handle = uuid::Uuid::new_v4().to_string();
-            host.chatObservations.lock().map_err(|_| "Chat observation registry mutex poisoned")?.insert(handle.clone(), stream);
-            Ok(Value::String(handle))
-        },
+            host.chatObservations
+                .lock()
+                .map_err(|_| "Chat observation registry mutex poisoned")?
+                .insert(handle.clone(), stream);
+            Ok(ChatObservationResultData::Open { handle })
+        }
         ChatObservationRequest::Next { handle } => {
-            let stream = host.chatObservations.lock().map_err(|_| "Chat observation registry mutex poisoned")?
-                .get(&handle).cloned().ok_or("Unknown Chat observation")?;
-            serde_json::to_value(stream.next().await.map_err(|error| error.to_string())?).map_err(|error| error.to_string())
-        },
+            let stream = host
+                .chatObservations
+                .lock()
+                .map_err(|_| "Chat observation registry mutex poisoned")?
+                .get(&handle)
+                .cloned()
+                .ok_or("Unknown Chat observation")?;
+            Ok(ChatObservationResultData::Next {
+                event: JsNullable::from_option(
+                    stream.next().await.map_err(|error| error.to_string())?,
+                ),
+            })
+        }
         ChatObservationRequest::Close { handle } => {
-            let stream = host.chatObservations.lock().map_err(|_| "Chat observation registry mutex poisoned")?
-                .remove(&handle).ok_or("Unknown Chat observation")?;
+            let stream = host
+                .chatObservations
+                .lock()
+                .map_err(|_| "Chat observation registry mutex poisoned")?
+                .remove(&handle)
+                .ok_or("Unknown Chat observation")?;
             stream.close().await.map_err(|error| error.to_string())?;
-            Ok(Value::Null)
-        },
+            Ok(ChatObservationResultData::Close)
+        }
     }
 }
 

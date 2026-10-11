@@ -138,3 +138,112 @@ pub enum StorageRequest {
         limit: u32,
     },
 }
+
+/// Identifies one successfully opened database session.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageOpenResult {
+    pub handle: String,
+    pub path: String,
+}
+
+/// Preserves the exact column order and tagged SQLite values of one query row.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageSqlRow {
+    pub columns: Vec<String>,
+    pub values: Vec<StorageSqlValue>,
+}
+
+/// Reports one statement's affected rows and exact int64 insertion identity.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StorageSqlExecutionResult {
+    pub affected_rows: u64,
+    pub last_insert_id: String,
+}
+
+/// Reports whether a declarative table definition changed the schema.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageTableDefinitionResult {
+    pub changed: bool,
+}
+
+/// Preserves a stored application JSON value and its exact concurrency version.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageValueEntry {
+    pub value: Value,
+    pub version: String,
+}
+
+/// Adds the collection key to a listed value and its concurrency version.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageKeyValueEntry {
+    pub key: String,
+    pub value: Value,
+    pub version: String,
+}
+
+/// Reports the actual version committed by an atomic mutation batch.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageCommitResult {
+    pub version: String,
+}
+
+/// Preserves the durable database identity carried by a change transaction.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageManifest {
+    pub path: String,
+    pub owner: String,
+    pub kind: StorageKind,
+    pub sync: bool,
+}
+
+/// Describes one declarative record mutation with an application-owned JSON value.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageRecordChange {
+    pub collection: String,
+    pub key: String,
+    pub value: Value,
+    pub deleted: bool,
+}
+
+/// Preserves all schema and record changes from one atomic storage transaction.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageChangeTransaction {
+    pub manifest: StorageManifest,
+    pub tables: Vec<StorageTable>,
+    pub changes: Vec<StorageRecordChange>,
+}
+
+/// Carries one exact int64 cursor and its complete atomic transaction.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageChangeEntry {
+    pub cursor: String,
+    pub transaction: StorageChangeTransaction,
+}
+
+/// Returns each storage operation's concrete business result.
+/// Serialization preserves the database API payload; tool results add their own operation discriminator.
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum StorageResponse {
+    Open(StorageOpenResult),
+    Close,
+    Query(Vec<StorageSqlRow>),
+    Execute(Vec<StorageSqlExecutionResult>),
+    Transaction(Vec<StorageSqlExecutionResult>),
+    DefineTable(StorageTableDefinitionResult),
+    Get(Option<StorageValueEntry>),
+    List(Vec<StorageKeyValueEntry>),
+    Commit(StorageCommitResult),
+    Changes(Vec<StorageChangeEntry>),
+}

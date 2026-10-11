@@ -31,9 +31,9 @@ import { definition } from "./definition";
 /** Connects lazy directory readers for every evaluated runtime, not just the registration-only module. */
 connectDirectorySources({
   /** Reads the actual configured model directory only when the shared service requests it. */
-  listModels: () => Tools.Models.listSummaries(),
+  listModels: async () => (await Tools.Models.listSummaries()).models,
   /** Reads the actual TTS directory without opening storage during registration. */
-  listTtsConfigs: () => Tools.Tts.listConfigs(),
+  listTtsConfigs: async () => (await Tools.Tts.listConfigs()).configs,
   /** Reads complete real builtin, package, skill and MCP sources through the canonical tool-source catalog. */
   readToolCatalog: () => Tools.Catalog.readToolSources(),
 });

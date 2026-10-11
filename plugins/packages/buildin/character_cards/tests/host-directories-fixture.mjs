@@ -15,9 +15,9 @@ export function createHostDirectoriesFixture(disk, input) {
 
   const methods = {
     /** Returns the explicitly supplied complete SDK model records without changing their fields. */
-    async "Models.listSummaries"(...args) { attempted("Models.listSummaries", args); return plain(values.models); },
+    async "Models.listSummaries"(...args) { attempted("Models.listSummaries", args); return { models: plain(values.models) }; },
     /** Returns the explicitly supplied complete SDK speech records without changing their fields. */
-    async "Tts.listConfigs"(...args) { attempted("Tts.listConfigs", args); return plain(values.ttsConfigs); },
+    async "Tts.listConfigs"(...args) { attempted("Tts.listConfigs", args); return { configs: plain(values.ttsConfigs) }; },
     /** Returns the explicitly supplied builtin, package, skill and MCP directory records. */
     async "Catalog.readToolSources"(...args) { attempted("Catalog.readToolSources", args); return plain(values.toolCatalog); },
   };

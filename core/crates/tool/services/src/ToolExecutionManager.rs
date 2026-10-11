@@ -4,7 +4,6 @@ use std::future::Future;
 
 use serde::{Deserialize, Serialize};
 
-use operit_plugin_sdk::js_sdk::tool_types::BuiltinToolName;
 use operit_tools::tools::climode::CliToolModeSupport::{
     CliToolModeSupport, PROXY_TOOL_NAME, SEARCH_TOOL_NAME,
 };
@@ -260,9 +259,9 @@ pub struct ToolExecutionManager;
 /// Selects native-owned admission policy without exposing permission controls to JavaScript parameters.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolExecutionPolicy {
-    /// Applies the model's declared tool exposure and AI permission preflight.
+    /// Dispatches AI lifecycle hooks and applies the model's declared exposure and permission preflight.
     Ai { exposure: ToolExposureMode },
-    /// Executes an ordinary JavaScript or application request without AI permission preflight.
+    /// Executes an ordinary JavaScript or application request without AI lifecycle hooks or permission preflight.
     Direct,
 }
 
@@ -694,31 +693,6 @@ pub trait SharedToolExecutor: Send + Sync {
     /// Decodes and validates once, declaring access only when native AI admission requires it.
     fn prepare<'a>(&'a self, request: &'a ToolCall, context: &'a ToolInvocationContext, checkAccess: bool)
         -> Result<PreparedToolInvocation<'a>, String>;
-}
-
-/// Binds a typed argument contract directly to a business function, without operation-name dispatch.
-pub struct TypedToolExecutor<T> {
-    pub decode: fn(&ToolCall) -> Result<T, String>,
-    pub effect: fn(&T) -> ToolEffect,
-    pub invoke: fn(T, ToolInvocationContext) -> operit_plugin_sdk::javascript::JsExecutionCompletion<Result<serde_json::Value, String>>,
-}
-
-impl<T: Send + 'static> SharedToolExecutor for TypedToolExecutor<T> {
-    /// Prepares the typed payload once and returns the standard result envelope after business execution.
-    fn prepare<'a>(&'a self, request: &'a ToolCall, context: &'a ToolInvocationContext, checkAccess: bool)
-        -> Result<PreparedToolInvocation<'a>, String> {
-        let arguments = (self.decode)(request)?;
-        let access = checkAccess.then(|| ToolAccessSpec { effect: (self.effect)(&arguments), boundary: ToolBoundary::None });
-        let context = context.clone();
-        Ok(PreparedToolInvocation { access, invoke: Box::pin(async move {
-            let (success, result, error) = match (self.invoke)(arguments, context).await {
-                Ok(value) => (true, operit_plugin_sdk::js_sdk::results::ToolResultData::JsonResultData(
-                    operit_plugin_sdk::js_sdk::results::JsonResultData { value }), None),
-                Err(error) => (false, stringResultData(""), Some(error)),
-            };
-            vec![ToolResult { toolName: request.name.clone(), success, result, error }]
-        }) })
-    }
 }
 
 /// Records the execution contract explicitly selected when a tool is registered.

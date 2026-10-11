@@ -57,6 +57,7 @@ impl Fixture {
                 self.device,
             )
             .map_err(|e| e.to_string())
+            .and_then(|response| serde_json::to_value(response).map_err(|error| error.to_string()))
     }
     /// Opens one storage kind and returns its private session-local handle.
     fn open(&self, kind: &str) -> String {
@@ -149,9 +150,11 @@ fn plugins_share_local_databases_by_path_without_replication() {
     assert!(otherOpened["handle"].is_string());
     let otherSession = PluginStorageSession::default();
     let reopened = otherSession.request(f.host.clone(), f.host.clone(), serde_json::from_value(json!({"op":"open","path":f.path,"kind":"data_store"})).unwrap(), "second-script").unwrap();
-    let otherHandle = reopened["handle"].as_str().unwrap();
+    let operit_host_api::PluginStorage::StorageResponse::Open(reopened) = reopened else { panic!("Expected storage open result") };
+    let otherHandle = &reopened.handle;
     let stored = otherSession.request(f.host.clone(), f.host.clone(), serde_json::from_value(json!({"op":"get","handle":otherHandle,"collection":"keys","key":"cached"})).unwrap(), "second-script").unwrap();
-    assert_eq!(stored["value"], 1);
+    let operit_host_api::PluginStorage::StorageResponse::Get(Some(stored)) = stored else { panic!("Expected stored value") };
+    assert_eq!(stored.value, 1);
     otherSession.request(f.host.clone(), f.host.clone(), serde_json::from_value(json!({"op":"commit","handle":otherHandle,"mutations":[put("cached",json!(2))]})).unwrap(), "second-script").unwrap();
     assert_eq!(f.get(&handle, "cached")["value"], 2);
     drop(otherSession);
