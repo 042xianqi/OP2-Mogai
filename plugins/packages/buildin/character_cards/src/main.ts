@@ -1,3 +1,5 @@
+import memoryMenuScreen from "./ui/chat-input-memory/index.ui.js";
+import memoryStatusScreen from "./ui/memory-status/index.ui.js";
 import memoryScreen from "./ui/memory/index.ui.js";
 import screen from "./ui/main/index.ui.js";
 import attachmentScreen from "./ui/memory-attachment/index.ui.js";
@@ -14,7 +16,7 @@ import { registerMemoryJobHooks } from "./memory-jobs/hooks";
 import { registerToolPolicies } from "./runtime-tools/policy";
 import { registerChatInitialization } from "./chat-lifecycle";
 import { registerGroupExecutionHooks } from "./group-execution/hooks";
-import { registerSidebarChannel } from "./ui-sidebar";
+import { registerSidebarChannel, chatSidebarPrepareApi } from "./ui-sidebar";
 import { registerSelectionSettingsAccess } from "./selection-settings";
 export * from "./commands";
 export * from "./public-api";
@@ -24,6 +26,7 @@ export { toolCallPolicy, toolPromptPolicy } from "./runtime-tools/policy";
 export { beforeChatCreate } from "./chat-lifecycle";
 export { onGroupInputSubmit } from "./group-execution/hooks";
 export { chatContextActionsApi, chatListSectionsApi } from "./ui-contributions";
+export { chatSidebarPrepareApi } from "./ui-sidebar";
 import { definition } from "./definition";
 /** Connects lazy directory readers for every evaluated runtime, not just the registration-only module. */
 connectDirectorySources({
@@ -50,5 +53,6 @@ export function registerToolPkg(): boolean {
   registerChatInitialization();
   registerGroupExecutionHooks();
   registerUiContributionApis();
-  return register(definition, screen, attachmentScreen, sidebarScreen, selectionScreen, groupExecutionScreen, memoryScreen, inputMenuScreen);
+  ToolPkg.registerApi({ name: "chat.sidebar.prepare", function: chatSidebarPrepareApi });
+  return register(definition, screen, attachmentScreen, sidebarScreen, selectionScreen, groupExecutionScreen, memoryScreen, inputMenuScreen, memoryMenuScreen, memoryStatusScreen);
 }

@@ -6,6 +6,9 @@ import type {
 
 /** Defines the plugin's local business repository, not an SDK host or global service. */
 export interface CharacterRepository {
+  readGlobalMemoryPreferences(): Promise<import("./model").GlobalMemoryPreferences>;
+  writeGlobalMemoryPreference(key: keyof import("./model").GlobalMemoryPreferences, value: boolean): Promise<import("./model").GlobalMemoryPreferences>;
+  searchMemoryDebug(options: MemorySearchOptions, config: MemorySearchConfig): Promise<import("./model").MemorySearchDebug>;
   /** Losslessly preserves legacy folder sidecars in old backups; live folders belong to native chats. */
   readConversationGroupsForBackup(): Promise<ConversationGroupRecord[]>;
   restoreConversationGroups(groups: ConversationGroupRecord[]): Promise<void>;

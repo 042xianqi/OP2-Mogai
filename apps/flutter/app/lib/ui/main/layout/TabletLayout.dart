@@ -5,10 +5,9 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-import '../components/CollapsedDrawerContent.dart';
 import '../../../core/bridge/OperitRuntimeBridge.dart';
 import '../../../core/bridge/ProxyCoreRuntimeBridge.dart';
-
+import '../components/CollapsedDrawerContent.dart';
 import '../components/DrawerConversationState.dart';
 import '../components/DrawerContent.dart';
 import '../components/NavigationDrawerAppearance.dart';
@@ -169,7 +168,6 @@ class _TabletLayoutState extends State<TabletLayout> {
                       builder: (context, drawerState, _) {
                         return CollapsedDrawerContent(
                           bridge: widget.bridge,
-                          key: const ValueKey<String>('collapsedDrawerContent'),
                           navigationEntries: widget.navigationEntries,
                           pluginEntries: widget.pluginSidebarEntries,
                           selectedRouteId: widget.selectedRouteId,

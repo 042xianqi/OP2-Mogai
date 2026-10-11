@@ -1,106 +1,70 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { loadModule, plain } from "./runtime.mjs";
-
-const drafts = loadModule("src/drafts.ts"), view = loadModule("web/features/characters/bindings/theme.ts");
-const state = loadModule("web/features/characters/bindings/theme.ts"), actions = loadModule("web/features/characters/bindings/theme.ts");
-const choices = [{ id: "independent-theme-one", label: "独立日间主题" }, { id: "independent-theme-two", label: "独立夜间主题" }];
-
-/** Provides explicit UI-only editor state, not a Theme SDK result, production host or stored catalog. */
-function dialog(kind, selected = null) {
-  const parent = kind === "character" ? { type: "character", card: plain(drafts.createCharacterDraft()) } : { type: "group", group: plain(drafts.createGroupDraft()) };
-  const result = { type: "theme", parent, choices: plain(choices), query: "", error: "", scroll: 0, busy: false };
-  state.themeDraft(result).themeConfigId = selected; return result;
+import { selectorEnvironment } from "./selector-environment.mjs";
+import { mountRegisteredComposeRoute, composeNodes, keyedNode } from "./selector-render.mjs";
+import { plain } from "./runtime.mjs";
+const themes = [{ id: "independent-theme-one", name: "独立日间主题" }, { id: "independent-theme-two", name: "独立夜间主题" }];
+async function click(ui, key, prop = "onClick", payload) { return ui.dispatch(keyedNode(ui.render().tree, key).props[prop], payload); }
+async function open(plugin, entity, id) {
+  const ui = mountRegisteredComposeRoute(plugin, { requestId: "theme-native", input: { mode: "edit", entity, id } }, "main");
+  await ui.load(); await new Promise(resolve => setImmediate(resolve)); return ui;
 }
 
-/** Both editor kinds use the same independent-ID picker without producing legacy role-prefixed targets. */
-test("pure theme picker view renders exact independent IDs for character and own-group drafts", () => {
-  for (const kind of ["character", "group"]) {
-    const current = dialog(kind, "independent-theme-two"), spec = plain(view.themeSpec(current));
-    assert.equal(spec.title, "选择主题配置"); assert.equal(spec.style, "chooser");
-    assert.match(spec.body, /data-id="independent-theme-one"/); assert.match(spec.body, /data-id="independent-theme-two"/);
-    assert.match(spec.body, /aria-label="不改变当前主题"/); assert.match(spec.footer, /取消/);
-    assert.doesNotMatch(spec.body, /role:|card:|group:/); assert.equal(state.themeDraft(current).themeConfigId, "independent-theme-two");
+test("one native theme picker searches exact independent IDs and stages the owner reference only until save", async t => {
+  const plugin = await selectorEnvironment(t, { async listThemeConfigs() { return themes; } });
+  for (const entity of ["card", "group"]) {
+    const api = entity === "card" ? "character" : "group", record = await plugin.api(api + ".create", { values: { name: "独立主题测试" } });
+    let ui = await open(plugin, entity, record.id);
+    await click(ui, entity === "card" ? "entity-theme-switch" : "entity-theme-picker", entity === "card" ? "onCheckedChange" : "onClick", true);
+    assert.equal(composeNodes(ui.render().tree, node => node.type === "Dialog").length, 1);
+    await click(ui, "entity-field-picker-query", "onValueChange", "夜间");
+    assert.equal(composeNodes(ui.render().tree, node => node.props.key === "entity-picker-independent-theme-one").length, 0);
+    await click(ui, "entity-picker-independent-theme-two");
+    assert.equal((await plugin.api(api + ".get", { id: record.id })).themeConfigId, null);
+    await click(ui, "entity-cancel");
+    assert.equal((await plugin.api(api + ".get", { id: record.id })).themeConfigId, null);
+    ui = await open(plugin, entity, record.id);
+    await click(ui, entity === "card" ? "entity-theme-switch" : "entity-theme-picker", entity === "card" ? "onCheckedChange" : "onClick", true);
+    await click(ui, "entity-picker-independent-theme-one"); await click(ui, "entity-primary");
+    const saved = await plugin.api(api + ".get", { id: record.id });
+    assert.equal(saved.themeConfigId, "independent-theme-one");
+    if (entity === "group") { assert.deepEqual(plain(saved.members), []); assert.equal(saved.ttsConfigId, undefined); }
   }
 });
 
-/** A deleted reference remains an explicit visible error, not an implicitly selected null or unrelated theme. */
-test("pure theme picker reports a saved missing reference and searches labels without editing the owner", () => {
-  const current = dialog("character", "deleted-independent-theme"); current.query = "夜间";
-  const spec = view.themeSpec(current); assert.match(spec.body, /role="alert"/); assert.match(spec.body, /deleted-independent-theme/);
-  assert.doesNotMatch(spec.body, /data-id="independent-theme-one"/); assert.match(spec.body, /data-id="independent-theme-two"/);
-  assert.equal(current.parent.card.themeConfigId, "deleted-independent-theme");
+test("missing theme references stay visible; picker cancellation preserves the original record", async t => {
+  const plugin = await selectorEnvironment(t, { async listThemeConfigs() { return themes; } });
+  const card = await plugin.api("character.create", { values: { name: "失效绑定", themeConfigId: "deleted-theme" } });
+  const ui = await open(plugin, "card", card.id);
+  assert.ok(composeNodes(ui.render().tree, node => String(node.props.text ?? "").includes("deleted-theme")).length);
+  await click(ui, "entity-theme-picker"); await click(ui, "entity-cancel"); await click(ui, "entity-cancel");
+  assert.equal((await plugin.api("character.get", { id: card.id })).themeConfigId, "deleted-theme");
 });
 
-/** Selecting in an editor stages a reference only, and all malformed or unknown choices fail before draft mutation. */
-test("pure theme picker stages one exact reference or explicit null and rejects invalid catalog IDs", () => {
-  for (const kind of ["character", "group"]) {
-    const current = dialog(kind, "independent-theme-one");
-    assert.throws(
-      /** Requires a real entry in the explicitly supplied UI catalog before changing this editor draft. */
-      () => state.chooseThemeReference(current, "missing-theme"), /主题配置不存在/,
-    );
-    assert.equal(state.themeDraft(current).themeConfigId, "independent-theme-one");
-    state.chooseThemeReference(current, "independent-theme-two"); assert.equal(state.themeDraft(current).themeConfigId, "independent-theme-two");
-    state.chooseThemeReference(current, null); assert.equal(state.themeDraft(current).themeConfigId, null);
+test("pending theme directory IO does not lock cancellation and late completion cannot reopen the native editor", async t => {
+  for (const fail of [false, true]) {
+    let resolve, reject; const pending = new Promise((yes, no) => { resolve = yes; reject = no; });
+    const plugin = await selectorEnvironment(t, { listThemeConfigs() { return pending; } });
+    const card = await plugin.api("character.create", { values: { name: "异步取消" } });
+    const ui = await open(plugin, "card", card.id);
+    assert.equal(keyedNode(ui.render().tree, "entity-cancel").props.enabled, true);
+    const result = await click(ui, "entity-cancel"); assert.equal(result.actionResult.type, "toolpkg.presentation.cancel");
+    if (fail) reject(new Error("late theme error")); else resolve(themes);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(composeNodes(ui.render().tree, node => node.props.key === "entity-primary").length, 0);
+    assert.equal((await plugin.api("character.get", { id: card.id })).themeConfigId, null);
   }
-  for (const malformed of [[{ id: "", label: "bad" }], [{ id: "same", label: "first" }, { id: "same", label: "second" }], [{ id: "present", label: "" }]]) assert.throws(
-    /** Keeps a bad projected directory explicit rather than inventing an empty or global choice. */
-    () => state.assertThemeChoices(malformed),
-  );
 });
 
-/** Real host capability wiring is intentionally outside this UI-only dependency test; a reader rejection remains the original failure. */
-test("pure picker action awaits its explicit reader and never substitutes a successful catalog on rejection", async () => {
-  const current = dialog("character", "independent-theme-one"), stack = [current.parent], original = new Error("Explicit UI catalog reader rejection");
-  let calls = 0;
-  const context = {
-    /** Supplies only this test's real local parent editor, not a business or configuration service. */
-    topDialog() { return stack[stack.length - 1]; },
-    /** Records an actual typed feature request to open its local chooser. */
-    pushDialog(value) { stack.push(value); },
-  };
-  const failed = actions.createThemeFeature(context,
-    /** Represents an explicitly planned external reader error, not an available production Theme SDK. */
-    async () => { calls += 1; throw original; },
-  );
-  await assert.rejects(failed.handleAction("select-theme", {}),
-    /** Requires exact original error identity and no successful or empty substitute response. */
-    failure => failure === original,
-  );
-  assert.equal(calls, 1); assert.equal(stack.length, 1); assert.equal(current.parent.card.themeConfigId, "independent-theme-one");
-  const loaded = actions.createThemeFeature(context,
-    /** Supplies labelled private presentation rows only for this isolated feature test. */
-    async () => { calls += 1; return plain(choices); },
-  );
-  await loaded.handleAction("select-theme", {}); assert.equal(calls, 2); assert.equal(stack.length, 2); assert.equal(stack[1].type, "theme");
-  assert.equal(current.parent.card.themeConfigId, "independent-theme-one");
-});
-
-/** Resolves bound names from the actual directory and keeps missing references visible without rewriting them. */
-test("binding summary shows the configured name, missing-reference error and explicit unbind action", () => {
-  assert.match(view.themeReferenceSection("independent-theme-two", choices), /独立夜间主题/);
-  assert.match(view.themeReferenceSection("independent-theme-two", choices), /data-action="unbind-theme"/);
-  assert.match(view.themeReferenceSection("deleted-theme", choices), /role="alert"[\s\S]*deleted-theme/);
-  assert.doesNotMatch(view.themeReferenceSection(null, choices), /data-action="unbind-theme"/);
-  const current = dialog("character"); current.choices = [];
-  assert.match(view.themeSpec(current).body, /设置 → 外观/);
-});
-
-/** Clears only the owning editor's staged reference; it never changes another group, role or host appearance. */
-test("explicit unbind edits only the current role or group draft", async () => {
-  for (const kind of ["character", "group"]) {
-    const current = dialog(kind, "independent-theme-one"); let renders = 0;
-    const feature = actions.createThemeFeature({
-      /** Returns this exact local owner rather than another selected participant. */
-      topDialog() { return current.parent; },
-      /** Records repainting after the staged reference has changed. */
-      renderDialogs() { renders += 1; },
-    },
-      /** Rejects an unsolicited directory read during an explicit unbind. */
-      async () => { throw new Error("Unbind must not read or apply any configuration"); },
-    );
-    await feature.handleAction("unbind-theme", {});
-    assert.equal(state.themeDraft(current).themeConfigId, null); assert.equal(renders, 1);
-  }
+test("the single native picker receives its pending real catalogue while keeping cancellation available", async t => {
+  let resolve; const pending = new Promise(yes => { resolve = yes; });
+  const plugin = await selectorEnvironment(t, { listThemeConfigs() { return pending; } });
+  const card = await plugin.api("character.create", { values: { name: "主题异步加载" } });
+  const ui = await open(plugin, "card", card.id);
+  await click(ui, "entity-theme-switch", "onCheckedChange", true);
+  assert.ok(composeNodes(ui.render().tree, node => node.props.text === "正在读取主题配置…").length);
+  assert.equal(keyedNode(ui.render().tree, "entity-cancel").props.enabled, true);
+  resolve(themes); await new Promise(resolve => setImmediate(resolve));
+  await click(ui, "entity-picker-independent-theme-two"); await click(ui, "entity-primary");
+  assert.equal((await plugin.api("character.get", { id: card.id })).themeConfigId, "independent-theme-two");
 });

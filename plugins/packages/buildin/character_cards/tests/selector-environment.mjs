@@ -8,7 +8,7 @@ import { plain } from "./runtime.mjs";
 import { createNativeChatHost } from "./native-chat-host.mjs";
 
 /** Opens real plugin files and registrations with explicitly controlled generic host-record namespaces, never fixture CRUD. */
-export async function selectorEnvironment(t, configurationSettings = {}, runtimeGlobals = {}) {
+export async function selectorEnvironment(t, configurationSettings = {}, runtimeGlobals = {}, composeModules = undefined) {
   const disk = await createDiskHarness(t), readonly = fixture().snapshot, records = new Map([["selector-chat", { extension: null }]]);
   const native = createNativeChatHost(records), { calls } = native, directoryCalls = [];
   const chat = {
@@ -32,16 +32,17 @@ export async function selectorEnvironment(t, configurationSettings = {}, runtime
     // Additional independently controlled Settings methods are explicit test inputs, never production defaults.
     ...configurationSettings,
   } };
-  const plugin = openPlugin({ ...disk, globals: { ...disk.globals, ...runtimeGlobals, Tools: tools, ToolPkg: { ...disk.globals.ToolPkg,
+  const plugin = openPlugin({ ...disk, composeModules, globals: { ...disk.globals, ...runtimeGlobals, Tools: tools, ToolPkg: { ...disk.globals.ToolPkg,
     /** Resolves and verifies one actually declared plugin resource on disk, never a fabricated avatar capability. */
     async readResource(key, name) {
-      assert.equal(key, "character_default_avatar"); assert.equal(name, "operit-avatar.png");
+      assert.ok(["character_default_avatar", "character_memory_html"].includes(key));
       const manifest = JSON.parse(await readFile(new URL("../manifest.json", import.meta.url), "utf8"));
       const found = manifest.resources.filter(
         /** Requires an exact registered resource key instead of guessing a directory or source. */
         resource => resource.key === key,
       );
-      assert.equal(found.length, 1); assert.equal(found[0].mime, "image/png");
+      assert.equal(found.length, 1); assert.equal(found[0].path.split("/").pop(), name);
+      if (key === "character_default_avatar") assert.equal(found[0].mime, "image/png");
       const file = fileURLToPath(new URL("../" + found[0].path, import.meta.url)); assert.ok((await stat(file)).size > 0); return file;
     },
   } } });

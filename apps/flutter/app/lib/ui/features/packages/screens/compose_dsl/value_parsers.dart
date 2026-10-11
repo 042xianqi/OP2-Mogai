@@ -300,11 +300,11 @@ Alignment _alignment(Object? raw) {
     'center' => Alignment.center,
     'topCenter' || 'centerTop' => Alignment.topCenter,
     'topEnd' || 'endTop' => Alignment.topRight,
-    'centerEnd' || 'endCenter' => Alignment.centerRight,
+    'end' || 'centerEnd' || 'endCenter' => Alignment.centerRight,
     'bottomEnd' || 'endBottom' => Alignment.bottomRight,
     'bottomCenter' || 'centerBottom' => Alignment.bottomCenter,
     'bottomStart' || 'startBottom' => Alignment.bottomLeft,
-    'centerStart' || 'startCenter' => Alignment.centerLeft,
+    'start' || 'centerStart' || 'startCenter' => Alignment.centerLeft,
     _ => Alignment.topLeft,
   };
 }

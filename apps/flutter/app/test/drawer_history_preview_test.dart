@@ -15,6 +15,54 @@ import 'package:operit2/ui/main/screens/ScreenRouteRegistry.dart';
 
 /// Verifies independent previews preserve conversation context and workspace isolation.
 void main() {
+  testWidgets('brand header fits the narrow drawer beside the tab switch', (
+    tester,
+  ) async {
+    for (final scale in [1.0, 1.4]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: MediaQuery(
+              data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: SizedBox(
+                  width: 195,
+                  child: SidebarInfoCard(
+                    brandName: 'Operit',
+                    appearance: const NavigationDrawerAppearance(
+                      containerColor: Colors.white,
+                      titleColor: Colors.black,
+                      statusAvailableColor: Colors.blue,
+                      itemColor: Colors.black87,
+                      buttonContainerColor: Colors.white70,
+                      selectedContainerColor: Colors.blue,
+                      selectedContentColor: Colors.white,
+                      dividerColor: Colors.black12,
+                      transparentSurfaceEnabled: false,
+                    ),
+                    trailing: const SizedBox(
+                      key: ValueKey('test-tab-switch'),
+                      width: 98,
+                      height: 23,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(
+        tester.getSize(find.byKey(const ValueKey('test-tab-switch'))).width,
+        98,
+      );
+      expect(tester.getSize(find.text('Operit')).width, lessThanOrEqualTo(63));
+    }
+  });
+
   testWidgets(
     'workspace retains the legacy compact create bar and scrolling brand header',
     (tester) async {

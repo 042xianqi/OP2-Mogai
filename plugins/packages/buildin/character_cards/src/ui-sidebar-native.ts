@@ -1,5 +1,5 @@
 import type { ComposeDslContext, ComposeNode } from "../../../../types/compose-dsl";
-import { reconcileSidebarCatalog, parseCurrentSidebar, type CurrentSidebar, type SidebarCatalog, type ConversationSidebarGroup, type ConversationSidebarScope } from "./ui-sidebar";
+import { reconcileSidebarCatalog, parseCurrentSidebar, preparedSidebar, sidebarCatalogKey, type CurrentSidebar, type SidebarCatalog, type ConversationSidebarGroup, type ConversationSidebarScope } from "./ui-sidebar";
 import { callMainDomain, encodeSelection } from "./ui-contributions";
 import { createChatInput } from "./chat-lifecycle";
 import { imageSource } from "./image-source";
@@ -20,10 +20,12 @@ export function renderSidebarScreen(ctx: ComposeDslContext): ComposeNode {
   const supplied = { input, chatSidebar };
   const current = ctx.useRef<CurrentSidebar>("native-sidebar-current", parseCurrentSidebar(supplied));
   current.current = parseCurrentSidebar(supplied);
-  const catalogKey = (value: CurrentSidebar): string => JSON.stringify({ input: value.input, chats: value.chatSidebar.chats });
+  const catalogKey = sidebarCatalogKey;
+  const [warmData] = ctx.useState<unknown>("chatSidebarPrepared", null);
+  const prepared = preparedSidebar(warmData, current.current);
   const identity = catalogKey(current.current), colors = ctx.MaterialTheme.colorScheme;
   const [state, setState] = ctx.useState<SidebarState>("native-sidebar-state", {
-    data: null, defaultAvatar: null, context: "", loading: true, busy: false, error: "", query: "", search: false,
+    data: prepared?.data ?? null, defaultAvatar: prepared?.defaultAvatar ?? null, context: prepared?.context ?? "", loading: prepared === null, busy: false, error: "", query: "", search: false,
     collapsed: [], expandedGroups: [], dialog: null,
   });
   const latest = ctx.useRef("native-sidebar-state-ref", state); latest.current = state;

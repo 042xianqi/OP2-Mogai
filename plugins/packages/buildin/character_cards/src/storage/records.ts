@@ -45,7 +45,7 @@ export function records(state: CharacterState): StoredRecord[] {
 export function stateFromRecords(metadata: Storage.Value, rows: StoredRecord[]): CharacterState {
   if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) throw new Error("Invalid character database metadata");
   if (metadata.migrationStatus === "writing") throw new Error("Character migration has not completed");
-  const state = { version: metadata.version, nextId: metadata.nextId, active: metadata.active, cards: [], groups: [], tags: [], stores: [], conversationGroups: [], owners: [] } as unknown as CharacterState;
+  const state = { version: metadata.version, nextId: metadata.nextId, active: metadata.active, memoryPreferences: metadata.memoryPreferences === undefined ? { userDescriptionEnabled: true, autoUpdateEnabled: true } : metadata.memoryPreferences, cards: [], groups: [], tags: [], stores: [], conversationGroups: [], owners: [] } as unknown as CharacterState;
   const owners = new Map<string, MemorySpace>();
   for (const row of rows) {
     if (row.collection === "owners") {

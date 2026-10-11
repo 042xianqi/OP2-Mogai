@@ -225,7 +225,12 @@ export interface MemorySearchConfig {
 }
 
 /** Aggregates independent canonical reads only after every requested read succeeds. */
+export interface GlobalMemoryPreferences { userDescriptionEnabled: boolean; autoUpdateEnabled: boolean }
+export interface MemorySearchHit { memory: Memory; score: number; keywordScore: number; tagScore: number; vectorScore: number; edgeScore: number; passedThreshold: boolean }
+export interface MemorySearchDebug { query: string; config: MemorySearchConfig; relevanceThreshold: number; memoriesInScopeCount: number; candidates: MemorySearchHit[] }
+
 export interface Snapshot {
+  memoryPreferences: GlobalMemoryPreferences;
   cards: Card[];
   groups: Group[];
   stores: Store[];
@@ -239,6 +244,12 @@ export interface Snapshot {
 /** Keeps UI and registered domain commands on one finite, plugin-owned request contract. */
 export type Request =
   | { action: "snapshot" }
+  | { action: "readGlobalMemoryPreferences" }
+  | { action: "readChatMemoryAutoSaveStatus"; chatId: string }
+  | { action: "updateCurrentChatMemory"; chatId: string }
+  | { action: "writeGlobalMemoryPreference"; key: keyof GlobalMemoryPreferences; value: boolean }
+  | { action: "searchMemoryDebug"; ownerKey: string; query: string; config: MemorySearchConfig; relevanceThreshold: number }
+  | { action: "readMemoryLink"; ownerKey: string; linkId: string }
   | { action: "listThemeChoices" }
   | { action: "listCharacters" }
   | { action: "getCharacter"; id: string }
@@ -278,6 +289,7 @@ export type Request =
   | { action: "writeMemorySettings"; ownerKey: string; settings: MemorySettings }
   | { action: "readMemorySearchConfig"; ownerKey: string }
   | { action: "writeMemorySearchConfig"; ownerKey: string; config: MemorySearchConfig }
+  | { action: "writeMemoryOwnerSettings"; ownerKey: string; settings: MemorySettings; config: MemorySearchConfig }
   | { action: "combinePrompts"; characterId: string; additionalTagIds: string[]; promptFunctionType: "CHAT" | "VOICE" }
   | { action: "importCharacter"; format: "operit" | "tavern"; content: string }
   | { action: "exportCharacter"; id: string; format: "operit" | "tavern" }
@@ -382,6 +394,7 @@ export interface MemorySpace {
 /** Owns the file schema for this plugin only; no runtime-wide storage schema is imposed. */
 export interface CharacterState {
   version: 3;
+  memoryPreferences: GlobalMemoryPreferences;
   nextId: string;
   cards: Card[];
   groups: Group[];
@@ -414,6 +427,12 @@ export interface UserDocumentWrite { ownerKey: string; path: string; content: st
 /** Maps every finite editor action to the exact result returned by its service branch. */
 export interface RequestResults {
   snapshot: Snapshot;
+  readGlobalMemoryPreferences: GlobalMemoryPreferences;
+  readChatMemoryAutoSaveStatus: MemoryAutoSaveStatus;
+  updateCurrentChatMemory: MemoryExtractionResult;
+  writeGlobalMemoryPreference: GlobalMemoryPreferences;
+  searchMemoryDebug: MemorySearchDebug;
+  readMemoryLink: MemoryLink;
   listThemeChoices: import("./selection-application").ThemeChoice[];
   listCharacters: Card[];
   getCharacter: Card;
@@ -453,6 +472,7 @@ export interface RequestResults {
   writeMemorySettings: MemorySettings;
   readMemorySearchConfig: MemorySearchConfig;
   writeMemorySearchConfig: MemorySearchConfig;
+  writeMemoryOwnerSettings: { settings: MemorySettings; config: MemorySearchConfig };
   combinePrompts: string;
   importCharacter: Snapshot;
   exportCharacter: string;

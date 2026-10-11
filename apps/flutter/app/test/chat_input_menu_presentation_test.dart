@@ -16,6 +16,7 @@ import 'package:operit2/core/proxy/generated/CoreProxyModels.g.dart'
     as core_proxy;
 import 'package:operit2/l10n/generated/app_localizations.dart';
 import 'package:operit2/ui/common/contributions/ContributionPresentationResult.dart';
+import 'package:operit2/ui/common/contributions/ChatUiContributionModels.dart';
 import 'package:operit2/ui/common/contributions/ToolPkgChatUiCatalog.dart';
 import 'package:operit2/ui/features/chat/components/style/input/agent/AgentInputMenuPopup.dart';
 import 'package:operit2/ui/features/chat/viewmodel/ChatSelectionTransition.dart';
@@ -65,6 +66,74 @@ void main() {
       }
     },
   );
+
+  test('application title never binds the avatar preview action', () {
+    final source = File(
+      'lib/ui/features/chat/screens/AIChatScreen.dart',
+    ).readAsStringSync();
+    final title = source.substring(
+      source.indexOf('void _updateTopBarTitle()'),
+      source.indexOf('void _updateTopBarActions()'),
+    );
+    expect(title, contains('return TopBarTitleText('));
+    expect(title, isNot(contains('InkWell(')));
+    expect(title, isNot(contains('onTap:')));
+    expect(
+      source,
+      contains('data.chatUiContext?.identity?.avatarAction == null'),
+    );
+  });
+
+  for (final field in ['avatarAction', 'action', null]) {
+    test(
+      'catalog accepts identity with ${field ?? 'no avatar action'} without title interaction',
+      () async {
+        final bridge =
+            _ContextBridge(currentChatId: null, publishIdentity: true)
+              ..identityDisplay = {
+                'title': 'Operit',
+                'avatarUri': null,
+                if (field != null)
+                  field: {
+                    'routeId': 'selector-route',
+                    'input': _opaqueInput('example.selector'),
+                  },
+              };
+        addTearDown(bridge.close);
+        final display = (await ToolPkgChatUiCatalog(
+          clients: GeneratedCoreProxyClients(bridge),
+        ).loadContext(chatId: null)).identity!;
+        expect(display.title, 'Operit');
+        if (field == null) {
+          expect(display.avatarAction, isNull);
+        } else {
+          expect(display.avatarAction?.route.routeId, 'selector-route');
+          expect(display.avatarAction?.input, _opaqueInput('example.selector'));
+        }
+      },
+    );
+  }
+
+  test('catalog rejects conflicting avatar preview actions', () async {
+    final action = {
+      'routeId': 'selector-route',
+      'input': _opaqueInput('example.selector'),
+    };
+    final bridge = _ContextBridge(currentChatId: null, publishIdentity: true)
+      ..identityDisplay = {
+        'title': 'Operit',
+        'avatarUri': null,
+        'avatarAction': action,
+        'action': action,
+      };
+    addTearDown(bridge.close);
+    await expectLater(
+      ToolPkgChatUiCatalog(
+        clients: GeneratedCoreProxyClients(bridge),
+      ).loadContext(chatId: null),
+      throwsStateError,
+    );
+  });
 
   test(
     'broken existing namespace is not replaced by active selection',
@@ -257,6 +326,76 @@ void main() {
       await _removeHost(tester);
     },
   );
+
+  for (final dismissal in ['confirm', 'outside', 'back']) {
+    testWidgets('memory status $dismissal closes only its presentation route', (
+      tester,
+    ) async {
+      final bridge = _ContextBridge(
+        currentChatId: 'chat-a',
+        publishIdentity: true,
+      )..alertDialogPresentation = true;
+      addTearDown(bridge.close);
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: const Scaffold(body: Text('Home page')),
+        ),
+      );
+      final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+      unawaited(
+        navigator.push<void>(
+          MaterialPageRoute(
+            builder: (context) => Scaffold(
+              body: Column(
+                children: [
+                  const Text('Conversation page'),
+                  TextButton(
+                    onPressed: () async {
+                      await ChatUiAction(
+                        route: _route('example.selector'),
+                        input: _opaqueInput('example.selector'),
+                      ).present(
+                        context: context,
+                        clients: GeneratedCoreProxyClients(bridge),
+                      );
+                    },
+                    child: const Text('Memory details'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Memory details'));
+      await tester.pumpAndSettle();
+      expect(find.text('Memory interval details'), findsOneWidget);
+      expect(find.byType(ToolPkgUiLauncherScreen), findsOneWidget);
+      switch (dismissal) {
+        case 'confirm':
+          await tester.tap(find.text('Close details'));
+        case 'outside':
+          await tester.tapAt(const Offset(4, 4));
+        case 'back':
+          await tester.binding.handlePopRoute();
+      }
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(ToolPkgUiLauncherScreen), findsNothing);
+      expect(find.text('Conversation page'), findsOneWidget);
+      expect(
+        navigator.canPop(),
+        isTrue,
+        reason: 'The conversation must remain above Home',
+      );
+      expect(bridge.configurationCalls, isEmpty);
+      expect(tester.takeException(), isNull);
+      await _removeHost(tester);
+    });
+  }
 
   testWidgets('explicit cancel does not resolve or publish any configuration', (
     tester,
@@ -539,13 +678,18 @@ core_proxy.ToolPkgUiRoute _route(String owner) => core_proxy.ToolPkgUiRoute(
 Map<String, Object?> _contextActions(
   String owner, {
   required bool publishIdentity,
+  Map<String, Object?>? identityDisplay,
 }) => {
   'identity': publishIdentity && owner == 'example.selector'
-      ? {
-          'title': 'Published identity',
-          'avatarUri': null,
-          'action': {'routeId': 'selector-route', 'input': _opaqueInput(owner)},
-        }
+      ? identityDisplay ??
+            {
+              'title': 'Published identity',
+              'avatarUri': null,
+              'avatarAction': {
+                'routeId': 'selector-route',
+                'input': _opaqueInput(owner),
+              },
+            }
       : null,
   'backgroundUri': null,
 };
@@ -564,6 +708,20 @@ class _ContextBridge extends OperitRuntimeBridge {
       final tree = Map<String, Object?>.from(
         (jsonDecode(_render(state)) as Map)['tree'] as Map,
       );
+      if (alertDialogPresentation && state.containsKey('presentation')) {
+        return <String, Object?>{
+          'type': 'AlertDialog',
+          'props': {
+            'title': 'Memory status',
+            'text': 'Memory interval details',
+            'confirmText': 'Close details',
+            'onConfirm': {'__actionId': 'cancel'},
+            'onDismissRequest': {'__actionId': 'cancel'},
+          },
+          'children': <Object?>[],
+          'slots': <String, Object?>{},
+        };
+      }
       if (!state.containsKey('presentation')) {
         final column = (tree['children'] as List).single as Map;
         for (var index = 0; index < menuExtraLines; index++) {
@@ -583,6 +741,7 @@ class _ContextBridge extends OperitRuntimeBridge {
   int menuExtraLines = 0;
   String? currentChatId;
   final bool publishIdentity;
+  Map<String, Object?>? identityDisplay;
   final List<core_proxy.ToolPkgUiRoute> routes;
   final List<CoreCallRequest> calls = [];
   final List<Map<String, Object?>> renderStates = [];
@@ -595,6 +754,7 @@ class _ContextBridge extends OperitRuntimeBridge {
   Object? configurationError;
   Object? statisticsError;
   bool durableCommitted = false;
+  bool alertDialogPresentation = false;
 
   /// Retains exact authoritative profile-refresh requests for ownership assertions.
   List<CoreCallRequest> get configurationCalls =>
@@ -654,6 +814,7 @@ class _ContextBridge extends OperitRuntimeBridge {
         value = _contextActions(
           args['packageName'] as String,
           publishIdentity: publishIdentity,
+          identityDisplay: identityDisplay,
         );
       case 'getToolPkgNavigationEntries':
         value = [

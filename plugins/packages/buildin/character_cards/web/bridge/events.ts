@@ -1,8 +1,4 @@
-import { changeCharacterBinding } from "../features/characters/bindings/events";
-import { changeToolSource } from "../features/characters/bindings/tool-policy";
-import { updateTtsQuery } from "../features/characters/bindings/tts";
-import { updateThemeQuery } from "../features/characters/bindings/theme";
-import { changeGroupMember } from "../features/groups/events";
+import { changeMemoryControls } from "../features/memory/controls-events";
 import { updateScoreOutput } from "../features/memory/item-events";
 import { dataValue } from "../shared/dom";
 import { editableDialog, setEditableValue } from "../shared/edits";
@@ -32,7 +28,7 @@ export function createEditorEvents(context: EditorContext, features: readonly Ac
     event.preventDefault();
     state.busy = true;
     const owner = state.dialogs.length === 0 ? null : topDialog();
-    if (owner !== null) owner.error = "";
+    if (owner !== null) owner.error = ""; else state.error = "";
     try { await handleAction(dataValue(element, "action"), element); }
     catch (error) {
       if (state.dialogs.length !== 0) { topDialog().error = String(error); renderDialogs(); }
@@ -45,8 +41,6 @@ export function createEditorEvents(context: EditorContext, features: readonly Ac
     const element = event.target;
     if (element.disabled) return;
     if (element instanceof HTMLInputElement && context.onScreenInput(element)) return;
-    if (element instanceof HTMLInputElement && element.hasAttribute("data-theme-query")) { updateThemeQuery(context, element); return; }
-    if (element instanceof HTMLInputElement && element.hasAttribute("data-tts-query")) { updateTtsQuery(context, element); return; }
     if (element instanceof HTMLInputElement && element.type === "checkbox") return;
     if (element.hasAttribute("data-graph-search")) { topDialog("graph").query = element.value; return; }
     if (!element.hasAttribute("data-field") || element.disabled) return;
@@ -54,6 +48,8 @@ export function createEditorEvents(context: EditorContext, features: readonly Ac
     if (key === "fixedModel") return;
     if (dialog.type === "text") { if (key !== "value") throw new Error("展开编辑字段无效"); dialog.value = element.value; return; }
     setEditableValue(editableDialog(dialog), key, element.value);
+    if (dialog.type === "import" && key === "format") renderDialogs();
+    if (dialog.type === "owner-settings" && dialog.searchResult === null) context.dialogsRoot.querySelector("[data-search-results]")?.remove();
     if (dialog.type === "memory-edit" && element instanceof HTMLInputElement && element.type === "range") {
       updateScoreOutput(element);
     }
@@ -64,9 +60,7 @@ export function createEditorEvents(context: EditorContext, features: readonly Ac
     const element = event.target;
     if (element.disabled) return;
     if (element.hasAttribute("data-graph-folder")) { topDialog("graph").folder = element.value; updateGraphSurface(topDialog("graph")); return; }
-    if (element instanceof HTMLInputElement && changeCharacterBinding(context, element)) return;
-    if (element instanceof HTMLInputElement && element.hasAttribute("data-tool-category")) { changeToolSource(context, element); return; }
-    if (element.hasAttribute("data-member") && element instanceof HTMLInputElement) changeGroupMember(context, element);
+    if (element instanceof HTMLInputElement && changeMemoryControls(context, element)) return;
   }
   /** Keeps Escape scoped to the top nested dialog and blocks cancellation during an operation. */
   async function onCancel(event: Event): Promise<void> {

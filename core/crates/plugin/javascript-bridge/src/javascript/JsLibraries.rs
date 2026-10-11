@@ -502,7 +502,7 @@ pub fn buildRuntimeBootstrapScript() -> String {
                 'exports',
                 'require',
                 '__operit_call_runtime',
-                __operitRuntimePrelude + '\n' + (composeCompilation ? OperitComposeCompiler.compile(source, identity) + (kind === 'main' ? '\n' + __operitComposeRuntimeSource : '') : source)
+                __operitRuntimePrelude + '\n' + (composeCompilation ? OperitComposeCompiler.prepare(source, identity) + (kind === 'main' ? '\n' + __operitComposeRuntimeSource : '') : source)
             );
             cache[key] = factory;
             return factory;

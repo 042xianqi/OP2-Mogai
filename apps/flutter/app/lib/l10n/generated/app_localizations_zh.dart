@@ -2624,6 +2624,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsAppearanceFontMonospace => '等宽';
 
   @override
+  String get settingsAppearanceInterfaceScale => '界面缩放';
+
+  @override
   String get settingsAppearanceFontScale => '字体大小';
 
   @override
@@ -3327,7 +3330,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeNetworkControl => '网络控制';
 
   @override
-  String get settingsRuntimeNetworkControlDescription => '角色、身份、设备权限与审计';
+  String get settingsRuntimeNetworkControlDescription => '管理设备身份与权限，查看操作记录';
 
   @override
   String get settingsRuntimeIdentitiesAndPermissions => '身份与权限';
@@ -3342,10 +3345,34 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeControlIdentities => '身份';
 
   @override
-  String get settingsRuntimeControlAudit => '审计';
+  String get settingsRuntimeControlAuditAccepted => '已执行';
 
   @override
-  String get settingsRuntimeControlAddRole => '添加角色';
+  String get settingsRuntimeControlAuditRejected => '已拒绝';
+
+  @override
+  String get settingsRuntimeControlAuditIssuer => '操作设备';
+
+  @override
+  String get settingsRuntimeControlAuditDetails => '技术详情';
+
+  @override
+  String get settingsRuntimeControlAuditBootstrap => '初始化空间权限';
+
+  @override
+  String get settingsRuntimeControlAuditAdmit => '接纳设备';
+
+  @override
+  String get settingsRuntimeControlAuditMerge => '合并设备空间';
+
+  @override
+  String get settingsRuntimeControlAuditPolicy => '更新权限策略';
+
+  @override
+  String get settingsRuntimeControlAudit => '操作记录';
+
+  @override
+  String get settingsRuntimeControlAddRole => '新建身份';
 
   @override
   String get settingsRuntimeControlGrantRole => '授予角色';
@@ -3357,10 +3384,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeControlBindDevice => '绑定设备';
 
   @override
-  String get settingsRuntimeControlRoleName => '角色名称';
+  String get settingsRuntimeControlRoleName => '身份名称';
 
   @override
-  String get settingsRuntimeControlCapabilities => '这个角色可以做什么';
+  String get settingsRuntimeControlCapabilities => '允许这个身份执行的操作';
 
   @override
   String get settingsRuntimeControlManagedDevices => '这个角色可以管理哪些设备（不选表示全部）';
@@ -3375,11 +3402,11 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeControlDeviceId => '设备 ID';
 
   @override
-  String get settingsRuntimeControlNoAudit => '暂无控制命令记录';
+  String get settingsRuntimeControlNoAudit => '暂无操作记录，身份和设备的变更会显示在这里';
 
   @override
   String settingsRuntimeControlAuditCount(int count) {
-    return '共 $count 条记录';
+    return '$count 条记录';
   }
 
   @override
@@ -3413,10 +3440,13 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeControlManages => '可管理';
 
   @override
+  String get settingsRuntimeControlLocalIdentity => '本机身份';
+
+  @override
   String get settingsRuntimeControlCurrentIdentity => '当前身份';
 
   @override
-  String get settingsRuntimeControlCurrentCapabilities => '当前能力';
+  String get settingsRuntimeControlCurrentCapabilities => '可用权限';
 
   @override
   String get settingsRuntimeControlManageIdentities => '管理身份';
@@ -3434,11 +3464,11 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeControlIdentityResetDone => '身份已重置为默认用户';
 
   @override
-  String get settingsRuntimeControlIdentityDefinitions => '身份定义';
+  String get settingsRuntimeControlIdentityDefinitions => '身份权限';
 
   @override
   String settingsRuntimeControlIdentityCount(int count) {
-    return '共 $count 个身份';
+    return '$count 个身份';
   }
 
   @override

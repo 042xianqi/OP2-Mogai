@@ -11,6 +11,12 @@ export function createMemoryLibraryActionsFeature(context: EditorContext) {
     const id = element.dataset.id;
     switch (action) {
 
+      case "toggle-memory-preference": {
+        const key = dataValue(element, "key");
+        if (key !== "userDescriptionEnabled" && key !== "autoUpdateEnabled") throw new Error("全局记忆设置字段无效");
+        snapshot().memoryPreferences = await request({ action: "writeGlobalMemoryPreference", key, value: !snapshot().memoryPreferences[key] });
+        toast("全局记忆设置已保存"); return;
+      }
       case "create-store": pushDialog({ type: "store", create: true, store: { id: "", name: "" } }); return;
 
       case "edit-store": {
@@ -28,5 +34,5 @@ export function createMemoryLibraryActionsFeature(context: EditorContext) {
       default: throw new Error(`Unknown memory/library-actions action: ${action}`);
     }
   }
-  return { names: ["create-store", "edit-store", "save-store", "delete-store"], handleAction };
+  return { names: ["toggle-memory-preference", "create-store", "edit-store", "save-store", "delete-store"], handleAction };
 }

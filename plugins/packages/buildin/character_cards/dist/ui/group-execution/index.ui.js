@@ -1,3 +1,4 @@
+// @operit-compose-artifact 1
 "use strict";
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -148,7 +149,7 @@ function renderGroupExecutionScreen(ctx) {
   const labels = { running: "\u6B63\u5728\u6267\u884C", settled: "\u5DF2\u7ED3\u675F", failed: "\u6267\u884C\u5931\u8D25" };
   const outcomes = { completed: "\u5DF2\u5B8C\u6210", cancelled: "\u5DF2\u53D6\u6D88\uFF0C\u53EF\u7EE7\u7EED", blocked: "\u53D1\u9001\u88AB\u963B\u6B62", consumed: "\u53D1\u9001\u88AB\u5176\u4ED6\u5904\u7406\u5668\u63A5\u7BA1", not_persisted: "\u6D88\u606F\u672A\u4FDD\u5B58" };
   const enabled = state.loaded && !state.busy && !state.finished && state.error === "";
-  return ctx.UI.Dialog({
+  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:7203",[{
     key: "group-execution-dialog",
     closeOnDismissRequest: false,
     properties: { dismissOnBackPress: !state.busy, dismissOnClickOutside: !state.busy },
@@ -156,43 +157,43 @@ function renderGroupExecutionScreen(ctx) {
     onLoad: () => control.load(),
     /** Closes this modal without changing the underlying submission. */
     onDismissRequest: () => control.close()
-  }, ctx.UI.Column({ fillMaxWidth: true, paddingHorizontal: 20, paddingVertical: 16 }, [
-    ctx.UI.Text({ text: "\u7FA4\u7EC4\u6267\u884C", style: "titleMedium" }),
-    ctx.UI.Text({ key: "group-execution-status", text: !state.loaded ? "\u6B63\u5728\u8BFB\u53D6\u6267\u884C\u72B6\u6001\u2026" : value === null ? "\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u5DF2\u63D0\u4EA4\u7684\u7FA4\u7EC4\u4EFB\u52A1" : labels[value.status], paddingVertical: 12 }),
+  },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:7605",[{ fillMaxWidth: true, paddingHorizontal: 20, paddingVertical: 16 },[
+    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:7693",[],()=>[{ text: "\u7FA4\u7EC4\u6267\u884C", style: "titleMedium" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:7770",[{ key: "group-execution-status", text: !state.loaded ? "\u6B63\u5728\u8BFB\u53D6\u6267\u884C\u72B6\u6001\u2026" : value === null ? "\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u5DF2\u63D0\u4EA4\u7684\u7FA4\u7EC4\u4EFB\u52A1" : labels[value.status], paddingVertical: 12 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
     ...value === null ? [] : [
-      ctx.UI.Text({ text: "\u63D0\u4EA4\uFF1A" + value.submissionId }),
-      ...value.outcome === null ? [] : [ctx.UI.Text({ text: outcomes[value.outcome.status] + " \xB7 " + value.outcome.cursor + "/" + value.outcome.plannedTurns })],
-      ...value.error === null ? [] : [ctx.UI.Text({ text: value.error, color: ctx.MaterialTheme.colorScheme.error })]
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:8085",[{ text: "\u63D0\u4EA4\uFF1A" + value.submissionId }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+      ...value.outcome === null ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:8191",[{ text: outcomes[value.outcome.status] + " \xB7 " + value.outcome.cursor + "/" + value.outcome.plannedTurns }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))],
+      ...value.error === null ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:8354",[{ text: value.error, color: ctx.MaterialTheme.colorScheme.error }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))]
     ],
-    ...state.error === "" ? [] : [ctx.UI.Text({ key: "group-execution-error", text: state.error, color: ctx.MaterialTheme.colorScheme.error })],
-    ...state.busy ? [ctx.UI.CircularProgressIndicator({ width: 20, height: 20 })] : [],
-    ctx.UI.Row({ fillMaxWidth: true }, [
-      ctx.UI.TextButton({
+    ...state.error === "" ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:8475",[{ key: "group-execution-error", text: state.error, color: ctx.MaterialTheme.colorScheme.error }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))],
+    ...state.busy ? [OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:8607",[],()=>[{ width: 20, height: 20 }],(...__operitArgs)=>ctx.UI.CircularProgressIndicator(...__operitArgs))] : [],
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:8678",[{ fillMaxWidth: true },[
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:8721",[{
         key: "group-execution-refresh",
         enabled: !state.busy && !state.finished,
         /** Requests a new status snapshot only for this explicit refresh click. */
         onClick: () => control.refresh()
-      }, ctx.UI.Text({ text: "\u5237\u65B0" })),
-      ctx.UI.TextButton({
+      },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:8964",[],()=>[{ text: "\u5237\u65B0" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))],(...__operitArgs)=>ctx.UI.TextButton(...__operitArgs)),
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:9010",[{
         key: "group-execution-cancel",
         enabled: enabled && value !== null && value.status === "running",
         /** Cancels only the exact running submission currently displayed. */
         onClick: () => control.act("cancel")
-      }, ctx.UI.Text({ text: "\u53D6\u6D88\u6267\u884C" })),
-      ctx.UI.TextButton({
+      },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:9275",[],()=>[{ text: "\u53D6\u6D88\u6267\u884C" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))],(...__operitArgs)=>ctx.UI.TextButton(...__operitArgs)),
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:9333",[{
         key: "group-execution-resume",
         enabled: enabled && value !== null && value.status === "settled" && value.outcome !== null && value.outcome.status === "cancelled",
         /** Resumes only the exact cancelled submission without resending its user input. */
         onClick: () => control.act("resume")
-      }, ctx.UI.Text({ text: "\u7EE7\u7EED\u6267\u884C" }))
-    ]),
-    ctx.UI.IconButton({
+      },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:9679",[],()=>[{ text: "\u7EE7\u7EED\u6267\u884C" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))],(...__operitArgs)=>ctx.UI.TextButton(...__operitArgs))
+    ]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs)),
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:9742",[{
       key: "group-execution-close",
       enabled: !state.busy && !state.finished,
       /** Dismisses this presentation and leaves execution unchanged. */
       onClick: () => control.close()
-    }, ctx.UI.Icon({ name: "Close", contentDescription: "\u5173\u95ED" }))
-  ]));
+    },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/group-execution/index.ui.js:9962",[],()=>[{ name: "Close", contentDescription: "\u5173\u95ED" }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.IconButton(...__operitArgs))
+  ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs))],(...__operitArgs)=>ctx.UI.Dialog(...__operitArgs));
 }
 
 // src/ui/group-execution/index.ui.ts

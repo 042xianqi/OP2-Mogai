@@ -404,6 +404,7 @@ extension _ComposeMaterialControls on _ComposeDslRendererState {
       case 'FilledIconToggleButton':
         return IconButton.filled(
           onPressed: onPressed,
+          tooltip: node.props['tooltip'] as String?,
           isSelected: toggle ? checked : null,
           selectedIcon: selectedIcon,
           style: style,
@@ -413,6 +414,7 @@ extension _ComposeMaterialControls on _ComposeDslRendererState {
       case 'FilledTonalIconToggleButton':
         return IconButton.filledTonal(
           onPressed: onPressed,
+          tooltip: node.props['tooltip'] as String?,
           isSelected: toggle ? checked : null,
           selectedIcon: selectedIcon,
           style: style,
@@ -422,6 +424,7 @@ extension _ComposeMaterialControls on _ComposeDslRendererState {
       case 'OutlinedIconToggleButton':
         return IconButton.outlined(
           onPressed: onPressed,
+          tooltip: node.props['tooltip'] as String?,
           isSelected: toggle ? checked : null,
           selectedIcon: selectedIcon,
           style: style,
@@ -430,6 +433,7 @@ extension _ComposeMaterialControls on _ComposeDslRendererState {
       default:
         return IconButton(
           onPressed: onPressed,
+          tooltip: node.props['tooltip'] as String?,
           isSelected: toggle ? checked : null,
           selectedIcon: selectedIcon,
           style: style,
@@ -448,13 +452,19 @@ extension _ComposeMaterialControls on _ComposeDslRendererState {
           ? BorderRadius.circular(12)
           : null,
     );
-    if (!hasExplicitSize && shape == null) {
+    if (!hasExplicitSize &&
+        shape == null &&
+        node.props['contentPadding'] == null) {
       return null;
     }
     return IconButton.styleFrom(
       shape: shape,
       minimumSize: hasExplicitSize ? Size.zero : null,
-      padding: hasExplicitSize ? EdgeInsets.zero : null,
+      padding: node.props['contentPadding'] != null
+          ? _edgeInsetsFromValue(node.props['contentPadding'])
+          : hasExplicitSize
+          ? EdgeInsets.zero
+          : null,
       tapTargetSize: hasExplicitSize ? MaterialTapTargetSize.shrinkWrap : null,
     );
   }

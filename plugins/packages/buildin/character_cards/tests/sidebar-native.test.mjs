@@ -34,16 +34,12 @@ function mount(current, data, adapters = {}) {
   runtime.context.exports = runtime.context.module.exports;
   vm.runInContext(readFileSync(new URL('../../../../../core/crates/plugin/sdk/src/toolpkg/vendor/acorn.js', import.meta.url), 'utf8'), runtime.context);
   runtime.context.__operitAcorn = runtime.context.module.exports;
-  vm.runInContext(readFileSync(new URL('../../../../../core/crates/plugin/sdk/src/toolpkg/ToolPkgComposeDslCompiler.js', import.meta.url), 'utf8'), runtime.context);
   for (const [modulePath, bytes] of Object.entries(compiledModules)) {
     compiledModules[modulePath] = runtime.context.OperitComposeCompiler.compile(Buffer.from(bytes).toString('utf8'), 'com.operit.character_cards:' + modulePath);
   }
   runtime.context.module = { exports: runtime.load('dist/ui/chat-sidebar/index.ui.js') };
-  for (const file of ['ToolPkgComposeDslRetained.js', 'ToolPkgComposeDslReactive.js']) {
-    vm.runInContext(readFileSync(new URL('../../../../../core/crates/plugin/sdk/src/toolpkg/' + file, import.meta.url), 'utf8'), runtime.context);
-  }
   vm.runInContext(sdkScript('ToolPkgComposeDslBridge.rs'), runtime.context);
-  vm.runInContext(sdkScript('ToolPkgComposeDslRuntimeScript.rs').replaceAll('{{', '{').replaceAll('}}', '}').replace('{script}', ''), runtime.context);
+  vm.runInContext(sdkScript('ToolPkgComposeDslRuntimeScript.rs'), runtime.context);
   composeStreamFixture(runtime.context).adapt();
   const options = { packageName: 'com.operit.character_cards', executionContextKey: 'native-sidebar-test' };
   const first = runtime.context.__operit_render_compose_dsl({ ...options, state: current });
@@ -88,7 +84,7 @@ test('native role sidebar restores rounded nested legacy layout without timestam
   assert.equal(chat.props.height, 34); assert.equal(chat.props.paddingStart, 56);
   assert.equal(keyedNode(tree, 'sidebar-chat-rail-c1').props.width, 20);
   const selected = keyedNode(tree, 'sidebar-chat-hit-c1');
-  assert.equal(selected.props.modifier.__modifierOps[0].args[1].cornerRadius, 8);
+  assert.equal(selected.props.modifier.__modifierOps.find(op => op.name === 'background').args[1].cornerRadius, 8);
   const combined = selected.props.modifier.__modifierOps.find(op => op.name === 'combinedClickable').args[0];
   assert.ok(combined.onLongClick.__actionId);
   assert.equal(keyedNode(tree, 'sidebar-status-c2').props.running, true);
@@ -111,6 +107,83 @@ test('native role sidebar restores rounded nested legacy layout without timestam
   assert.equal(composeNodes(tree, node => /Conversation/.test(node.type)).length, 0);
   assert.equal(composeNodes(tree, node => node.type === 'HoverRegion' && node.props.onHover).length, 0, 'Hover must not call JS');
   assert.deepEqual(JSON.parse(JSON.stringify((await screen.dispatch(combined.onClick)).actionResult)), { type: 'toolpkg.chat.activate', chatId: 'c1' });
+});
+
+test('chat rails are plugin-composed Boxes with generic hover styles and transitions', async () => {
+  const chats = [summary('c1'), summary('c2')], screen = mount(context(chats), catalog(chats));
+  const { tree } = await screen.load();
+  assert.equal(composeNodes(tree, node => node.type === 'HistoryRail').length, 0);
+  for (const chat of chats) {
+    const hover = keyedNode(tree, 'sidebar-chat-hover-' + chat.id);
+    const rail = keyedNode(hover, 'sidebar-chat-rail-' + chat.id);
+    const base = keyedNode(rail, 'sidebar-chat-rail-base-' + chat.id);
+    const indicator = keyedNode(rail, 'sidebar-chat-rail-indicator-' + chat.id);
+    assert.equal(hover.type, 'HoverRegion');
+    assert.equal(hover.props.onHover, undefined, 'The host renders transitions without JS frame dispatch');
+    assert.equal(rail.type, 'Box');
+    assert.equal(rail.props.width, 20);
+    assert.equal(rail.props.height, 34);
+    assert.equal(rail.props.contentAlignment, 'center');
+    assert.equal(base.type, 'Box');
+    assert.equal(base.props.width, 1);
+    assert.equal(base.props.height, 34);
+    assert.equal(base.props.backgroundColor.__colorToken, 'outlineVariant');
+    assert.equal(base.props.backgroundColor.alpha, 0.45);
+    assert.equal(indicator.type, 'Box');
+    assert.equal(indicator.props.width, chat.id === 'c1' ? 2 : 1);
+    assert.equal(indicator.props.height, chat.id === 'c1' ? 16 : 0);
+    assert.equal(indicator.props.hoverStyle.width, 2);
+    assert.equal(indicator.props.hoverStyle.height, chat.id === 'c1' ? 16 : 10);
+    assert.equal(indicator.props.backgroundShape.cornerRadius, 1.5);
+    assert.deepEqual(JSON.parse(JSON.stringify(indicator.props.animation)), { durationMillis: 160, curve: 'easeOutCubic' });
+    assert.equal(keyedNode(hover, 'sidebar-chat-hit-' + chat.id).type, 'Row');
+  }
+  const { tree: selected } = screen.update(context(chats, { currentChatId: 'c2' }));
+  assert.equal(keyedNode(selected, 'sidebar-chat-rail-indicator-c1').props.height, 0);
+  assert.equal(keyedNode(selected, 'sidebar-chat-rail-indicator-c1').props.hoverStyle.height, 10);
+  assert.equal(keyedNode(selected, 'sidebar-chat-rail-indicator-c2').props.height, 16);
+  assert.equal(keyedNode(selected, 'sidebar-chat-rail-indicator-c2').props.hoverStyle.height, 16);
+});
+
+test('chat swipe surfaces share the row radius and use compact centered action icons', async () => {
+  const chats = [summary('c1'), summary('c2')], screen = mount(context(chats), catalog(chats));
+  const { tree } = await screen.load();
+  for (const chat of chats) {
+    const hit = keyedNode(tree, 'sidebar-chat-hit-' + chat.id);
+    const swipe = keyedNode(tree, 'sidebar-chat-swipe-' + chat.id);
+    for (const node of [hit, swipe]) {
+      assert.equal(node.props.modifier.__modifierOps.find(op => op.name === 'clip').args[0].cornerRadius, 8);
+    }
+    assert.equal(swipe.props.height, hit.props.height);
+    for (const [slot, alignment, iconName] of [['startBackground', 'start', 'Edit'], ['endBackground', 'end', 'Delete']]) {
+      const background = swipe.slots[slot][0];
+      assert.equal(background.props.contentAlignment, alignment);
+      const icon = composeNodes(background, node => node.type === 'Icon')[0];
+      assert.equal(icon.props.name, iconName);
+      assert.equal(icon.props.size, 18);
+      assert.equal(icon.props.width, 18);
+      assert.equal(icon.props.height, 18);
+    }
+  }
+});
+
+test('chat selection changes decoration values without replacing the ripple modifier hierarchy', async () => {
+  const chats = [summary('c1'), summary('c2')], screen = mount(context(chats), catalog(chats));
+  const before = await screen.load();
+  const update = screen.update(context(chats, { currentChatId: 'c2' }));
+  const after = await screen.dispatch(update.tree.props.onInputsChanged);
+  const ops = (tree, id) => keyedNode(tree, 'sidebar-chat-hit-' + id).props.modifier.__modifierOps;
+  const expected = ['clip', 'background', 'border', 'combinedClickable'];
+  for (const id of ['c1', 'c2']) {
+    assert.deepEqual(Array.from(ops(before.tree, id), op => op.name), expected);
+    assert.deepEqual(Array.from(ops(after.tree, id), op => op.name), expected);
+    const background = values => values.find(op => op.name === 'background').args[0].alpha;
+    const border = values => values.find(op => op.name === 'border').args[1].alpha;
+    assert.equal(background(ops(before.tree, id)), id === 'c1' ? 0.78 : 0);
+    assert.equal(background(ops(after.tree, id)), id === 'c2' ? 0.78 : 0);
+    assert.equal(border(ops(before.tree, id)), id === 'c1' ? 0.08 : 0);
+    assert.equal(border(ops(after.tree, id)), id === 'c2' ? 0.08 : 0);
+  }
 });
 
 test('native group collapse keeps the category and other conversations visible', async () => {
@@ -176,6 +249,36 @@ test('plugin menu delegates pin and lock to the real SDK interface, not native b
   await screen.dispatch(selected, 1);
   await screen.dispatch(selected, 2);
   assert.deepEqual(mutations, [['pin', 'c1', true], ['lock', 'c1', true]]);
+});
+
+test('long-press pin survives concurrent host reorder and closes the action dialog', async () => {
+  let chats = [summary('c1'), summary('c2'), summary('c3')], screen;
+  const mutations = [];
+  screen = mount(context(chats), catalog(chats), {
+    catalog: async request => catalog(request.chatSidebar.chats),
+    chat: { updatePinned: async (id, pinned) => {
+      mutations.push([id, pinned]);
+      chats = chats.map(chat => ({ ...chat, pinned: chat.id === id ? pinned : chat.pinned }))
+        .sort((a, b) => Number(b.pinned) - Number(a.pinned));
+      const refreshed = screen.update(context(chats));
+      await screen.dispatch(refreshed.tree.props.onInputsChanged);
+      return '';
+    } },
+  });
+  const loaded = await screen.load();
+  const longPress = keyedNode(loaded.tree, 'sidebar-chat-hit-c2').props.modifier.__modifierOps
+    .find(op => op.name === 'combinedClickable').args[0].onLongClick;
+  const opened = await screen.dispatch(longPress);
+  const tile = composeNodes(opened.tree, node => node.type === 'Surface' && node.props.onClick
+    && composeNodes(node, child => child.type === 'Text' && child.props.text === '置顶').length > 0)[0];
+  assert.ok(tile, 'Long press must expose the genuine plugin pin action');
+  const result = await screen.dispatch(tile.props.onClick);
+  assert.deepEqual(mutations, [['c2', true]]);
+  assert.equal(result.state['native-sidebar-state'].dialog, null, result.state['native-sidebar-state'].error);
+  assert.equal(result.state['native-sidebar-state'].busy, false);
+  assert.equal(result.state['native-sidebar-state'].loading, false);
+  assert.equal(composeNodes(result.tree, node => node.type === 'Dialog').length, 0);
+  for (const chat of chats) assert.ok(keyedNode(result.tree, 'sidebar-chat-' + chat.id));
 });
 
 test('generic drop commits native membership before canonical order, and refuses stale IDs', async () => {
@@ -257,7 +360,7 @@ test('live metadata refresh retains rows, menus, search and collapse without a l
   assert.equal(composeNodes(changed.tree,node => node.type === 'LoadingIndicator').length,0);
   assert.ok(keyedNode(changed.tree,'sidebar-chat-c1'));
   assert.ok(keyedNode(changed.tree,'sidebar-search'));
-  assert.equal(composeNodes(changed.tree,node => node.type === 'Text' && node.props.text === 'Updated c1').length,1);
+  assert.equal(keyedNode(changed.tree,'sidebar-chat-title-c1').props.text,'Updated c1');
   const refreshing=screen.dispatch(changed.tree.props.onInputsChanged);
   const during=screen.render();
   assert.equal(during.state['native-sidebar-state'].loading,false);
@@ -313,4 +416,31 @@ test('custom avatars overlap file reads with bounded concurrency', async () => {
   assert.equal(reads, 17);
   assert.equal(maximum, 8);
   assert.equal(keyedNode(tree, 'sidebar-avatar-card:avatar-16').props.uri, 'data:image/png;base64,iVBORw0KGgo=');
+});
+
+
+test('prepared role data and avatars appear in the first DSL tree before IPC completes', async () => {
+  const chats = [summary('c1')], current = context(chats), data = catalog(chats);
+  const chatSidebarPrepared = { context: JSON.stringify({ input: current.input, chats }), data,
+    defaultAvatar: 'data:image/png;base64,iVBORw0KGgo=' };
+  let finish;
+  const pending = new Promise(resolve => { finish = resolve; });
+  const session = mount({ ...current, chatSidebarPrepared }, data, { catalog: () => pending });
+  assert.ok(keyedNode(session.first.tree, 'sidebar-section-card:travel'), 'First tree must already contain a role category');
+  assert.equal(session.calls.length, 0, 'First tree must not depend on a backend read');
+  const loading = session.load();
+  await Promise.resolve();
+  assert.equal(session.calls.filter(call => call.name === 'character-sidebar.catalog').length, 1, 'Warm state must still revalidate');
+  finish({ view: 'characters', sections: [] });
+  await loading;
+  assert.equal(composeNodes(session.render().tree, node => node.props?.key === 'sidebar-section-card:travel').length, 0,
+    'Fresh catalog must replace stale prepared roles');
+});
+
+test('prepared sidebar for different history is ignored instead of displaying stale groups', () => {
+  const chats = [summary('c1')], current = context(chats);
+  const chatSidebarPrepared = { context: JSON.stringify({ input: current.input, chats: [summary('c2')] }),
+    data: catalog([summary('c2')]), defaultAvatar: null };
+  const session = mount({ ...current, chatSidebarPrepared }, catalog(chats));
+  assert.equal(composeNodes(session.first.tree, node => node.props?.key === 'sidebar-section-card:travel').length, 0);
 });

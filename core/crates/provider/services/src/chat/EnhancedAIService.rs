@@ -1278,11 +1278,9 @@ impl EnhancedAIService {
             introPrompt,
             waifuRulesText: String::new(),
             avatarMoodRulesText: String::new(),
-            disableUserPreferenceDescription: self
-                .provider_runtime_context
-                .support()
-                .disableUserPreferenceDescription()
-                .map_err(AiServiceError::RequestFailed)?,
+            // The plugin execution profile already applies its persisted USER.md policy.
+            // Do not let the retired Core preference silently veto the plugin's switch.
+            disableUserPreferenceDescription: false,
             aiName,
             hasImageRecognition: modelConfig.capabilities.directImage,
             hasAudioRecognition: modelConfig.capabilities.directAudio,

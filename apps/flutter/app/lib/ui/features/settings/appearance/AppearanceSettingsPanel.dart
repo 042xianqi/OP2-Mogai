@@ -11,6 +11,7 @@ import '../../../../data/preferences/UserPreferencesManager.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../chat/components/style/bubble/BubbleSurface.dart';
 import '../../../common/components/OperitDialog.dart';
+import '../../../common/layout/ApplicationZoom.dart';
 import '../../../theme/OperitGlassSurface.dart';
 import '../../../theme/OperitTheme.dart';
 import '../../../theme/OperitThemeAssets.dart';
@@ -64,6 +65,7 @@ class AppearanceSettingsPanel extends StatelessWidget {
     OperitThemeController themeController,
     ThemePreferenceSnapshot snapshot,
   ) {
+    final applicationZoom = ApplicationZoomScope.of(context);
     final hasCustomFont =
         snapshot.customFontPath != null && snapshot.customFontPath!.isNotEmpty;
     return _ResponsivePreviewSplitTabView(
@@ -175,6 +177,23 @@ class AppearanceSettingsPanel extends StatelessWidget {
                     },
                   ),
               ],
+            ),
+            const SizedBox(height: 8),
+            SettingsSliderRow(
+              icon: Icons.zoom_in_outlined,
+              label: l10n.settingsAppearanceInterfaceScale,
+              value: ApplicationZoom.levels
+                  .indexOf(applicationZoom.zoom)
+                  .toDouble(),
+              min: 0,
+              max: (ApplicationZoom.levels.length - 1).toDouble(),
+              divisions: ApplicationZoom.levels.length - 1,
+              valueText: '${(applicationZoom.zoom * 100).round()}%',
+              onChanged: (value) {
+                applicationZoom.onZoomChanged(
+                  ApplicationZoom.levels[value.round()],
+                );
+              },
             ),
             const SizedBox(height: 8),
             SettingsSliderRow(

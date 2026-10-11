@@ -154,7 +154,7 @@ export async function createDiskHarness(testContext) {
         try {
           for (const collection of schema.collections) sql.prepare("DELETE FROM records WHERE collection=?").run(collection);
           for (const row of schema.records(state)) sql.prepare("INSERT INTO records VALUES(?,?,?,?)").run(row.collection, row.key, JSON.stringify(row.value), "test-edit");
-          sql.prepare("UPDATE records SET value=?,version='test-edit' WHERE collection='meta' AND key='state'").run(JSON.stringify({ version: state.version, nextId: state.nextId, active: state.active }));
+          sql.prepare("UPDATE records SET value=?,version='test-edit' WHERE collection='meta' AND key='state'").run(JSON.stringify({ version: state.version, nextId: state.nextId, active: state.active, memoryPreferences: state.memoryPreferences }));
           sql.exec("COMMIT");
         } catch (error) { sql.exec("ROLLBACK"); throw error; }
       });

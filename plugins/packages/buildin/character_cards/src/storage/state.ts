@@ -2,7 +2,7 @@ import type { CharacterState, MemorySpace, Card } from "../model";
 import { operitDefaultContent } from "../default-character";
 import { createCharacterDraft } from "../drafts";
 import { assertEmbedding } from "../memory-jobs/embeddings";
-import { assertCard, assertConversationGroups, assertGroup, assertInteger, assertMemory, assertMemoryChatMessage, assertMemorySettings, assertNumber, assertObject, assertSearchConfig, assertString, assertTag, requireDecimal, requireId } from "../validation";
+import { assertBoolean, assertCard, assertConversationGroups, assertGroup, assertInteger, assertMemory, assertMemoryChatMessage, assertMemorySettings, assertNumber, assertObject, assertSearchConfig, assertString, assertTag, requireDecimal, requireId } from "../validation";
 
 /** Creates the actual product default on first installation or explicit reset only. */
 export function createDefaultCharacter(now: number): Card {
@@ -22,7 +22,7 @@ export function createMemorySpace(ownerKey: string): MemorySpace {
 }
 /** Creates first-install domain state without reading or migrating Core records. */
 export function createInitialState(now: number): CharacterState {
-  return { version: 3, conversationGroups: [], nextId: "1", cards: [createDefaultCharacter(now)], groups: [], tags: [], stores: [], active: { CharacterCard: { id: "default" } }, owners: [createMemorySpace("character:default")] };
+  return { version: 3, memoryPreferences: { userDescriptionEnabled: true, autoUpdateEnabled: true }, conversationGroups: [], nextId: "1", cards: [createDefaultCharacter(now)], groups: [], tags: [], stores: [], active: { CharacterCard: { id: "default" } }, owners: [createMemorySpace("character:default")] };
 }
 /** Requires a real array instead of supplying missing persisted records. */
 function array(value: unknown, label: string): asserts value is unknown[] {
@@ -43,8 +43,11 @@ function identities(records: unknown[], label: string): Set<string> {
 export function assertCharacterState(value: unknown): asserts value is CharacterState {
   assertObject(value, "character state");
   if (value.version !== 3) throw new Error("Unsupported character database version");
-  const fields = new Set(["version", "nextId", "cards", "groups", "tags", "stores", "active", "owners", "conversationGroups"]);
+  const fields = new Set(["memoryPreferences", "version", "nextId", "cards", "groups", "tags", "stores", "active", "owners", "conversationGroups"]);
   for (const key of Object.keys(value)) if (!fields.has(key)) throw new Error("Unsupported character state field: " + key);
+  assertObject(value.memoryPreferences, "global memory preferences");
+  assertBoolean(value.memoryPreferences.userDescriptionEnabled, "user description enabled");
+  assertBoolean(value.memoryPreferences.autoUpdateEnabled, "auto update enabled");
   const nextId = BigInt(requireDecimal(value.nextId, "nextId", true));
   assertConversationGroups(value.conversationGroups);
   for (const group of value.conversationGroups) if (BigInt(group.id) >= nextId) throw new Error("nextId does not exceed the conversation group identity");

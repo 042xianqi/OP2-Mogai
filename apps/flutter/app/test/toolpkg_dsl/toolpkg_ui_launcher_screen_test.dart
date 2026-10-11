@@ -1,4 +1,5 @@
 import '../support/compose_session_fixture.dart';
+import 'package:operit2/core/application/PluginHotReload.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:operit2/data/preferences/UserPreferencesManager.dart';
@@ -524,6 +525,105 @@ void main() {
     },
   );
 
+  for (final size in <Size>[const Size(800, 600), const Size(390, 844)]) {
+    testWidgets('plugin-owned native dialog covers the window at $size', (
+      tester,
+    ) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = size;
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPhysicalSize);
+      final bridge = _ToolPkgDslTestBridge(
+        renderResult: (count) => jsonEncode({
+          'success': true,
+          'tree': _node(
+            'Dialog',
+            props: {
+              'key': 'character-presentation',
+              'closeOnDismissRequest': false,
+              'properties': {
+                'fullscreen': count > 0,
+                'usePlatformDefaultWidth': false,
+                'dismissOnClickOutside': false,
+              },
+            },
+            children: [
+              _node(
+                'Column',
+                props: {
+                  if (count > 0) 'fillMaxSize': true,
+                  if (count == 0) 'width': 760,
+                  if (count == 0) 'height': 820,
+                },
+                children: [
+                  _node(
+                    'Row',
+                    props: {'fillMaxWidth': true},
+                    children: [
+                      _node('Text', props: {'text': '角色卡预览', 'weight': 1}),
+                      _node(
+                        'TextButton',
+                        props: {
+                          'text': '全屏',
+                          'onClick': {'__actionId': 'increment'},
+                        },
+                      ),
+                    ],
+                  ),
+                  _node(
+                    'LazyColumn',
+                    props: {'weight': 1, 'fillMaxWidth': true},
+                    children: [
+                      for (var index = 0; index < 30; index++)
+                        _node(
+                          'Text',
+                          props: {
+                            'text': 'Native content $index',
+                            'height': 48,
+                          },
+                        ),
+                    ],
+                  ),
+                  _node(
+                    'TextButton',
+                    props: {
+                      'text': '关闭',
+                      'onClick': {'__actionId': 'close'},
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ),
+        }),
+      );
+      await tester.pumpWidget(
+        _screen(bridge, dialogTitle: '宿主角色卡', showLauncherChrome: false),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(Dialog), findsOneWidget);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.text('宿主角色卡'), findsNothing);
+      expect(find.text('角色卡预览'), findsOneWidget);
+      expect(find.text('关闭'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.text('全屏'));
+      await tester.pumpAndSettle();
+      expect(find.byType(Dialog), findsOneWidget);
+      expect(find.byType(AlertDialog), findsNothing);
+      final bounds = tester.getRect(find.byType(Dialog));
+      expect(bounds.topLeft, Offset.zero);
+      expect(bounds.size, size);
+      expect(
+        tester.getRect(find.text('关闭')).bottom,
+        lessThanOrEqualTo(size.height),
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    });
+  }
+
   testWidgets('keeps alert dialog open according to close policy', (
     tester,
   ) async {
@@ -910,6 +1010,200 @@ void main() {
       'toolpkg:com.operit.sidebar_model_sites:ui:model_sites_viewer',
     ]);
   });
+
+  testWidgets('Flutter reassemble opens a fresh usable Compose session', (
+    tester,
+  ) async {
+    final bridge = _ToolPkgDslTestBridge();
+    await tester.pumpWidget(_screen(bridge));
+    await tester.pumpAndSettle();
+    expect(bridge._sessions.length, 1);
+    final reassemble = tester.binding.reassembleApplication();
+    await tester.pump();
+    await reassemble;
+    await _pumpComposeReload(tester);
+    expect(bridge._sessions.length, 2);
+    expect(bridge._sessions.values.first.updates.isClosed, isTrue);
+    expect(bridge._sessions.values.last.updates.isClosed, isFalse);
+    await tester.tap(find.text('Increment'));
+    await tester.pumpAndSettle();
+    expect(find.text('Counter: 1'), findsOneWidget);
+    expect(find.textContaining('stream closed'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'reload invalidates a pending action before closing the old update stream',
+    (tester) async {
+      final results = <Object?>[];
+      final bridge = _ToolPkgDslTestBridge(holdActionCompletion: true);
+      await tester.pumpWidget(_screen(bridge, onActionResult: results.add));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Increment'));
+      await tester.pumpAndSettle();
+      final oldCompletion = bridge.actionCompletion!;
+      final reassemble = tester.binding.reassembleApplication();
+      await tester.pump();
+      await reassemble;
+      await _pumpComposeReload(tester);
+      expect(bridge._sessions.length, 2);
+      expect(find.textContaining('stream closed'), findsNothing);
+      oldCompletion.complete();
+      await tester.pumpAndSettle();
+      expect(results, isEmpty);
+      await tester.tap(find.text('Increment'));
+      await tester.pumpAndSettle();
+      bridge.actionCompletion!.complete();
+      await tester.pumpAndSettle();
+      expect(find.text('Counter: 2'), findsOneWidget);
+      expect(results, hasLength(1));
+      expect(find.textContaining('stream closed'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('consecutive package reloads retire the old session only once', (
+    tester,
+  ) async {
+    final bridge = _ToolPkgDslTestBridge();
+    await tester.pumpWidget(_screen(bridge));
+    await tester.pumpAndSettle();
+    PluginHotReload.revision.value++;
+    PluginHotReload.revision.value++;
+    await _pumpComposeReload(tester);
+    expect(bridge._sessions.length, 2);
+    expect(
+      bridge.calls.where(
+        (call) => call.methodName == 'releaseToolPkgExecutionEngine',
+      ),
+      hasLength(1),
+    );
+    expect(bridge._sessions.values.first.updates.isClosed, isTrue);
+    expect(bridge._sessions.values.last.updates.isClosed, isFalse);
+    await tester.tap(find.text('Increment'));
+    await tester.pumpAndSettle();
+    expect(find.text('Counter: 1'), findsOneWidget);
+    expect(find.textContaining('stream closed'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('reload retires a pending initial render before loading again', (
+    tester,
+  ) async {
+    final oldRender = Completer<String>();
+    final bridge = _ToolPkgDslTestBridge()..renderCompletion = oldRender;
+    await tester.pumpWidget(_screen(bridge));
+    await tester.pump();
+    expect(bridge._sessions.length, 1);
+    bridge.renderCompletion = null;
+    final reassemble = tester.binding.reassembleApplication();
+    await tester.pump();
+    await reassemble;
+    await _pumpComposeReload(tester);
+    expect(bridge._sessions.length, 2);
+    expect(find.text('Counter: 0'), findsOneWidget);
+    oldRender.complete(_counterRenderResult(99));
+    await tester.pumpAndSettle();
+    expect(find.text('Counter: 99'), findsNothing);
+    await tester.tap(find.text('Increment'));
+    await tester.pumpAndSettle();
+    expect(find.text('Counter: 1'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'reload during release waits and acquires only the latest session',
+    (tester) async {
+      final bridge = _ToolPkgDslTestBridge();
+      await tester.pumpWidget(_screen(bridge));
+      await tester.pumpAndSettle();
+      final release = Completer<void>();
+      bridge.releaseCompletion = release;
+      PluginHotReload.revision.value++;
+      await _pumpComposeReload(tester, settle: false);
+      expect(
+        bridge.calls.where(
+          (call) => call.methodName == 'releaseToolPkgExecutionEngine',
+        ),
+        hasLength(1),
+      );
+      PluginHotReload.revision.value++;
+      await _pumpComposeReload(tester, settle: false);
+      expect(bridge._sessions.length, 1);
+      bridge.releaseCompletion = null;
+      release.complete();
+      await _pumpComposeReload(tester);
+      expect(bridge._sessions.length, 2);
+      expect(
+        bridge.calls.where(
+          (call) => call.methodName == 'releaseToolPkgExecutionEngine',
+        ),
+        hasLength(1),
+      );
+      await tester.tap(find.text('Increment'));
+      await tester.pumpAndSettle();
+      expect(find.text('Counter: 1'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'leaving during reload releases once without opening a new session',
+    (tester) async {
+      final bridge = _ToolPkgDslTestBridge();
+      await tester.pumpWidget(_screen(bridge));
+      await tester.pumpAndSettle();
+      final release = Completer<void>();
+      bridge.releaseCompletion = release;
+      PluginHotReload.revision.value++;
+      await _pumpComposeReload(tester, settle: false);
+      await tester.pumpWidget(const SizedBox());
+      bridge.releaseCompletion = null;
+      release.complete();
+      await _pumpComposeReload(tester);
+      expect(bridge._sessions.length, 1);
+      expect(bridge._sessions.values.single.updates.isClosed, isTrue);
+      expect(
+        bridge.calls.where(
+          (call) => call.methodName == 'releaseToolPkgExecutionEngine',
+        ),
+        hasLength(1),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'early native attachment error is preserved and reload starts a usable session',
+    (tester) async {
+      final script = Completer<String>();
+      const nativeError = 'Compose session does not exist or has closed';
+      final bridge = _ToolPkgDslTestBridge(attachmentError: nativeError)
+        ..scriptCompletion = script;
+      await tester.pumpWidget(_screen(bridge));
+      await tester.pump();
+      await tester.pump();
+      script.complete('export default function render() {}');
+      await tester.pumpAndSettle();
+      expect(find.textContaining(nativeError), findsOneWidget);
+      expect(find.textContaining('update stream closed'), findsNothing);
+      expect(
+        bridge.calls.where((call) => call.methodName == 'render'),
+        isEmpty,
+        reason:
+            'Commands cannot be sent after the native attachment has already failed',
+      );
+      bridge.attachmentError = null;
+      bridge.scriptCompletion = null;
+      PluginHotReload.revision.value++;
+      await _pumpComposeReload(tester);
+      expect(find.textContaining(nativeError), findsNothing);
+      await tester.tap(find.text('Increment'));
+      await tester.pumpAndSettle();
+      expect(find.text('Counter: 1'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'premature action stream closure reports failure without publishing success',
@@ -2015,12 +2309,28 @@ void main() {
   });
 }
 
+/// Flushes stream teardown, including Dart's cached cancellation future which
+/// can originate outside the widget test's fake-async zone.
+Future<void> _pumpComposeReload(
+  WidgetTester tester, {
+  bool settle = true,
+}) async {
+  for (var i = 0; i < 3; i++) {
+    await tester.pump();
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+  }
+  if (settle) await tester.pumpAndSettle();
+}
+
 Widget _screen(
   _ToolPkgDslTestBridge bridge, {
   core_proxy.ToolPkgContainerRuntime? plugin,
   String? initialRouteId,
   String? embeddedScreenPath,
   Map<String, Object?>? initialModuleSpec,
+  ValueChanged<Object?>? onActionResult,
+  String? dialogTitle,
+  bool showLauncherChrome = true,
 }) {
   return MaterialApp(
     home: ToolPkgUiLauncherScreen(
@@ -2029,6 +2339,9 @@ Widget _screen(
       initialRouteId: initialRouteId,
       embeddedScreenPath: embeddedScreenPath,
       initialModuleSpec: initialModuleSpec,
+      onActionResult: onActionResult,
+      dialogTitle: dialogTitle,
+      showLauncherChrome: showLauncherChrome,
     ),
   );
 }
@@ -2230,6 +2543,7 @@ class _ToolPkgDslTestBridge extends OperitRuntimeBridge {
     String Function(int count)? renderResult,
     this.holdActionCompletion = false,
     this.closeBeforeActionComplete = false,
+    this.attachmentError,
     this.onAction,
   }) : _renderResult = renderResult ?? _counterRenderResult;
 
@@ -2239,7 +2553,10 @@ class _ToolPkgDslTestBridge extends OperitRuntimeBridge {
   final bool closeBeforeActionComplete;
   final void Function(Map<String, Object?>)? onAction;
   Completer<void>? actionCompletion;
+  String? attachmentError;
+  Completer<String>? scriptCompletion;
   Completer<String>? renderCompletion;
+  Completer<void>? releaseCompletion;
   var _count = 0;
   var _checked = false;
   final _sessions = <String, _DslFixtureSession>{};
@@ -2302,9 +2619,13 @@ class _ToolPkgDslTestBridge extends OperitRuntimeBridge {
         await _sessions[id]!.updates.close();
         return null;
       case 'acquireToolPkgExecutionEngine':
+        return null;
       case 'releaseToolPkgExecutionEngine':
+        final pending = releaseCompletion;
+        if (pending != null) await pending.future;
         return null;
       case 'getToolPkgComposeDslScript':
+        if (scriptCompletion != null) return await scriptCompletion!.future;
         return 'export default function render() {}';
       case 'readToolPkgTextResource':
         return 'export default function render() {}';
@@ -2457,6 +2778,28 @@ class _ToolPkgDslTestBridge extends OperitRuntimeBridge {
       throw StateError('unexpected watch: ${request.propertyName}');
     final session = _sessions[(request.args as Map)['sessionId']]!;
     session.target = request.target;
+    final error = attachmentError;
+    if (error != null) {
+      return Stream.value(
+        CoreEvent.raw(
+          requestId: request.requestId,
+          target: request.target,
+          propertyName: request.propertyName,
+          kind: 'Changed',
+          decodeValue: decodeCoreLink<Object?>,
+          valueBytes: encodeCoreLink(
+            core_proxy.ToolPkgComposeDslEvent(
+              requestId: '',
+              phase: 'sessionError',
+              update: null,
+              actionResult: null,
+              navigationCommands: const [],
+              error: error,
+            ).toJson(),
+          ),
+        ),
+      );
+    }
     return session.updates.stream.map(
       (event) => CoreEvent.raw(
         requestId: request.requestId,

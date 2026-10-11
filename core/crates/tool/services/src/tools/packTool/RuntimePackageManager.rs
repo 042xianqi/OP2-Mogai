@@ -6,6 +6,10 @@ pub use package_registry_readiness::{PackageRegistryLoadState, PackageRegistryRe
 mod core_command_catalog;
 pub use core_command_catalog::{ResolvedToolPkgCoreCommand, ToolPkgCoreCommandCatalog, ToolPkgCoreCommandRegistrationInfo};
 
+#[path = "ToolPkgTextResourceCache.rs"]
+mod text_resource_cache;
+use text_resource_cache::{read_text_resources, ToolPkgTextResourceCache};
+
 use crate::tools::packTool::ToolPkgPublicApiUiCatalog::{discover_public_api_owners, ToolPkgPublicApiOwner};
 
 use operit_store::ExtensionStore::{ExtensionRecord, ExtensionStore};
@@ -258,6 +262,7 @@ pub struct RuntimePackageManager {
     toolPkgLoadIssues: Vec<ToolPkgLoadIssue>,
     manualToolPkgLoadIssues: Vec<ToolPkgLoadIssue>,
     toolPkgCacheLock: Arc<Mutex<()>>,
+    toolPkgTextResourceCache: Arc<ToolPkgTextResourceCache>,
     packageRegistryReadiness: PackageRegistryReadiness,
     scopeState: Arc<Mutex<BTreeMap<String, ExtensionRecord>>>,
     toolPkgExecutionEngineFactory: Arc<dyn ToolPkgExecutionEngineFactory>,
@@ -304,6 +309,7 @@ impl RuntimePackageManager {
             toolPkgLoadIssues: Vec::new(),
             manualToolPkgLoadIssues: Vec::new(),
             toolPkgCacheLock: Arc::new(Mutex::new(())),
+            toolPkgTextResourceCache: Arc::new(ToolPkgTextResourceCache::default()),
             packageRegistryReadiness: PackageRegistryReadiness::new(),
             scopeState: Arc::new(Mutex::new(BTreeMap::new())),
             toolPkgExecutionEngineFactory,
@@ -474,15 +480,20 @@ impl RuntimePackageManager {
     /// Resolves the same application session for every automatic object-proxy access.
     pub fn openComposeDslSession(&self, contextKey: &str, containerPackageName: &str) -> Result<String, String> {
         let key = (contextKey.to_string(), containerPackageName.to_string());
+        {
+            let sessions = self.composeDslSessions.lock().expect("Compose session registry mutex poisoned");
+            if let Some(session) = sessions.get(&key) {
+                if !session.isClosed() { return Ok(session.id()); }
+            }
+        }
+        let engine = self.findToolPkgExecutionEngine(contextKey, containerPackageName)
+            .ok_or("Compose execution context has not been acquired or has been released")?;
+        // Resource I/O must not hold the session registry lock or block other pages' releases.
+        let resources = self.toolPkgTextResources(containerPackageName)?;
         let mut sessions = self.composeDslSessions.lock().expect("Compose session registry mutex poisoned");
-        if let Some(session) = sessions.get(&key) { return Ok(session.id()); }
-        let session = ToolPkgComposeDslSession::new(
-            self.findToolPkgExecutionEngine(contextKey, containerPackageName)
-                .ok_or("Compose execution context has not been acquired or has been released")?,
-            self.toolPkgTextResources(containerPackageName)?,
-        );
-        sessions.insert(key, session.clone());
-        Ok(session.id())
+        openComposeDslSessionForContext(&mut sessions, key, || {
+            Ok(ToolPkgComposeDslSession::new(engine, resources))
+        })
     }
 
     #[allow(non_snake_case)]
@@ -619,6 +630,7 @@ impl RuntimePackageManager {
 
     #[allow(non_snake_case)]
     fn deleteToolPkgCacheDir(&self, packageName: &str) {
+        self.toolPkgTextResourceCache.invalidate(packageName);
         let _guard = self
             .toolPkgCacheLock
             .lock()
@@ -812,39 +824,45 @@ impl RuntimePackageManager {
         )
     }
 
-    /// Collects immutable UTF-8 ToolPkg entries for module resolution without host reentry.
+    /// Shares immutable text resources across sessions of the same package revision.
     #[allow(non_snake_case)]
     pub fn toolPkgTextResources(
         &self,
         containerPackageName: &str,
     ) -> Result<Arc<BTreeMap<String, String>>, String> {
-        let normalizedContainerPackageName = self.normalizePackageName(containerPackageName);
-        let runtime = self
-            .toolPkgManager()
-            .getToolPkgContainerRuntime(&normalizedContainerPackageName)
-            .ok_or_else(|| {
-                format!(
-                    "ToolPkg container package is not registered: {normalizedContainerPackageName}"
-                )
-            })?;
-        let cacheDir = self.ensureToolPkgCache(&runtime).ok_or_else(|| {
-            format!("ToolPkg package cache is unavailable: {normalizedContainerPackageName}")
-        })?;
-        let entryIndex = ToolPkgArchiveParser::buildDirectoryEntryIndex(
-            self.fileSystemHost.as_ref(),
-            &hostPath(&cacheDir),
-        );
-        let mut textResources = BTreeMap::new();
-        for entryName in entryIndex.entryNames {
-            let Some(bytes) = self.readToolPkgResourceBytes(&runtime, &entryName) else {
-                continue;
-            };
-            let Ok(text) = String::from_utf8(bytes) else {
-                continue;
-            };
-            textResources.insert(entryName.to_ascii_lowercase(), text);
-        }
-        Ok(Arc::new(textResources))
+        let started = std::time::Instant::now();
+        let packageName = self.normalizePackageName(containerPackageName);
+        let runtime = self.toolPkgManager().getToolPkgContainerRuntime(&packageName)
+            .ok_or_else(|| format!("ToolPkg container package is not registered: {packageName}"))?;
+        let signature = self.buildToolPkgCacheSignatureForRuntime(&runtime)
+            .ok_or_else(|| format!("ToolPkg package source is unavailable: {packageName}"))?;
+        let (resources, cacheHit) = self.toolPkgTextResourceCache.get_or_load(
+            &packageName,
+            &signature,
+            || {
+                // Validate/extract once for this batch. Reading each cached file must
+                // not rehash the archive or recheck its on-disk signature.
+                let directorySource = runtime.sourceType != ToolPkgSourceType::ASSET
+                    && self.fileSystemHost.fileExists(&runtime.sourcePath)
+                        .map_err(|error| error.to_string())?.isDirectory;
+                let cacheDir = if directorySource {
+                    // Reload directory sources from their actual files; changing a
+                    // child need not change the source directory's cached signature.
+                    PathBuf::from(&runtime.sourcePath)
+                } else {
+                    self.ensureToolPkgCacheDir(
+                        &packageName, &signature, &runtime.mainEntry,
+                        |destination| self.extractToolPkgArchive(&runtime, destination),
+                    ).ok_or_else(|| format!("ToolPkg package cache is unavailable: {packageName}"))?
+                };
+                read_text_resources(self.fileSystemHost.as_ref(), &cacheDir)
+            },
+        )?;
+        AppLogger::i(PACKAGE_MANAGER_LOG_TAG, &format!(
+            "event=compose_text_resources package={packageName} cacheHit={cacheHit} entries={} elapsedMs={:.1}",
+            resources.len(), started.elapsed().as_secs_f64() * 1000.0,
+        ));
+        Ok(resources)
     }
 
     #[allow(non_snake_case)]
@@ -2284,10 +2302,12 @@ impl RuntimePackageManager {
             );
             return false;
         }
+        let packageName = loadResult.containerRuntime.packageName.clone();
         let registered = self.pluginPackageManager.registerToolPkg(loadResult);
         if !registered {
             return false;
         }
+        self.toolPkgTextResourceCache.invalidate(&packageName);
         self.notifyToolPkgRuntimeChangeListeners();
         true
     }
@@ -2304,6 +2324,9 @@ impl RuntimePackageManager {
     pub(crate) fn notifyToolPkgRuntimeChangeListeners(&self) {
         let toolPkgManager = self.toolPkgManager().clone();
         let activeContainers = self.getEnabledToolPkgContainerRuntimes();
+        self.toolPkgTextResourceCache.retain_packages(
+            &activeContainers.iter().map(|runtime| runtime.packageName.clone()).collect(),
+        );
         let scheduler = self
             .context
             .hostRuntimeTaskSchedulerHost
@@ -3238,6 +3261,9 @@ impl RuntimePackageManager {
                 snapshot.availablePackages.remove(&name);
             }
         }
+        // A reload also invalidates directory sources whose child files can change
+        // without changing the parent directory metadata or declared package version.
+        self.toolPkgTextResourceCache.clear();
         self.pluginPackageManager
             .replaceAvailablePackages(snapshot.availablePackages);
         self.pluginPackageManager
@@ -5642,4 +5668,23 @@ mod bundled_source_retirement_tests {
         assert_eq!(validateRetiredBundledSource(&record, "user-edit").unwrap_err(),
             "Removed bundled source 'daily_life.js' was modified locally; resolve its installation explicitly");
     }
+}
+
+/// Applies the package manager's context cache policy independently of transport attachment.
+#[allow(non_snake_case)]
+pub(crate) fn openComposeDslSessionForContext(
+    sessions: &mut BTreeMap<(String, String), ToolPkgComposeDslSession>,
+    key: (String, String),
+    create: impl FnOnce() -> Result<ToolPkgComposeDslSession, String>,
+) -> Result<String, String> {
+    if let Some(session) = sessions.get(&key) {
+        if !session.isClosed() { return Ok(session.id()); }
+    }
+    // Closing the command producer removes the capability registry entry, but
+    // the package manager can survive a Dart isolate and still hold this cache.
+    sessions.remove(&key);
+    let session = create()?;
+    let id = session.id();
+    sessions.insert(key, session);
+    Ok(id)
 }

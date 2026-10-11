@@ -2082,19 +2082,22 @@ pub enum ToolPkgNavigationSurface {
     /// Embeds a package-owned Compose DSL row in the chat input menu above native statistics.
     #[serde(rename = "chat_input_menu")]
     ChatInputMenu,
+    /// Embeds a package-owned Compose DSL section below chat statistics and above native controls.
+    #[serde(rename = "chat_input_menu_sections")]
+    ChatInputMenuSections,
 }
 /// Describes a plugin action exposed through a host navigation surface.
 pub struct ToolPkgNavigationEntryRegistration {
     /// Uniquely identifies this navigation entry registration within the package.
     pub id: String,
-    /// Provides this package's registered UI route; required for chat_attachments, chat_sidebar_tabs and chat_input_menu.
+    /// Provides this package's registered UI route; required for chat_attachments, chat_sidebar_tabs, chat_input_menu and chat_input_menu_sections.
     /// Embedded sidebar and input-menu surfaces require one owned Compose DSL route registered before the navigation entry.
     pub route: Option<String>,
     /// Carries opaque plugin-owned route input without host domain interpretation.
     pub params: Option<ToolPkgJsonValue>,
     /// Selects the host navigation surface containing this entry.
     pub surface: ToolPkgNavigationSurface,
-    /// Supplies navigation callbacks on other surfaces; action is unsupported for chat_attachments, chat_sidebar_tabs and chat_input_menu.
+    /// Supplies navigation callbacks on other surfaces; action is unsupported for chat_attachments, chat_sidebar_tabs, chat_input_menu and chat_input_menu_sections.
     pub action: Option<ToolPkgNavigationEntryActionHookHandler>,
     /// Provides primary text displayed by the host UI.
     pub title: Option<ToolPkgLocalizedText>,

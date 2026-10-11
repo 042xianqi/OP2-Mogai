@@ -2301,8 +2301,46 @@ pub struct FlowRowProps {
     /// Gap inserted between completed horizontal lines.
     pub runSpacing: Option<f64>,
 }
+/// Easing curve for implicit visual transitions.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum ComposeAnimationCurve {
+    /// Interpolates at constant speed.
+    #[serde(rename = "linear")]
+    Linear,
+    /// Decelerates with a cubic curve.
+    #[serde(rename = "easeOutCubic")]
+    EaseOutCubic,
+    /// Accelerates and then decelerates.
+    #[serde(rename = "easeInOut")]
+    EaseInOut,
+    /// Decelerates toward the target.
+    #[serde(rename = "easeOut")]
+    EaseOut,
+}
+/// Generic implicit transition options; animation frames are rendered by the host.
+pub struct ComposeBoxAnimation {
+    /// Transition duration in milliseconds; zero applies changes immediately.
+    pub durationMillis: Option<u32>,
+    /// Easing curve, defaulting to linear.
+    pub curve: Option<ComposeAnimationCurve>,
+}
+/// Visual overrides while the enclosing HoverRegion is hovered or its menu is open.
+pub struct ComposeBoxHoverStyle {
+    /// Overrides the requested width.
+    pub width: Option<f64>,
+    /// Overrides the requested height.
+    pub height: Option<f64>,
+    /// Overrides the solid background paint.
+    pub backgroundColor: Option<ComposeColor>,
+    /// Overrides background corner geometry.
+    pub backgroundShape: Option<ComposeShape>,
+}
 /// Properties for stacking child nodes in the same layout bounds.
 pub struct BoxProps {
+    /// Optional host-rendered transitions for size, background paint and corner geometry.
+    pub animation: Option<ComposeBoxAnimation>,
+    /// Partial visual overrides from the enclosing HoverRegion, independent of touch visibility.
+    pub hoverStyle: Option<ComposeBoxHoverStyle>,
     /// Shared node layout, drawing, identity, and lifecycle properties.
     pub base_compose_common_props: ComposeCommonProps,
     /// Child nodes drawn in stacking order.
@@ -2339,6 +2377,8 @@ pub struct TextProps {
     pub softWrap: Option<bool>,
     /// Rendering behavior for text beyond the available lines or bounds.
     pub overflow: Option<ComposeTextOverflow>,
+    /// Horizontal alignment within the available text width.
+    pub textAlign: Option<String>,
     /// Share of remaining main-axis space when placed in a row or column.
     pub weight: Option<f64>,
 }
@@ -2358,7 +2398,35 @@ pub struct MarkdownProps {
     pub streamTagName: Option<String>,
 }
 /// State, decoration, validation, and typography for an editable text field.
+/// Standard themed input frame for arbitrary plugin-owned content.
+/// Controlled horizontally swipeable pages.
+pub struct HorizontalPagerProps {
+    /// Shared layout and lifecycle properties.
+    pub base_compose_common_props: ComposeCommonProps,
+    /// Selected zero-based page.
+    pub currentPage: i32,
+    /// Receives a user-selected page.
+    pub onPageChanged: Arc<dyn Fn(i32) + Send + Sync>,
+    /// Page content.
+    pub content: Option<ComposeChildren>,
+}
+/// Standard themed input frame for arbitrary plugin-owned content.
+pub struct InputDecoratorProps {
+    /// Shared layout and lifecycle properties.
+    pub base_compose_common_props: ComposeCommonProps,
+    /// Floating field label.
+    pub label: String,
+    /// Whether the field frame is enabled.
+    pub enabled: Option<bool>,
+    /// Arbitrary composed field content.
+    pub content: Option<ComposeChildren>,
+}
+/// State, decoration, validation, and typography for an editable text field.
 pub struct TextFieldProps {
+    /// Optional width constraint for suffix icon content.
+    pub suffixIconWidth: Option<f64>,
+    /// Optional height constraint for suffix icon content.
+    pub suffixIconHeight: Option<f64>,
     /// Shared node layout, drawing, identity, and lifecycle properties.
     pub base_compose_common_props: ComposeCommonProps,
     /// Plain or composed label displayed with the field.
@@ -2528,6 +2596,10 @@ pub struct FloatingActionButtonProps {
 }
 /// Icon or custom content rendered as a compact clickable control.
 pub struct IconButtonProps {
+    /// Label shown on long press or pointer hover.
+    pub tooltip: Option<String>,
+    /// Internal inset around the icon.
+    pub contentPadding: Option<ComposePadding>,
     /// Shared node layout, drawing, identity, and lifecycle properties.
     pub base_compose_common_props: ComposeCommonProps,
     /// Arbitrary content rendered inside the icon-button bounds.
@@ -2846,6 +2918,8 @@ pub enum ComposeDialogText {
 }
 /// Modal dismissal and window layout policies.
 pub struct DialogProperties {
+    /// Expands a custom Dialog to the window without platform dialog margins.
+    pub fullscreen: Option<bool>,
     /// Allows dismissal requests from the back button.
     pub dismissOnBackPress: Option<bool>,
     /// Allows dismissal requests from the modal barrier.
@@ -2963,6 +3037,10 @@ pub struct ComposeUiFactoryRegistry {
     pub Markdown: ComposeNodeFactory<MarkdownProps>,
     /// Creates a controlled editable text field.
     pub TextField: ComposeNodeFactory<TextFieldProps>,
+    /// Creates a themed field frame around arbitrary content.
+    pub InputDecorator: ComposeNodeFactory<InputDecoratorProps>,
+    /// Creates controlled horizontally swipeable pages.
+    pub HorizontalPager: ComposeNodeFactory<HorizontalPagerProps>,
     /// Creates a controlled binary switch.
     pub Switch: ComposeNodeFactory<SwitchProps>,
     /// Creates a controlled checkbox.

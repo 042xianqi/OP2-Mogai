@@ -1,3 +1,4 @@
+import { readSdkScript, wrapComposeScript } from "../runtime/compose_scripts.mjs";
 import { composeStreamFixture } from '../tests/support/compose_stream_fixture.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -18,10 +19,7 @@ const screenFile = new URL('first-render-selector.cjs', output);
 writeFileSync(screenFile, bundle.outputFiles[0].text + `
 module.exports.default = function(ctx) { return selectorView(ctx, { mode: 'select', kind: 'all', selected: null, chatId: null }, data, controller); };`);
 /** Extracts one exact production SDK JavaScript string. */
-function sdkScript(file) {
-  const text = readFileSync(new URL('core/crates/plugin/sdk/src/toolpkg/' + file, root), 'utf8');
-  return text.slice(text.indexOf('r#"') + 3, text.lastIndexOf('"#'));
-}
+function sdkScript(file) { return readSdkScript(file); }
 /** Summarizes independent measured samples without combining process clocks. */
 function stats(values) {
   const sorted = values.slice().sort((a, b) => a - b);
@@ -37,25 +35,17 @@ function sample(rows) {
   const controller = { load() {}, select() { throw Error('No user data access'); }, cancel() { throw Error('No presentation'); } };
   const times = {};
   let start = performance.now();
-  const acorn = readFileSync(new URL('core/crates/plugin/sdk/src/toolpkg/vendor/acorn.js', root), 'utf8');
-  const compiler = readFileSync(new URL('core/crates/plugin/sdk/src/toolpkg/ToolPkgComposeDslCompiler.js', root), 'utf8');
-  const retained = readFileSync(new URL('core/crates/plugin/sdk/src/toolpkg/ToolPkgComposeDslRetained.js', root), 'utf8');
-  const reactive = readFileSync(new URL('core/crates/plugin/sdk/src/toolpkg/ToolPkgComposeDslReactive.js', root), 'utf8');
   const bridge = sdkScript('ToolPkgComposeDslBridge.rs');
-  const wrapper = sdkScript('ToolPkgComposeDslRuntimeScript.rs');
   const source = readFileSync(screenFile, 'utf8');
   times.readScriptsMs = performance.now() - start;
   start = performance.now();
   const context = vm.createContext({ module: { exports: {} }, console, data, controller, __probeNow: () => performance.now() });
   context.exports = context.module.exports;
-  vm.runInContext(acorn, context);
-  context.__operitAcorn = context.module.exports;
-  context.module = { exports: {} };
-  for (const script of [compiler, retained, reactive, bridge]) vm.runInContext(script, context);
+  vm.runInContext(bridge, context);
   times.sdkInitMs = performance.now() - start;
   start = performance.now();
   const compiled = context.OperitComposeCompiler.compile(source, 'first-render-probe');
-  vm.runInContext(wrapper.replaceAll('{{', '{').replaceAll('}}', '}').replace('{script}', compiled), context);
+  vm.runInContext(wrapComposeScript(compiled), context);
   times.entryCompileEvalMs = performance.now() - start;
   vm.runInContext(`
     const originalCreate = OperitComposeDslRuntime.createContext;

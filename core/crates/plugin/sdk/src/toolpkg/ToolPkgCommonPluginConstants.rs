@@ -87,6 +87,9 @@ pub const TOOLPKG_NAV_SURFACE_CHAT_SIDEBAR_TABS: &str = "chat_sidebar_tabs";
 /// Names plugin-owned Compose DSL rows embedded above the native chat input statistics.
 pub const TOOLPKG_NAV_SURFACE_CHAT_INPUT_MENU: &str = "chat_input_menu";
 
+/// Names plugin-owned Compose DSL sections below chat statistics and above native controls.
+pub const TOOLPKG_NAV_SURFACE_CHAT_INPUT_MENU_SECTIONS: &str = "chat_input_menu_sections";
+
 /// Requires an exact supported navigation surface without case folding or whitespace repair.
 #[allow(non_snake_case)]
 pub(crate) fn requireToolPkgNavigationSurface(surface: &str) -> Result<(), String> {
@@ -96,7 +99,8 @@ pub(crate) fn requireToolPkgNavigationSurface(surface: &str) -> Result<(), Strin
         | TOOLPKG_NAV_SURFACE_APP_BAR
         | TOOLPKG_NAV_SURFACE_CHAT_ATTACHMENTS
         | TOOLPKG_NAV_SURFACE_CHAT_SIDEBAR_TABS
-        | TOOLPKG_NAV_SURFACE_CHAT_INPUT_MENU => Ok(()),
+        | TOOLPKG_NAV_SURFACE_CHAT_INPUT_MENU
+        | TOOLPKG_NAV_SURFACE_CHAT_INPUT_MENU_SECTIONS => Ok(()),
         _ => Err(format!("is unsupported: {surface}")),
     }
 }

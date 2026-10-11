@@ -1,17 +1,16 @@
+import { readSdkScript, wrapComposeScript } from "../runtime/compose_scripts.mjs";
 import { composeStreamFixture } from './support/compose_stream_fixture.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
+import { compileComposeModule } from '../../plugins/tools/compile_compose_module.mjs';
 
 const root = new URL('../../core/crates/plugin/sdk/src/toolpkg/', import.meta.url);
 /** Extracts the exact production SDK string without building an application. */
-function embedded(name) {
-  const text = readFileSync(new URL(name, root), 'utf8');
-  return text.slice(text.indexOf('r#"') + 3, text.lastIndexOf('"#'));
-}
+function embedded(name) { return readSdkScript(name); }
 /** Starts a genuine compiled SDK screen in an isolated JS session. */
-function session(source) {
+function session(source, { forbidCompilation = false } = {}) {
   const events = [];
   const nodes = new Map();
   let rootId;
@@ -25,10 +24,11 @@ function session(source) {
   vm.runInContext(readFileSync(new URL('vendor/acorn.js', root), 'utf8'), context);
   context.__operitAcorn = context.module.exports;
   context.module = { exports: {} };
-  for (const name of ['ToolPkgComposeDslCompiler.js', 'ToolPkgComposeDslRetained.js', 'ToolPkgComposeDslReactive.js']) {
-    vm.runInContext(readFileSync(new URL(name, root), 'utf8'), context);
-  }
   vm.runInContext(embedded('ToolPkgComposeDslBridge.rs'), context);
+  if (forbidCompilation) {
+    context.__operitAcorn.parse = () => { throw Error('Artifact parsed at runtime'); };
+    context.OperitComposeCompiler.compile = () => { throw Error('Artifact lowered at runtime'); };
+  }
   const fixture = composeStreamFixture(context, { projectTree: false, inspectStorage: false,
     /** Retains every real stream response for storage and revision assertions. */
     onResponse(_phase, response) {
@@ -43,8 +43,8 @@ function session(source) {
   let rawAction;
   /** Re-evaluates the wrapper as the host does when a script is loaded again. */
   function install(script) {
-    const compiled = context.OperitComposeCompiler.compile(script, 'state-lifecycle');
-    vm.runInContext(embedded('ToolPkgComposeDslRuntimeScript.rs').replaceAll('{{', '{').replaceAll('}}', '}').replace('{script}', compiled), context);
+    const compiled = context.OperitComposeCompiler.prepare(script, 'state-lifecycle');
+    vm.runInContext(wrapComposeScript(compiled), context);
     rawAction = context.__operit_dispatch_compose_dsl_action;
     fixture.adapt();
   }
@@ -295,4 +295,56 @@ test('session commits remain contiguous when a previous command completion is no
   const revisions = s.events.map(event => event.update.revision);
   assert.ok(revisions.length >= 4, 'initial, intermediate and final commits must all use the same stream');
   assert.deepEqual(revisions, Array.from({length: revisions.length}, (_, index) => index + 1));
+});
+
+/** Replays the same ownership/lifecycle behavior through both compiler entry paths. */
+for (const precompiled of [false, true]) {
+  test(`DSL ${precompiled ? 'build artifact' : 'legacy source'} preserves state, async actions, reloads and page isolation`, async () => {
+    const code = precompiled ? compileComposeModule(screen, 'state-lifecycle') : screen;
+    const s = session(code, { forbidCompilation: precompiled });
+    s.render();
+    const captured = s.context.captured;
+    await s.action('editAsync', 4);
+    await s.action('mutate');
+    assert.equal((await s.action('inspect')).actionResult.count, 4);
+    const pending = s.beginAction('wait');
+    while (!s.context.release) await Promise.resolve();
+    s.install(code);
+    s.render();
+    assert.equal(s.context.captured.ref, captured.ref);
+    s.context.release();
+    await pending;
+    assert.equal((await s.action('inspect')).actionResult.count, 9);
+    await assert.rejects(() => s.action('fail'), /intentional action error/);
+    assert.equal((await s.action('edit', 7)).actionResult, 7);
+    const other = session(code, { forbidCompilation: precompiled });
+    other.render();
+    assert.equal((await other.action('inspect')).actionResult.count, 0);
+    s.events.forEach(noSnapshot);
+  });
+  test(`DSL ${precompiled ? 'build artifact' : 'legacy source'} refreshes partitioned lexical state dependencies`, async () => {
+    const raw = `module.exports.default = function(ctx) {
+      const [count, setCount] = ctx.useState('count', 0);
+      const label = 'Count ' + count;
+      return ctx.UI.Column({ edit: next => setCount(next) }, [ctx.UI.Text({ text: label })]);
+    };`;
+    const code = precompiled ? compileComposeModule(raw, 'state-lifecycle') : raw;
+    const s = session(code, { forbidCompilation: precompiled });
+    s.render();
+    await s.action('edit', 5);
+    assert.ok(s.events.some(event => event.update?.upserts.some(node => node.props.text === 'Count 5')));
+    const result = s.render({ __operit_update_inputs: true, __operit_input_state: { count: 11 } });
+    assert.ok(result.update.upserts.some(node => node.props.text === 'Count 11'));
+  });
+}
+
+
+test('state flush failures reject the owning action without publishing a successful final response', async () => {
+  const s = session(screen);
+  s.render();
+  const error = new Error('controlled state flush failure');
+  s.context.__operit_compose_bundle.flushStateChanges = () => { throw error; };
+  const finalBefore = s.events.length;
+  await assert.rejects(s.action('edit', 9), /controlled state flush failure/);
+  assert.equal(s.events.slice(finalBefore).some(event => Object.hasOwn(event, 'actionResult')), false);
 });

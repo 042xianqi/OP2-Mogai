@@ -4946,6 +4946,12 @@ abstract class AppLocalizations {
   /// **'Mono'**
   String get settingsAppearanceFontMonospace;
 
+  /// No description provided for @settingsAppearanceInterfaceScale.
+  ///
+  /// In en, this message translates to:
+  /// **'Interface scale'**
+  String get settingsAppearanceInterfaceScale;
+
   /// No description provided for @settingsAppearanceFontScale.
   ///
   /// In en, this message translates to:
@@ -6217,7 +6223,7 @@ abstract class AppLocalizations {
   /// No description provided for @settingsRuntimeNetworkControlDescription.
   ///
   /// In en, this message translates to:
-  /// **'Roles, identities, device authority, and audit'**
+  /// **'Manage device identities and permissions, and review activity'**
   String get settingsRuntimeNetworkControlDescription;
 
   /// No description provided for @settingsRuntimeIdentitiesAndPermissions.
@@ -6244,16 +6250,64 @@ abstract class AppLocalizations {
   /// **'Identities'**
   String get settingsRuntimeControlIdentities;
 
+  /// No description provided for @settingsRuntimeControlAuditAccepted.
+  ///
+  /// In en, this message translates to:
+  /// **'Applied'**
+  String get settingsRuntimeControlAuditAccepted;
+
+  /// No description provided for @settingsRuntimeControlAuditRejected.
+  ///
+  /// In en, this message translates to:
+  /// **'Rejected'**
+  String get settingsRuntimeControlAuditRejected;
+
+  /// No description provided for @settingsRuntimeControlAuditIssuer.
+  ///
+  /// In en, this message translates to:
+  /// **'Requested by'**
+  String get settingsRuntimeControlAuditIssuer;
+
+  /// No description provided for @settingsRuntimeControlAuditDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Technical details'**
+  String get settingsRuntimeControlAuditDetails;
+
+  /// No description provided for @settingsRuntimeControlAuditBootstrap.
+  ///
+  /// In en, this message translates to:
+  /// **'Initialize space permissions'**
+  String get settingsRuntimeControlAuditBootstrap;
+
+  /// No description provided for @settingsRuntimeControlAuditAdmit.
+  ///
+  /// In en, this message translates to:
+  /// **'Admit device'**
+  String get settingsRuntimeControlAuditAdmit;
+
+  /// No description provided for @settingsRuntimeControlAuditMerge.
+  ///
+  /// In en, this message translates to:
+  /// **'Merge device spaces'**
+  String get settingsRuntimeControlAuditMerge;
+
+  /// No description provided for @settingsRuntimeControlAuditPolicy.
+  ///
+  /// In en, this message translates to:
+  /// **'Update permission policy'**
+  String get settingsRuntimeControlAuditPolicy;
+
   /// No description provided for @settingsRuntimeControlAudit.
   ///
   /// In en, this message translates to:
-  /// **'Audit'**
+  /// **'Activity'**
   String get settingsRuntimeControlAudit;
 
   /// No description provided for @settingsRuntimeControlAddRole.
   ///
   /// In en, this message translates to:
-  /// **'Add role'**
+  /// **'New identity'**
   String get settingsRuntimeControlAddRole;
 
   /// No description provided for @settingsRuntimeControlGrantRole.
@@ -6277,13 +6331,13 @@ abstract class AppLocalizations {
   /// No description provided for @settingsRuntimeControlRoleName.
   ///
   /// In en, this message translates to:
-  /// **'Role name'**
+  /// **'Identity name'**
   String get settingsRuntimeControlRoleName;
 
   /// No description provided for @settingsRuntimeControlCapabilities.
   ///
   /// In en, this message translates to:
-  /// **'What can this role do?'**
+  /// **'Actions this identity can perform'**
   String get settingsRuntimeControlCapabilities;
 
   /// No description provided for @settingsRuntimeControlManagedDevices.
@@ -6313,7 +6367,7 @@ abstract class AppLocalizations {
   /// No description provided for @settingsRuntimeControlNoAudit.
   ///
   /// In en, this message translates to:
-  /// **'No control commands recorded'**
+  /// **'No activity yet. Identity and device changes will appear here.'**
   String get settingsRuntimeControlNoAudit;
 
   /// No description provided for @settingsRuntimeControlAuditCount.
@@ -6382,6 +6436,12 @@ abstract class AppLocalizations {
   /// **'Manages'**
   String get settingsRuntimeControlManages;
 
+  /// No description provided for @settingsRuntimeControlLocalIdentity.
+  ///
+  /// In en, this message translates to:
+  /// **'This device'**
+  String get settingsRuntimeControlLocalIdentity;
+
   /// No description provided for @settingsRuntimeControlCurrentIdentity.
   ///
   /// In en, this message translates to:
@@ -6391,7 +6451,7 @@ abstract class AppLocalizations {
   /// No description provided for @settingsRuntimeControlCurrentCapabilities.
   ///
   /// In en, this message translates to:
-  /// **'Current capabilities'**
+  /// **'Permissions'**
   String get settingsRuntimeControlCurrentCapabilities;
 
   /// No description provided for @settingsRuntimeControlManageIdentities.
@@ -6427,7 +6487,7 @@ abstract class AppLocalizations {
   /// No description provided for @settingsRuntimeControlIdentityDefinitions.
   ///
   /// In en, this message translates to:
-  /// **'Identity definitions'**
+  /// **'Identity permissions'**
   String get settingsRuntimeControlIdentityDefinitions;
 
   /// No description provided for @settingsRuntimeControlIdentityCount.

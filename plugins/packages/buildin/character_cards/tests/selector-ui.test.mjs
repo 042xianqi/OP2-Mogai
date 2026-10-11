@@ -24,7 +24,7 @@ test("registered native selector loads real records, avatars, current checks and
   await runtime.api("chat.configuration.binding.write", { chatId: "selector-chat", selection: "card:" + card.id });
   const menu = await runtime.api("chat.context.actions", { chatId: "selector-chat" });
   assert.equal(Object.hasOwn(menu, "selectors"), false);
-  assert.equal(menu.identity.action.input.mode, "preview");
+  assert.equal(menu.identity.avatarAction.input.mode, "preview");
   const ui = mountRegisteredSelector(runtime, presentation("native-shape", "selector-chat", "card", { CharacterCard: { id: "default" } }));
   assert.equal(ui.first.tree.type, "Dialog"); assert.equal(composeNodes(ui.first.tree,
     /** Checks genuine native loading rather than a static text marker. */

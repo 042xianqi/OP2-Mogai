@@ -1,5 +1,7 @@
 import type { DomainInput, DomainOperation, DomainOutput } from "./api";
 import { executeDomain } from "./operations";
+import { decodeChatMarker } from "./chat-markers";
+import { parseChatSelection } from "./chat-bindings";
 import { MemoryJobRunner } from "./memory-jobs/scheduler";
 import { decodeMemoryBackup, exportMemoryBackup } from "./backup";
 import type { CharacterRepository, CharacterRepositoryOwner } from "./canonical";
@@ -30,6 +32,7 @@ interface TagPlan {
   attachedIds: string[];
 }
 export interface CharacterCardsService {
+  readGlobalMemoryPreferences(): Promise<import("./model").GlobalMemoryPreferences>;
   /** Advances genuine persisted jobs using this service's same repository owner. */
   runMemoryJobs(): Promise<{ owners: number; rebuildWindows: number; candidateBatches: number }>;
   /** Dispatches an editor or registered domain command through the supplied canonical port. */
@@ -68,6 +71,7 @@ export function createCharacterCardsService(owner: CharacterRepositoryOwner, con
   return {
     /** Runs the private job scheduler without constructing another store or business service. */
     runMemoryJobs: () => jobs.tick(),
+    readGlobalMemoryPreferences: () => owner.run(repository => repository.readGlobalMemoryPreferences()),
     /** Preserves action-specific results through the shared service dispatcher. */
     dispatch: dispatchRequest,
     /** Reads one consistent domain snapshot through the same operation queue. */
@@ -127,9 +131,9 @@ function assertActive(value: unknown): asserts value is ActivePrompt {
 
 /** Builds the editor aggregate exclusively from independent real canonical reads. */
 export async function snapshot(host: CharacterRepository): Promise<Snapshot> {
-  const [cards, groups, stores, tags, active, models, ttsConfigs, toolCatalog] = await Promise.all([
+  const [cards, groups, stores, tags, active, models, ttsConfigs, toolCatalog, memoryPreferences] = await Promise.all([
     host.listCharacters(), host.listGroups(), host.listStores(), host.listTags(),
-    host.readActive(), host.listModels(), host.listTtsConfigs(), host.readToolCatalog(),
+    host.readActive(), host.listModels(), host.listTtsConfigs(), host.readToolCatalog(), host.readGlobalMemoryPreferences(),
   ]);
   records(cards, assertCard, "角色卡列表");
   records(groups, assertGroup, "角色组列表");
@@ -139,7 +143,7 @@ export async function snapshot(host: CharacterRepository): Promise<Snapshot> {
   if (!Array.isArray(models) || !Array.isArray(ttsConfigs)) throw new Error("模型或 TTS 目录返回格式不正确");
   assertObject(toolCatalog, "工具来源目录");
   for (const field of ["builtinTools", "packages", "skills", "mcpServers"] as const) if (!Array.isArray(toolCatalog[field])) throw new Error(`工具来源目录缺少 ${field}`);
-  return { cards, groups, stores, tags, active, models, ttsConfigs, toolCatalog };
+  return { cards, groups, stores, tags, active, models, ttsConfigs, toolCatalog, memoryPreferences };
 }
 
 /** Requires exactly one canonical record instead of silently choosing an ambiguous identity. */
@@ -387,6 +391,16 @@ export function parseOwner(ownerKey: string): MemoryOwner {
   throw new Error("记忆库命名空间无效");
 }
 
+/** Matches the original menu's explicit-card and active-card memory owner rules entirely in the plugin. */
+async function menuMemoryOwner(chatId: string, host: CharacterRepository): Promise<string> {
+  requireId(chatId, "memory menu chat id");
+  const extension = await Tools.Chat.readExtension({ kind: "chat", chatId });
+  const selection = extension === null ? null : parseChatSelection(decodeChatMarker(extension).selection);
+  if (selection?.kind === "card") return resolveMemoryOwner(selection.id, host);
+  const active = await host.readActive();
+  return resolveMemoryOwner("CharacterCard" in active ? active.CharacterCard.id : "default", host);
+}
+
 /** Requires the selected owner to exist in the canonical character or shared store registry. */
 export async function requireOwner(ownerKey: string, host: CharacterRepository): Promise<MemoryOwner> {
   const owner = parseOwner(ownerKey);
@@ -518,6 +532,15 @@ export async function dispatch(request: Request, host: CharacterRepository): Pro
   assertObject(request, "角色卡请求");
   switch (request.action) {
     case "snapshot": return snapshot(host);
+    case "readGlobalMemoryPreferences": return host.readGlobalMemoryPreferences();
+    case "readChatMemoryAutoSaveStatus": return host.readMemoryAutoSaveStatus(await menuMemoryOwner(request.chatId, host));
+    case "updateCurrentChatMemory": return executeDomain("memory.chat.update", { ownerKey: await menuMemoryOwner(request.chatId, host), chatId: request.chatId }, host);
+    case "writeGlobalMemoryPreference": return host.writeGlobalMemoryPreference(request.key, request.value);
+    case "searchMemoryDebug": {
+      await requireOwner(request.ownerKey, host); assertSearchConfig(request.config);
+      return host.searchMemoryDebug({ ownerKey: request.ownerKey, query: request.query, folderPath: null, relevanceThreshold: request.relevanceThreshold, createdAtStartMs: null, createdAtEndMs: null }, request.config);
+    }
+    case "readMemoryLink": await requireOwner(request.ownerKey, host); return host.readMemoryLink(request.ownerKey, request.linkId);
     case "listThemeChoices": return readThemeChoices(independentConfigurations);
     case "listCharacters": return records(await host.listCharacters(), assertCard, "角色卡列表");
     case "getCharacter": { const card = await host.getCharacter(requireId(request.id, "角色卡标识")); assertCard(card); return card; }
@@ -589,6 +612,15 @@ export async function dispatch(request: Request, host: CharacterRepository): Pro
     case "writeMemorySettings": return writeMemorySettings(request.ownerKey, request.settings, host);
     case "readMemorySearchConfig": { await requireOwner(request.ownerKey, host); const config = await host.readMemorySearchConfig(request.ownerKey); assertSearchConfig(config); return config; }
     case "writeMemorySearchConfig": return writeMemorySearchConfig(request.ownerKey, request.config, host);
+    case "writeMemoryOwnerSettings": {
+      // Validate both drafts before mutation; the repository owner publishes this entire request atomically.
+      assertMemorySettings(request.settings); assertSearchConfig(request.config);
+      await requireOwner(request.ownerKey, host);
+      const current = await host.readMemorySettings(request.ownerKey);
+      await host.writeMemorySettings(request.ownerKey, { ...request.settings, nextAutoSaveRunAtMs: current.nextAutoSaveRunAtMs });
+      await host.writeMemorySearchConfig(request.ownerKey, request.config);
+      return { settings: await host.readMemorySettings(request.ownerKey), config: await host.readMemorySearchConfig(request.ownerKey) };
+    }
     case "combinePrompts": return combinePrompts(request.characterId, request.additionalTagIds, request.promptFunctionType, host);
     case "importCharacter": {
       const tags = records(await host.listTags(), assertTag, "标签列表");

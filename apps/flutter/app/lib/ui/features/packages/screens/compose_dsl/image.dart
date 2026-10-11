@@ -4,16 +4,21 @@ part of '../ToolPkgUiLauncherScreen.dart';
 
 /// Remembers the decoded image source across unrelated Compose recompositions.
 class _ComposeStableImage extends StatefulWidget {
-  const _ComposeStableImage({required this.source, required this.fit});
+  const _ComposeStableImage({
+    required this.source,
+    required this.fit,
+    required this.hostContext,
+  });
   final String source;
   final BoxFit fit;
+  final ComposeDslWebViewHostContext hostContext;
 
   @override
   State<_ComposeStableImage> createState() => _ComposeStableImageState();
 }
 
 class _ComposeStableImageState extends State<_ComposeStableImage> {
-  late ImageProvider _provider;
+  late Future<ImageProvider> _provider;
 
   @override
   void initState() {
@@ -29,19 +34,27 @@ class _ComposeStableImageState extends State<_ComposeStableImage> {
 
   /// Resolves only a changed source; MemoryImage equality depends on byte identity.
   void _resolveSource() {
-    final uri = Uri.tryParse(widget.source);
-    _provider = switch (uri?.scheme) {
-      'data' => MemoryImage(UriData.parse(widget.source).contentAsBytes()),
-      'file' => FileImage(File.fromUri(uri!)),
-      _ =>
-        widget.source.startsWith('/')
-            ? FileImage(File(widget.source))
-            : NetworkImage(widget.source),
-    };
+    _provider = resolveComposeDslImage(
+      widget.source,
+      readVfsBytes: widget.hostContext.readResourceBytes,
+    );
   }
 
   @override
   Widget build(BuildContext context) => RepaintBoundary(
-    child: Image(image: _provider, fit: widget.fit, gaplessPlayback: true),
+    child: FutureBuilder<ImageProvider>(
+      future: _provider,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return const Icon(Icons.broken_image_outlined);
+        if (!snapshot.hasData) return const SizedBox.shrink();
+        return Image(
+          image: snapshot.requireData,
+          fit: widget.fit,
+          gaplessPlayback: true,
+          errorBuilder: (_, error, stack) =>
+              const Icon(Icons.broken_image_outlined),
+        );
+      },
+    ),
   );
 }

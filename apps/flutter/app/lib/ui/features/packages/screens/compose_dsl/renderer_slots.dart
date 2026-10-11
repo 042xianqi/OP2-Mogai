@@ -334,7 +334,11 @@ extension _ComposeRendererSlots on _ComposeDslRendererState {
     Widget child;
     final source = _imageSource().trim();
     if (source.isNotEmpty) {
-      child = _ComposeStableImage(source: source, fit: fit);
+      child = _ComposeStableImage(
+        source: source,
+        fit: fit,
+        hostContext: webViewHostContext,
+      );
     } else {
       final iconName = _string(
         node.props['name'] ?? node.props['icon'] ?? 'info',

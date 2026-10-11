@@ -228,7 +228,7 @@ class _OperitThemeState extends State<OperitTheme> {
     });
   }
 
-  /// Applies a keyboard-selected zoom and persists changes in input order.
+  /// Applies interface zoom from settings or shortcuts and persists it in order.
   void _changeZoom(double zoom) {
     if (_zoom == zoom) {
       return;

@@ -3,8 +3,8 @@ import { isKey } from "./dom";
 /** Requires a dialog whose current draft can accept text-field edits. */
 export function editableDialog(dialog: Dialog): EditableDialog {
   switch (dialog.type) {
-    case "character": case "group": case "store": case "memory-edit": case "link": case "link-edit":
-    case "tag-edit": case "user": case "import": case "export": return dialog;
+    case "store": case "memory-edit": case "link": case "link-edit":
+    case "user": case "import": case "export": case "owner-settings": return dialog;
     default: throw new Error("当前页面不能编辑文字字段");
   }
 }
@@ -12,13 +12,6 @@ export function editableDialog(dialog: Dialog): EditableDialog {
 /** Updates one explicitly declared editable field while retaining non-text canonical data. */
 export function setEditableValue(dialog: EditableDialog, key: string, value: string): void {
   switch (dialog.type) {
-    case "character":
-      if (isKey(key, ["name", "description", "characterSetting", "openingStatement", "otherContentChat", "otherContentVoice", "advancedCustomPrompt", "marks"])) { dialog.card[key] = value; return; }
-      if (isKey(key, ["avatarUri", "chatModelId", "ttsConfigId", "sharedMemoryId"])) { dialog.card[key] = value === "" ? null : value; return; }
-      break;
-    case "group":
-      if (isKey(key, ["name", "description"])) { dialog.group[key] = value; return; }
-      break;
     case "store": if (key === "name") { dialog.store.name = value; return; } break;
     case "memory-edit":
       if (isKey(key, ["credibility", "importance"])) { dialog.draft[key] = Number(value); return; }
@@ -27,10 +20,24 @@ export function setEditableValue(dialog: EditableDialog, key: string, value: str
     case "link": case "link-edit":
       if (isKey(key, ["sourceTitle", "targetTitle", "linkType", "description", "weight"])) { dialog.draft[key] = value; return; }
       break;
-    case "tag-edit":
-      if (isKey(key, ["name", "description", "promptContent"])) { dialog.draft[key] = value; return; }
+    case "owner-settings": {
+      if (key === "searchQuery") { dialog.searchQuery = value; dialog.searchResult = null; return; }
+      if (key === "searchThreshold") { dialog.searchThreshold = Number(value); dialog.searchResult = null; return; }
+      if (key === "from" || key === "to") { dialog[key] = value; return; }
+      if (key === "windowMessageCount") { dialog.windowMessageCount = Number(value); return; }
+      if (dialog.settings === null || dialog.config === null) throw new Error("记忆设置尚未读取成功");
+      if (key === "interval") { dialog.settings.autoSaveIntervalMinutes = Number(value); return; }
+      if (isKey(key, ["keywordWeight", "tagWeight", "vectorWeight", "edgeWeight"])) { dialog.config[key] = Number(value); dialog.searchResult = null; return; }
+      const fields = { extractionRules: "memoryExtractionCustomRules", endpoint: "cloudEmbeddingEndpoint", embeddingModel: "cloudEmbeddingModel", apiKey: "cloudEmbeddingApiKey" } as const;
+      if (isKey(key, ["extractionRules", "endpoint", "embeddingModel", "apiKey"])) { dialog.settings[fields[key]] = value; return; }
       break;
-    case "user": case "import": if (key === "content") { dialog.content = value; return; } break;
+    }
+    case "import":
+      if (key === "format" && (value === "operit" || value === "tavern")) { dialog.format = value; return; }
+      if (key === "strategy" && (value === "SKIP" || value === "UPDATE" || value === "CREATE_NEW")) { dialog.strategy = value; return; }
+      if (key === "content") { dialog.content = value; return; }
+      break;
+    case "user": if (key === "content") { dialog.content = value; return; } break;
     case "export": if (key === "path") { dialog.path = value; return; } break;
   }
   throw new Error(`此页面不能编辑字段：${key}`);
@@ -40,11 +47,12 @@ export function setEditableValue(dialog: EditableDialog, key: string, value: str
 export function editableValue(dialog: EditableDialog, key: string): string {
   let record: object;
   switch (dialog.type) {
-    case "character": record = dialog.card; break;
-    case "group": record = dialog.group; break;
     case "store": record = dialog.store; break;
-    case "memory-edit": case "link": case "link-edit": case "tag-edit": record = dialog.draft; break;
+    case "memory-edit": case "link": case "link-edit": record = dialog.draft; break;
     case "user": case "import": case "export": record = dialog; break;
+    case "owner-settings":
+      if (dialog.settings === null || key !== "extractionRules") throw new Error("展开编辑字段不是文字");
+      return dialog.settings.memoryExtractionCustomRules;
   }
   const value: unknown = Reflect.get(record, key);
   if (typeof value !== "string") throw new Error("展开编辑字段不是文字");

@@ -1,4 +1,4 @@
-import type { Memory, MemorySearchConfig, MemorySearchOptions, MemorySpace } from "./model";
+import type { Memory, MemorySearchConfig, MemorySearchOptions, MemorySpace, MemorySearchDebug, MemorySearchHit } from "./model";
 import { cosineSimilarity, embeddingFor } from "./memory-jobs/embeddings";
 
 /** Tokenizes Unicode words and CJK unigrams/bigrams without substring guessing. */
@@ -35,12 +35,17 @@ function matchesFilters(memory: Memory, options: MemorySearchOptions): boolean {
 }
 /** Computes lexical, real provider-vector, tag and graph scoring over complete plugin records. */
 export async function searchMemorySpace(space: MemorySpace, options: MemorySearchOptions): Promise<Memory[]> {
-  const config: MemorySearchConfig = space.searchConfig;
+  if (options.query.trim() === "*") return space.memories.filter(memory => matchesFilters(memory, options));
+  return (await searchMemorySpaceDebug(space, options, space.searchConfig)).candidates.filter(hit => hit.passedThreshold).map(hit => hit.memory);
+}
+/** Uses the same real index and provider vectors with a caller's validated draft weights. */
+export async function searchMemorySpaceDebug(space: MemorySpace, options: MemorySearchOptions, config: MemorySearchConfig): Promise<MemorySearchDebug> {
   const memories = space.memories.filter(
     /** Keeps complete records under the caller's explicit filters. */
     memory => matchesFilters(memory, options),
   );
-  if (options.query.trim() === "*") return memories;
+  if (options.query.trim() === "*") throw new Error("检索调试请输入具体查询文本");
+  const result: MemorySearchDebug = { query: options.query, config: { ...config }, relevanceThreshold: options.relevanceThreshold, memoriesInScopeCount: memories.length, candidates: [] };
   const query = [...new Set(tokens(options.query))];
   if (query.length === 0) throw new Error("Memory search query has no searchable tokens");
   const index = memories.map(
@@ -61,7 +66,7 @@ export async function searchMemorySpace(space: MemorySpace, options: MemorySearc
       )) };
     },
   );
-  if (index.length === 0) return [];
+  if (index.length === 0) return result;
   const average = index.reduce(
     /** Accumulates actual token lengths for length normalization. */
     (total, document) => total + document.length, 0,
@@ -105,7 +110,7 @@ export async function searchMemorySpace(space: MemorySpace, options: MemorySearc
   }
   const keywordWeight = config.keywordWeight * keywordMultiplier, tagWeight = config.tagWeight * keywordMultiplier,
     vectorWeight = config.vectorWeight * semanticMultiplier, edgeWeight = config.edgeWeight * edgeMultiplier;
-  const scores: { memory: Memory; score: number }[] = [];
+  const scores: MemorySearchHit[] = [];
   for (const document of index) {
     const lexicalValue = lexical.get(document.memory.id), tagValue = tagScores.get(document.memory.id);
     if (lexicalValue === undefined || tagValue === undefined) throw new Error("Search index is inconsistent");
@@ -124,14 +129,11 @@ export async function searchMemorySpace(space: MemorySpace, options: MemorySearc
     let vector = 0;
     if (vectorWeight > 0) { const value = semantic.get(document.memory.id); if (value === undefined) throw new Error("Semantic search index is inconsistent"); vector = value; }
     const score = (keyword * keywordWeight + tagValue * tagWeight + vector * vectorWeight + edge * edgeWeight) / denominator;
-    if (score > 0 && score >= options.relevanceThreshold) scores.push({ memory: document.memory, score });
+    scores.push({ memory: document.memory, score, keywordScore: keyword * keywordWeight / denominator, tagScore: tagValue * tagWeight / denominator, vectorScore: vector * vectorWeight / denominator, edgeScore: edge * edgeWeight / denominator, passedThreshold: score > 0 && score >= options.relevanceThreshold });
   }
   scores.sort(
     /** Orders actual ranked hits with a stable lossless identity tie breaker. */
     (left, right) => right.score - left.score || (BigInt(left.memory.id) < BigInt(right.memory.id) ? -1 : BigInt(left.memory.id) > BigInt(right.memory.id) ? 1 : 0),
   );
-  return scores.map(
-    /** Returns full records rather than a lossy search projection. */
-    entry => entry.memory,
-  );
+  result.candidates = scores; return result;
 }

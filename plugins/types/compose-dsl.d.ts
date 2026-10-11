@@ -2765,9 +2765,58 @@ export interface FlowRowProps extends ComposeCommonProps {
 }
 
 /**
+ * Easing curve for implicit visual transitions.
+ */
+export type ComposeAnimationCurve = "linear" | "easeOutCubic" | "easeInOut" | "easeOut";
+
+/**
+ * Generic implicit transition options; animation frames are rendered by the host.
+ */
+export interface ComposeBoxAnimation {
+  /**
+   * Transition duration in milliseconds; zero applies changes immediately.
+   */
+  durationMillis?: number;
+  /**
+   * Easing curve, defaulting to linear.
+   */
+  curve?: ComposeAnimationCurve;
+}
+
+/**
+ * Visual overrides while the enclosing HoverRegion is hovered or its menu is open.
+ */
+export interface ComposeBoxHoverStyle {
+  /**
+   * Overrides the requested width.
+   */
+  width?: number;
+  /**
+   * Overrides the requested height.
+   */
+  height?: number;
+  /**
+   * Overrides the solid background paint.
+   */
+  backgroundColor?: ComposeColor;
+  /**
+   * Overrides background corner geometry.
+   */
+  backgroundShape?: ComposeShape;
+}
+
+/**
  * Properties for stacking child nodes in the same layout bounds.
  */
 export interface BoxProps extends ComposeCommonProps {
+  /**
+   * Optional host-rendered transitions for size, background paint and corner geometry.
+   */
+  animation?: ComposeBoxAnimation;
+  /**
+   * Partial visual overrides from the enclosing HoverRegion, independent of touch visibility.
+   */
+  hoverStyle?: ComposeBoxHoverStyle;
   /**
    * Child nodes drawn in stacking order.
    */
@@ -2833,6 +2882,10 @@ export interface TextProps extends ComposeCommonProps {
    */
   overflow?: ComposeTextOverflow;
   /**
+   * Horizontal alignment within the available text width.
+   */
+  textAlign?: string;
+  /**
    * Share of remaining main-axis space when placed in a row or column.
    */
   weight?: number;
@@ -2866,8 +2919,54 @@ export interface MarkdownProps extends ComposeCommonProps {
 
 /**
  * State, decoration, validation, and typography for an editable text field.
+ * Standard themed input frame for arbitrary plugin-owned content.
+ * Controlled horizontally swipeable pages.
+ */
+export interface HorizontalPagerProps extends ComposeCommonProps {
+  /**
+   * Selected zero-based page.
+   */
+  currentPage: number;
+  /**
+   * Receives a user-selected page.
+   */
+  onPageChanged: (arg0: number) => void;
+  /**
+   * Page content.
+   */
+  content?: ComposeChildren;
+}
+
+/**
+ * Standard themed input frame for arbitrary plugin-owned content.
+ */
+export interface InputDecoratorProps extends ComposeCommonProps {
+  /**
+   * Floating field label.
+   */
+  label: string;
+  /**
+   * Whether the field frame is enabled.
+   */
+  enabled?: boolean;
+  /**
+   * Arbitrary composed field content.
+   */
+  content?: ComposeChildren;
+}
+
+/**
+ * State, decoration, validation, and typography for an editable text field.
  */
 export interface TextFieldProps extends ComposeCommonProps {
+  /**
+   * Optional width constraint for suffix icon content.
+   */
+  suffixIconWidth?: number;
+  /**
+   * Optional height constraint for suffix icon content.
+   */
+  suffixIconHeight?: number;
   /**
    * Plain or composed label displayed with the field.
    */
@@ -3132,6 +3231,14 @@ export interface FloatingActionButtonProps extends ButtonProps {
  * Icon or custom content rendered as a compact clickable control.
  */
 export interface IconButtonProps extends ComposeCommonProps {
+  /**
+   * Label shown on long press or pointer hover.
+   */
+  tooltip?: string;
+  /**
+   * Internal inset around the icon.
+   */
+  contentPadding?: ComposePadding;
   /**
    * Arbitrary content rendered inside the icon-button bounds.
    */
@@ -3571,6 +3678,10 @@ export type ComposeDialogText = string | ComposeChildren;
  */
 export interface DialogProperties {
   /**
+   * Expands a custom Dialog to the window without platform dialog margins.
+   */
+  fullscreen?: boolean;
+  /**
    * Allows dismissal requests from the back button.
    */
   dismissOnBackPress?: boolean;
@@ -3796,6 +3907,14 @@ export interface ComposeUiFactoryRegistry {
    * Creates a controlled editable text field.
    */
   TextField: ComposeNodeFactory<TextFieldProps>;
+  /**
+   * Creates a themed field frame around arbitrary content.
+   */
+  InputDecorator: ComposeNodeFactory<InputDecoratorProps>;
+  /**
+   * Creates controlled horizontally swipeable pages.
+   */
+  HorizontalPager: ComposeNodeFactory<HorizontalPagerProps>;
   /**
    * Creates a controlled binary switch.
    */

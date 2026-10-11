@@ -1,9 +1,8 @@
 // ignore_for_file: file_names
 
 import 'dart:async';
+import 'ComposeDslImageSource.dart';
 import '../../../../core/application/PluginHotReload.dart';
-import 'dart:convert';
-import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -27,6 +26,7 @@ import 'ToolPkgComposeDslWebView.dart';
 import 'compose_dsl/fill_layout.dart';
 import 'compose_dsl/lazy_viewport.dart';
 import 'compose_dsl/action_scheduler.dart';
+import 'compose_dsl/execution_owner.dart';
 import '../../../common/components/SwipeActions.dart';
 
 part 'compose_dsl/compose_host.dart';
@@ -51,6 +51,7 @@ part 'compose_dsl/navigation_nodes.dart';
 part 'compose_dsl/interactive_nodes.dart';
 part 'compose_dsl/renderer_slots.dart';
 part 'compose_dsl/image.dart';
+part 'compose_dsl/pager.dart';
 
 class ToolPkgUiLauncherScreen extends StatefulWidget {
   /// Creates a routable or embedded screen using the existing Compose host.
@@ -93,11 +94,12 @@ class ToolPkgUiLauncherScreen extends StatefulWidget {
       _ToolPkgUiLauncherScreenState();
 }
 
-/// Opt-in stage timings distinguish bridge/engine startup from asynchronous plugin IO.
-/// Enable with --dart-define=OPERIT_PROFILE_PLUGIN_UI=true; disabled builds allocate no timer.
+/// First-load stages are logged by default; profiling also includes later updates.
+/// Frame completion is a Flutter tree measurement, not a GPU presentation timestamp.
 class _ToolPkgUiLoadTiming {
-  _ToolPkgUiLoadTiming(this.label)
-    : _watch = const bool.fromEnvironment('OPERIT_PROFILE_PLUGIN_UI')
+  _ToolPkgUiLoadTiming(this.label, {bool firstLoad = false})
+    : _watch =
+          firstLoad || const bool.fromEnvironment('OPERIT_PROFILE_PLUGIN_UI')
           ? (Stopwatch()..start())
           : null;
 
@@ -109,20 +111,20 @@ class _ToolPkgUiLoadTiming {
     final watch = _watch;
     if (watch == null) return;
     final elapsed = watch.elapsedMicroseconds;
-    debugPrint(
-      '[ToolPkg UI timing] $label stage=$stage '
+    ClientLogger.i(
+      'event=compose_load_stage $label stage=$stage '
       'stepMs=${((elapsed - _previousMicros) / 1000).toStringAsFixed(1)} '
       'totalMs=${(elapsed / 1000).toStringAsFixed(1)}',
+      tag: 'ToolPkgUiLauncher',
     );
     _previousMicros = elapsed;
   }
 }
 
 class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
-  static int _nextExecutionOwnerId = 0;
   static const String _logTag = 'ToolPkgUiLauncher';
 
-  late final int _executionOwnerId = _nextExecutionOwnerId++;
+  late final String _executionOwnerId = ComposeDslExecutionOwner.allocate();
   late final String _selectedRouteId = _initialRouteId();
   _ComposeDslRenderResult? _renderResult;
   String? _scriptScreenPath;
@@ -136,10 +138,18 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
   String? _error;
   final _actionScheduler = ComposeDslActionScheduler();
   Future<void> _renderTail = Future<void>.value();
+  Future<void> _reloadTail = Future<void>.value();
+  int _reloadGeneration = 0;
+  bool _reloading = false;
   final _ComposeDslNodeStore _nodeStore = _ComposeDslNodeStore();
   final Map<String, _ComposeDslPendingCommand> _composePending = {};
   String? _composeSessionId;
+  Object? _composeSessionError;
+  StackTrace? _composeSessionErrorStack;
   bool _composeHasRendered = false;
+  final _firstTreeWatch = Stopwatch()..start();
+  bool _firstTreeFrameReported = false;
+  bool _firstTreeFrameScheduled = false;
   StreamController<core_proxy.ToolPkgComposeDslCommand>? _composeCommands;
   StreamSubscription<core_proxy.ToolPkgComposeDslEvent>? _composeUpdates;
   Future<void>? _composeSubmission;
@@ -159,25 +169,64 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
   @override
   void didUpdateWidget(covariant ToolPkgUiLauncherScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!_composeInputEquals(oldWidget.initialState, widget.initialState) ||
-        !_composeInputEquals(oldWidget.initialMemo, widget.initialMemo) ||
-        (widget.embeddedScreenPath == null &&
-            !_composeInputEquals(
-              oldWidget.initialModuleSpec,
-              widget.initialModuleSpec,
-            ))) {
+    if (!_reloading &&
+        (!_composeInputEquals(oldWidget.initialState, widget.initialState) ||
+            !_composeInputEquals(oldWidget.initialMemo, widget.initialMemo) ||
+            (widget.embeddedScreenPath == null &&
+                !_composeInputEquals(
+                  oldWidget.initialModuleSpec,
+                  widget.initialModuleSpec,
+                )))) {
       unawaited(_loadRoute(updateInputs: true));
     }
   }
 
-  /// Recreates the visible plugin document after runtime packages reload.
+  /// Recreates the page-owned Compose session after Flutter hot reload.
+  @override
+  void reassemble() {
+    super.reassemble();
+    _reloadDevelopmentPackage();
+  }
+
+  /// Retires old request ownership before either stream closes during a reload.
   void _reloadDevelopmentPackage() {
-    final executionContext = _activeExecutionContext;
-    _activeExecutionContext = null;
-    setState(() { _renderResult = null; _loading = true; });
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (executionContext != null) await _releaseExecutionContext(executionContext);
-      if (mounted) await _loadRoute();
+    if (!mounted) return;
+    final generation = ++_reloadGeneration;
+    _routeLoadGeneration++;
+    _actionOwnerGeneration++;
+    _reloading = true;
+    _failComposeCommands(StateError('Compose session reloading'));
+    setState(() {
+      _renderResult = null;
+      _loading = true;
+      _error = null;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Coalesce notifications in the same frame, and never overlap an old
+      // engine's release with acquisition of its replacement under the same key.
+      _reloadTail = _reloadTail
+          .then((_) async {
+            if (!mounted || generation != _reloadGeneration) return;
+            await _renderTail;
+            if (!mounted || generation != _reloadGeneration) return;
+            final executionContext = _activeExecutionContext;
+            _activeExecutionContext = null;
+            if (executionContext != null) {
+              await _releaseExecutionContext(executionContext);
+            }
+            if (!mounted || generation != _reloadGeneration) return;
+            _reloading = false;
+            await _loadRoute();
+          })
+          .catchError((Object error, StackTrace stackTrace) {
+            if (!mounted || generation != _reloadGeneration) return;
+            _reloading = false;
+            _printComposeError('reload', error, stackTrace);
+            setState(() {
+              _error = error.toString();
+              _loading = false;
+            });
+          });
     });
   }
 
@@ -194,7 +243,7 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
     if (shouldLoadRoute) {
       _loadedInitialRoute = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
+        if (mounted && !_reloading) {
           _loadRoute();
         }
       });
@@ -297,7 +346,8 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
       containerPackageName: widget.plugin.packageName,
     );
     final timing = _ToolPkgUiLoadTiming(
-      '${widget.plugin.packageName} route=$uiModuleId updateInputs=$updateInputs',
+      'package=${widget.plugin.packageName} route=$uiModuleId updateInputs=$updateInputs',
+      firstLoad: !_composeHasRendered,
     );
     setState(() {
       // Streaming input is an update, not a new page initialization.
@@ -316,7 +366,7 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
       }
       if (_activeExecutionContext != executionContext) {
         _activeExecutionContext = executionContext;
-        await _acquireExecutionContext(executionContext);
+        await _acquireExecutionContext(executionContext, timing);
         if (!_isCurrentRouteLoad(routeLoadGeneration)) {
           if (_activeExecutionContext != executionContext) {
             await _releaseExecutionContext(executionContext);
@@ -324,7 +374,6 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
           return;
         }
       }
-      timing.mark('acquire-engine');
       final embeddedScreenPath = _embeddedScreenPath();
       final String? script;
       final String? screenPath;
@@ -375,9 +424,15 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
         ),
       );
       if (!_isCurrentRouteLoad(routeLoadGeneration)) return;
+      timing.mark('render-command');
       _composeHasRendered = true;
-      if (_renderResult == null) throw StateError('Compose render completed without a root node');
-      setState(() { _loading = false; });
+      if (_renderResult == null) {
+        throw StateError('Compose render completed without a root node');
+      }
+      setState(() {
+        _loading = false;
+      });
+      _reportFirstTreeFrame();
       if (_themeScheme != renderedTheme) {
         _scheduleThemeDispatchAfterRouteRender(routeLoadGeneration);
       }
@@ -392,6 +447,31 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
         _loading = false;
       });
     }
+  }
+
+  /// Measures first committed DSL-tree frame, including any initial render queue.
+  /// A prewarmed sidebar can complete this while its presentation is hidden.
+  void _reportFirstTreeFrame() {
+    if (_firstTreeFrameReported || _firstTreeFrameScheduled) return;
+    _firstTreeFrameScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _firstTreeFrameScheduled = false;
+      if (!mounted ||
+          _loading ||
+          _renderResult == null ||
+          _firstTreeFrameReported) {
+        return;
+      }
+      _firstTreeFrameReported = true;
+      _firstTreeWatch.stop();
+      ClientLogger.i(
+        'event=compose_first_tree_frame package=${widget.plugin.packageName} '
+        'route=$_selectedRouteId elapsedMs=${_firstTreeWatch.elapsedMilliseconds} '
+        'prepared=${widget.initialState['chatSidebarPrepared'] != null} '
+        'tickerEnabled=${TickerMode.valuesOf(context).enabled}',
+        tag: _logTag,
+      );
+    });
   }
 
   bool _isCurrentRouteLoad(int routeLoadGeneration) {
@@ -410,37 +490,70 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
   /// Acquires one page-owned ToolPkg execution context.
   Future<void> _acquireExecutionContext(
     ({String contextKey, String containerPackageName}) executionContext,
+    _ToolPkgUiLoadTiming timing,
   ) async {
     await _packageManager.acquireToolPkgExecutionEngine(
       contextKey: executionContext.contextKey,
       containerPackageName: executionContext.containerPackageName,
     );
+    timing.mark('acquire-engine');
     final sessionId = await _packageManager.openComposeDslSession(
       contextKey: executionContext.contextKey,
       containerPackageName: executionContext.containerPackageName,
     );
+    timing.mark('open-session');
+    ClientLogger.i(
+      'event=compose_session_open package=${executionContext.containerPackageName} '
+      'context=${executionContext.contextKey} session=$sessionId',
+      tag: _logTag,
+    );
     _composeSessionId = sessionId;
+    _composeSessionError = null;
+    _composeSessionErrorStack = null;
     _composeHasRendered = false;
     final session = widget.clients.servicesComposeDslSessionService;
-    _composeUpdates = session.updates(sessionId: sessionId).listen(
-      // The subscription owns the session lease, including callbacks from completed actions.
-      (event) {
-        if (mounted && _composeSessionId == sessionId) _receiveComposeEvent(event);
-      },
-      onError: _failComposeCommands,
-      onDone: () => _failComposeCommands(StateError('Compose session update stream closed')),
-    );
+    _composeUpdates = session
+        .updates(sessionId: sessionId)
+        .listen(
+          // The subscription owns the session lease, including callbacks from completed actions.
+          (event) {
+            if (mounted && !_reloading && _composeSessionId == sessionId) {
+              _receiveComposeEvent(event);
+            }
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (mounted && !_reloading && _composeSessionId == sessionId) {
+              _failComposeCommands(error, stackTrace);
+            }
+          },
+          onDone: () {
+            if (mounted && !_reloading && _composeSessionId == sessionId) {
+              _failComposeCommands(
+                StateError('Compose session update stream closed'),
+              );
+            }
+          },
+        );
     final commands = StreamController<core_proxy.ToolPkgComposeDslCommand>();
     _composeCommands = commands;
-    _composeSubmission = session.submit(sessionId: sessionId, commands: commands.stream).catchError((Object error, StackTrace stackTrace) {
-      _failComposeCommands(error, stackTrace);
-    });
+    _composeSubmission = session
+        .submit(sessionId: sessionId, commands: commands.stream)
+        .catchError((Object error, StackTrace stackTrace) {
+          if (mounted && !_reloading && _composeSessionId == sessionId) {
+            _failComposeCommands(error, stackTrace);
+          }
+        });
   }
 
   /// Closes this page's two streams before releasing its existing engine ownership.
   Future<void> _releaseExecutionContext(
     ({String contextKey, String containerPackageName}) executionContext,
   ) async {
+    ClientLogger.i(
+      'event=compose_session_close package=${executionContext.containerPackageName} '
+      'context=${executionContext.contextKey} session=$_composeSessionId',
+      tag: _logTag,
+    );
     final commands = _composeCommands;
     final updates = _composeUpdates;
     final submission = _composeSubmission;
@@ -471,7 +584,9 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
       actionResult: event.actionResult,
     );
     if (!identical(oldRoot, root) || _error != null) {
-      setState(() { _error = null; });
+      setState(() {
+        _error = null;
+      });
     }
   }
 
@@ -488,11 +603,17 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
       }
       if (pending == null) {
         if (event.phase == 'intermediate' || event.phase == 'final') {
-          _navigateCommands(event.navigationCommands.map(_composeNavigateCommand).toList());
+          _navigateCommands(
+            event.navigationCommands.map(_composeNavigateCommand).toList(),
+          );
         } else if (event.phase == 'error') {
           final error = event.error;
-          if (error == null) throw StateError('Compose error event requires an error');
-          setState(() { _error = error; });
+          if (error == null) {
+            throw StateError('Compose error event requires an error');
+          }
+          setState(() {
+            _error = error;
+          });
         }
         return;
       }
@@ -510,13 +631,21 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
         case 'intermediate':
         case 'final':
           pending.actionResult = event.actionResult;
-          pending.navigationCommands.addAll(event.navigationCommands.map(_composeNavigateCommand));
+          pending.navigationCommands.addAll(
+            event.navigationCommands.map(_composeNavigateCommand),
+          );
           break;
         case 'error':
           final error = event.error;
-          if (error == null) throw StateError('Compose error event requires an error');
-          setState(() { _error = error; });
-          if (!pending.completion.isCompleted) pending.completion.completeError(StateError(error));
+          if (error == null) {
+            throw StateError('Compose error event requires an error');
+          }
+          setState(() {
+            _error = error;
+          });
+          if (!pending.completion.isCompleted) {
+            pending.completion.completeError(StateError(error));
+          }
           break;
         case 'complete':
           if (!pending.completion.isCompleted) pending.completion.complete();
@@ -526,15 +655,24 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
           throw StateError('Unsupported Compose event phase: ${event.phase}');
       }
     } catch (error, stackTrace) {
-      if (pending != null && !pending.completion.isCompleted) pending.completion.completeError(error, stackTrace);
+      if (pending != null && !pending.completion.isCompleted) {
+        pending.completion.completeError(error, stackTrace);
+      }
       _printComposeError('event:${event.phase}', error, stackTrace);
     }
   }
 
   /// Settles pending requests when either session stream reports a terminal error.
   void _failComposeCommands(Object error, [StackTrace? stackTrace]) {
+    _composeSessionError ??= error;
+    _composeSessionErrorStack ??= stackTrace;
     for (final pending in _composePending.values) {
-      if (!pending.completion.isCompleted) pending.completion.completeError(error, stackTrace);
+      if (!pending.completion.isCompleted) {
+        pending.completion.completeError(
+          _composeSessionError!,
+          _composeSessionErrorStack,
+        );
+      }
     }
   }
 
@@ -546,15 +684,31 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
     String? actionId,
     Object? payload,
   }) async {
+    final terminalError = _composeSessionError;
+    if (terminalError != null) {
+      Error.throwWithStackTrace(
+        terminalError,
+        _composeSessionErrorStack ?? StackTrace.current,
+      );
+    }
     final commands = _composeCommands;
-    if (commands == null) throw StateError('Compose session has not been acquired');
-    final requestId = 'compose:${_executionOwnerId}:${_nextComposeRequestId++}';
+    if (commands == null) {
+      throw StateError('Compose session has not been acquired');
+    }
+    final requestId = 'compose:$_executionOwnerId:${_nextComposeRequestId++}';
     final pending = _ComposeDslPendingCommand(_actionOwnerGeneration);
     _composePending[requestId] = pending;
-    commands.add(core_proxy.ToolPkgComposeDslCommand(
-      requestId: requestId, operation: operation, script: script, actionId: actionId,
-      payload: payload, runtimeOptions: runtimeOptions, envOverrides: const {},
-    ));
+    commands.add(
+      core_proxy.ToolPkgComposeDslCommand(
+        requestId: requestId,
+        operation: operation,
+        script: script,
+        actionId: actionId,
+        payload: payload,
+        runtimeOptions: runtimeOptions,
+        envOverrides: const {},
+      ),
+    );
     try {
       await pending.completion.future;
       return pending;
@@ -642,9 +796,8 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
       routeInstanceId: routeInstanceId,
     );
     final timing = _ToolPkgUiLoadTiming(
-      '${widget.plugin.packageName} action=$actionId',
+      'package=${widget.plugin.packageName} action=$actionId',
     );
-    var timedFirstRender = false;
     Object? latestActionResult;
     final navigationCommands =
         <({String routeId, Map<String, Object?> args})>[];
@@ -655,10 +808,14 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
         executionContextKey: executionContextKey,
       );
       final command = await _submitComposeCommand(
-        operation: 'action', actionId: actionId, payload: payload,
+        operation: 'action',
+        actionId: actionId,
+        payload: payload,
         runtimeOptions: runtimeOptions,
       );
+      timing.mark('action-command');
       latestActionResult = command.actionResult;
+      if (!_isCurrentActionOwner(routeGeneration)) return latestActionResult;
       navigationCommands.addAll(command.navigationCommands);
       _navigateCommands(navigationCommands);
       if (notifyActionResult) {
@@ -669,7 +826,7 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
       }
       return latestActionResult;
     } catch (error, stackTrace) {
-      if (!mounted) {
+      if (!_isCurrentActionOwner(routeGeneration)) {
         return latestActionResult;
       }
       _printComposeError('action:$actionId', error, stackTrace);
@@ -877,6 +1034,7 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
       routeInstanceId: routeInstanceId,
       executionContextKey: executionContextKey,
       dispatchAction: _dispatchWebViewAction,
+      readFileBytes: (path) => readComposeDslVfsBytes(widget.clients, path),
       onActionResultDelivered: (result) =>
           _notifyActionResult(result, routeGeneration: routeGeneration),
       runtimeOptionsProvider: () => _runtimeOptions(

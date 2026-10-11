@@ -5,7 +5,6 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
-import '../../../../../../../core/application/PluginHotReload.dart';
 import '../../../../../../../core/proxy/generated/CoreProxyModels.g.dart'
     as core_proxy;
 import '../../../../../../common/contributions/ChatUiContributionModels.dart';
@@ -13,7 +12,6 @@ import '../../../../../../common/contributions/ContributionPresentationResult.da
 import '../../../../../../common/contributions/ChatInputMenuHost.dart';
 import '../../../../../../common/icons/MaterialIconNameResolver.dart';
 import '../../../../../../main/navigation/ToolPkgCatalogChangeBus.dart';
-import '../../../../../packages/screens/ToolPkgUiLauncherScreen.dart';
 import '../../../../viewmodel/ChatSelectionTransition.dart';
 import '../../../../viewmodel/ChatViewModel.dart';
 
@@ -46,32 +44,13 @@ class _AgentInputMenuPopupState extends State<AgentInputMenuPopup> {
   bool _toolsExpanded = false;
   bool _behaviorExpanded = false;
   bool _pluginsExpanded = false;
-  Future<List<core_proxy.ToolPkgNavigationEntry>>? _pluginEntriesFuture;
-  StreamSubscription<void>? _pluginCatalogSubscription;
-  String? _pluginLanguageCode;
-  bool _openingPluginEntry = false;
 
-  /// Starts menu observers and listens to mutations of the existing UI catalog.
+  /// Starts observers for the current chat menu settings.
   @override
   void initState() {
     super.initState();
     _settingsFuture = _loadSettings();
     _startPluginChangeObserver();
-    _pluginCatalogSubscription = ToolPkgCatalogChangeBus.listen(
-      _reloadPluginEntries,
-    );
-    PluginHotReload.revision.addListener(_reloadPluginEntries);
-  }
-
-  /// Reloads localized plugin navigation entries when the host locale changes.
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final languageCode = Localizations.localeOf(context).languageCode;
-    if (_pluginLanguageCode != languageCode) {
-      _pluginLanguageCode = languageCode;
-      _pluginEntriesFuture = _loadPluginEntries(languageCode);
-    }
   }
 
   /// Keeps menu data scoped to the current chat and runtime client.
@@ -82,191 +61,14 @@ class _AgentInputMenuPopupState extends State<AgentInputMenuPopup> {
         oldWidget.viewModel != widget.viewModel) {
       _settingsSignature = null;
       _settingsFuture = _loadSettings();
-      if (oldWidget.viewModel != widget.viewModel) {
-        _reloadPluginEntries();
-      }
     }
   }
 
-  /// Releases both chat observers and plugin catalog listeners with the popup.
+  /// Stops menu polling when the popup closes.
   @override
   void dispose() {
     _pluginChangeTimer?.cancel();
-    unawaited(_pluginCatalogSubscription?.cancel());
-    PluginHotReload.revision.removeListener(_reloadPluginEntries);
     super.dispose();
-  }
-
-  /// Reads toolbox entries from the actual registry without selecting a package.
-  Future<List<core_proxy.ToolPkgNavigationEntry>> _loadPluginEntries(
-    String languageCode,
-  ) async {
-    final entries = await widget.viewModel.clients.application
-        .packageManager()
-        .getToolPkgNavigationEntries(useEnglish: languageCode == 'en');
-    return List<core_proxy.ToolPkgNavigationEntry>.unmodifiable(
-      entries.where((entry) => entry.surface == 'toolbox'),
-    );
-  }
-
-  /// Refreshes registered menu actions after package or hot-reload changes.
-  void _reloadPluginEntries() {
-    if (!mounted) {
-      return;
-    }
-    final languageCode = _pluginLanguageCode;
-    if (languageCode == null) {
-      return;
-    }
-    setState(() {
-      _pluginEntriesFuture = _loadPluginEntries(languageCode);
-    });
-  }
-
-  /// Invokes the declared action or opens the exact catalog-owned Compose route.
-  Future<void> _openPluginEntry(core_proxy.ToolPkgNavigationEntry entry) async {
-    if (_openingPluginEntry) {
-      return;
-    }
-    final clients = widget.viewModel.clients;
-    final viewModel = widget.viewModel;
-    final chatId = widget.currentChatId;
-    final navigator = Navigator.of(context, rootNavigator: true);
-    final messenger = ScaffoldMessenger.of(context);
-    final languageCode = Localizations.localeOf(context).languageCode;
-    setState(() => _openingPluginEntry = true);
-    try {
-      final manager = clients.application.packageManager();
-      final action = entry.action;
-      if (action != null) {
-        await manager.runToolPkgNavigationEntryAction(
-          containerPackageName: entry.containerPackageName,
-          entryId: entry.entryId,
-          functionName: action.functionName,
-          inlineFunctionSource: action.functionSource,
-          eventPayload: <String, Object?>{
-            'entryId': entry.entryId,
-            'routeId': entry.routeId,
-            'surface': entry.surface,
-            'title': entry.title,
-            'description': entry.description,
-            'chatId': chatId,
-          },
-        );
-        if (mounted &&
-            widget.viewModel == viewModel &&
-            widget.currentChatId == chatId) {
-          widget.onDismiss();
-        }
-        return;
-      }
-      final routes = await manager.getToolPkgUiRoutes(
-        runtime: 'compose_dsl',
-        useEnglish: languageCode == 'en',
-      );
-      final matchingRoutes = routes.where(
-        (route) =>
-            route.containerPackageName == entry.containerPackageName &&
-            route.routeId == entry.routeId,
-      );
-      if (matchingRoutes.length != 1) {
-        throw StateError(
-          'A menu entry must resolve to exactly one registered Compose route: '
-          '${entry.containerPackageName}/${entry.routeId}',
-        );
-      }
-      final route = matchingRoutes.single;
-      final plugin = await manager.getToolPkgContainerRuntime(
-        containerPackageName: route.containerPackageName,
-      );
-      if (plugin == null) {
-        throw StateError(
-          'Menu route container is not registered: ${route.containerPackageName}',
-        );
-      }
-      if (!mounted ||
-          widget.viewModel != viewModel ||
-          widget.currentChatId != chatId ||
-          !navigator.mounted) {
-        return;
-      }
-      widget.onDismiss();
-      await navigator.push<void>(
-        MaterialPageRoute<void>(
-          builder: (context) => ToolPkgUiLauncherScreen(
-            clients: clients,
-            plugin: plugin,
-            initialRouteId: route.routeId,
-            initialModuleSpec: route.moduleSpec,
-          ),
-        ),
-      );
-    } catch (error) {
-      if (messenger.mounted) {
-        messenger.showSnackBar(SnackBar(content: Text('插件入口打开失败：$error')));
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _openingPluginEntry = false);
-      }
-    }
-  }
-
-  /// Renders registered actions with their localized title and Material icon.
-  Widget _buildPluginEntries() {
-    return FutureBuilder<List<core_proxy.ToolPkgNavigationEntry>>(
-      future: _pluginEntriesFuture,
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return Padding(
-            padding: const EdgeInsets.all(8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Text('插件入口加载失败：${snapshot.error}'),
-                TextButton(
-                  onPressed: _reloadPluginEntries,
-                  child: const Text('重试'),
-                ),
-              ],
-            ),
-          );
-        }
-        final entries = snapshot.data;
-        if (entries == null) {
-          return const Padding(
-            padding: EdgeInsets.all(12),
-            child: LinearProgressIndicator(),
-          );
-        }
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            for (final entry in entries)
-              ListTile(
-                dense: true,
-                enabled: !_openingPluginEntry,
-                leading: entry.icon == null
-                    ? null
-                    : Icon(
-                        MaterialIconNameResolver.resolve(entry.icon!),
-                        size: 20,
-                      ),
-                title: Text(entry.title),
-                subtitle: entry.description.isEmpty
-                    ? null
-                    : Text(
-                        entry.description,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                trailing: const Icon(Icons.open_in_new, size: 16),
-                onTap: () => _openPluginEntry(entry),
-              ),
-          ],
-        );
-      },
-    );
   }
 
   void _startPluginChangeObserver() {
@@ -360,6 +162,25 @@ class _AgentInputMenuPopupState extends State<AgentInputMenuPopup> {
     _reloadSettings();
   }
 
+  /// Presents a registered section action through the root overlay's lifetime.
+  Future<void> _presentSectionAction(ChatUiAction action) async {
+    if (!widget.isChatContextCurrent()) return;
+    final clients = widget.viewModel.clients;
+    final chatId = widget.currentChatId;
+    final isCurrent = widget.isChatContextCurrent;
+    final presentationContext = Navigator.of(
+      context,
+      rootNavigator: true,
+    ).overlay!.context;
+    widget.onDismiss();
+    if (!isCurrent() || !presentationContext.mounted) return;
+    await action.present(
+      context: presentationContext,
+      clients: clients,
+      hostState: <String, Object?>{'chatId': chatId},
+    );
+  }
+
   /// Builds the input menu popup with optional leading entries.
   @override
   Widget build(BuildContext context) {
@@ -412,6 +233,12 @@ class _AgentInputMenuPopupState extends State<AgentInputMenuPopup> {
                     ),
                     const Divider(height: 1),
                     ...widget.leadingChildren,
+                    ChatInputMenuHost(
+                      clients: widget.viewModel.clients,
+                      chatId: widget.currentChatId,
+                      surface: 'chat_input_menu_sections',
+                      onPresent: _presentSectionAction,
+                    ),
                     _MenuSection(
                       icon: Icons.security_outlined,
                       title: '工具',
@@ -476,7 +303,6 @@ class _AgentInputMenuPopupState extends State<AgentInputMenuPopup> {
                             enabled: toggle.isEnabled,
                             onTap: () => _togglePlugin(toggle),
                           ),
-                        _buildPluginEntries(),
                       ],
                     ),
                   ],

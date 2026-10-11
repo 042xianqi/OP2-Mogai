@@ -2,6 +2,7 @@
 export function fixture() {
   const base = { description: "", characterSetting: "你是一位可靠、温和的助手。", openingStatement: "你好，有什么可以帮你的？", otherContentChat: "", otherContentVoice: "", avatarUri: null, attachedTagIds: ["tag-persona"], advancedCustomPrompt: "", marks: "", chatModelBindingMode: "FOLLOW_GLOBAL", chatModelId: null, ttsConfigId: null, themeConfigId: null, memoryBindingMode: "CHARACTER", sharedMemoryId: null, sharedMemoryMounts: [], toolAccessConfig: { enabled: false, allowedBuiltinTools: [], allowedPackages: [], allowedSkills: [], allowedMcpServers: [] }, createdAt: 1, updatedAt: 1 };
   const snapshot = {
+    memoryPreferences: { userDescriptionEnabled: true, autoUpdateEnabled: true },
     cards: [
       { ...base, id: "operit", name: "Operit", description: "默认角色卡", isDefault: true },
       { ...base, id: "travel", name: "旅行助理", description: "一起规划行程，记录沿途的故事。", isDefault: false, memoryBindingMode: "SHARED", sharedMemoryId: "shared-main", attachedTagIds: ["tag-persona", "tag-travel"] },
@@ -51,8 +52,17 @@ export function installBrowserFixture(data) {
       if (window.testFailure === operation.action) throw new Error("TEST_HOST_REJECTED");
       switch (operation.action) {
         case "snapshot": return copy(window.testRecords);
+        case "exportGroup": return JSON.stringify(window.testRecords.groups.find(group => group.id === operation.id), null, 2);
+        case "exportCharacter": return JSON.stringify(window.testRecords.cards.find(card => card.id === operation.id), null, 2);
+        case "readMemoryLink": return copy(data.links.find(link => link.id === operation.linkId));
         // These are explicitly labelled presentation rows, not real SDK Theme configs or host integration evidence.
         case "listThemeChoices": return copy(data.themeChoices);
+        // Presentation-only inputs for layout tests; persistence/jobs are covered by the separate real-service suite.
+        case "readMemorySettings": return copy(data.settings);
+        case "readMemorySearchConfig": return copy(data.searchConfig);
+        case "listMemoryChats": return [];
+        case "readMemoryAutoSaveStatus": return { ownerKey: operation.ownerKey, pendingCandidates: 0, pendingChats: 0, processingCandidates: 0, failedCandidates: 0, nextRunAtMs: data.settings.nextAutoSaveRunAtMs, minutesUntilNextRun: 0, lastError: "" };
+        case "readMemoryRebuildProgress": return { status: "idle", totalChats: 0, completedChats: 0, totalWindows: 0, completedWindows: 0, totalSourceMessages: 0, processedSourceMessages: 0, failedWindows: 0, currentChatTitle: "", lastError: "" };
         case "readUser": return { ownerKey: operation.ownerKey, content: window.testProfile };
         case "writeUser": window.testProfile = operation.content; return { saved: true };
         case "graph": return copy(window.testGraph);
@@ -111,7 +121,7 @@ export function installBrowserFixture(data) {
     /** Records explicit exports without writing outside the browser fixture. */
     // Labelled browser resource/picker adapters, not filesystem or domain implementations.
     async avatarImage() { return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII="; },
-    async chooseAvatar() { return null; },
+    async openEntity(mode, entity, id) { window.testCalls.push({ action: "openEntity", mode, entity, id }); },
     async exportFile(path, content) { window.testCalls.push({ action: "exportFile", path, content }); return true; },
   };
 }

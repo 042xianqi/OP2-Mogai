@@ -33,6 +33,7 @@ async function propagateJobFailure(error: unknown, publishStatus: () => Promise<
 
 /** Enqueues a real selected message or finalized reply for exact bound memory owners. */
 export async function enqueueCandidate(input: CandidateRequest, repository: CharacterRepository): Promise<CandidateResult> {
+  if (input.sourceType === "reply_finalized_auto" && !(await repository.readGlobalMemoryPreferences()).autoUpdateEnabled) return { owners: [], candidateIds: [] };
   await requireChat(input.chatId); assertInteger(input.timestamp, "candidate message timestamp", 0); assertInteger(input.variantIndex, "candidate variant index", 0);
   if (input.variantIndex > 2147483647) throw new Error("Candidate variant exceeds the host range");
   const messages = await readMessages(input.chatId), matches = messages.filter(
@@ -246,6 +247,7 @@ export class MemoryJobRunner {
         const batches = await this.owner.run(
           /** Claims only due pending records; failed attempts are never automatically retried. */
           async repository => {
+            if (!(await repository.readGlobalMemoryPreferences()).autoUpdateEnabled) return [] as MemoryCandidate[][];
             const space = await repository.readMemorySpace(ownerKey), now = Date.now();
             if (space.settings.autoSaveIntervalMinutes === 0 || now < space.settings.nextAutoSaveRunAtMs) return [] as MemoryCandidate[][];
             const pending = space.candidates.filter(
@@ -272,9 +274,10 @@ export class MemoryJobRunner {
           },
         );
         for (const batch of batches) {
-          await this.owner.run(
+          const claimed = await this.owner.run(
             /** Claims only the next actual batch so a failure leaves later sources genuinely pending. */
             async repository => {
+              if (!(await repository.readGlobalMemoryPreferences()).autoUpdateEnabled) return false;
               const space = await repository.readMemorySpace(ownerKey), ids = new Set<string>();
               for (const candidate of batch) ids.add(candidate.id);
               let count = 0;
@@ -283,9 +286,10 @@ export class MemoryJobRunner {
                 candidate.status = "processing"; candidate.attemptCount += 1; candidate.updatedAt = Date.now(); count += 1;
               }
               if (count !== batch.length) throw new Error("A selected candidate no longer exists");
-              await repository.writeMemorySpace(ownerKey, space);
+              await repository.writeMemorySpace(ownerKey, space); return true;
             },
           );
+          if (!claimed) break;
           await processCandidates(ownerKey, batch, this.owner); report.candidateBatches += 1;
         }
       }

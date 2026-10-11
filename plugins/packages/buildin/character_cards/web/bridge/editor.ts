@@ -1,12 +1,7 @@
 import type { Snapshot } from "../../src/model";
-import { createTtsFeature } from "../features/characters/bindings/tts";
-import { assertThemeChoices } from "../../src/selection-application";
-import { createThemeFeature } from "../features/characters/bindings/theme";
-import { createToolPolicyFeature } from "../features/characters/bindings/tool-policy";
 import { createCharactersActionsFeature } from "../features/characters/actions";
 import { createPageRenderer } from "../features/characters/page";
 import { createPreviewFeature } from "../features/characters/preview-actions";
-import { createCharactersTagsActionsFeature } from "../features/characters/tags-actions";
 import { createCharactersTransfersFeature } from "../features/characters/transfers";
 import { createGraphActionsFeature } from "../features/graph/actions";
 import { updateGraphSurface as paintGraph } from "../features/graph/canvas";
@@ -18,7 +13,7 @@ import { createMemoryLibraryActionsFeature } from "../features/memory/library-ac
 import { createMemoryLinkActionsFeature } from "../features/memory/link-actions";
 import { createProfileFeature } from "../features/memory/profile";
 import { requireElement } from "../shared/dom";
-import { copy, escapeHtml } from "../shared/ui/html";
+import { escapeHtml } from "../shared/ui/html";
 import { createDialogActions } from "./actions";
 import type { EditorContext } from "./context";
 import type { Dialog, DialogInput, DialogOf, DialogType, GraphDialog, WebAction, WebRequest, WebResponses } from "./contracts";
@@ -47,12 +42,10 @@ export function createEditor() {
 
   /** Opens a typed draft and returns the same state object tracked by the dialog stack. */
   function pushDialog<T extends DialogInput>(draft: T): DialogOf<T["type"]>;
-  /** Initializes common dialog state and the enclosing character's staged tag transaction. */
+  /** Initializes only common state for remaining memory/import dialogs. */
   function pushDialog(draft: DialogInput): Dialog {
     const common = { error: "", scroll: 0, busy: false };
-    const dialog: Dialog = draft.type === "character"
-      ? { ...draft, ...common, tags: copy(snapshot().tags), tagChanges: { created: [], updated: [], deleted: [] }, nextTagId: 0, ttsBindingEnabled: draft.card.ttsConfigId !== null }
-      : { ...draft, ...common };
+    const dialog: Dialog = { ...draft, ...common };
     state.dialogs.push(dialog); renderDialogs(); return dialog;
   }
 
@@ -88,8 +81,8 @@ export function createEditor() {
   }
 
   /** Calls the only registered host transport and rejects malformed snapshots. */
-  async function request<A extends WebAction>(operation: WebRequest<A>): Promise<WebResponses[A]> {
-    const dialog = state.dialogs.length === 0 ? null : topDialog();
+  async function request<A extends WebAction>(operation: WebRequest<A>, options?: { background: boolean }): Promise<WebResponses[A]> {
+    const dialog = options?.background || state.dialogs.length === 0 ? null : topDialog();
     if (dialog !== null) { dialog.busy = true; renderDialogs(); }
     try { return await host().request(operation); }
     finally { if (dialog !== null) dialog.busy = false; }
@@ -101,9 +94,7 @@ export function createEditor() {
   const context: EditorContext = {
 state, app, dialogsRoot, snapshot, topDialog, pushDialog, popDialog, request, renderMain, renderDialogs, toast, owningGraph,
     /** Cancels only the presented root before removing the current local dialog. */
-    dismissDialog: async () => { await screens.dismissDialog(topDialog()); popDialog(); renderMain(); },
-    /** Delivers a successful save or deletion through the current entity presentation. */
-    entityChanged: (entity, id, operation) => screens.entityChanged(entity, id, operation),
+    dismissDialog: async () => { popDialog(); renderMain(); },
     /** Delegates exact screen fields to their owning feature. */
     onScreenInput: element => screens.onInput(element),
     /** Opens the owner's loaded graph through its feature. */
@@ -111,7 +102,6 @@ state, app, dialogsRoot, snapshot, topDialog, pushDialog, popDialog, request, re
     /** Opens the owner's profile through its feature. */
     openUser: (owner, name) => profile.openUser(owner, name),
     /** Opens a saved-record export through the transfer feature. */
-    openExport: (type, value) => transfers.openExport(type, value),
     /** Paints a graph without changing the captured SVG root. */
     updateGraphSurface: dialog => paintGraph(dialog, dialogsRoot),
     /** Shares the exact click dispatcher with keyboard graph activation. */
@@ -120,17 +110,17 @@ state, app, dialogsRoot, snapshot, topDialog, pushDialog, popDialog, request, re
   const page = createPageRenderer(context), dialogs = createDialogRenderer(context);
   const screens = createScreenController(context, page);
   const graph = createGraphActionsFeature(context), profile = createProfileFeature(context), transfers = createCharactersTransfersFeature(context);
-  const themePicker = createThemeFeature(context,
-    /** Reads independent theme choices through the existing package request channel. */
-    async () => {
-      const choices = await context.request({ action: "listThemeChoices" });
-      assertThemeChoices(choices); state.themeChoices = choices; return choices;
-    },
-  );
-  const events = createEditorEvents(context, [...screens.features, themePicker, createTtsFeature(context), createToolPolicyFeature(context), createPreviewFeature(context), createDialogActions(context), createCharactersActionsFeature(context), createCharactersTagsActionsFeature(context), createGroupsActionsFeature(context), createMemoryLibraryActionsFeature(context), createMemoryItemActionsFeature(context), createMemoryLinkActionsFeature(context), transfers, graph, profile, createMemoryControlsFeature(context)]);
+  const events = createEditorEvents(context, [...screens.features, createPreviewFeature(context), createDialogActions(context), createCharactersActionsFeature(context), createGroupsActionsFeature(context), createMemoryLibraryActionsFeature(context), createMemoryItemActionsFeature(context), createMemoryLinkActionsFeature(context), transfers, graph, profile, createMemoryControlsFeature(context)]);
   const gestures = createGraphGestures(context);
   /** Mounts finite DOM events once, with graph-specific gesture handlers kept in their own feature. */
   function mount(): void {
+    window.addEventListener("character-entity-closed", () => {
+      void (async () => {
+        try { state.snapshot = await request({ action: "snapshot" }); await loadAvatars(); }
+        catch (error) { state.error = String(error); }
+        finally { renderMain(); }
+      })();
+    });
     document.addEventListener("click", events.onClick);
     document.addEventListener("input", events.onInput);
     document.addEventListener("change", events.onChange);
@@ -159,8 +149,7 @@ state, app, dialogsRoot, snapshot, topDialog, pushDialog, popDialog, request, re
   }
   /** Loads the real record and independent theme catalogs before presenting a binding editor. */
   async function loadCatalogs(): Promise<void> {
-    const [records, choices] = await Promise.all([request({ action: "snapshot" }), request({ action: "listThemeChoices" })]);
-    assertThemeChoices(choices); state.snapshot = records; state.themeChoices = choices;
+    state.snapshot = await request({ action: "snapshot" });
   }
   /** Presents a startup failure without substituting records or transports. */
   function showStartupError(error: unknown): void { app.innerHTML = `<div class="scroll"><h1>角色卡插件未能加载</h1><p role="alert">${escapeHtml(String(error))}</p></div>`; }

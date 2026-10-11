@@ -77,6 +77,7 @@ pub fn buildToolPkgRegistrationBridgeScript(restrictHostCapabilities: bool) -> S
                 case 'chat_attachments':
                 case 'chat_sidebar_tabs':
                 case 'chat_input_menu':
+                case 'chat_input_menu_sections':
                     return;
                 default:
                     throw new Error('registerNavigationEntry.surface is unsupported: ' + String(surface));
@@ -643,7 +644,7 @@ pub fn buildToolPkgRegistrationBridgeScript(restrictHostCapabilities: bool) -> S
                     throw new Error('registerNavigationEntry requires an object');
                 }
                 validateNavigationSurface(definition.surface);
-                if (definition.surface === 'chat_attachments' || definition.surface === 'chat_sidebar_tabs' || definition.surface === 'chat_input_menu') {
+                if (definition.surface === 'chat_attachments' || definition.surface === 'chat_sidebar_tabs' || definition.surface === 'chat_input_menu' || definition.surface === 'chat_input_menu_sections') {
                     if (definition.action !== undefined && definition.action !== null) {
                         throw new Error('registerNavigationEntry.action is unsupported for ' + definition.surface);
                     }
@@ -651,7 +652,7 @@ pub fn buildToolPkgRegistrationBridgeScript(restrictHostCapabilities: bool) -> S
                         throw new Error('registerNavigationEntry.route is required for ' + definition.surface);
                     }
                 }
-                if (definition.surface === 'chat_sidebar_tabs' || definition.surface === 'chat_input_menu') validateEmbeddedRoute(definition);
+                if (definition.surface === 'chat_sidebar_tabs' || definition.surface === 'chat_input_menu' || definition.surface === 'chat_input_menu_sections') validateEmbeddedRoute(definition);
                 if (Object.prototype.hasOwnProperty.call(definition, 'params')) {
                     validateNavigationParams(definition.params, []);
                 }

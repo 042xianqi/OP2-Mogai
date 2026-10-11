@@ -1,3 +1,4 @@
+import { composeContextScript, wrapComposeScript } from "../../runtime/compose_scripts.mjs";
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const root=new URL('../../../',import.meta.url);
@@ -16,11 +17,9 @@ export function productionBootstrap() {
     source(bridge + 'JsInitRuntime.script.js'),
     '"/runtime/clean-on-exit"',
     JSON.stringify(embedded(sdk + 'JsExecutionScriptBuilder.rs')),
-    JSON.stringify(embedded(sdk + 'toolpkg/ToolPkgComposeDslRuntimeScript.rs').replace('{script}', '').replace(/\{\{|\}\}/g, token => token[0])),
+    JSON.stringify(wrapComposeScript()),
     embedded(bridge + 'JsJavaBridge.rs'),
-    'var __operitAcorn={}; (function(exports,module){' + source(sdk + 'toolpkg/vendor/acorn.js') + '})(__operitAcorn,{exports:__operitAcorn});\n' +
-    ['ToolPkgComposeDslCompiler.js','ToolPkgComposeDslRetained.js','ToolPkgComposeDslReactive.js'].map(name=>source(sdk+'toolpkg/'+name)).join('\n') +
-    embedded(sdk + 'toolpkg/ToolPkgComposeDslBridge.rs'),
+    composeContextScript(),
     embedded(sdk + 'toolpkg/ToolPkgApiRuntimeScript.rs'),
     embedded(sdk + 'toolpkg/ToolPkgRegistrationBridge.rs').replace('__OPERIT_TOOLPKG_REGISTRATION_ONLY__', 'false'),
     '', '', // These tests exercise host operations, not generated Tools or external libraries.

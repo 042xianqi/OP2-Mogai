@@ -232,15 +232,19 @@ class SidebarInfoCard extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: <Widget>[
-          Text(
-            brandName,
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-              letterSpacing: 0,
-              color: appearance.titleColor,
-              fontWeight: FontWeight.bold,
+          Expanded(
+            child: Text(
+              brandName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                letterSpacing: 0,
+                color: appearance.titleColor,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
-          if (trailing != null) ...<Widget>[const Spacer(), trailing!],
+          if (trailing != null) trailing!,
         ],
       ),
     );

@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../../../core/application/PluginHotReload.dart';
+import '../../../core/logging/ClientLogger.dart';
 import '../../../core/proxy/generated/CoreProxyClients.g.dart';
 import '../../../core/proxy/generated/CoreProxyModels.g.dart' as core_proxy;
 import '../../../data/preferences/UserPreferencesManager.dart';
@@ -363,6 +364,9 @@ class _ChatSidebarTabHostState extends State<ChatSidebarTabHost> {
 
   /// Embeds the plugin tree with its natural content height.
   Widget _embedded(_SidebarTab tab, int generation) {
+    final prepared = ChatSidebarPreparationScope.maybeOf(
+      context,
+    )?.read(tab.id, widget.chats);
     return ToolPkgUiLauncherScreen(
       key: ValueKey('sidebar-route:${tab.id}:$generation'),
       clients: widget.clients,
@@ -373,6 +377,7 @@ class _ChatSidebarTabHostState extends State<ChatSidebarTabHost> {
       showLoadingIndicator: false,
       initialModuleSpec: tab.route.moduleSpec,
       initialState: <String, Object?>{
+        'chatSidebarPrepared': ?prepared,
         'input': tab.entry.params,
         'chatSidebar': <String, Object?>{
           'chats': widget.chats.map(chatSidebarSummary).toList(growable: false),
@@ -553,4 +558,140 @@ class _ChatSidebarTabHostState extends State<ChatSidebarTabHost> {
       ],
     );
   }
+}
+
+/// Prepares opaque plugin data without opening a Compose session or a UI route.
+class ChatSidebarPreparation extends ChangeNotifier {
+  ChatSidebarPreparation({required this.clients}) {
+    _catalogSubscription = ToolPkgCatalogChangeBus.listen(_invalidate);
+    PluginHotReload.revision.addListener(_invalidate);
+  }
+
+  static const api = 'chat.sidebar.prepare';
+  final GeneratedCoreProxyClients clients;
+  StreamSubscription<void>? _catalogSubscription;
+  List<core_proxy.ChatHistoryListItem>? _chats;
+  String? _key;
+  int _generation = 0;
+  bool _disposed = false;
+  Map<String, Object?> _data = const {};
+
+  /// Only full generic history changes require new plugin projections.
+  Future<void> prepare(List<core_proxy.ChatHistoryListItem> chats) async {
+    if (_disposed) return;
+    final summaries = chats.map(chatSidebarSummary).toList(growable: false);
+    final key = jsonEncode(summaries);
+    if (key == _key) return;
+    _chats = List.unmodifiable(chats);
+    _key = key;
+    final generation = ++_generation;
+    _data = const {};
+    notifyListeners();
+    final watch = Stopwatch()..start();
+    try {
+      final manager = clients.application.packageManager();
+      final owners = await manager.getToolPkgPublicApiOwners(apiName: api);
+      if (!_current(generation)) return;
+      final seen = <String>{};
+      for (final owner in owners) {
+        if (owner.apiName != api ||
+            owner.containerPackageName.trim().isEmpty ||
+            !seen.add(owner.containerPackageName)) {
+          throw const FormatException('Invalid sidebar preparation API owner.');
+        }
+      }
+      // A failed optional provider must not suppress another owner's data.
+      await Future.wait(
+        owners.map((owner) async {
+          try {
+            final raw = await manager.invokeToolPkgPublicApi(
+              packageName: owner.containerPackageName,
+              methodName: api,
+              payload: <String, Object?>{'chats': summaries},
+            );
+            if (!_current(generation)) return;
+            if (raw is! Map || raw.length != 1 || raw['entries'] is! List) {
+              throw const FormatException(
+                'Sidebar preparation must return entries.',
+              );
+            }
+            final prepared = <String, Object?>{};
+            for (final entry in raw['entries'] as List) {
+              if (entry is! Map ||
+                  entry.length != 2 ||
+                  !entry.containsKey('data') ||
+                  entry['entryId'] is! String ||
+                  (entry['entryId'] as String).trim().isEmpty) {
+                throw const FormatException('Invalid prepared sidebar entry.');
+              }
+              final id = chatSidebarTabIdentity(
+                owner.containerPackageName,
+                entry['entryId'] as String,
+              );
+              if (prepared.containsKey(id)) {
+                throw const FormatException(
+                  'Duplicate prepared sidebar entry.',
+                );
+              }
+              prepared[id] = entry['data'];
+            }
+            _data = {..._data, ...prepared};
+            notifyListeners();
+            ClientLogger.i(
+              'event=sidebar_data_prepared package=${owner.containerPackageName} '
+              'entries=${prepared.length} elapsedMs=${watch.elapsedMilliseconds}',
+              tag: 'ChatSidebarPreparation',
+            );
+          } catch (error) {
+            if (_current(generation)) _logFailure(error);
+          }
+        }),
+      );
+    } catch (error) {
+      if (_current(generation)) _logFailure(error);
+    }
+  }
+
+  /// Returns only same-history data; the host never interprets business fields.
+  Object? read(String id, List<core_proxy.ChatHistoryListItem> chats) =>
+      _key == jsonEncode(chats.map(chatSidebarSummary).toList(growable: false))
+      ? _data[id]
+      : null;
+
+  bool _current(int generation) => !_disposed && generation == _generation;
+
+  void _logFailure(Object error) => ClientLogger.w(
+    'Optional sidebar preparation failed; route will load normally: $error',
+    tag: 'ChatSidebarPreparation',
+  );
+
+  void _invalidate() {
+    if (_disposed) return;
+    _key = null;
+    final chats = _chats;
+    if (chats != null) unawaited(prepare(chats));
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    ++_generation;
+    unawaited(_catalogSubscription?.cancel());
+    PluginHotReload.revision.removeListener(_invalidate);
+    super.dispose();
+  }
+}
+
+/// Keeps prepared data owned by the main window, not the transient drawer tree.
+class ChatSidebarPreparationScope
+    extends InheritedNotifier<ChatSidebarPreparation> {
+  const ChatSidebarPreparationScope({
+    super.key,
+    required ChatSidebarPreparation preparation,
+    required super.child,
+  }) : super(notifier: preparation);
+
+  static ChatSidebarPreparation? maybeOf(BuildContext context) => context
+      .dependOnInheritedWidgetOfExactType<ChatSidebarPreparationScope>()
+      ?.notifier;
 }

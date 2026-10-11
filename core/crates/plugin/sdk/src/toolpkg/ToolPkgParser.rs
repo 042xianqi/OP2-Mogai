@@ -1242,7 +1242,7 @@ impl ToolPkgArchiveParser {
             requireToolPkgNavigationSurface(&surface).map_err(|error| {
                 format!("{TOOLPKG_REGISTRATION_NAVIGATION_ENTRY}[{index}].surface {error}")
             })?;
-            if surface == TOOLPKG_NAV_SURFACE_CHAT_ATTACHMENTS || surface == TOOLPKG_NAV_SURFACE_CHAT_SIDEBAR_TABS {
+            if surface == TOOLPKG_NAV_SURFACE_CHAT_ATTACHMENTS || surface == TOOLPKG_NAV_SURFACE_CHAT_SIDEBAR_TABS || surface == TOOLPKG_NAV_SURFACE_CHAT_INPUT_MENU || surface == TOOLPKG_NAV_SURFACE_CHAT_INPUT_MENU_SECTIONS {
                 if entry.action.is_some() {
                     return Err(format!("{TOOLPKG_REGISTRATION_NAVIGATION_ENTRY}[{index}].action is unsupported for {surface}"));
                 }
@@ -1250,19 +1250,19 @@ impl ToolPkgArchiveParser {
                     return Err(format!("{TOOLPKG_REGISTRATION_NAVIGATION_ENTRY}[{index}].route is required for {surface}"));
                 }
             }
-            if surface == TOOLPKG_NAV_SURFACE_CHAT_SIDEBAR_TABS {
+            if surface == TOOLPKG_NAV_SURFACE_CHAT_SIDEBAR_TABS || surface == TOOLPKG_NAV_SURFACE_CHAT_INPUT_MENU || surface == TOOLPKG_NAV_SURFACE_CHAT_INPUT_MENU_SECTIONS {
                 if !routeId.starts_with(&format!("toolpkg:{}:ui:", manifest.toolpkgId)) {
-                    return Err(format!("{TOOLPKG_REGISTRATION_NAVIGATION_ENTRY}[{index}].route must belong to this package for chat_sidebar_tabs: {routeId}"));
+                    return Err(format!("{TOOLPKG_REGISTRATION_NAVIGATION_ENTRY}[{index}].route must belong to this package for {surface}: {routeId}"));
                 }
                 let matching = uiRoutes.iter().filter(|route| route.routeId == routeId).collect::<Vec<_>>();
                 if matching.is_empty() {
                     return Err(format!("{TOOLPKG_REGISTRATION_NAVIGATION_ENTRY}[{index}].route not found: {routeId}"));
                 }
                 if matching.len() != 1 {
-                    return Err(format!("{TOOLPKG_REGISTRATION_NAVIGATION_ENTRY}[{index}].route is duplicated for chat_sidebar_tabs: {routeId}"));
+                    return Err(format!("{TOOLPKG_REGISTRATION_NAVIGATION_ENTRY}[{index}].route is duplicated for {surface}: {routeId}"));
                 }
                 if matching[0].runtime != TOOLPKG_RUNTIME_COMPOSE_DSL {
-                    return Err(format!("{TOOLPKG_REGISTRATION_NAVIGATION_ENTRY}[{index}].route must use compose_dsl for chat_sidebar_tabs: {routeId}"));
+                    return Err(format!("{TOOLPKG_REGISTRATION_NAVIGATION_ENTRY}[{index}].route must use compose_dsl for {surface}: {routeId}"));
                 }
             }
             if id.is_empty() {
@@ -2861,6 +2861,22 @@ mod navigation_registration_tests {
         assert_eq!(load_sidebar_navigation(vec![route.clone(), route.clone()], entry.clone()).unwrap_err(), "Duplicate toolpkg ui route id: panel");
         let mut invalid = route; invalid.runtime = "unsupported".to_string();
         assert_eq!(load_sidebar_navigation(vec![invalid], entry).unwrap_err(), format!("{TOOLPKG_REGISTRATION_NAVIGATION_ENTRY}[0].route must use compose_dsl for chat_sidebar_tabs: toolpkg:arbitrary_package:ui:panel"));
+    }
+
+    /// Applies the same owned Compose-route contract to the generic menu section slot.
+    #[test]
+    fn input_menu_sections_archive_requires_one_owned_compose_route_without_actions() {
+        let (route, mut entry) = sidebar_archive_input();
+        entry.surface = TOOLPKG_NAV_SURFACE_CHAT_INPUT_MENU_SECTIONS.to_string();
+        assert!(load_sidebar_navigation(vec![route.clone()], entry.clone()).is_ok());
+        let mut invalid = entry.clone();
+        invalid.routeId = Some("toolpkg:foreign:ui:panel".to_string());
+        assert!(load_sidebar_navigation(vec![route.clone()], invalid).unwrap_err().contains("route must belong to this package for chat_input_menu_sections"));
+        let mut invalid = entry.clone();
+        invalid.action = Some(ToolPkgNavigationActionHookRuntime { function: "action".to_string(), functionSource: None });
+        assert!(load_sidebar_navigation(vec![route.clone()], invalid).unwrap_err().contains("action is unsupported for chat_input_menu_sections"));
+        let mut invalid = route.clone(); invalid.runtime = "web".to_string();
+        assert!(load_sidebar_navigation(vec![invalid], entry).unwrap_err().contains("route must use compose_dsl for chat_input_menu_sections"));
     }
 
 }

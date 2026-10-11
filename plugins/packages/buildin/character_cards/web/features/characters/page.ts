@@ -1,6 +1,6 @@
 import type { EditorContext } from "../../bridge/context";
-import { button, escapeHtml, icon, iconButton } from "../../shared/ui/html";
-import { groupTile } from "../groups/view";
+import { button, escapeHtml, icon } from "../../shared/ui/html";
+import { groupTile } from "../groups/tiles";
 import { cardTile } from "./tiles";
 import { memoryPageBody } from "../memory/library-view";
 /** Composes the single role-card page from separate card and group tile renderers. */
@@ -10,7 +10,7 @@ export function createPageRenderer(context: EditorContext) {
   function renderMain() {
     if (state.snapshot === null) return;
     if (state.managementView === "memory") {
-      app.innerHTML = `<div class="page"><header class="appbar"><h1>记忆</h1><span class="spacer"></span>${iconButton("refresh", "刷新", "refresh")}</header><div class="scroll">${state.error === "" ? "" : `<div class="error-banner" role="alert">${escapeHtml(state.error)}</div>`}${memoryPageBody(snapshot(), state.avatarSources)}</div></div>`;
+      app.innerHTML = `<div class="page"><div class="scroll">${state.error === "" ? "" : `<div class="error-banner" role="alert">${escapeHtml(state.error)}</div>`}${memoryPageBody(snapshot(), state.avatarSources)}</div></div>`;
       return;
     }
     let cards = "", groups = "";

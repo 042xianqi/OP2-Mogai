@@ -2729,6 +2729,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsAppearanceFontMonospace => 'Mono';
 
   @override
+  String get settingsAppearanceInterfaceScale => 'Interface scale';
+
+  @override
   String get settingsAppearanceFontScale => 'Font size';
 
   @override
@@ -3462,7 +3465,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsRuntimeNetworkControlDescription =>
-      'Roles, identities, device authority, and audit';
+      'Manage device identities and permissions, and review activity';
 
   @override
   String get settingsRuntimeIdentitiesAndPermissions =>
@@ -3478,10 +3481,35 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsRuntimeControlIdentities => 'Identities';
 
   @override
-  String get settingsRuntimeControlAudit => 'Audit';
+  String get settingsRuntimeControlAuditAccepted => 'Applied';
 
   @override
-  String get settingsRuntimeControlAddRole => 'Add role';
+  String get settingsRuntimeControlAuditRejected => 'Rejected';
+
+  @override
+  String get settingsRuntimeControlAuditIssuer => 'Requested by';
+
+  @override
+  String get settingsRuntimeControlAuditDetails => 'Technical details';
+
+  @override
+  String get settingsRuntimeControlAuditBootstrap =>
+      'Initialize space permissions';
+
+  @override
+  String get settingsRuntimeControlAuditAdmit => 'Admit device';
+
+  @override
+  String get settingsRuntimeControlAuditMerge => 'Merge device spaces';
+
+  @override
+  String get settingsRuntimeControlAuditPolicy => 'Update permission policy';
+
+  @override
+  String get settingsRuntimeControlAudit => 'Activity';
+
+  @override
+  String get settingsRuntimeControlAddRole => 'New identity';
 
   @override
   String get settingsRuntimeControlGrantRole => 'Grant role';
@@ -3493,10 +3521,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsRuntimeControlBindDevice => 'Bind device';
 
   @override
-  String get settingsRuntimeControlRoleName => 'Role name';
+  String get settingsRuntimeControlRoleName => 'Identity name';
 
   @override
-  String get settingsRuntimeControlCapabilities => 'What can this role do?';
+  String get settingsRuntimeControlCapabilities =>
+      'Actions this identity can perform';
 
   @override
   String get settingsRuntimeControlManagedDevices =>
@@ -3512,7 +3541,8 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsRuntimeControlDeviceId => 'Device ID';
 
   @override
-  String get settingsRuntimeControlNoAudit => 'No control commands recorded';
+  String get settingsRuntimeControlNoAudit =>
+      'No activity yet. Identity and device changes will appear here.';
 
   @override
   String settingsRuntimeControlAuditCount(int count) {
@@ -3550,11 +3580,13 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsRuntimeControlManages => 'Manages';
 
   @override
+  String get settingsRuntimeControlLocalIdentity => 'This device';
+
+  @override
   String get settingsRuntimeControlCurrentIdentity => 'Current identity';
 
   @override
-  String get settingsRuntimeControlCurrentCapabilities =>
-      'Current capabilities';
+  String get settingsRuntimeControlCurrentCapabilities => 'Permissions';
 
   @override
   String get settingsRuntimeControlManageIdentities => 'Manage identities';
@@ -3575,7 +3607,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsRuntimeControlIdentityDefinitions =>
-      'Identity definitions';
+      'Identity permissions';
 
   @override
   String settingsRuntimeControlIdentityCount(int count) {

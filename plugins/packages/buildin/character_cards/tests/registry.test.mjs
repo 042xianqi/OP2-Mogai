@@ -9,11 +9,16 @@ const roots = ["character", "group", "tag", "active-prompt", "memory"];
 test("chat context projection publishes identity only while its menu renders through DSL", () => {
   const api = loadModule("src/ui-contributions.ts"), directory = fixture().snapshot;
   const routes = { editor: "editor-route", selection: "selection-route", execution: "execution-route" };
-  for (const selection of [null, "card:travel", "group:group-one"]) {
+  for (const selection of [null, "card:operit", "card:travel", "group:group-one"]) {
     const context = plain(api.contextActions(routes, { chatId: "explicit-chat", selection }, directory));
     assert.deepEqual(Object.keys(context).sort(), ["backgroundUri", "identity"]);
     if (selection === null) assert.equal(context.identity, null);
-    else assert.equal(context.identity.action.routeId, routes.editor);
+    else {
+      assert.deepEqual(Object.keys(context.identity).sort(), ["avatarAction", "avatarUri", "title"]);
+      assert.equal(Object.hasOwn(context.identity, "action"), false, "Display titles must not publish a generic click action");
+      assert.equal(context.identity.avatarAction.routeId, routes.editor);
+      if (selection === "card:operit") assert.equal(context.identity.title, "Operit");
+    }
   }
 });
 
@@ -123,11 +128,13 @@ test("one character-and-memory package registers native selection, embedded side
   const memoryScreen = () => { throw new Error("Registration tests do not render memory UI"); };
   /** Supplies the independent embedded input-menu renderer. */
   const inputMenuScreen = () => { throw new Error("Registration tests do not render input-menu UI"); };
-  assert.equal(api.register({ id: "com.operit.character_cards", title: "角色卡", icon: "Badge", order: 150 }, screen, attachmentScreen, sidebarScreen, selectionScreen, groupExecutionScreen, memoryScreen, inputMenuScreen), true);
+  const memoryMenuScreen = () => { throw new Error("Registration does not render memory controls"); };
+  const memoryStatusScreen = () => { throw new Error("Registration does not render memory status"); };
+  assert.equal(api.register({ id: "com.operit.character_cards", title: "角色卡", icon: "Badge", order: 150 }, screen, attachmentScreen, sidebarScreen, selectionScreen, groupExecutionScreen, memoryScreen, inputMenuScreen, memoryMenuScreen, memoryStatusScreen), true);
   api.registerUiRequestChannel();
   const managementRoute = "toolpkg:com.operit.character_cards:ui:main";
   const attachmentRoute = "toolpkg:com.operit.character_cards:ui:memory-attachment";
-  assert.equal(routes.length, 7);
+  assert.equal(routes.length, 9);
   assert.deepEqual(plain(routes), [
     { id: "main", route: managementRoute, runtime: "compose_dsl", keepAlive: true, title: { zh: "角色卡", en: "Characters" } },
     { id: "memory-attachment", route: attachmentRoute, runtime: "compose_dsl", keepAlive: false, title: { zh: "记忆附件", en: "Memory attachment" } },
@@ -136,14 +143,16 @@ test("one character-and-memory package registers native selection, embedded side
     { id: "selection", route: "toolpkg:com.operit.character_cards:ui:selection", runtime: "compose_dsl", keepAlive: false, title: { zh: "切换角色卡", en: "Switch character" } },
     { id: "group-execution", route: "toolpkg:com.operit.character_cards:ui:group-execution", runtime: "compose_dsl", keepAlive: false, title: { zh: "群组执行", en: "Group execution" } },
     { id: "memory", route: "toolpkg:com.operit.character_cards:ui:memory", runtime: "compose_dsl", keepAlive: true, title: { zh: "记忆", en: "Memory" } },
+    { id: "chat-input-memory", route: "toolpkg:com.operit.character_cards:ui:chat-input-memory", runtime: "compose_dsl", keepAlive: false, title: { zh: "记忆", en: "Memory" } },
+    { id: "memory-status", route: "toolpkg:com.operit.character_cards:ui:memory-status", runtime: "compose_dsl", keepAlive: false, title: { zh: "记忆状态", en: "Memory status" } },
   ]);
   assert.equal(routes[0].screen, screen); assert.equal(routes[1].screen, attachmentScreen);
   assert.equal(routes[2].screen, sidebarScreen); assert.equal(routes[3].screen, inputMenuScreen); assert.equal(routes[4].screen, selectionScreen); assert.equal(routes[5].screen, groupExecutionScreen); assert.equal(routes[6].screen, memoryScreen);
   assert.equal(new Set(routes.map(
     /** Requires five independent real screen callbacks, not aliases of the management page. */
     entry => entry.screen,
-  )).size, 7);
-  assert.equal(navigation.length, 6);
+  )).size, 9);
+  assert.equal(navigation.length, 7);
   assert.deepEqual(plain(navigation.filter(
     /** Requires exactly one directly embedded input-menu registration. */
     entry => entry.surface === "chat_input_menu",

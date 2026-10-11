@@ -7,7 +7,7 @@ import type { DomainMessage } from "./ui-contributions";
 import { parseDomainMessage } from "./ui-contributions";
 
 /** Registers independent character and memory management entries using the same generic route. */
-export function register(definition: Definition, screen: (ctx: ComposeDslContext) => ComposeNode, attachmentScreen: (ctx: ComposeDslContext) => ComposeNode, sidebarScreen: (ctx: ComposeDslContext) => ComposeNode, selectionScreen: (ctx: ComposeDslContext) => ComposeNode, groupExecutionScreen: (ctx: ComposeDslContext) => ComposeNode, memoryScreen: (ctx: ComposeDslContext) => ComposeNode, inputMenuScreen: (ctx: ComposeDslContext) => ComposeNode): boolean {
+export function register(definition: Definition, screen: (ctx: ComposeDslContext) => ComposeNode, attachmentScreen: (ctx: ComposeDslContext) => ComposeNode, sidebarScreen: (ctx: ComposeDslContext) => ComposeNode, selectionScreen: (ctx: ComposeDslContext) => ComposeNode, groupExecutionScreen: (ctx: ComposeDslContext) => ComposeNode, memoryScreen: (ctx: ComposeDslContext) => ComposeNode, inputMenuScreen: (ctx: ComposeDslContext) => ComposeNode, memoryMenuScreen: (ctx: ComposeDslContext) => ComposeNode, memoryStatusScreen: (ctx: ComposeDslContext) => ComposeNode): boolean {
   const route = `toolpkg:${definition.id}:ui:main`;
   ToolPkg.registerUiRoute({ id: "main", route, screen, runtime: "compose_dsl", keepAlive: true, title: { zh: definition.title, en: "Characters" } });
   const memoryRoute = `toolpkg:${definition.id}:ui:memory`;
@@ -27,6 +27,10 @@ export function register(definition: Definition, screen: (ctx: ComposeDslContext
   ToolPkg.registerNavigationEntry({ id: "memory-settings", route: memoryRoute, surface: "main_sidebar_plugins", title: { zh: "记忆", en: "Memory" }, icon: "Memory", order: definition.order + 1 });
   ToolPkg.registerNavigationEntry({ id: "toolbox", route, surface: "toolbox", title: { zh: definition.title, en: "Characters" }, icon: definition.icon, order: definition.order });
   ToolPkg.registerNavigationEntry({ id: "memory-attachment", route: attachmentRoute, surface: "chat_attachments", title: { zh: "记忆附件", en: "Memory attachment" }, icon: "Memory", order: definition.order, params: { mode: "memory-attachment", ownerKey: null, folderPath: null } });
+  const memoryMenuRoute = `toolpkg:${definition.id}:ui:chat-input-memory`;
+  ToolPkg.registerUiRoute({ id: "chat-input-memory", route: memoryMenuRoute, screen: memoryMenuScreen, runtime: "compose_dsl", keepAlive: false, title: { zh: "记忆", en: "Memory" } });
+  ToolPkg.registerNavigationEntry({ id: "memory-menu", route: memoryMenuRoute, surface: "chat_input_menu_sections", title: { zh: "记忆", en: "Memory" }, order: definition.order, params: {} });
+  ToolPkg.registerUiRoute({ id: "memory-status", route: `toolpkg:${definition.id}:ui:memory-status`, screen: memoryStatusScreen, runtime: "compose_dsl", keepAlive: false, title: { zh: "记忆状态", en: "Memory status" } });
   return true;
 }
 

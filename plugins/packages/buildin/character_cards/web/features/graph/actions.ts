@@ -67,9 +67,16 @@ export function createGraphActionsFeature(context: EditorContext) {
 
       case "fit-graph": { const graph = topDialog("graph"); graph.camera = fitMemoryGraph(memoryGraphBounds(graph.positions, graph.sizes), graphViewport(graph).width, graphViewport(graph).height); updateGraphSurface(graph); return; }
 
-      case "export-graph": throw new Error("插件记忆备份工作流尚未接入");
+      case "export-graph": {
+        const graph = topDialog("graph"), backup = await request({ action: "exportMemory", ownerKey: graph.ownerKey });
+        pushDialog({ type: "export", path: "", content: backup.content, typeName: "memory" }); return;
+      }
+      case "import-graph": {
+        const graph = topDialog("graph");
+        pushDialog({ type: "import", target: "memory", ownerKey: graph.ownerKey, format: "operit", strategy: "SKIP", content: "" }); return;
+      }
       default: throw new Error(`Unknown graph/actions action: ${action}`);
     }
   }
-  return { names: ["owner-graph", "refresh-graph", "search-graph", "clear-search", "select-edge", "select-memory", "zoom-in", "zoom-out", "fit-graph", "export-graph"], handleAction, openGraph };
+  return { names: ["owner-graph", "refresh-graph", "search-graph", "clear-search", "select-edge", "select-memory", "zoom-in", "zoom-out", "fit-graph", "export-graph", "import-graph"], handleAction, openGraph };
 }

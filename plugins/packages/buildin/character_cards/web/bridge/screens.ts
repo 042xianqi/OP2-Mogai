@@ -1,13 +1,10 @@
-import type { CurrentScreen, EditScreen, EntityKind, PresentedScreen, PreviewScreen, ScreenReceiver, ScreenResult } from "../../src/presentation";
+import type { CurrentScreen, PresentedScreen, ScreenReceiver, ScreenResult } from "../../src/presentation";
 import type { EditorContext, ActionFeature } from "./context";
-import type { Dialog, CharacterMemoryBridge } from "./contracts";
+import type { CharacterMemoryBridge } from "./contracts";
 import { type AttachmentState, createAttachmentFeature, createAttachmentState, attachmentPage } from "../features/memory/attachments";
 import { type SelectionState, createSelectionFeature, validateSelection, createSelectionState, selectionPage } from "../features/characters/selection";
 import { parseScreenInput, parseScreenResult } from "../../src/presentation";
 import { host } from "./transport";
-import { getCard } from "../features/characters/data";
-import { getGroup } from "../features/groups/data";
-import { copy, escapeHtml } from "../shared/ui/html";
 
 /** Keeps presentation domain contracts in this plugin, shared by its service and Web entry. */
 export type {
@@ -29,9 +26,7 @@ export interface ScreenFeatureContext {
   cancel(): Promise<void>;
 }
 
-export interface PreviewState { mode: "preview"; input: PreviewScreen; root: Dialog | null }
-export interface EditState { mode: "edit"; input: EditScreen; root: Dialog | null }
-export type ScreenState = { mode: "manage" } | SelectionState | AttachmentState | PreviewState | EditState;
+export type ScreenState = { mode: "manage" } | SelectionState | AttachmentState;
 export type ScreenStateOf<T extends ScreenState["mode"]> = Extract<ScreenState, { mode: T }>;
 
 export { parseScreenInput } from "../../src/presentation";
@@ -106,8 +101,6 @@ export function createScreenController(editor: EditorContext, management: { /** 
       case "manage": management.renderMain(); return;
       case "select": editor.app.innerHTML = selectionPage(active, editor.snapshot(), editor.state.error, editor.state.busy); return;
       case "memory-attachment": editor.app.innerHTML = attachmentPage(active, editor.snapshot(), editor.state.error, editor.state.busy); return;
-      case "preview":
-      case "edit": editor.app.innerHTML = `<div class="presentation-backdrop" aria-label="${active.mode === "preview" ? "实体预览" : "实体编辑"}">${editor.state.error === "" ? "" : `<div class="error-banner" role="alert">${escapeHtml(editor.state.error)}</div>`}</div>`; return;
     }
   }
 
@@ -141,41 +134,14 @@ export function createScreenController(editor: EditorContext, management: { /** 
       case "select":
         validateSelection(input.selected, input.kind, editor.snapshot()); active = createSelectionState(input); break;
       case "memory-attachment": active = createAttachmentState(input); break;
-      case "preview": active = { mode: "preview", input, root: null }; break;
-      case "edit": active = { mode: "edit", input, root: null }; break;
+      case "preview": case "edit": throw new Error("Entity presentations are rendered by the native DSL route");
     }
     renderMain();
     switch (active.mode) {
       case "select": return;
       case "memory-attachment": await attachment.initialize(); return;
-      case "preview": {
-        if (input.mode !== "preview") throw new Error("预览上下文不匹配");
-        if (input.entity === "card") getCard(editor.snapshot(), input.id); else getGroup(editor.snapshot(), input.id);
-        active.root = editor.pushDialog({ type: "preview", entity: input.entity, id: input.id, tab: 0 }); return;
-      }
-      case "edit": {
-        if (input.mode !== "edit") throw new Error("编辑上下文不匹配");
-        active.root = input.entity === "card"
-          ? editor.pushDialog({ type: "character", card: copy(getCard(editor.snapshot(), input.id)), create: false, tab: 0 })
-          : editor.pushDialog({ type: "group", group: copy(getGroup(editor.snapshot(), input.id)), create: false }); return;
-      }
       default: { const unexpected: never = active; throw new Error(`Unexpected presented view: ${String(unexpected)}`); }
     }
-  }
-
-  /** Observes explicit close actions on the presented root, not on nested editors. */
-  async function dismissDialog(dialog: Dialog): Promise<void> {
-    if ((active.mode !== "preview" && active.mode !== "edit") || active.root !== dialog) return;
-    if (active.mode === "preview") await complete({ mode: "preview", entity: active.input.entity, id: active.input.id });
-    else await cancel();
-  }
-
-  /** Completes an edit presentation only after its corresponding real save or delete succeeds. */
-  async function entityChanged(entity: EntityKind, id: string, operation: "saved" | "deleted"): Promise<void> {
-    if (active.mode !== "edit") return;
-    if (active.input.entity !== entity || active.input.id !== id) return;
-    if (active.root === null || editor.state.dialogs.indexOf(active.root) < 0) throw new Error("编辑 presentation 的根编辑器已关闭");
-    await complete({ mode: "edit", entity, id, operation });
   }
 
   /** Handles searchable screen fields without moving them into the generic editor draft contract. */
@@ -192,5 +158,5 @@ export function createScreenController(editor: EditorContext, management: { /** 
     catch (error) { editor.state.error = String(error); }
     finally { editor.state.busy = false; renderMain(); }
   }
-  return { renderMain, enter, dismissDialog, entityChanged, onInput, onKeyDown, features: [common, selection, attachment] };
+  return { renderMain, enter, onInput, onKeyDown, features: [common, selection, attachment] };
 }

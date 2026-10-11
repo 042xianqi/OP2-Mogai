@@ -29,10 +29,13 @@ Widget buildRetainedComposeDslLayoutForTest({
   required core_proxy.ToolPkgComposeDslNodeUpdate update,
   required ComposeDslWebViewHostContext hostContext,
   required void Function(VoidCallback dispose) registerDispose,
+  void Function(void Function(core_proxy.ToolPkgComposeDslNodeUpdate) apply)?
+  registerApply,
 }) {
   final store = _ComposeDslNodeStore();
   store.apply(update);
   registerDispose(store.dispose);
+  registerApply?.call(store.apply);
   return _ComposeDslRenderer(
     node: store.root,
     onAction: hostContext.dispatchAction,
@@ -79,43 +82,68 @@ class _ComposeDslRendererState extends State<_ComposeDslRenderer> {
 
   /// Reads the current node handle owned by this widget.
   _ComposeDslNode get node => widget.node;
+
   /// Reads the current action dispatcher without subscribing to a parent renderer.
-  Future<Object?> Function(String actionId, [Object? payload]) get onAction => widget.onAction;
+  Future<Object?> Function(String actionId, [Object? payload]) get onAction =>
+      widget.onAction;
+
   /// Reads the current ordered text dispatcher.
-  Future<Object?> Function(String actionId, String text) get onTextInput => widget.onTextInput;
+  Future<Object?> Function(String actionId, String text) get onTextInput =>
+      widget.onTextInput;
+
   /// Reads the existing WebView execution context.
-  ComposeDslWebViewHostContext get webViewHostContext => widget.webViewHostContext;
+  ComposeDslWebViewHostContext get webViewHostContext =>
+      widget.webViewHostContext;
+
   /// Reads the existing Markdown splitter.
-  MarkdownContentSplitter get splitMarkdownContent => widget.splitMarkdownContent;
+  MarkdownContentSplitter get splitMarkdownContent =>
+      widget.splitMarkdownContent;
+
   /// Uses the retained identity for node-owned resources and positional snapshot paths otherwise.
   String get nodePath => widget.node.id ?? widget.nodePath;
+
   /// Reads the parent's modifier scope.
   _ComposeDslModifierScope get modifierScope => widget.modifierScope;
+
   /// Reads the owning dialog's embedding policy.
   bool get embedDialog => widget.embedDialog;
 
   /// Requests a rebuild only after an observed node changes.
-  void _invalidate() { if (mounted) setState(() {}); }
+  void _invalidate() {
+    if (mounted) setState(() {});
+  }
 
   /// Captures reads from immediate and deferred node builders.
   Widget _trackBuild(Widget Function() build) {
+    // Dialog routes and deferred layout builders can run after a retained commit
+    // removes their source. Do not rebuild or resubscribe a retired node.
+    if (!mounted || widget.node.isDisposed) return const SizedBox.shrink();
     final reads = <_ComposeDslNode>{};
-    try { return _ComposeDslReadScope.track(reads, build); } finally {
+    try {
+      return _ComposeDslReadScope.track(reads, build);
+    } finally {
       for (final dependency in reads) {
-        if (_dependencies.add(dependency)) dependency.addListener(_invalidate);
+        if (!dependency.isDisposed && _dependencies.add(dependency)) {
+          dependency.addListener(_invalidate);
+        }
       }
     }
   }
 
   /// Removes subscriptions from the preceding build before recording current reads.
   void _clearDependencies() {
-    for (final dependency in _dependencies) { dependency.removeListener(_invalidate); }
+    for (final dependency in _dependencies) {
+      dependency.removeListener(_invalidate);
+    }
     _dependencies.clear();
   }
 
   /// Releases every observed-node subscription on unmount.
   @override
-  void dispose() { _clearDependencies(); super.dispose(); }
+  void dispose() {
+    _clearDependencies();
+    super.dispose();
+  }
 
   /// Builds the widget for the current DSL state.
   @override
@@ -383,6 +411,14 @@ class _ComposeDslRendererState extends State<_ComposeDslRenderer> {
       case 'BasicText':
         return Text(
           _string(node.props['text']),
+          textAlign: switch (_string(node.props['textAlign'])) {
+            'end' => TextAlign.end,
+            'center' => TextAlign.center,
+            'right' => TextAlign.right,
+            'left' => TextAlign.left,
+            'justify' => TextAlign.justify,
+            _ => TextAlign.start,
+          },
           maxLines: _int(node.props['maxLines']),
           overflow: _string(node.props['overflow']) == 'ellipsis'
               ? TextOverflow.ellipsis
@@ -410,6 +446,23 @@ class _ComposeDslRendererState extends State<_ComposeDslRenderer> {
       case 'FilledTonalIconToggleButton':
       case 'OutlinedIconToggleButton':
         return _iconButton(context, type);
+      case 'HorizontalPager':
+        return _ComposePager(
+          currentPage: _int(node.props['currentPage']) ?? 0,
+          onPageChanged: (page) =>
+              _invokeAction(node.props['onPageChanged'], page),
+          children: _slotChildren('content', useChildren: true),
+        );
+      case 'InputDecorator':
+        return InputDecorator(
+          decoration: InputDecoration(
+            labelText: _string(node.props['label']),
+            enabled: _enabled(),
+          ),
+          child: _hasSlot('content')
+              ? _slotInline('content')
+              : _decoratorChild(),
+        );
       case 'TextField':
       case 'OutlinedTextField':
         return _textField(context, type);

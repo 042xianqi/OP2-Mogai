@@ -9,7 +9,4 @@
 .picker-row>.icon{color:var(--onSurfaceVariant);flex:none}.picker-row>span{overflow-wrap:anywhere}
 .picker-row:hover:not(:disabled){background:color-mix(in srgb,var(--onSurface) 8%,transparent)}
 .attachment-content{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:8px 0;user-select:text}
-.presentation-backdrop{height:100%;padding:16px;background:var(--surface)}
-.preview-section{padding:8px 0}.preview-section h3{font-size:13px;font-weight:600;color:var(--onSurfaceVariant);margin:0 0 8px}
-.preview-section pre{white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;font:inherit;margin:0}
 @media(max-width:600px){.selection-toolbar{padding:8px 12px 0}.presentation-footer{padding:10px 12px}.picker-row{padding:12px 8px}}

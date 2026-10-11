@@ -225,7 +225,10 @@ test('Compose WebView and file picker have no callback-ID or JSON-text bridge', 
     },
     /** Returns the file-picker's ordinary structured data contract. */
     __operitNativeComposeFilePickerCommand(payload) {
-      assert.equal(payload.executionContextKey, 'ui-owner'); return {cancelled: false, files: [{path:'/picked/value'}]};
+      assert.equal(payload.executionContextKey, 'ui-owner');
+      assert.equal(payload.routeInstanceId, 'route');
+      assert.deepEqual(JSON.parse(JSON.stringify(payload.options)), {picker: 'document', allowedMimeTypes: ['image/png']});
+      return {cancelled: false, files: [{path:'/picked/value'}]};
     },
   });
   openCall();
@@ -234,7 +237,7 @@ test('Compose WebView and file picker have no callback-ID or JSON-text bridge', 
   vm.runInContext('JSON.parse = JSON.stringify = function() { throw Error("JSON transport used"); };', context);
   assert.equal(web.getState(), '{"literal":true}');
   assert.equal(await web.evaluateJavascript('1'), '{"literal":true}');
-  assert.equal((await compose.openFilePicker({picker:'document'})).files[0].path, '/picked/value');
+  assert.equal((await compose.openFilePicker({picker: 'document', allowedMimeTypes: ['image/png']})).files[0].path, '/picked/value');
   await flush();
   assert.equal(context.__operitGetCallState('owner').pendingReferences, 0);
   assert.equal(Object.keys(context).some(key => /^__operit_compose_webview_/.test(key)), false);

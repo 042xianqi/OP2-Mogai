@@ -5,7 +5,7 @@ import { graphData } from "./data";
 import { graphInspector } from "./inspector";
 /** Exposes the original graph header operations within the current character's dialog. */
 export function graphHeader(dialog: GraphDialog): string {
-  return `<div class="actions">${iconButton("owner-settings", "记忆设置", "tune", `data-owner="${escapeHtml(dialog.ownerKey)}" data-name="${escapeHtml(dialog.name)}"`)}${iconButton("export-graph", "导出记忆 JSON（备份接口待接入）", "download", "disabled")}${iconButton("refresh-graph", "刷新", "refresh", dialog.loading ? "disabled" : "")}</div>`;
+  return `<div class="actions">${iconButton("owner-settings", "记忆设置", "tune", `data-owner="${escapeHtml(dialog.ownerKey)}" data-name="${escapeHtml(dialog.name)}"`)}${iconButton("export-graph", "导出记忆 JSON", "download", dialog.loading ? "disabled" : "")}${iconButton("import-graph", "导入记忆 JSON", "upload", dialog.loading ? "disabled" : "")}${iconButton("refresh-graph", "刷新", "refresh", dialog.loading ? "disabled" : "")}</div>`;
 }
 
 /** Defines the graph surface and its inspector as one nested Material view. */

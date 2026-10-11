@@ -30,24 +30,24 @@ export function createMemoryLinkActionsFeature(context: EditorContext) {
           item => item.id === dataValue(element, "link"),
         );
         if (edge === undefined) throw new Error("记忆关系不存在");
+        const link = await request({ action: "readMemoryLink", ownerKey: graph.ownerKey, linkId: edge.id });
         const source = graphData(graph).items.find(
           /** Resolves the relationship source title from its UUID endpoint. */
-          item => item.uuid === edge.sourceId,
+          item => item.id === link.sourceMemoryId,
         );
         const target = graphData(graph).items.find(
           /** Resolves the relationship target title from its UUID endpoint. */
-          item => item.uuid === edge.targetId,
+          item => item.id === link.targetMemoryId,
         );
         if (source === undefined || target === undefined) throw new Error("记忆关系端点不存在");
-        if (edge.label === null || typeof edge.metadata.description !== "string") throw new Error("插件未返回完整关系记录，不能用图谱边覆盖关系描述");
-        pushDialog({ type: "link-edit", ownerKey: graph.ownerKey, linkId: edge.id, draft: { sourceTitle: source.title, targetTitle: target.title, linkType: edge.label, weight: edge.weight, description: edge.metadata.description } }); return;
+        pushDialog({ type: "link-edit", ownerKey: graph.ownerKey, linkId: edge.id, draft: { sourceTitle: source.title, targetTitle: target.title, linkType: link.type_, weight: link.weight, description: link.description } }); return;
       }
 
       case "save-link-edit": {
         const dialog = topDialog("link-edit"), weight = Number(dialog.draft.weight);
         if (dialog.draft.linkType.trim() === "" || !Number.isFinite(weight) || weight < 0 || weight > 1) throw new Error("请输入关系类型和有效的关系强度");
         const graph = owningGraph(dialog.ownerKey);
-        graph.data = await request({ action: "updateLink", ownerKey: dialog.ownerKey, linkId: dialog.linkId, linkType: dialog.draft.linkType.trim(), weight, description: dialog.draft.description.trim() });
+        graph.data = await request({ action: "updateLink", ownerKey: dialog.ownerKey, linkId: dialog.linkId, linkType: dialog.draft.linkType.trim(), weight, description: dialog.draft.description });
         popDialog(); toast("关系已保存"); return;
       }
 

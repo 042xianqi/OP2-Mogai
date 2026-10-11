@@ -268,6 +268,7 @@ export function jsonValue(value: unknown, path = "result"): JsonValue {
 
 /** Exposes only the shared business service operations used by resolved chat configuration. */
 export interface ChatConfigurationService {
+  readGlobalMemoryPreferences(): Promise<import("./model").GlobalMemoryPreferences>;
   /** Reads the real persisted plugin directory. */
   snapshot(): Promise<SnapshotRecord>;
   /** Calls a typed business operation without invoking another command. */
@@ -355,10 +356,11 @@ async function chatParticipant(
     routes.set(key, { key, readable: mount.readable || existing?.readable === true, writable: mount.writable || existing?.writable === true });
   }
   const prompt = await service.dispatchDomain("character.combine", { id: card.id, promptFunctionType: request.promptFunctionType, additionalTagIds: [] });
-  const document = await service.dispatchDomain("memory.user.read", { ownerKey: primary });
+  const userPreferencesText = (await service.readGlobalMemoryPreferences()).userDescriptionEnabled
+    ? (await service.dispatchDomain("memory.user.read", { ownerKey: primary })).content : "";
   return {
     id: card.id, name: card.name, avatarUri: card.avatarUri,
-    introPrompt: prompt.prompt, userPreferencesText: document.content,
+    introPrompt: prompt.prompt, userPreferencesText,
     openingStatement: card.openingStatement, modelBinding, ttsConfigId,
     toolAccess: { ...card.toolAccessConfig,
       allowedBuiltinTools: [...card.toolAccessConfig.allowedBuiltinTools], allowedPackages: [...card.toolAccessConfig.allowedPackages],

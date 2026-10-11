@@ -1,3 +1,4 @@
+import { readSdkScript, wrapComposeScript } from "../runtime/compose_scripts.mjs";
 import { composeStreamFixture } from './support/compose_stream_fixture.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -5,10 +6,7 @@ import vm from 'node:vm';
 import test from 'node:test';
 
 /** Reads the production JavaScript embedded in a Rust source file. */
-function embedded(name) {
-  const source = readFileSync(new URL(`../../core/crates/plugin/sdk/src/toolpkg/${name}`, import.meta.url), 'utf8');
-  return source.slice(source.indexOf('r#"') + 3, source.lastIndexOf('"#'));
-}
+function embedded(name) { return readSdkScript(name); }
 
 /** Loads the actual packaged screen without replacing its callback implementation. */
 function load(context, url) {
@@ -32,11 +30,8 @@ function runtime(screen) {
     } } },
     Tools: { System: { async toast() {} } },
   });
-  for (const name of ['ToolPkgComposeDslCompiler.js', 'ToolPkgComposeDslRetained.js', 'ToolPkgComposeDslReactive.js']) {
-    vm.runInContext(readFileSync(new URL(`../../core/crates/plugin/sdk/src/toolpkg/${name}`, import.meta.url), 'utf8'), context);
-  }
   vm.runInContext(embedded('ToolPkgComposeDslBridge.rs'), context);
-  vm.runInContext(embedded('ToolPkgComposeDslRuntimeScript.rs').replaceAll('{{', '{').replaceAll('}}', '}').replace('{script}', ''), context);
+  vm.runInContext(wrapComposeScript(''), context);
   context.module.exports = load(context, new URL(`../../plugins/packages/buildin/plan_mode/dist/ui/${screen}/index.ui.js`, import.meta.url));
   composeStreamFixture(context).adapt();
   return { context, calls };

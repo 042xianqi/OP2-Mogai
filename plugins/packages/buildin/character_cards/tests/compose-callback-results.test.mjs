@@ -1,3 +1,4 @@
+import { readSdkScript, wrapComposeScript } from "../../../../../tools/runtime/compose_scripts.mjs";
 import { productionBootstrap } from '../../../../../tools/tests/fixtures/production_bootstrap.mjs';
 import { composeStreamFixture } from '../../../../../tools/tests/support/compose_stream_fixture.mjs';
 import assert from "node:assert/strict";
@@ -14,18 +15,10 @@ const cancel = { type: "toolpkg.presentation.cancel", requestId: "fixture-reques
 function source(path) { return readFileSync(new URL(path, root), "utf8").replaceAll("\r\n", "\n"); }
 
 /** Extracts the sole production raw JavaScript string from a Rust bridge source. */
-function embedded(path) {
-  const matches = [...source(path).matchAll(/r#"([\s\S]*?)"#/g)];
-  assert.equal(matches.length, 1, `Expected one embedded JavaScript definition in ${path}`);
-  return matches[0][1];
-}
+function embedded(path) { return readSdkScript(path.split("/").at(-1)); }
 
 /** Applies Rust format-string brace escaping before inserting the actual screen fixture. */
-function wrappedScreen(screen) {
-  const wrapper = embedded(sdkRoot + "toolpkg/ToolPkgComposeDslRuntimeScript.rs");
-  assert.equal([...wrapper.matchAll(/\{script\}/g)].length, 1);
-  return wrapper.replaceAll("{{", "{").replaceAll("}}", "}").replace("{script}", screen);
-}
+function wrappedScreen(screen) { return wrapComposeScript(screen); }
 
 /** Serializes the real callback response across a JSON-only assertion boundary. */
 function json(value) { return JSON.parse(JSON.stringify(value)); }
@@ -33,9 +26,6 @@ function json(value) { return JSON.parse(JSON.stringify(value)); }
 /** Creates a clickable fixture with the actual Compose context and dispatch implementation. */
 function compose(component, property, callback) {
   const context = vm.createContext({ module: { exports: {} }, fixtureCallback: callback });
-  for (const file of ["ToolPkgComposeDslCompiler.js", "ToolPkgComposeDslRetained.js", "ToolPkgComposeDslReactive.js"]) {
-    vm.runInContext(source(sdkRoot + "toolpkg/" + file), context);
-  }
   vm.runInContext(embedded(sdkRoot + "toolpkg/ToolPkgComposeDslBridge.rs"), context);
   vm.runInContext(wrappedScreen(`
     /** Creates a generic component with an observable callback result. */

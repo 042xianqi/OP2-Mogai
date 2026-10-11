@@ -95,14 +95,16 @@ async fn native_character_editor_webview_actions_preserve_session_revision_order
     let mut stream = session.updates().unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap();
     let source = std::fs::read_to_string(root.join("plugins/packages/buildin/character_cards/dist/ui/main/index.ui.js")).unwrap();
-    let script = format!(r#"
-        __operitNativeComposeWebViewControllerCommand = function(command) {{
+    let setup = r#"exports.install = function() {
+        __operitNativeComposeWebViewControllerCommand = function(command) {
             globalThis.characterControllerCommand = command;
-            return {{success:true, data:null}};
-        }};
-        ToolPkg.readResource = async function() {{ await Promise.resolve(); return '/fixture/character-memory.html'; }};
-        {source}
-    "#);
+            return {success:true, data:null};
+        };
+        ToolPkg.readResource = async function() { await Promise.resolve(); return '/fixture/character-memory.html'; };
+        return true;
+    };"#;
+    engine.execute_script_function(setup, "install", &options(), &BTreeMap::new(), None, false, 60, None).await.unwrap();
+    let script = source;
     let render_started = std::time::Instant::now();
     session.execute(command("render", Some(script), None, None)).await;
     eprintln!("character_editor_probe phase=cold_script_to_retained_commit elapsedMs={:.3}", render_started.elapsed().as_secs_f64() * 1000.0);
@@ -271,19 +273,57 @@ async fn native_source_fingerprint_preserves_utf16_cache_identity_and_source_cha
     session.close(); engine.destroy();
 }
 
-/// Splits real editor startup into bootstrap, compiler, JS render and retained-commit measurements.
+/// Uses real built artifacts through the native factory/cache, with runtime lowering forbidden.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "Run explicitly to inspect native editor cold-load stages without opening personal data"]
-async fn native_character_editor_load_stage_performance_probe() {
+async fn native_compose_artifact_loads_without_parser_and_invalidates_changed_source() {
     let (session, engine) = native_session();
     let mut stream = session.updates().unwrap();
     let install = r#"exports.install = function() {
-        globalThis.__editorProbe = {parseMs:0, compileMs:0, compileCalls:0, renderMs:0, commitMs:0};
+        __operitAcorn.parse = function() { throw Error('Runtime parser invoked'); };
+        OperitComposeCompiler.compile = function() { throw Error('Runtime lowering invoked'); };
+        return true;
+    };"#;
+    engine.execute_script_function(install, "install", &options(), &BTreeMap::new(), None, false, 60, None).await.unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap();
+    let source = std::fs::read_to_string(root.join("plugins/packages/buildin/character_cards/dist/ui/main/index.ui.js")).unwrap();
+    assert!(source.starts_with("// @operit-compose-artifact 1\n"));
+    session.execute(command("artifact", Some(source), None, None)).await;
+    let events = drain(&mut stream);
+    assert!(events.iter().all(|event| event.error.is_none()), "{events:?}");
+    assert!(events.iter().any(|event| event.update.is_some()));
+    let first = "// @operit-compose-artifact 1\nexports.default = ctx => ctx.UI.Text({text:'first'});";
+    let other = first.replace("first", "other");
+    assert_eq!(first.len(), other.len());
+    for (script, expected) in [(first, "first"), (other.as_str(), "other"), (first, "first")] {
+        session.execute(command(expected, Some(script.into()), None, None)).await;
+        let events = drain(&mut stream);
+        assert!(events.iter().all(|event| event.error.is_none()), "{events:?}");
+        assert!(events.iter().filter_map(|event| event.update.as_ref()).flat_map(|update| &update.upserts)
+            .any(|node| node.props.get("text") == Some(&Value::from(expected))), "{events:?}");
+    }
+    session.execute(command("bad-version", Some(first.replace("artifact 1", "artifact 999")), None, None)).await;
+    assert!(drain(&mut stream).iter().any(|event| event.error.as_ref().is_some_and(|error| error.contains("Unsupported Compose artifact version"))));
+    // Rejection must not poison the engine or replace its valid factory cache.
+    session.execute(command("recovery", Some(other), None, None)).await;
+    assert!(drain(&mut stream).iter().all(|event| event.error.is_none()));
+    session.close(); engine.destroy();
+}
+
+/// Measures fresh native page engines separately from source lowering and warm retained refreshes.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "Run explicitly to inspect native editor cold-load stages without opening personal data"]
+async fn native_character_editor_load_stage_performance_probe() {
+    // Source reads and instrumentation are deliberately outside the startup timer.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap();
+    let source_dir = std::env::var_os("OPERIT_DSL_PROBE_SOURCE_DIR").map(std::path::PathBuf::from)
+        .unwrap_or_else(|| root.join("plugins/packages/buildin/character_cards/dist/ui"));
+    let install = r#"exports.install = function() {
+        globalThis.__editorProbe = {parseMs:0, parseCalls:0, compileMs:0, compileCalls:0, renderMs:0, commitMs:0};
         const parse = __operitAcorn.parse;
         /** Measures AST parsing separately from the compiler transformation. */
         __operitAcorn.parse = function(source, options) {
             const start = Date.now(); const result = parse(source, options);
-            globalThis.__editorProbe.parseMs += Date.now() - start; return result;
+            globalThis.__editorProbe.parseMs += Date.now() - start; globalThis.__editorProbe.parseCalls++; return result;
         };
         const compile = OperitComposeCompiler.compile;
         /** Measures compilation while preserving the exact compiled output. */
@@ -310,32 +350,56 @@ async fn native_character_editor_load_stage_performance_probe() {
         };
         return true;
     };"#;
-    let bootstrap = std::time::Instant::now();
-    engine.execute_script_function(install, "install", &options(), &BTreeMap::new(), None, false, 60, None).await.unwrap();
-    eprintln!("editor_stage_probe bootstrapMs={:.3}", bootstrap.elapsed().as_secs_f64() * 1000.0);
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap();
-    let source = std::fs::read_to_string(root.join("plugins/packages/buildin/character_cards/dist/ui/main/index.ui.js")).unwrap();
-    let render_start = std::time::Instant::now();
-    session.execute(command("render", Some(source.clone()), None, None)).await;
-    let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
-    let events = drain(&mut stream);
-    assert!(events.iter().all(|event| event.error.is_none()), "{events:?}");
-    assert!(events.iter().any(|event| event.phase == "final" && event.update.is_some()));
     let inspect = "exports.inspect = function() { return globalThis.__editorProbe; };";
-    let result = engine.execute_script_function(inspect, "inspect", &options(), &BTreeMap::new(), None, false, 60, None).await.unwrap().unwrap();
-    eprintln!("editor_stage_probe scriptToCommitMs={render_ms:.3} stages={result}");
-    for sample in 0..3 {
-        let mut refresh = command(&format!("refresh-{sample}"), Some(source.clone()), None, None);
-        refresh.runtimeOptions.insert("__operit_update_inputs".into(), Value::Bool(true));
-        let started = std::time::Instant::now();
-        session.execute(refresh).await;
-        eprintln!("editor_stage_probe warmInputRefreshMs={:.3}", started.elapsed().as_secs_f64() * 1000.0);
-        assert!(drain(&mut stream).iter().all(|event| event.error.is_none()));
+    let mut screens = Vec::new();
+    for screen in ["main", "selection", "chat-sidebar"] {
+        let source = std::fs::read_to_string(source_dir.join(format!("{screen}/index.ui.js"))).unwrap();
+        let precompiled = source.starts_with("// @operit-compose-artifact ");
+        let state = if screen == "selection" {
+            serde_json::json!({"presentation":{"requestId":"perf-selection", "input":{"mode":"select", "kind":"all", "selected":null,"chatId":null}}})
+        } else if screen == "chat-sidebar" {
+            serde_json::json!({"input":{"view":"characters"}, "chatSidebar":{"chats":[],"currentChatId":null,"activeStreamingChatIds":[]}})
+        } else { serde_json::json!({}) };
+        let mut samples = Vec::new();
+        for sample in 0..12 {
+            let bootstrap = std::time::Instant::now();
+            let (session, engine) = native_session();
+            let bootstrap_ms = bootstrap.elapsed().as_secs_f64() * 1000.0;
+            let mut stream = session.updates().unwrap();
+            engine.execute_script_function(install, "install", &options(), &BTreeMap::new(), None, false, 60, None).await.unwrap();
+            let render_start = std::time::Instant::now();
+            let mut initial = command("render", Some(source.clone()), None, None);
+            initial.runtimeOptions.insert("state".into(), state.clone());
+            session.execute(initial).await;
+            let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
+            let events = drain(&mut stream);
+            assert!(events.iter().all(|event| event.error.is_none()), "{events:?}");
+            assert!(events.iter().any(|event| event.phase == "final" && event.update.is_some()));
+            let node_count: usize = events.iter().filter_map(|event| event.update.as_ref()).map(|update| update.upserts.len()).sum();
+            let result = engine.execute_script_function(inspect, "inspect", &options(), &BTreeMap::new(), None, false, 60, None).await.unwrap().unwrap();
+            let stages: Value = serde_json::from_str(&result).unwrap();
+            let mut warm = Vec::new();
+            for refresh_sample in 0..10 {
+                let mut refresh = command(&format!("refresh-{refresh_sample}"), Some(source.clone()), None, None);
+                refresh.runtimeOptions.insert("state".into(), state.clone());
+                refresh.runtimeOptions.insert("__operit_update_inputs".into(), Value::Bool(true));
+                let started = std::time::Instant::now();
+                session.execute(refresh).await;
+                warm.push(started.elapsed().as_secs_f64() * 1000.0);
+                assert!(drain(&mut stream).iter().all(|event| event.error.is_none()));
+            }
+            let result = engine.execute_script_function(inspect, "inspect", &options(), &BTreeMap::new(), None, false, 60, None).await.unwrap().unwrap();
+            let after: Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(after["compileCalls"], Value::from(if precompiled { 0 } else { 1 }));
+            assert_eq!(after["parseCalls"], Value::from(if precompiled { 0 } else { 1 }));
+            samples.push(serde_json::json!({"sample":sample,"engineBootstrapMs":bootstrap_ms,"scriptToCommitMs":render_ms,
+                "coldTotalMs":bootstrap_ms+render_ms,"upserts":node_count,"stages":stages,"warmInputRefreshMs":warm}));
+            session.close(); engine.destroy();
+        }
+        screens.push(serde_json::json!({"screen":screen,"sourceBytes":source.len(),"precompiled":precompiled,"samples":samples}));
     }
-    let result = engine.execute_script_function(inspect, "inspect", &options(), &BTreeMap::new(), None, false, 60, None).await.unwrap().unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&result).unwrap()["compileCalls"], Value::from(1));
-    eprintln!("editor_stage_probe afterRefreshStages={result}");
-    session.close(); engine.destroy();
+    eprintln!("dsl_native_probe {}", serde_json::json!({"scope":"native QuickJS, synthetic initial state; excludes file reads, instrumentation, Flutter and GPU; parse/compile timers have 1 ms resolution",
+        "profile":if cfg!(debug_assertions) {"debug"} else {"release"}, "screens":screens}));
 }
 
 /// Replays the compiled native sidebar through repeated metadata reorders and input refreshes.
@@ -346,19 +410,21 @@ async fn native_character_sidebar_reorder_keeps_every_retained_reference_mounted
     let mut stream = session.updates().unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap();
     let plugin = std::fs::read_to_string(root.join("plugins/packages/buildin/character_cards/dist/ui/chat-sidebar/index.ui.js")).unwrap();
-    let source = format!(r#"
-        ToolPkg.readResource = async function() {{ return '/fixture/avatar.png'; }};
-        Tools.Files.readBinary = async function(path) {{ return {{path:path, size:12, contentBase64:'iVBORw0KGgo='}}; }};
-        ToolPkg.ipc.call = async function(name, request) {{
+    let setup = r#"exports.install = function() {
+        ToolPkg.readResource = async function() { return '/fixture/avatar.png'; };
+        Tools.Files.readBinary = async function(path) { return {path:path, size:12, contentBase64:'iVBORw0KGgo='}; };
+        ToolPkg.ipc.call = async function(name, request) {
             if (name !== 'character-sidebar.catalog') throw new Error('Unexpected sidebar IPC: ' + name);
             const chats = request.chatSidebar.chats;
-            return {{view:'characters', sections:[{{id:'card:travel', title:'Travel', avatarUri:null,
+            return {view:'characters', sections:[{id:'card:travel', title:'Travel', avatarUri:null,
                 kind:'card', selection:'card:travel', chats:chats,
-                conversationGroups:[{{id:'1', name:'Group', pinned:true, displayOrder:0, chats:chats.slice(0,2)}}],
-                ungroupedChats:chats.slice(2)}}]}};
-        }};
-        {plugin}
-    "#);
+                conversationGroups:[{id:'1', name:'Group', pinned:true, displayOrder:0, chats:chats.slice(0,2)}],
+                ungroupedChats:chats.slice(2)}]};
+        };
+        return true;
+    };"#;
+    engine.execute_script_function(setup, "install", &options(), &BTreeMap::new(), None, false, 60, None).await.unwrap();
+    let source = plugin;
     let chats: Vec<Value> = (1..=3).map(|index| serde_json::json!({
         "id":format!("c{index}"), "title":format!("Chat {index}"), "updatedAt":"1791059541109",
         "displayOrder":index, "workspaceId":null, "workspaceName":null, "locked":false,
@@ -412,4 +478,42 @@ async fn native_character_sidebar_reorder_keeps_every_retained_reference_mounted
     }
     assert_revisions(&events);
     session.close(); engine.destroy();
+}
+
+/// Reproduces a retained Rust cache after Dart restarts and abandons its command producer.
+#[tokio::test(flavor = "current_thread")]
+async fn native_restart_reopens_closed_cached_session_and_renders() {
+    use crate::tools::packTool::RuntimePackageManager::openComposeDslSessionForContext;
+    let (old, engine) = native_session();
+    let key = ("restarted-dart-page:0".to_string(), "package".to_string());
+    let mut cache = BTreeMap::from([(key.clone(), old.clone())]);
+    let mut old_updates = old.updates().unwrap();
+    old.execute(command("render-before-restart", Some(
+        "exports.default = ctx => ctx.UI.Text({text: 'before restart'});".into()
+    ), None, None)).await;
+    assert!(drain(&mut old_updates).iter().any(|event| event.phase == "final"));
+    let (mut old_sender, old_commands) = ReverseStream::channel();
+    old_sender.close();
+    old.submit(old_commands).await.unwrap();
+    assert!(old_updates.recv().await.is_none());
+    assert!(ToolPkgComposeDslSession::resolve(&old.id()).is_err());
+    let id = openComposeDslSessionForContext(&mut cache, key.clone(), || {
+        Ok(ToolPkgComposeDslSession::new(Arc::new(engine.clone()), Arc::new(BTreeMap::new())))
+    }).unwrap();
+    assert_ne!(id, old.id(), "the live Rust manager must not return the closed capability");
+    let reopened = ToolPkgComposeDslSession::resolve(&id).unwrap();
+    let mut updates = reopened.updates().unwrap();
+    reopened.execute(command("render-after-restart", Some(
+        "exports.default = ctx => ctx.UI.Text({text: 'usable after restart'});".into()
+    ), None, None)).await;
+    let events = drain(&mut updates);
+    assert!(events.iter().all(|event| event.error.is_none()), "{events:?}");
+    assert!(events.iter().any(|event| event.phase == "final"));
+    assert!(events.iter().any(|event| event.phase == "complete"));
+    let first_commit = events.iter().find_map(|event| event.update.as_ref()).unwrap();
+    assert!(first_commit.reset, "a new capability needs a full reset, not the abandoned client's delta");
+    assert_eq!(first_commit.revision, 1);
+    old.close();
+    assert!(ToolPkgComposeDslSession::resolve(&id).is_ok(), "late old cleanup cannot close its replacement");
+    reopened.close(); engine.destroy();
 }

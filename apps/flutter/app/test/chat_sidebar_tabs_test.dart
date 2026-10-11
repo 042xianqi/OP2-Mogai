@@ -20,6 +20,8 @@ import 'package:operit2/ui/features/packages/screens/ToolPkgUiLauncherScreen.dar
 import 'package:operit2/ui/features/chat/components/NewChatIntro.dart';
 import 'package:operit2/ui/main/components/CollapsedDrawerContent.dart';
 import 'package:operit2/ui/main/components/DrawerContent.dart';
+import 'package:operit2/ui/main/components/DrawerConversationState.dart';
+import 'package:operit2/ui/main/layout/TabletLayout.dart';
 import 'package:operit2/ui/main/components/NavigationDrawerAppearance.dart';
 import 'package:operit2/ui/main/navigation/AppNavigationModels.dart';
 import 'package:operit2/ui/theme/OperitTheme.dart';
@@ -31,6 +33,289 @@ const _workspaceKey = ValueKey('native-workspace-content');
 
 /// Covers real sidebar registrations, embedded routes, and validated host activation.
 void main() {
+  testWidgets(
+    'desktop drawer expands before revealing content and fades before shrinking',
+    (tester) async {
+      final bridge = _registry();
+      bridge.entries.removeWhere(
+        (entry) =>
+            entry.containerPackageName != 'owner.first' ||
+            entry.surface != 'chat_sidebar_tabs',
+      );
+      bridge.preferences[_tabPreference] = chatSidebarTabIdentity(
+        'owner.first',
+        'history',
+      );
+      final expanded = ValueNotifier(false);
+      final conversations = ValueNotifier(
+        DrawerConversationState(
+          histories: [_chat('chat-a')],
+          currentChatId: 'chat-a',
+          loading: false,
+        ),
+      );
+      addTearDown(expanded.dispose);
+      addTearDown(conversations.dispose);
+      final launcher = find.byType(ToolPkgUiLauncherScreen);
+      final collapsed = find.byType(CollapsedDrawerContent);
+      final drawer = find.byType(DrawerContent);
+      final content = find.text('Desktop content');
+      await tester.pumpWidget(_tabletSidebar(bridge, expanded, conversations));
+      await tester.pumpAndSettle();
+      expect(collapsed, findsOneWidget);
+      expect(drawer, findsNothing);
+      expect(launcher, findsNothing);
+      expect(tester.getTopLeft(content).dx, 56);
+      expect(
+        bridge.calls.where(
+          (call) => call.methodName == 'openComposeDslSession',
+        ),
+        isEmpty,
+      );
+
+      expanded.value = true;
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 279));
+      expect(collapsed, findsOneWidget);
+      expect(drawer, findsNothing);
+      expect(launcher, findsNothing);
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(drawer, findsOneWidget);
+      expect(tester.getTopLeft(content).dx, 280);
+      await tester.pumpAndSettle();
+      expect(collapsed, findsNothing);
+      final firstSession = tester.state(launcher);
+
+      expanded.value = false;
+      await tester.pump();
+      expect(collapsed, findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 159));
+      expect(tester.getTopLeft(content).dx, 280);
+      await tester.pump(const Duration(milliseconds: 1));
+      await tester.pump(const Duration(milliseconds: 140));
+      expect(tester.getTopLeft(content).dx, greaterThan(56));
+      expect(tester.getTopLeft(content).dx, lessThan(280));
+      await tester.pumpAndSettle();
+      expect(tester.getTopLeft(content).dx, 56);
+      expect(drawer, findsNothing);
+      expect(launcher, findsNothing);
+      expect(firstSession.mounted, isFalse);
+
+      conversations.value = DrawerConversationState(
+        histories: [_chat('chat-b')],
+        currentChatId: 'chat-b',
+        loading: false,
+      );
+      expanded.value = true;
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 280));
+      await tester.pumpAndSettle();
+      expect(tester.state(launcher), isNot(same(firstSession)));
+      final latest = bridge.renderedStates.last['chatSidebar'] as Map;
+      expect(latest['currentChatId'], 'chat-b');
+      expect(((latest['chats'] as List).single as Map)['id'], 'chat-b');
+      expect(
+        bridge.calls
+            .where((call) => call.methodName == 'openComposeDslSession')
+            .length,
+        2,
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets('desktop drawer cancels pending transitions on rapid toggles', (
+    tester,
+  ) async {
+    final bridge = _registry();
+    final expanded = ValueNotifier(false);
+    final conversations = ValueNotifier(
+      DrawerConversationState(histories: [_chat('chat-a')], loading: false),
+    );
+    addTearDown(expanded.dispose);
+    addTearDown(conversations.dispose);
+    await tester.pumpWidget(_tabletSidebar(bridge, expanded, conversations));
+    await tester.pumpAndSettle();
+
+    expanded.value = true;
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expanded.value = false;
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(find.byType(DrawerContent), findsNothing);
+    expect(find.byType(CollapsedDrawerContent), findsOneWidget);
+    expect(tester.getTopLeft(find.text('Desktop content')).dx, 56);
+
+    expanded.value = true;
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 280));
+    await tester.pumpAndSettle();
+    expanded.value = false;
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 80));
+    expanded.value = true;
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 280));
+    await tester.pumpAndSettle();
+    expect(find.byType(DrawerContent), findsOneWidget);
+    expect(find.byType(CollapsedDrawerContent), findsNothing);
+    expect(tester.getTopLeft(find.text('Desktop content')).dx, 280);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('prepared data reaches the first embedded DSL inputs', (
+    tester,
+  ) async {
+    final bridge = _registry();
+    final preparation = ChatSidebarPreparation(
+      clients: GeneratedCoreProxyClients(bridge),
+    );
+    addTearDown(preparation.dispose);
+    await preparation.prepare([_chat('chat-a')]);
+    await tester.pumpWidget(
+      ChatSidebarPreparationScope(
+        preparation: preparation,
+        child: _host(bridge),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _openFirstTab(tester);
+    expect(_launcher(tester).initialState['chatSidebarPrepared'], {
+      'cached': true,
+    });
+    expect(bridge.renderedStates.first['chatSidebarPrepared'], {
+      'cached': true,
+    });
+  });
+
+  test(
+    'prepares opaque data without creating an engine or Compose session',
+    () async {
+      final bridge = _PreparationBridge();
+      final preparation = ChatSidebarPreparation(
+        clients: GeneratedCoreProxyClients(bridge),
+      );
+      addTearDown(preparation.dispose);
+      await preparation.prepare(const []);
+      expect(
+        preparation.read(
+          chatSidebarTabIdentity('plugin.one', 'roles'),
+          const [],
+        ),
+        {'seed': 'plugin.one'},
+      );
+      expect(bridge.calls, [
+        'getToolPkgPublicApiOwners',
+        'invokeToolPkgPublicApi',
+      ]);
+      await preparation.prepare(const []);
+      expect(bridge.invocations, 1);
+    },
+  );
+
+  test(
+    'ignores old history responses and never uses them for new chats',
+    () async {
+      final bridge = _PreparationBridge();
+      final old = Completer<Object?>();
+      bridge.responses.add(old.future);
+      final preparation = ChatSidebarPreparation(
+        clients: GeneratedCoreProxyClients(bridge),
+      );
+      addTearDown(preparation.dispose);
+      final first = preparation.prepare(const []);
+      await _flushPreparation();
+      final chats = [_preparationChat('new')];
+      await preparation.prepare(chats);
+      final id = chatSidebarTabIdentity('plugin.one', 'roles');
+      expect(preparation.read(id, const []), isNull);
+      old.complete({
+        'entries': [
+          {
+            'entryId': 'roles',
+            'data': {'seed': 'obsolete'},
+          },
+        ],
+      });
+      await first;
+      expect(preparation.read(id, chats), {'seed': 'plugin.one'});
+    },
+  );
+
+  test(
+    'provider failure does not block another provider or normal route loading',
+    () async {
+      final bridge = _PreparationBridge()
+        ..owners = ['plugin.one', 'plugin.two'];
+      bridge.responses.add(
+        Future<Object?>.value({
+          'entries': [
+            {'entryId': 'roles'},
+          ],
+        }),
+      );
+      final preparation = ChatSidebarPreparation(
+        clients: GeneratedCoreProxyClients(bridge),
+      );
+      addTearDown(preparation.dispose);
+      await preparation.prepare(const []);
+      expect(
+        preparation.read(
+          chatSidebarTabIdentity('plugin.one', 'roles'),
+          const [],
+        ),
+        isNull,
+      );
+      expect(
+        preparation.read(
+          chatSidebarTabIdentity('plugin.two', 'roles'),
+          const [],
+        ),
+        {'seed': 'plugin.two'},
+      );
+    },
+  );
+
+  test('plugin hot reload invalidates the cache and prepares again', () async {
+    final bridge = _PreparationBridge();
+    final preparation = ChatSidebarPreparation(
+      clients: GeneratedCoreProxyClients(bridge),
+    );
+    addTearDown(preparation.dispose);
+    await preparation.prepare(const []);
+    PluginHotReload.revision.value++;
+    await _flushPreparation();
+    expect(bridge.invocations, 2);
+  });
+
+  test('disposing during a preparation rejects late publication', () async {
+    final bridge = _PreparationBridge();
+    final pending = Completer<Object?>();
+    bridge.responses.add(pending.future);
+    final preparation = ChatSidebarPreparation(
+      clients: GeneratedCoreProxyClients(bridge),
+    );
+    var notifications = 0;
+    preparation.addListener(() => notifications++);
+    final work = preparation.prepare(const []);
+    await _flushPreparation();
+    preparation.dispose();
+    final before = notifications;
+    pending.complete({
+      'entries': [
+        {
+          'entryId': 'roles',
+          'data': {'seed': 'late'},
+        },
+      ],
+    });
+    await work;
+    expect(notifications, before);
+  });
+
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(ClientLogger.initialize);
   tearDown(() => newChatIntroArmed.value = false);
@@ -1165,6 +1450,22 @@ class _SidebarRegistryBridge extends OperitRuntimeBridge {
           ...(args['values'] as Map).cast<String, String>(),
         });
         value = null;
+      case 'getToolPkgPublicApiOwners':
+        value = [
+          {
+            'containerPackageName': 'owner.first',
+            'apiName': ChatSidebarPreparation.api,
+          },
+        ];
+      case 'invokeToolPkgPublicApi':
+        value = {
+          'entries': [
+            {
+              'entryId': 'history',
+              'data': {'cached': true},
+            },
+          ],
+        };
       case 'getToolPkgNavigationEntries':
         catalogReads += 1;
         if (nextCatalogRead case final Future<void> pending) {
@@ -1367,3 +1668,131 @@ core.ToolPkgContainerRuntime _runtime(String owner) =>
       logoResource: null,
       marketOrigin: null,
     );
+
+Future<void> _flushPreparation() async {
+  for (var i = 0; i < 8; i++) {
+    await Future<void>.delayed(Duration.zero);
+  }
+}
+
+core.ChatHistoryListItem _preparationChat(String id) =>
+    core.ChatHistoryListItem(
+      id: id,
+      title: id,
+      updatedAt: '1',
+      displayOrder: 0,
+      workspaceId: null,
+      workspaceName: null,
+      locked: false,
+      pinned: false,
+      group: null,
+    );
+
+class _PreparationBridge extends OperitRuntimeBridge {
+  final calls = <String>[];
+  final responses = <Future<Object?>>[];
+  List<String> owners = ['plugin.one'];
+  int invocations = 0;
+
+  @override
+  Future<Uint8List> callBytes(CoreCallRequest request) async {
+    calls.add(request.methodName);
+    final args = request.args as Map;
+    Object? result;
+    switch (request.methodName) {
+      case 'getToolPkgPublicApiOwners':
+        expect(args['apiName'], ChatSidebarPreparation.api);
+        result = owners
+            .map(
+              (owner) => {
+                'containerPackageName': owner,
+                'apiName': ChatSidebarPreparation.api,
+              },
+            )
+            .toList();
+      case 'invokeToolPkgPublicApi':
+        invocations++;
+        expect(args['methodName'], ChatSidebarPreparation.api);
+        result = responses.isEmpty
+            ? {
+                'entries': [
+                  {
+                    'entryId': 'roles',
+                    'data': {'seed': args['packageName']},
+                  },
+                ],
+              }
+            : await responses.removeAt(0);
+      default:
+        throw StateError('Preloading must not perform ${request.methodName}');
+    }
+    return encodeCoreLink([0, result]);
+  }
+
+  @override
+  Future<CorePushSink> push(CorePushRequest request) =>
+      throw StateError('No Compose session allowed');
+  @override
+  Future<CoreEvent> watchSnapshot(CoreWatchRequest request) =>
+      throw StateError('Unexpected watch');
+  @override
+  Stream<CoreEvent> watchStream(CoreWatchRequest request) =>
+      throw StateError('Unexpected watch');
+}
+
+/// Exercises the real desktop layout with a selected registered role tab.
+Widget _tabletSidebar(
+  _SidebarRegistryBridge bridge,
+  ValueNotifier<bool> expanded,
+  ValueNotifier<DrawerConversationState> conversations,
+) => OperitTheme(
+  initialThemePreferenceSnapshot:
+      UserPreferencesManager.defaultThemePreferenceSnapshot,
+  initialThemeIsReady: false,
+  unconfiguredChildEnabled: true,
+  hostInteractionHostsEnabled: false,
+  child: MaterialApp(
+    localizationsDelegates: AppLocalizations.localizationsDelegates,
+    supportedLocales: AppLocalizations.supportedLocales,
+    home: Scaffold(
+      body: ValueListenableBuilder<bool>(
+        valueListenable: expanded,
+        builder: (_, open, _) => TabletLayout(
+          bridge: bridge,
+          content: const Text('Desktop content'),
+          navigationEntries: const [
+            NavigationEntrySpec(
+              entryId: 'main.ai_chat',
+              routeId: 'native-chat',
+              surface: NavigationSurface.mainSidebarAi,
+              title: 'Chat',
+              icon: Icons.chat,
+            ),
+            NavigationEntrySpec(
+              entryId: 'main.package_manager',
+              routeId: 'native-packages',
+              surface: NavigationSurface.mainSidebarSystem,
+              title: 'Packages',
+              icon: Icons.extension,
+            ),
+            NavigationEntrySpec(
+              entryId: 'main.settings',
+              routeId: 'native-settings',
+              surface: NavigationSurface.mainSidebarSystem,
+              title: 'Settings',
+              icon: Icons.settings,
+            ),
+          ],
+          pluginSidebarEntries: const [],
+          selectedRouteId: 'native-chat',
+          drawerConversationState: conversations,
+          isTabletSidebarExpanded: open,
+          tabletSidebarWidth: 280,
+          collapsedTabletSidebarWidth: 56,
+          onNavigationEntrySelected: (_) {},
+          onConversationActivated: () {},
+        ),
+      ),
+    ),
+  ),
+);

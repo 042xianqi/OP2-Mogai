@@ -4050,3 +4050,91 @@ fn registration_failure_result_survives_the_ordinary_text_adapter() {
     );
     assert_eq!(result.expect_err("failed registration must not publish a capture").message, "exact registration failure");
 }
+
+/// Separates native bootstrap evaluation costs without involving personal data or plugin code.
+#[test]
+#[ignore = "Run explicitly to measure native SDK bootstrap components"]
+fn native_compose_bootstrap_component_probe() {
+    let host = testJavaScriptRuntimeHost();
+    let sdk = Path::new(env!("CARGO_MANIFEST_DIR")).join("../sdk/src/toolpkg");
+    let bootstrap = operit_plugin_sdk::toolpkg::ToolPkgComposeDslBridge::buildComposeDslContextBridgeDefinition();
+    let facade = operit_plugin_sdk::toolpkg::ToolPkgComposeDslBridge::buildComposeDslParserDefinition();
+    let acorn = std::fs::read_to_string(sdk.join("vendor/acorn.js")).unwrap();
+    let eager = format!("var __operitAcorn = {{}}; (function(exports, module) {{ {acorn} }})(__operitAcorn, {{exports: __operitAcorn}});");
+    let eager_bootstrap = bootstrap.replacen(&facade, &eager, 1);
+    let components = [
+        ("acorn", std::fs::read_to_string(sdk.join("vendor/acorn.js")).unwrap()),
+        ("compiler", std::fs::read_to_string(sdk.join("compose/Compiler.js")).unwrap()),
+        ("generation", std::fs::read_to_string(sdk.join("compose/Generation.js")).unwrap()),
+        ("compose-bootstrap-eager-comparison", eager_bootstrap),
+        ("compose-bootstrap-lazy", bootstrap),
+    ];
+    for (name, script) in components {
+        let mut samples = Vec::new();
+        for _ in 0..12 {
+            let mut runtime = host.createHostJavaScriptRuntime().unwrap();
+            let start = Instant::now();
+            runtime.evaluateHostJavaScriptVoid(name, &script).unwrap();
+            samples.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        samples.sort_by(f64::total_cmp);
+        eprintln!("compose_bootstrap_probe component={name} bytes={} p50Ms={:.3} p95Ms={:.3}", script.len(), samples[5], samples[11]);
+    }
+}
+
+/// Exercises the real SDK bootstrap in QuickJS, not a Node-only approximation of laziness.
+#[test]
+fn native_compose_bootstrap_defers_parser_until_first_source_compilation() {
+    let mut runtime = testJavaScriptRuntimeHost().createHostJavaScriptRuntime().unwrap();
+    runtime.evaluateHostJavaScriptVoid("observe-parser", r#"
+        globalThis.parserInitializations = 0;
+        var originalFunction = Function;
+        globalThis.Function = function(...args) { parserInitializations++; return originalFunction(...args); };
+    "#).unwrap();
+    runtime.evaluateHostJavaScriptVoid("compose-bootstrap",
+        &operit_plugin_sdk::toolpkg::ToolPkgComposeDslBridge::buildComposeDslContextBridgeDefinition()).unwrap();
+    let result = runtime.evaluateHostJavaScriptString("probe-lazy-parser", r#"JSON.stringify((function() {
+        var startup = parserInitializations;
+        var artifact = '// @operit-compose-artifact 1\nexports.default = ctx => ctx.UI.Text({text:"artifact"});';
+        OperitComposeCompiler.prepare(artifact, 'artifact');
+        var afterArtifact = parserInitializations;
+        OperitComposeCompiler.prepare('exports.default = ctx => ctx.UI.Text({text:"source"});', 'first');
+        var afterSource = parserInitializations;
+        try { OperitComposeCompiler.prepare('function {', 'bad'); } catch (_) {}
+        OperitComposeCompiler.prepare('exports.default = ctx => ctx.UI.Text({text:"changed"});', 'second');
+        return [startup, afterArtifact, afterSource, parserInitializations];
+    })())"#).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&result).unwrap(), serde_json::json!([0, 0, 1, 1]));
+}
+
+/// Interrupts inside parser initialization after an export was assigned, then retries
+/// under a fresh execution budget. Partial installation must never escape the loader.
+#[test]
+fn native_compose_parser_retries_after_interrupted_initialization() {
+    let mut runtime = testJavaScriptRuntimeHost().createHostJavaScriptRuntime().unwrap();
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let signal = armed.clone();
+    runtime.registerHostJavaScriptJsonFunction("__armParserInterrupt", Arc::new(move |_| {
+        signal.store(true, Ordering::SeqCst);
+        Ok(Value::Null)
+    })).unwrap();
+    let sdk = Path::new(env!("CARGO_MANIFEST_DIR")).join("../sdk/src/toolpkg");
+    let parser = format!(r#"
+        if (!globalThis.parserAttempted) {{
+            globalThis.parserAttempted = true;
+            exports.parse = function() {{ throw Error('Partial parser published'); }};
+            __armParserInterrupt();
+            while (true) {{}}
+        }}
+        {}
+    "#, std::fs::read_to_string(sdk.join("vendor/acorn.js")).unwrap());
+    let loader = std::fs::read_to_string(sdk.join("compose/Parser.js")).unwrap()
+        .replace("__OPERIT_COMPOSE_PARSER_SOURCE__", &serde_json::to_string(&parser).unwrap());
+    runtime.evaluateHostJavaScriptVoid("lazy-parser", &loader).unwrap();
+    runtime.setHostJavaScriptInterruptHandler(Some(Arc::new(move || armed.load(Ordering::SeqCst)))).unwrap();
+    assert!(runtime.evaluateHostJavaScriptVoid("interrupted-parse", "__operitAcorn.parse('let value = 1;', {ecmaVersion:2022});").is_err());
+    runtime.setHostJavaScriptInterruptHandler(None).unwrap();
+    let result = runtime.evaluateHostJavaScriptString("retry-parse", "__operitAcorn.parse('let value = 1;', {ecmaVersion:2022}).type").unwrap();
+    assert_eq!(result, "Program");
+    assert_eq!(runtime.evaluateHostJavaScriptString("no-parser-global-leak", "[typeof exports, typeof module, typeof acorn].join(',')").unwrap(), "undefined,undefined,undefined");
+}

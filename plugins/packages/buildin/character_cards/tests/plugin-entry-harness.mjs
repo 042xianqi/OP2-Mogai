@@ -1,4 +1,5 @@
 import { loadModule } from "./runtime.mjs";
+import { packageRuntime } from "./package-runtime.mjs";
 
 /** Captures existing SDK registrations and loops only the package's real IPC callback; it supplies no business data. */
 export function openPlugin(disk) {
@@ -52,6 +53,13 @@ export function openPlugin(disk) {
   if (main.registerToolPkg() !== true) throw new Error("Actual plugin registration did not succeed");
   return {
     main, commands, apis, routes, navigation, lifecycle, chatMessageHooks, hostEventHooks, chatLifecycleHooks, chatInputHooks, toolLifecycleHooks, toolPromptHooks,
+    ...(disk.composeModules === undefined ? {} : {
+      /** Opens the packaged executable in its own SDK realm while retaining the real main IPC provider. */
+      openComposeRoute(routeId) {
+        const runtime = packageRuntime(disk.composeModules, { ...disk.globals, ToolPkg: registry });
+        return { context: runtime.context, screen: runtime.load("dist/ui/" + routeId + "/index.ui.js").default };
+      },
+    }),
     /** Invokes the real registered public provider with its current SDK payload shape. */
     api(name, payload) {
       const definition = apis.get(name);

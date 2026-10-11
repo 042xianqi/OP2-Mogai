@@ -136,6 +136,10 @@ impl ToolPkgComposeDslSession {
     /// Exposes the opaque capability used by the application stream service.
     pub fn id(&self) -> String { self.state.id.clone() }
 
+    /// Reports whether a retained context cache still contains an attachable capability.
+    #[allow(non_snake_case)]
+    pub(crate) fn isClosed(&self) -> bool { self.state.closed.load(Ordering::Acquire) }
+
     /// Resolves a live page-owned session without extending registry ownership.
     pub fn resolve(id: &str) -> Result<Self, String> {
         let state = sessionRegistry().lock().map_err(|error| error.to_string())?
@@ -201,9 +205,12 @@ impl ToolPkgComposeDslSession {
     }
 
     /// Runs one command with an explicit operation and a cancellation lease owned by the page.
-    async fn execute(&self, command: ToolPkgComposeDslCommand) {
+    async fn execute(&self, mut command: ToolPkgComposeDslCommand) {
         let cancellation = self.state.cancellation.notified();
         if self.state.closed.load(Ordering::Acquire) { return; }
+        // The native engine may outlive a transport capability. Its JS retained
+        // bundle must start a full document when a new session reuses that engine.
+        command.runtimeOptions.insert("__operit_compose_session_id".into(), Value::String(self.id()));
         let work = async {
             let session = self.clone();
             let requestId = command.requestId.clone();

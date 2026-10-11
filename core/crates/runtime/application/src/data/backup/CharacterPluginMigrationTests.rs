@@ -429,3 +429,29 @@ fn legacy_settings_reader_propagates_malformed_json() {
     assert!(legacyMemoryRoot("unknown:legacy").is_err());
     assert!(legacyMemoryRoot("character:").is_err());
 }
+
+/// Transfers both global flags into the sole plugin metadata and retains them across reopen/idempotent import.
+#[test]
+fn imports_global_memory_policy_without_a_second_runtime_preference_owner() {
+    let fixture = Fixture::new();
+    let mut source = data();
+    source.memory_preferences = Some(json!({"userDescriptionEnabled":false,"autoUpdateEnabled":false}));
+    fixture.writer().import("global-memory-policy", source).unwrap();
+    let reopened = CharacterPluginWriter::open(fixture.host.clone(), fixture.host.clone()).unwrap();
+    let saved = reopened.get("meta", "state").unwrap().unwrap()["value"]["memoryPreferences"].clone();
+    assert_eq!(saved, json!({"userDescriptionEnabled":false,"autoUpdateEnabled":false}));
+    reopened.import("global-memory-policy", CharacterMigrationData::default()).unwrap();
+    assert_eq!(reopened.get("meta", "state").unwrap().unwrap()["value"]["memoryPreferences"], saved);
+}
+
+/// Malformed imported flags fail before the migration marker or any domain records are published.
+#[test]
+fn rejects_invalid_global_memory_policy_before_publication() {
+    let fixture = Fixture::new();
+    let mut source = data();
+    source.memory_preferences = Some(json!({"userDescriptionEnabled":false,"autoUpdateEnabled":"false"}));
+    assert!(fixture.writer().import("invalid-global-memory-policy", source).is_err());
+    assert!(fixture.writer().get("meta", "state").unwrap().is_none());
+    assert!(fixture.writer().list("cards").unwrap().is_empty());
+    assert!(fixture.writer().get("imports", "invalid-global-memory-policy").unwrap().is_none());
+}

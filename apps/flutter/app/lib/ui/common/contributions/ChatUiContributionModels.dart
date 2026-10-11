@@ -77,19 +77,19 @@ class ChatUiChoice {
   final ChatUiAction action;
 }
 
-/// Describes the current chat identity and its registered preview presentation.
+/// Describes display-only title text and an optional avatar preview presentation.
 @immutable
 class ChatUiIdentity {
-  /// Creates a display-only identity whose tap delegates to its owning plugin.
+  /// Avatar actions never make the application title interactive.
   const ChatUiIdentity({
     required this.title,
     required this.avatarUri,
-    required this.action,
+    this.avatarAction,
   });
 
   final String title;
   final String? avatarUri;
-  final ChatUiAction action;
+  final ChatUiAction? avatarAction;
 }
 
 /// Contains the merged display context produced by the enabled public API owners.

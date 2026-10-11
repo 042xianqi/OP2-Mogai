@@ -139,8 +139,8 @@ export async function createMemoryJobsHarness(testContext) {
   const statePath = path.join(disk.directory, "character-memory", "state.json");
 
   /** Opens a fresh production main module against the same real disk after the previous runtime is retired. */
-  function openRuntime() {
-    const plugin = openPlugin({ ...disk, globals: { ...disk.globals, Tools: tools } });
+  function openRuntime(runtimeGlobals = {}) {
+    const plugin = openPlugin({ ...disk, globals: { ...disk.globals, ...runtimeGlobals, Tools: tools } });
     assert.equal(plugin.toolLifecycleHooks.length, 1); assert.equal(plugin.toolPromptHooks.length, 1);
     return {
       ...plugin,

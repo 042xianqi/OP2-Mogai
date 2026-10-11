@@ -2,6 +2,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
@@ -16,6 +17,7 @@ import '../../../../core/logging/ClientLogger.dart';
 import '../../../../core/proxy/generated/CoreProxyClients.g.dart';
 import '../../../../core/proxy/generated/CoreProxyModels.g.dart' as core_proxy;
 import 'ToolPkgComposeDslWebViewResourceLoader.dart';
+import 'ComposeDslImageSource.dart';
 import 'ToolPkgComposeDslWebViewBridgeRuntime.dart';
 
 export 'ToolPkgComposeDslWebViewBridgeRuntime.dart'
@@ -40,6 +42,7 @@ class ComposeDslWebViewHostContext {
     required this.dispatchAction,
     required this.runtimeOptionsProvider,
     this.onActionResultDelivered,
+    this.readFileBytes,
   });
 
   /// Stable plugin package identity, not the transient execution/session key.
@@ -48,6 +51,13 @@ class ComposeDslWebViewHostContext {
   final String executionContextKey;
   final ComposeDslWebViewActionDispatcher dispatchAction;
   final ComposeDslWebViewRuntimeOptionsProvider runtimeOptionsProvider;
+
+  /// Supplies the owning launcher's generic VFS service to native resources.
+  final Future<Uint8List> Function(String path)? readFileBytes;
+
+  Future<Uint8List> readResourceBytes(String path) =>
+      readFileBytes?.call(path) ??
+      readComposeDslVfsBytes(_runtimeClients, path);
 
   /// Observes action results only after the WebView receives its bridge response.
   final ValueChanged<Object?>? onActionResultDelivered;

@@ -22,7 +22,7 @@ function assertDirectoryCalls(settings, methods) {
 /** Compares the complete returned snapshot with independently read authoritative disk state and explicit host-test inputs. */
 function assertCompleteSnapshot(snapshot, state) {
   assert.deepEqual(plain(snapshot), {
-    cards: state.cards, groups: state.groups, stores: state.stores, tags: state.tags, active: state.active,
+    cards: state.cards, groups: state.groups, stores: state.stores, tags: state.tags, active: state.active, memoryPreferences: state.memoryPreferences,
     models: directoryInput.models, ttsConfigs: directoryInput.ttsConfigs, toolCatalog: directoryInput.toolCatalog,
   });
 }
@@ -87,7 +87,7 @@ test("registered management Web IPC preserves a full file-backed snapshot with e
   assert.equal(settings.calls.length, 0, "Registration must not read configured directories");
   assert.equal(disk.calls.length, 0, "Registration must not open plugin files");
   const managementRoute = "toolpkg:com.operit.character_cards:ui:main", attachmentRoute = "toolpkg:com.operit.character_cards:ui:memory-attachment";
-  assert.equal(plugin.routes.length, 7);
+  assert.equal(plugin.routes.length, 9);
   assert.deepEqual(plain(plugin.routes.map(
     /** Inspects the actual route identities and lifetimes without rendering either screen or synthesizing a host. */
     route => ({ id: route.id, route: route.route, runtime: route.runtime, keepAlive: route.keepAlive }),
@@ -99,6 +99,8 @@ test("registered management Web IPC preserves a full file-backed snapshot with e
     { id: "selection", route: "toolpkg:com.operit.character_cards:ui:selection", runtime: "compose_dsl", keepAlive: false },
     { id: "group-execution", route: "toolpkg:com.operit.character_cards:ui:group-execution", runtime: "compose_dsl", keepAlive: false },
     { id: "memory", route: "toolpkg:com.operit.character_cards:ui:memory", runtime: "compose_dsl", keepAlive: true },
+    { id: "chat-input-memory", route: "toolpkg:com.operit.character_cards:ui:chat-input-memory", runtime: "compose_dsl", keepAlive: false },
+    { id: "memory-status", route: "toolpkg:com.operit.character_cards:ui:memory-status", runtime: "compose_dsl", keepAlive: false },
   ]);
   assert.equal(typeof plugin.routes[0].screen, "function"); assert.equal(typeof plugin.routes[1].screen, "function");
   assert.notEqual(plugin.routes[0].screen, plugin.routes[1].screen);
@@ -106,8 +108,8 @@ test("registered management Web IPC preserves a full file-backed snapshot with e
   assert.equal(new Set(plugin.routes.map(
     /** Requires actual independent screen identity rather than accepting a reused editor callback. */
     entry => entry.screen,
-   )).size, 7);
-  assert.equal(plugin.navigation.length, 6);
+   )).size, 9);
+  assert.equal(plugin.navigation.length, 7);
   const sidebar = plugin.navigation.filter(
     /** Requires one actual sidebar entry rather than accepting any route that happens to match it. */
     entry => entry.surface === "main_sidebar_plugins",
@@ -337,4 +339,33 @@ test("fresh exported chat UI APIs retain package routes without replaying regist
   assert.ok(registeredRouteIds.includes(menuEntries[0].route));
   const sections = plain(await fresh.chatListSectionsApi({ callerPackage: "host", payload: { chats: [] } }));
   assert.ok(Array.isArray(sections.sections));
+});
+
+
+test("sidebar preparation reads real plugin data and avatars without opening a UI", async t => {
+  const disk = await createDiskHarness(t), settings = createSoftwareSettingsFixture(disk, directoryInput);
+  const avatar = path.join(disk.directory, "prepared-avatar.png");
+  await writeFile(avatar, Buffer.from("iVBORw0KGgo=", "base64"));
+  const extensionReads = [];
+  const harness = { ...settings.harness, globals: { ...settings.harness.globals,
+    Tools: { ...settings.harness.globals.Tools, Chat: { readExtension: async request => { extensionReads.push(request); return null; } } },
+    ToolPkg: { ...settings.harness.globals.ToolPkg, readResource: async (key, file) => {
+      assert.equal(key, "character_default_avatar"); assert.equal(file, "operit-avatar.png"); return avatar;
+    } },
+  } };
+  const plugin = openPlugin(harness);
+  assert.equal(disk.calls.length, 0, "Registration must stay lazy");
+  await assert.rejects(plugin.apis.get("chat.sidebar.prepare").function({ callerPackage: "other", payload: { chats: [] } }), /authenticated host/);
+  const chats = [{ id: "prepared-chat", title: "提前加载", updatedAt: "1", displayOrder: 0,
+    workspaceId: null, workspaceName: null, locked: false, pinned: false, group: null }];
+  const result = plain(await plugin.api("chat.sidebar.prepare", { chats }));
+  assert.equal(result.entries.length, 1);
+  assert.equal(result.entries[0].entryId, "sidebar-characters");
+  const prepared = result.entries[0].data;
+  assert.equal(prepared.context, JSON.stringify({ input: { view: "characters" }, chats }));
+  assert.equal(prepared.data.view, "characters");
+  assert.ok(prepared.data.sections.some(section => section.kind === "card"));
+  assert.equal(prepared.defaultAvatar, "data:image/png;base64,iVBORw0KGgo=");
+  assert.equal(extensionReads.length, 1);
+  assert.equal(prepared.data.sections.find(section => section.kind === "unbound").chats[0].id, "prepared-chat");
 });

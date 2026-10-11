@@ -40,24 +40,31 @@ class _ComposeHoverRegionState extends State<_ComposeHoverRegion> {
   bool _hovered = false;
   bool _menuOpen = false;
   @override
-  Widget build(BuildContext context) => MouseRegion(
-    onEnter: (_) => setState(() => _hovered = true),
-    onExit: (_) => setState(() => _hovered = false),
-    child: _ComposeHoverScope(
-      hovered: _hovered || _menuOpen,
-      onMenuOpenChanged: (open) {
-        if (mounted) setState(() => _menuOpen = open);
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 140),
-        decoration: BoxDecoration(
-          color: _hovered ? widget.color : Colors.transparent,
-          borderRadius: widget.radius,
+  Widget build(BuildContext context) {
+    // Nested surfaces share the row's hover state, including its leading rail.
+    final active = _hovered || _menuOpen || _ComposeHoverScope.of(context);
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: _ComposeHoverScope(
+        hovered: active,
+        onMenuOpenChanged: (open) {
+          if (mounted) {
+            setState(() => _menuOpen = open);
+            _ComposeHoverScope.menuOpenChanged(context, open);
+          }
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          decoration: BoxDecoration(
+            color: active ? widget.color : Colors.transparent,
+            borderRadius: widget.radius,
+          ),
+          child: widget.child,
         ),
-        child: widget.child,
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _ComposeHoverOnly extends StatelessWidget {

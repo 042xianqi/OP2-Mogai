@@ -1,6 +1,7 @@
 import type { ComposeDslContext, ComposeNode, ComposeThemeSnapshot } from "../../../../types/compose-dsl";
 import type { Definition, Request, RequestOutput } from "./model";
-import { imageSource, pickedImagePath } from "./image-source";
+import { imageSource } from "./image-source";
+import { renderManagedEntityScreen, type ManagedEntityRequest } from "./ui-entity-native";
 import { parseScreenResult } from "./presentation";
 import { record } from "./domain";
 import { createUiScreenSession } from "./ui-contributions";
@@ -23,6 +24,14 @@ export function renderScreen(ctx: ComposeDslContext, definition: Definition, req
   const session = ctx.useRef<UiScreenSession | null>("character-memory-screen-session", null);
   if (session.current === null) session.current = createUiScreenSession(presentation);
   const screenSession = session.current;
+  const [managed, setManaged] = ctx.useState<ManagedEntityRequest | null>("managed-entity", null);
+  const managedLive = ctx.useRef<ManagedEntityRequest | null>("managed-entity-live", managed); managedLive.current = managed;
+  const nextManaged = ctx.useRef("managed-entity-counter", 0);
+  function finishEntity(result: { operation: "saved" | "deleted"; id: string } | null): void {
+    managedLive.current = null; setManaged(null);
+    void controller.evaluateJavascript("window.dispatchEvent(new CustomEvent('character-entity-closed', { detail: " + JSON.stringify(result) + " }));")
+      .catch(error => setError(String(error)));
+  }
   if (requiredMode !== null && screenSession.currentScreen().input.mode !== requiredMode) throw new Error("The attachment route requires an explicit attachment presentation");
   const origin = "https://characters.operit.local/";
   /** Sends host theme changes through the plugin-owned document contract. */
@@ -66,21 +75,15 @@ export function renderScreen(ctx: ComposeDslContext, definition: Definition, req
           if (uri !== null && typeof uri !== "string") throw new Error("头像路径必须是字符串或 null");
           return imageSource(uri === null ? await ToolPkg.readResource("character_default_avatar", "operit-avatar.png") : uri);
         },
-        /** Imports only a user-selected image to persistent package storage. */
-        chooseAvatar: async (...args: unknown[]) => {
-          webArguments(args, 0);
-          const selected = await ctx.openFilePicker({ picker: "image", allowMultiple: false, mimeTypes: ["image/*"] });
-          if (selected.cancelled) return null;
-          if (selected.files.length !== 1) throw new Error("请选择一张头像图片");
-          const platform = (await Tools.System.terminal.info()).platform;
-          const source = await imageSource(pickedImagePath(selected.files[0].path, platform));
-          const directory = ToolPkg.getConfigDir().replace(/\/$/, "") + "/avatars";
-          const created = await Tools.Files.mkdir(directory, true);
-          if (!created.successful) throw new Error(created.details);
-          const uri = directory + "/" + Date.now() + "-" + Math.random().toString(36).slice(2) + ".image";
-          const saved = await Tools.Files.writeBinary(uri, source.slice(source.indexOf(",") + 1));
-          if (!saved.successful) throw new Error(saved.details);
-          return { uri, source };
+        /** Opens the same native entity renderer used by chat avatars and the sidebar. */
+        openEntity: (...args: unknown[]) => {
+          const [mode, entity, id] = webArguments(args, 3);
+          if (screenSession.currentScreen().input.mode !== "manage") throw new Error("Only management can open a local entity dialog");
+          if ((mode !== "create" && mode !== "edit" && mode !== "preview") || (entity !== "card" && entity !== "group") || typeof id !== "string" || (mode === "create" ? id !== "" : id.trim() === "")) throw new Error("Invalid native entity dialog request");
+          if (managedLive.current !== null) throw new Error("An entity dialog is already open");
+          const request: ManagedEntityRequest = { requestId: "management-" + (++nextManaged.current), input: mode === "create" ? { mode, entity, id: "" } : { mode, entity, id } };
+          managedLive.current = request; setManaged(request);
+          return null;
         },
         /** Saves an export to the VFS path explicitly supplied by the user. */
         exportFile: async (...args: unknown[]) => {
@@ -100,7 +103,7 @@ export function renderScreen(ctx: ComposeDslContext, definition: Definition, req
     ready.current = false;
     if (unsubscribe.current !== null) { unsubscribe.current(); unsubscribe.current = null; }
   }
-  return ctx.UI.Box({ fillMaxSize: true, onLoad: initialize }, path === "" ? ctx.UI.Text({ text: error === "" ? `正在加载${managementView === "memory" ? "记忆" : definition.title}…` : error }) : ctx.UI.WebView({
+  return ctx.UI.Box({ fillMaxSize: true, onLoad: initialize }, [path === "" ? ctx.UI.Text({ text: error === "" ? `正在加载${managementView === "memory" ? "记忆" : definition.title}…` : error }) : ctx.UI.WebView({
     key: "character-memory-web", controller, fillMaxSize: true, url: origin,
     javaScriptEnabled: true, domStorageEnabled: true, supportZoom: false, useWideViewPort: true,
     /** Restricts top-level navigation to the package document. */
@@ -109,5 +112,5 @@ export function renderScreen(ctx: ComposeDslContext, definition: Definition, req
     onInterceptRequest: request => request.url === origin ? { action: "respond", response: { mimeType: "text/html", encoding: "utf-8", statusCode: 200, reasonPhrase: "OK", filePath: path } } : { action: "block" },
     /** Handles disposal without retaining the screen in the host theme service. */
     onLifecycleEvent: event => { if (event.type === "Disposed") dispose(); },
-  }));
+  }), ...(managed === null ? [] : [renderManagedEntityScreen(ctx, managed, finishEntity)])]);
 }

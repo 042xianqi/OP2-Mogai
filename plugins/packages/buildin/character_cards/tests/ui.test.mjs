@@ -14,8 +14,10 @@ import { createDiskHarness } from "./disk-files.mjs";
 import { importedCallCount } from "./runtime.mjs";
 import { keyedNode, mountRegisteredSelector } from "./selector-render.mjs";
 import { createNativeChatHost } from "./native-chat-host.mjs";
+import { createSelectionSettingsFixture } from "./selection-settings-fixture.mjs";
 const require = createRequire(new URL("../../workflow/package.json", import.meta.url));
-const { chromium } = require("playwright");
+const browserType = require("playwright")[process.env.CHARACTER_CARDS_UI_BROWSER ?? "chromium"];
+assert.ok(browserType?.launch, "Unknown CHARACTER_CARDS_UI_BROWSER");
 const html = await createHtmlDocument();
 const mainScript = await buildMainScript();
 const installedHtml = await readFile(new URL("../resources/character-memory.html", import.meta.url), "utf8");
@@ -37,7 +39,7 @@ test.before(async () => {
     resolve => server.listen(0, "127.0.0.1", resolve),
   );
   origin = `http://127.0.0.1:${server.address().port}`;
-  browser = await chromium.launch({ headless: true });
+  browser = await browserType.launch({ headless: true });
   await mkdir(output, { recursive: true });
 });
 
@@ -72,33 +74,34 @@ async function page(width = 1100, height = 950, data = fixture()) {
 }
 
 /** Opens the existing character rather than a newly fabricated draft. */
-async function openCharacter(page) { await page.getByRole("button", { name: "编辑 旅行助理", exact: true }).click(); }
 
-/** Verifies original Material structure and draft preservation across all role tabs. */
-test("character editor reproduces exactly basic/content/binding; memory is an independent page", async () => {
-  const ui = await page();
-  const errors = [];
-  ui.page.on("pageerror", error => errors.push(error.message));
-  await openCharacter(ui.page);
-  const dialog = ui.page.getByRole("dialog", { name: "编辑角色卡", exact: true });
-  assert.equal(await dialog.getByRole("tab").count(), 3);
-  assert.equal(await dialog.getByLabel("角色名称 *").inputValue(), "旅行助理");
-  await dialog.getByLabel("角色名称 *").fill("我的旅行助手");
-  await dialog.getByRole("tab", { name: "内容", exact: true }).click();
-  await dialog.getByLabel("聊天附加内容").fill("尽量给出详细路线。");
-  await dialog.getByRole("tab", { name: "绑定", exact: true }).click();
-  assert.equal(await dialog.getByRole("switch", { name: "TTS 配置", exact: true }).isEnabled(), true);
-  await dialog.getByRole("tab", { name: "基础", exact: true }).click();
-  assert.equal(await dialog.getByLabel("角色名称 *").inputValue(), "我的旅行助手");
-  await ui.page.screenshot({ path: output + "character-editor-light.png" });
-  await dialog.getByRole("button", { name: "保存", exact: true }).click();
-  await ui.page.getByRole("button", { name: "编辑 我的旅行助手", exact: true }).waitFor();
-  const calls = await ui.page.evaluate(() => window.testCalls);
-  const saved = calls.find(call => call.action === "saveCharacter");
-  assert.equal(saved.card.otherContentChat, "尽量给出详细路线。");
-  assert.deepEqual(errors, []);
-  await ui.context.close();
-});
+/** Supplies an actual dark host palette for the shared-control mobile checks. */
+async function applyDarkHostTheme(page) {
+  await page.evaluate(theme => {
+    theme.brightness = "dark";
+    Object.assign(theme.colors, { primary: "#98cef8ff", onPrimary: "#00344cff", primaryContainer: "#173847ff", onPrimaryContainer: "#c6e7ffff", onSurface: "#e0e3e5ff", onSurfaceVariant: "#bec7ceff", surface: "#101417ff", surfaceContainer: "#1c2226ff", surfaceContainerHigh: "#262c30ff", surfaceContainerHighest: "#31373bff", outline: "#899298ff", outlineVariant: "#41494fff", error: "#ffb4abff" });
+    window.applyCharacterMemoryTheme(theme);
+  }, fixture().theme);
+}
+
+/** Checks outlined selects use our geometry and caret instead of platform-native chrome. */
+async function assertSelectLayout(select) {
+  const metrics = await select.evaluate(element => {
+    const style = getComputedStyle(element), bounds = element.getBoundingClientRect();
+    const label = element.closest(".field").querySelector(".field-label").getBoundingClientRect();
+    const arrow = element.nextElementSibling;
+    const caret = arrow.getBoundingClientRect();
+    return { appearance: style.appearance, height: bounds.height, paddingRight: parseFloat(style.paddingRight), labelBottom: label.bottom, top: bounds.top, caretCenter: caret.top + caret.height / 2, center: bounds.top + bounds.height / 2, pointerEvents: getComputedStyle(arrow).pointerEvents, hidden: arrow.getAttribute("aria-hidden"), client: element.clientWidth, scroll: element.scrollWidth };
+  });
+  assert.equal(metrics.appearance, "none");
+  assert.equal(metrics.height, 56);
+  assert.ok(metrics.paddingRight >= 44);
+  assert.ok(metrics.labelBottom <= metrics.top + 12);
+  assert.equal(metrics.caretCenter, metrics.center);
+  assert.equal(metrics.pointerEvents, "none");
+  assert.equal(metrics.hidden, "true");
+  assert.ok(metrics.scroll <= metrics.client);
+}
 
 /** Opens the separate memory settings page and the exact bound role-library row. */
 async function openCharacterMemory(page, name = "旅行助理") {
@@ -141,6 +144,35 @@ test("independent memory page USER.md and graph use the selected character share
   await ui.context.close();
 });
 
+/** Keeps the unnecessary score-mode selector out of desktop and mobile memory settings. */
+test("memory retrieval settings omit score mode and preserve the remaining controls", async t => {
+  for (const width of [1100, 390]) await t.test(`${width}px viewport`, async () => {
+    const ui = await page(width, 844);
+    try {
+      const editor = await openCharacterMemory(ui.page);
+      if (width === 390) await applyDarkHostTheme(ui.page);
+      await editor.getByRole("button", { name: "记忆设置", exact: true }).click();
+      const settings = ui.page.getByRole("dialog", { name: "记忆设置", exact: true });
+      await settings.getByRole("tab", { name: "检索", exact: true }).click();
+      assert.equal(await settings.getByRole("tab").count(), 3);
+      assert.equal(await settings.locator('[data-field="scoreMode"]').count(), 0);
+      assert.equal(await settings.getByText("评分模式", { exact: true }).count(), 0);
+      assert.equal(await settings.getByRole("combobox").count(), 0);
+      for (const label of ["关键词权重", "标签权重", "向量权重", "关系权重", "Embedding 完整请求地址", "Embedding 模型", "API Key"]) {
+        assert.equal(await settings.getByLabel(label, { exact: true }).isEnabled(), true);
+      }
+      assert.match(await settings.innerText(), /所属记忆库：shared:shared-main/);
+      const bounds = await settings.boundingBox();
+      assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width);
+      const metrics = await settings.evaluate(element => ({ client: element.clientWidth, scroll: element.scrollWidth }));
+      assert.ok(metrics.scroll <= metrics.client);
+      await ui.page.screenshot({ path: output + `memory-retrieval-settings-${width}.png` });
+    } finally {
+      await ui.context.close();
+    }
+  });
+});
+
 /** Ensures profile read failures cannot turn into an enabled blank overwrite form. */
 test("failed USER.md read stays visible and disables save", async () => {
   const ui = await page();
@@ -151,101 +183,6 @@ test("failed USER.md read stays visible and disables save", async () => {
   await profile.getByRole("alert").waitFor();
   assert.match(await profile.getByRole("alert").innerText(), /TEST_HOST_REJECTED/);
   assert.equal(await profile.getByRole("button", { name: "保存", exact: true }).isEnabled(), false);
-  await ui.context.close();
-});
-
-/** Checks live theme updates and the full mobile editor without horizontal overflow. */
-test("mobile layout and dark host theme preserve draft and fit the viewport", async () => {
-  const ui = await page(390, 844);
-  await openCharacter(ui.page);
-  const editor = ui.page.getByRole("dialog", { name: "编辑角色卡", exact: true });
-  await editor.getByLabel("角色名称 *").fill("保留编辑中的名称");
-  await ui.page.evaluate(theme => {
-    theme.brightness = "dark";
-    Object.assign(theme.colors, { primary: "#d0bcffff", onPrimary: "#381e72ff", primaryContainer: "#4f378bff", onPrimaryContainer: "#eaddffff", onSurface: "#e6e0e9ff", onSurfaceVariant: "#cac4d0ff", surface: "#141218ff", surfaceContainer: "#211f26ff", surfaceContainerHigh: "#2b2930ff", surfaceContainerHighest: "#36343bff", outline: "#938f99ff", outlineVariant: "#49454fff", error: "#f2b8b5ff" });
-    window.applyCharacterMemoryTheme(theme);
-  }, fixture().theme);
-  assert.equal(await editor.getByLabel("角色名称 *").inputValue(), "保留编辑中的名称");
-  const bounds = await editor.boundingBox();
-  assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 390);
-  assert.ok(bounds.y >= 0 && bounds.y + bounds.height <= 844);
-  await ui.page.screenshot({ path: output + "character-editor-mobile-dark.png" });
-  await editor.getByRole("button", { name: "取消", exact: true }).click();
-  await openCharacterMemory(ui.page);
-  await ui.page.screenshot({ path: output + "character-memory-mobile-dark.png" });
-  await ui.context.close();
-});
-
-/** Verifies tag CRUD remains draft-only and cancels with its enclosing native character editor. */
-test("tag management stages edits and deletion without writing until character save", async () => {
-  const ui = await page(); await openCharacter(ui.page);
-  const editor = ui.page.getByRole("dialog", { name: "编辑角色卡", exact: true });
-  await editor.getByRole("button", { name: "管理标签", exact: true }).click();
-  const manager = ui.page.getByRole("dialog", { name: "管理标签", exact: true });
-  await manager.getByRole("button", { name: "创建标签", exact: true }).click();
-  const tag = ui.page.getByRole("dialog", { name: "创建标签", exact: true });
-  await tag.getByLabel("标签名称 *").fill("新标签");
-  await tag.getByLabel("提示词内容").fill("<script>不执行</script>");
-  await tag.getByRole("button", { name: "保存", exact: true }).click();
-  await manager.getByRole("button", { name: "编辑 新标签", exact: true }).waitFor();
-  assert.equal(await ui.page.locator("script").count(), 1);
-  await manager.getByRole("button", { name: "删除 旅行", exact: true }).click();
-  const confirmation = ui.page.getByRole("dialog", { name: "删除标签", exact: true });
-  await confirmation.getByRole("button", { name: "删除", exact: true }).click();
-  await manager.getByRole("button", { name: "完成", exact: true }).click();
-  assert.equal(await editor.getByRole("button", { name: "新标签", exact: true }).getAttribute("class"), "chip selected");
-  assert.equal(await editor.getByRole("button", { name: "旅行", exact: true }).count(), 0);
-  const before = await ui.page.evaluate(
-    /** Reads only the test host's explicit request history. */
-    () => window.testCalls,
-  );
-  assert.deepEqual(before.map(
-    /** Records the finite actions performed before character save. */
-    call => call.action,
-  ), ["snapshot", "listThemeChoices"]);
-  await editor.getByRole("button", { name: "取消", exact: true }).click();
-  await openCharacter(ui.page);
-  assert.equal(await editor.getByRole("button", { name: "新标签", exact: true }).count(), 0);
-  assert.equal(await editor.getByRole("button", { name: "旅行", exact: true }).count(), 1);
-  await ui.context.close();
-});
-
-/** Verifies staged tag changes and real selected ids travel with character save. */
-test("character save sends staged tags in the native change-set shape", async () => {
-  const ui = await page(); await openCharacter(ui.page);
-  const editor = ui.page.getByRole("dialog", { name: "编辑角色卡", exact: true });
-  await editor.getByRole("button", { name: "管理标签", exact: true }).click();
-  const manager = ui.page.getByRole("dialog", { name: "管理标签", exact: true });
-  await manager.getByRole("button", { name: "编辑 友好", exact: true }).click();
-  const tag = ui.page.getByRole("dialog", { name: "编辑标签", exact: true });
-  await tag.getByLabel("标签名称 *").fill("修改后的友好");
-  await tag.getByRole("button", { name: "保存", exact: true }).click();
-  await manager.getByRole("button", { name: "完成", exact: true }).click();
-  await editor.getByRole("button", { name: "保存", exact: true }).click();
-  const calls = await ui.page.evaluate(
-    /** Reads the test bridge's exact payload after the parent was saved. */
-    () => window.testCalls,
-  );
-  const saved = calls.find(
-    /** Selects the sole character commit. */
-    call => call.action === "saveCharacter",
-  );
-  assert.equal(saved.tagChanges.updated[0].id, "tag-persona");
-  assert.equal(saved.tagChanges.updated[0].tagType, "TONE");
-  assert.equal(saved.tagChanges.updated[0].name, "修改后的友好");
-  await ui.context.close();
-});
-
-/** Verifies export is native Operit JSON of the saved record, not a plugin envelope or draft. */
-test("native JSON export preserves original saved record fields", async () => {
-  const ui = await page(); await openCharacter(ui.page);
-  const editor = ui.page.getByRole("dialog", { name: "编辑角色卡", exact: true });
-  await editor.getByLabel("角色名称 *").fill("尚未保存");
-  await editor.getByRole("button", { name: "导出", exact: true }).click();
-  const exported = ui.page.getByRole("dialog", { name: "导出 JSON", exact: true });
-  const record = JSON.parse(await exported.getByLabel("JSON 内容").inputValue());
-  assert.deepEqual(record, fixture().snapshot.cards[1]);
-  assert.equal(Object.hasOwn(record, "format"), false);
   await ui.context.close();
 });
 
@@ -374,6 +311,8 @@ test("SVG node drag does not select a link source and the next click still does"
   await graph.locator('.graph-node[data-id="memory-two"]').click();
   const link = ui.page.getByRole("dialog", { name: "创建记忆链接", exact: true });
   assert.equal(await link.getByLabel("源记忆", { exact: true }).inputValue(), "喜欢安静的旅行");
+  await assertSelectLayout(link.getByLabel("源记忆", { exact: true }));
+  await assertSelectLayout(link.getByLabel("目标记忆", { exact: true }));
   await ui.context.close();
 });
 
@@ -476,7 +415,7 @@ test("failed graph read reports the host failure and prevents memory writes", as
 function plain(value) { return JSON.parse(JSON.stringify(value)); }
 
 /** Runs the current main bundle with native file IO and explicit readonly directory fixtures, never fixture storage. */
-async function fileBackedPlugin(t, bundle, uiScripts = undefined) {
+async function fileBackedPlugin(t, bundle, uiScripts = undefined, settings = null) {
   const disk = await createDiskHarness(t), readonly = fixture(), native = createNativeChatHost(new Map([["chat-dom", { extension: null }]])), hostCalls = native.calls, records = native.records;
   const apis = new Map(), channels = new Map(), commands = new Map(), routes = [], navigation = [], appHooks = [], messageHooks = [], hostHooks = [], chatLifecycleHooks = [], toolLifecycleHooks = [], toolPromptHooks = [];
   const tools = { Files: disk.files, Storage: disk.storage, SoftwareSettings: {
@@ -499,6 +438,7 @@ async function fileBackedPlugin(t, bundle, uiScripts = undefined) {
       };
     },
   } };
+  if (settings !== null) Object.assign(tools.SoftwareSettings, settings);
   const registry = { ...disk.globals.ToolPkg,
     /** Captures an actual route callback from the current production main bundle. */
     registerUiRoute(value) { routes.push(value); },
@@ -544,7 +484,8 @@ async function fileBackedPlugin(t, bundle, uiScripts = undefined) {
       async call(name, input, options) { assert.equal(options.targetRuntime, "main"); assert.equal(channels.has(name), true, name); return channels.get(name)(input); },
     },
   };
-  const runtime = packageRuntime({ "dist/main.js": bundle, ...(uiScripts ?? await buildUiScreenScripts()) }, { Tools: tools, ToolPkg: registry });
+  const modules = { "dist/main.js": bundle, ...(uiScripts ?? await buildUiScreenScripts()) };
+  const runtime = packageRuntime(modules, { Tools: tools, ToolPkg: registry });
   const module = { exports: runtime.load("dist/main.js") };
   assert.equal(module.exports.registerToolPkg(), true);
   assert.equal(disk.calls.length, 0, "Registration must not read directories or initialize business storage");
@@ -559,7 +500,12 @@ async function fileBackedPlugin(t, bundle, uiScripts = undefined) {
   assert.equal(toolLifecycleHooks[0].function, module.exports.toolCallPolicy);
   assert.equal(toolPromptHooks.length, 1); assert.equal(toolPromptHooks[0].id, "participant-tool-visibility");
   assert.equal(toolPromptHooks[0].function, module.exports.toolPromptPolicy);
-  return { disk, readonly, routes, navigation, main: module.exports, tools, hostCalls, records, chatLifecycleHooks, toolLifecycleHooks, toolPromptHooks,
+  return { disk, readonly, routes, navigation, main: module.exports,
+    /** Gives each page its own runtime, retaining only the explicit main IPC transport. */
+    openComposeRoute(id) {
+      const pageRuntime = packageRuntime(modules, { Tools: tools, ToolPkg: registry });
+      return { context: pageRuntime.context, screen: pageRuntime.load(`dist/ui/${id}/index.ui.js`).default };
+    }, tools, hostCalls, records, chatLifecycleHooks, toolLifecycleHooks, toolPromptHooks,
     /** Delegates only the real registered main-runtime operation channel, not a fixture domain implementation. */
     domain: registry.ipc.call,
     /** Invokes an actual registered API with the authenticated generic host request envelope. */
@@ -621,51 +567,34 @@ async function registeredPage(t, plugin, routeId, presentation, documentUrl) {
     /** Releases this test's browser context without changing any application or fixture state. */
     async () => context.close(),
   );
-  const states = new Map([["presentation", presentation], ["chatId", "chat-dom"]]), refs = new Map();
   const completed = [], calls = [], errors = [];
   let bridge = null;
-  const controller = {
-    /** Captures the actual interface object published by the production route renderer. */
+  const pageRuntime = plugin.openComposeRoute(routeId);
+  const bundle = pageRuntime.context.OperitComposeDslRuntime.createContext({
+    state: { presentation, chatId: "chat-dom" }, theme: plain(plugin.readonly.theme),
+  });
+  const ctx = bundle.ctx;
+  // Only the external WebView boundary is substituted; state, generation and
+  // node construction run in the production SDK and the screen's own realm.
+  ctx.createWebViewController = () => ({
     addJavascriptInterface(name, value) { assert.equal(name, "CharacterMemoryHost"); bridge = value; },
-    /** Rejects unexpected document evaluation instead of inventing an evaluation result. */
     evaluateJavascript() { throw new Error("Unexpected theme event during this isolated UI test"); },
-  };
-  const ctx = {
-    /** Returns the documented WebView controller used by the actual renderer. */
-    createWebViewController() { return controller; },
-    /** Retains state requested by the existing Compose route contract. */
-    useState(key, initial) { if (!states.has(key)) states.set(key, initial); return [states.get(key),
-      /** Assigns only an explicit state update from the renderer. */
-      value => states.set(key, value),
-    ]; },
-    /** Retains only references declared by the actual route. */
-    useRef(key, initial) { if (!refs.has(key)) refs.set(key, { current: initial }); return refs.get(key); },
-    Theme: {
-      /** Supplies only an explicit isolated palette; no business data is sourced here. */
-      getCurrent() { return plain(plugin.readonly.theme); },
-      /** Retains the disposer without emitting an invented theme event. */
-      subscribe() { return /** Disposes the isolated subscription. */ () => {}; },
-    },
-    UI: {
-      /** Retains the production onLoad callback without interpreting opaque input. */
-      Box(props, children) { return { props, children }; },
-      /** Captures the real loading text node. */
-      Text(props) { return { props }; },
-      /** Captures existing WebView options without adding a new renderer or transport. */
-      WebView(props) { return { props }; },
-    },
-  };
+  });
   const route = plugin.routes.find(
     /** Requires the exact registered route identifier requested by the test. */
     value => value.id === routeId,
   );
-  assert.notEqual(route, undefined); await route.screen(ctx).props.onLoad(); assert.notEqual(bridge, null);
+  assert.notEqual(route, undefined);
+  const tree = pageRuntime.context.OperitComposeReactive.render(ctx, () => pageRuntime.screen(ctx));
+  bundle.composition.commit(tree);
+  await bundle.invokeAction(tree.props.onLoad.__actionId);
+  assert.notEqual(bridge, null);
   await context.exposeFunction("invokeActualCharacterBridge",
     /** Routes each browser call through the actual nested-argument ABI and records only terminal V1 actions. */
     async (method, args) => {
       assert.equal(Object.hasOwn(bridge, method), true);
       calls.push({ method, args: plain(args) });
-      const result = plain(await bridge[method](args));
+      const raw = await bridge[method](args); const result = raw === undefined ? null : plain(raw);
       if (method === "completeScreen" || method === "cancelScreen") completed.push(result);
       return result;
     },
@@ -686,7 +615,7 @@ async function registeredPage(t, plugin, routeId, presentation, documentUrl) {
       /** Delegates requested export IO to the actual existing host method. */
       exportFile: (file, content) => window.invokeActualCharacterBridge("exportFile", [file, content]),
       avatarImage: uri => window.invokeActualCharacterBridge("avatarImage", [uri]),
-      chooseAvatar: () => window.invokeActualCharacterBridge("chooseAvatar", []),
+      openEntity: async (mode, entity, id) => { const result = await window.invokeActualCharacterBridge("openEntity", [mode, entity, id]); window.__entityRequestSent = true; return result; },
     }; },
   );
   const page = await context.newPage();
@@ -717,226 +646,8 @@ test("management fixture explicitly declares its screen and rejects completion a
   await ui.context.close();
 });
 
-/** Exercises actual editor DOM and picker dispatch with clearly labelled presentation-only directory inputs. */
-test("theme picker DOM searches exact independent IDs, cancels without writes, and stages only the character reference", async () => {
-  const ui = await page(); await openCharacter(ui.page);
-  const editor = ui.page.getByRole("dialog", { name: "编辑角色卡", exact: true });
-  await editor.getByRole("tab", { name: "绑定", exact: true }).click();
-  await editor.getByRole("button", { name: "选择主题配置", exact: true }).click();
-  let picker = ui.page.getByRole("dialog", { name: "选择主题配置", exact: true });
-  await picker.getByLabel("搜索主题配置", { exact: true }).fill("夜间");
-  assert.equal(await picker.getByRole("button", { name: "选择主题 测试独立主题", exact: true }).count(), 0);
-  assert.equal(await picker.getByRole("button", { name: "选择主题 测试夜间主题", exact: true }).count(), 1);
-  await picker.getByRole("button", { name: "取消", exact: true }).click();
-  assert.equal(await ui.page.evaluate(
-    /** Reads only the explicit browser fixture audit; opening and cancelling must not invoke save or activation. */
-    () => window.testCalls.filter(value => value.action !== "snapshot" && value.action !== "listThemeChoices").length,
-  ), 0);
-  await editor.getByRole("button", { name: "选择主题配置", exact: true }).click();
-  picker = ui.page.getByRole("dialog", { name: "选择主题配置", exact: true });
-  await picker.getByRole("button", { name: "选择主题 测试夜间主题", exact: true }).click();
-  assert.match(await editor.textContent(), /测试夜间主题/);
-  assert.equal(await ui.page.evaluate(
-    /** Confirms the chooser has edited only its local draft, not the saved isolated fixture record. */
-    () => window.testRecords.cards.find(value => value.id === "travel").themeConfigId,
-  ), null);
-  await editor.getByRole("button", { name: "保存", exact: true }).click();
-  await ui.page.waitForFunction(
-    /** Waits for the explicit save response to be installed, not a screenshot or a predetermined success indicator. */
-    () => window.testRecords.cards.find(value => value.id === "travel").themeConfigId === "independent-theme-two",
-  );
-  const calls = await ui.page.evaluate(
-    /** Copies the actual business requests dispatched by the production browser module. */
-    () => window.testCalls,
-  );
-  const saved = calls.filter(value => value.action === "saveCharacter"); assert.equal(saved.length, 1);
-  assert.equal(saved[0].card.themeConfigId, "independent-theme-two"); assert.equal(saved[0].card.ttsConfigId, null);
-  assert.equal(calls.filter(value => value.action === "activate" || value.action === "writeChatBinding").length, 0);
-  await ui.context.close();
-});
-
-/** Uses the actual group editor while making every response and UI-only directory source explicit in the fixture. */
-test("group theme picker DOM saves its own reference without changing members or adding participant TTS", async () => {
-  const data = fixture(); data.groupSaveSnapshot = plain(data.snapshot); data.groupSaveSnapshot.groups[0].themeConfigId = "independent-theme-one";
-  const ui = await page(1100, 950, data);
-  await ui.page.getByRole("button", { name: "编辑群组 日常讨论", exact: true }).click();
-  const editor = ui.page.getByRole("dialog", { name: "编辑群组", exact: true });
-  await editor.getByRole("button", { name: "选择主题配置", exact: true }).click();
-  const picker = ui.page.getByRole("dialog", { name: "选择主题配置", exact: true });
-  await picker.getByRole("button", { name: "选择主题 测试独立主题", exact: true }).click();
-  assert.match(await editor.textContent(), /测试独立主题/);
-  await editor.getByRole("button", { name: "保存", exact: true }).click();
-  await ui.page.waitForFunction(
-    /** Waits for the fully declared group response rather than emulating a group repository in the browser. */
-    () => window.testRecords.groups[0].themeConfigId === "independent-theme-one",
-  );
-  const saved = await ui.page.evaluate(
-    /** Reads exactly one actual group-save request from the production dispatcher. */
-    () => window.testCalls.filter(value => value.action === "saveGroup"),
-  );
-  assert.equal(saved.length, 1); assert.equal(saved[0].group.themeConfigId, "independent-theme-one");
-  assert.deepEqual(saved[0].group.members, data.snapshot.groups[0].members); assert.equal(Object.hasOwn(saved[0].group, "ttsConfigId"), false);
-  await ui.context.close();
-});
-
-/** Missing directory access stays an explicit visible error; no implicit empty picker, save, retry or success is permitted. */
-test("theme picker directory rejection stays in the same editor and performs zero reference saves", async () => {
-  const ui = await page(); await openCharacter(ui.page);
-  const editor = ui.page.getByRole("dialog", { name: "编辑角色卡", exact: true });
-  await editor.getByRole("tab", { name: "绑定", exact: true }).click();
-  await ui.page.evaluate(
-    /** Injects an explicitly planned original directory failure at the test transport boundary only. */
-    () => { window.testFailure = "listThemeChoices"; },
-  );
-  await editor.getByRole("button", { name: "选择主题配置", exact: true }).click();
-  await editor.getByRole("alert").filter({ hasText: "TEST_HOST_REJECTED" }).waitFor();
-  assert.equal(await ui.page.getByRole("dialog", { name: "选择主题配置", exact: true }).count(), 0);
-  await editor.getByRole("button", { name: "取消", exact: true }).click();
-  const calls = await ui.page.evaluate(
-    /** Audits exact directory attempts and zero mutations after the failed reader and explicit cancellation. */
-    () => window.testCalls,
-  );
-  assert.equal(calls.filter(value => value.action === "listThemeChoices").length, 2);
-  assert.equal(calls.filter(value => value.action === "saveCharacter" || value.action === "activate" || value.action === "writeChatBinding").length, 0);
-  await ui.context.close();
-});
-
-/** Keeps the plugin settings entry within the pre-migration character/group surface. */
-test("character settings remove the whole page title and retain theme binding", async () => {
-  const data = fixture(); data.snapshot.cards[1].themeConfigId = "saved-independent-theme";
-  const ui = await page(1100, 950, data);
-  assert.equal(await ui.page.locator('#app [data-action="refresh"], #app [data-action="preview-group"]').count(), 0);
-  assert.equal(await ui.page.locator("#app .appbar, #app h1").count(), 0);
-  assert.equal((await ui.page.locator("#app .scroll").boundingBox()).y, 0);
-  await ui.page.screenshot({ path: output + "character-settings-no-title.png" });
-  assert.equal(await ui.page.getByRole("button", { name: "编辑群组", exact: true }).count(), 0);
-  await openCharacter(ui.page);
-  const editor = ui.page.getByRole("dialog", { name: "编辑角色卡", exact: true });
-  await editor.getByRole("tab", { name: "绑定", exact: true }).click();
-  assert.equal(await editor.locator(".binding").count(), 5);
-  assert.deepEqual(await editor.getByRole("switch").evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-label"))), ["聊天模型", "TTS 配置", "记忆绑定", "工具访问"]);
-  assert.equal(await editor.getByRole("button", { name: "选择主题配置", exact: true }).count(), 1);
-  await editor.getByRole("tab", { name: "基础", exact: true }).click();
-  await editor.getByLabel("角色名称 *", { exact: true }).fill("原有角色编辑");
-  await editor.getByRole("button", { name: "保存", exact: true }).click();
-  await ui.page.getByRole("button", { name: "编辑 原有角色编辑", exact: true }).waitFor();
-  const calls = await ui.page.evaluate(() => window.testCalls);
-  assert.equal(calls.filter(call => call.action === "listThemeChoices").length, 1);
-  assert.equal(calls.find(call => call.action === "saveCharacter").card.themeConfigId, "saved-independent-theme");
-  await ui.context.close();
-});
-
-/** Removes the added group UI without deleting data already stored on that group. */
-test("group settings retain theme picker, fields and members without duplicate row actions", async () => {
-  const data = fixture(); data.snapshot.groups[0].themeConfigId = "saved-group-theme";
-  data.groupSaveSnapshot = plain(data.snapshot);
-  const ui = await page(1100, 950, data);
-  const tile = ui.page.locator(".entity").filter({ has: ui.page.getByRole("button", { name: "编辑群组 日常讨论", exact: true }) });
-  assert.equal(await tile.locator(".entity-subtitle").textContent(), "Operit、旅行助理");
-  assert.equal(await tile.locator(".badge").count(), 1);
-  assert.equal(await tile.locator(".entity-actions button").count(), 1);
-  await tile.getByRole("button", { name: "编辑群组 日常讨论", exact: true }).click();
-  const editor = ui.page.getByRole("dialog", { name: "编辑群组", exact: true });
-  assert.equal(await editor.locator(".field").count(), 2);
-  assert.equal(await editor.getByRole("checkbox").count(), data.snapshot.cards.length);
-  assert.equal(await editor.getByRole("button", { name: "选择主题配置", exact: true }).count(), 1);
-  assert.equal(await editor.locator(".notice").count(), 0);
-  assert.equal(await editor.locator(".binding").count(), 1);
-  assert.equal(await editor.getByRole("button", { name: "导出 JSON", exact: true }).count(), 1);
-  await editor.getByRole("button", { name: "保存", exact: true }).click();
-  await editor.waitFor({ state: "detached" });
-  const calls = await ui.page.evaluate(() => window.testCalls);
-  const saved = calls.find(call => call.action === "saveGroup");
-  assert.equal(saved.group.themeConfigId, "saved-group-theme");
-  assert.deepEqual(saved.group.members, data.snapshot.groups[0].members);
-  assert.equal(calls.filter(call => call.action === "listThemeChoices").length, 1);
-  await ui.context.close();
-});
-
-/** Deleted refs remain explicit until the user chooses a real independent ID or intentionally removes the reference. */
-test("deleted theme and TTS references remain visible in picker DOM and cancellation does not replace them", async () => {
-  const data = fixture(); data.snapshot.cards[1].themeConfigId = "deleted-theme"; data.snapshot.cards[1].ttsConfigId = "deleted-tts";
-  const ui = await page(1100, 950, data); await openCharacter(ui.page);
-  const editor = ui.page.getByRole("dialog", { name: "编辑角色卡", exact: true });
-  await editor.getByRole("tab", { name: "绑定", exact: true }).click();
-  assert.match(await editor.getByRole("alert").filter({ hasText: "已绑定 TTS" }).textContent(), /已绑定 TTS 配置不存在：deleted-tts/);
-  await editor.getByRole("button", { name: "选择主题配置", exact: true }).click();
-  const theme = ui.page.getByRole("dialog", { name: "选择主题配置", exact: true });
-  assert.match(await theme.getByRole("alert").textContent(), /已绑定主题配置不存在：deleted-theme/);
-  await theme.getByRole("button", { name: "取消", exact: true }).click();
-  await editor.getByRole("button", { name: "选择 TTS 配置", exact: true }).click();
-  const tts = ui.page.getByRole("dialog", { name: "选择 TTS 配置", exact: true });
-  assert.match(await tts.getByRole("alert").textContent(), /已绑定 TTS 配置不存在：deleted-tts/);
-  await tts.getByRole("button", { name: "取消", exact: true }).click();
-  await editor.getByRole("button", { name: "取消", exact: true }).click();
-  const retained = await ui.page.evaluate(
-    /** Reads the unchanged declared record and mutation audit, not a default or synthesized unbound value. */
-    () => ({ card: window.testRecords.cards.find(value => value.id === "travel"), saves: window.testCalls.filter(value => value.action === "saveCharacter").length }),
-  );
-  assert.equal(retained.card.themeConfigId, "deleted-theme"); assert.equal(retained.card.ttsConfigId, "deleted-tts"); assert.equal(retained.saves, 0);
-  await ui.context.close();
-});
-
-/** An explicitly empty independent speech directory must not trap a saved deleted reference behind a disabled unbind control. */
-test("empty TTS directory permits only explicit user unbinding and never chooses a replacement config", async () => {
-  const data = fixture(); data.snapshot.ttsConfigs = []; data.snapshot.cards[1].ttsConfigId = "deleted-tts";
-  const ui = await page(1100, 950, data); await openCharacter(ui.page);
-  const editor = ui.page.getByRole("dialog", { name: "编辑角色卡", exact: true });
-  await editor.getByRole("tab", { name: "绑定", exact: true }).click();
-  const binding = editor.getByRole("switch", { name: "TTS 配置", exact: true }); assert.equal(await binding.isEnabled(), true);
-  assert.match(await editor.getByRole("alert").textContent(), /deleted-tts/);
-  await binding.uncheck(); await editor.getByRole("button", { name: "保存", exact: true }).click();
-  await ui.page.waitForFunction(
-    /** Confirms the actual explicit save submitted null, not an automatic response to the missing record. */
-    () => window.testRecords.cards.find(value => value.id === "travel").ttsConfigId === null,
-  );
-  const saved = await ui.page.evaluate(
-    /** Retains the actual staged reference field and zero global-configuration operations. */
-    () => window.testCalls.filter(value => value.action === "saveCharacter"),
-  );
-  assert.equal(saved.length, 1); assert.equal(saved[0].card.ttsConfigId, null); await ui.context.close();
-});
-
-/** Keeps binding controls editable and proves they remain staged until the one complete character save. */
-test("TTS and four tool-source categories stage real directory choices and save their complete binding fields", async () => {
-  const ui = await page(); await openCharacter(ui.page);
-  const editor = ui.page.getByRole("dialog", { name: "编辑角色卡", exact: true });
-  await editor.getByRole("tab", { name: "绑定", exact: true }).click();
-  await editor.getByRole("switch", { name: "TTS 配置", exact: true }).check();
-  await editor.getByRole("button", { name: "选择 TTS 配置", exact: true }).click();
-  const tts = ui.page.getByRole("dialog", { name: "选择 TTS 配置", exact: true });
-  await tts.getByLabel("搜索 TTS 配置", { exact: true }).fill("测试语音");
-  await tts.getByRole("button", { name: "选择 TTS 测试语音", exact: true }).click();
-  await editor.getByRole("switch", { name: "工具访问", exact: true }).check();
-  await editor.getByRole("button", { name: "配置允许使用的工具", exact: true }).click();
-  const policy = ui.page.getByRole("dialog", { name: "自定义允许使用的工具", exact: true });
-  for (const name of ["fixture-builtin", "fixture-package", "fixture-skill", "fixture-mcp"]) await policy.locator(`[data-tool-source="${name}"]`).check();
-  await policy.getByRole("button", { name: "确定", exact: true }).click();
-  const before = await ui.page.evaluate(
-    /** Reads only emitted requests to prove nested directory picks have not persisted the parent draft. */
-    () => window.testCalls,
-  );
-  assert.equal(before.some(
-    /** Requires the single authoritative save to remain uncalled while picks are staged. */
-    call => call.action === "saveCharacter",
-  ), false);
-  await editor.getByRole("button", { name: "保存", exact: true }).click(); await editor.waitFor({ state: "hidden" });
-  const calls = await ui.page.evaluate(
-    /** Reads the actual full-record request emitted by the one explicit save. */
-    () => window.testCalls,
-  );
-  const saves = calls.filter(
-    /** Counts only complete character writes, never a nested chooser action. */
-    call => call.action === "saveCharacter",
-  );
-  assert.equal(saves.length, 1); assert.equal(saves[0].card.ttsConfigId, "tts-one");
-  assert.deepEqual(saves[0].card.sharedMemoryMounts, fixture().snapshot.cards[1].sharedMemoryMounts);
-  assert.deepEqual(saves[0].card.toolAccessConfig, { enabled: true, allowedBuiltinTools: ["fixture-builtin"], allowedPackages: ["fixture-package"], allowedSkills: ["fixture-skill"], allowedMcpServers: ["fixture-mcp"] });
-  await ui.context.close();
-});
-
 /** Exercises source-built routes, real host completion and native file persistence without fixture storage. */
-test("current plugin routes connect selector preview and memory attachment to the actual file service", async t => {
+test("current plugin routes connect selector and memory attachment to the actual file service", async t => {
   const plugin = await fileBackedPlugin(t, mainScript);
   const card = await plugin.api("character.create", { values: { name: "真实选择角色", description: "Native disk card", characterSetting: "Persisted setting", openingStatement: "Persisted opening" } });
   const group = await plugin.api("group.create", { values: { name: "真实选择组", description: "Native disk group", members: [{ characterCardId: card.id, orderIndex: 0 }] } });
@@ -983,23 +694,6 @@ test("current plugin routes connect selector preview and memory attachment to th
     assert.deepEqual(plugin.records.get("chat-dom").extension, { version: 1, selection: "group:" + group.id });
     assert.equal((await plugin.api("chat.configuration.binding.read", { chatId: "chat-dom" })).selection, "group:" + group.id);
     assert.deepEqual(await plugin.api("activePrompt.get", {}), active);
-  });
-  /** Saves a nested preview editor without ending the caller until the root preview closes. */
-  await t.test("identity preview opens the actual plugin popup and its nested editor saves genuine records", async s => {
-    await plugin.api("chat.configuration.binding.write", { chatId: "chat-dom", selection: "card:" + card.id });
-    const menu = await plugin.api("chat.context.actions", { chatId: "chat-dom" });
-    const ui = await registeredPage(s, plugin, "main", { requestId: "preview-card", input: menu.identity.action.input }, origin);
-    const preview = ui.page.getByRole("dialog", { name: "角色卡预览", exact: true }); await preview.waitFor();
-    assert.equal(await preview.getByText("Persisted setting", { exact: true }).count(), 1);
-    await preview.getByRole("button", { name: "编辑", exact: true }).click();
-    const editor = ui.page.getByRole("dialog", { name: "编辑角色卡", exact: true });
-    await editor.getByLabel("描述", { exact: true }).fill("真实 popup 提交后的描述");
-    await editor.getByRole("button", { name: "保存", exact: true }).click(); await editor.waitFor({ state: "hidden" });
-    assert.equal((await plugin.api("character.get", { id: card.id })).description, "真实 popup 提交后的描述");
-    assert.deepEqual(ui.completed, []); await preview.locator("[data-action=close-dialog]").first().click();
-    await ui.page.getByText("当前视图已结束。", { exact: true }).waitFor();
-    assert.deepEqual(ui.completed, [{ type: "toolpkg.presentation.complete", requestId: "preview-card", value: { mode: "preview", entity: "card", id: card.id } }]);
-    assert.deepEqual(ui.errors, []);
   });
   /** Exercises the formal attachment entry, exact complete records and generic terminal payload. */
   await t.test("formal plus-menu entry picks genuine owner folder records and emits only V1 generic text", async s => {
@@ -1089,10 +783,9 @@ test("installed plugin artifacts launch management and the independent V1 text a
     const ui = await registeredPage(s, plugin, "main", null, origin + "/installed");
     assert.deepEqual(plain(ui.bridge.currentScreen([])), { requestId: null, input: { mode: "manage" } });
     await ui.page.getByRole("button", { name: "编辑 产物角色", exact: true }).click();
-    const editor = ui.page.getByRole("dialog", { name: "编辑角色卡", exact: true });
-    assert.equal(await editor.getByRole("tab").count(), 3);
-    await editor.getByRole("tab", { name: "绑定", exact: true }).click();
-    assert.equal(await editor.getByRole("switch", { name: "TTS 配置", exact: true }).isEnabled(), true);
+    await ui.page.waitForFunction(() => window.__entityRequestSent === true);
+    assert.equal(await ui.page.getByRole("dialog", { name: "编辑角色卡", exact: true }).count(), 0, "Management must not recreate the removed browser editor");
+    assert.deepEqual(ui.calls.find(call => call.method === "openEntity").args, ["edit", "card", card.id]);
     await assert.rejects(async () => ui.bridge.completeScreen([{ mode: "preview", entity: "card", id: card.id }]), /Management has no presentation completion channel/);
     assert.throws(
       /** Verifies actual management has no cancellation receiver rather than mocking a successful closure. */
@@ -1113,8 +806,8 @@ test("installed plugin artifacts launch management and the independent V1 text a
   });
 });
 
-/** The character page has no inner title; the independent memory header remains stationary. */
-test("character scroll uses the full viewport without a title while memory keeps its fixed header", async () => {
+/** Both management pages use the full viewport for scrolling without an inner title or refresh header. */
+test("character and memory scroll use the full viewport without a title or refresh header", async () => {
   const data = fixture();
   for (let i = 0; i < 24; i++) data.snapshot.cards.push({ ...data.snapshot.cards[1], id: "scroll-" + i, name: "滚动角色 " + i, isDefault: false });
   const ui = await page(800, 500, data);
@@ -1122,38 +815,35 @@ test("character scroll uses the full viewport without a title while memory keeps
     await ui.page.goto(document);
     await ui.page.locator(".entity").first().waitFor();
     assert.equal(await ui.page.locator('[data-action="memory-settings"], [data-action="characters-settings"]').count(), 0);
-    const memory = document.endsWith("/memory");
-    assert.equal(await ui.page.locator(".appbar").count(), memory ? 1 : 0);
-    const before = memory ? await ui.page.locator(".appbar").boundingBox() : null;
+    assert.equal(await ui.page.locator('.appbar, h1, [data-action="refresh"]').count(), 0);
+    if (document.endsWith("/memory")) await ui.page.getByText("全局记忆设置", { exact: true }).waitFor();
     const metrics = await ui.page.locator(".scroll").evaluate(el => ({ client: el.clientHeight, content: el.scrollHeight }));
     assert.ok(metrics.content > metrics.client);
-    if (memory) assert.ok(metrics.client < 500);
-    else assert.equal(metrics.client, 500);
+    assert.equal(metrics.client, 500);
     await ui.page.locator(".scroll").hover(); await ui.page.mouse.wheel(0, 700);
     await ui.page.waitForFunction(() => document.querySelector(".scroll").scrollTop > 0);
-    if (memory) assert.deepEqual(await ui.page.locator(".appbar").boundingBox(), before);
-    else assert.equal(await ui.page.locator(".appbar, h1").count(), 0);
+    assert.equal(await ui.page.locator('.appbar, h1, [data-action="refresh"]').count(), 0);
   }
   await ui.context.close();
 });
 
-/** Checks the original flexible avatar row, explicit picker transport and the authored persistent URI. */
-test("avatar editor keeps old 44px preview and right-aligned choose/clear controls", async () => {
-  const ui = await page(); await openCharacter(ui.page);
-  const editor = ui.page.getByRole("dialog", { name: "编辑角色卡", exact: true });
-  const row = editor.locator(".avatar-editor");
-  const image = await row.locator(".avatar").boundingBox(), bounds = await row.boundingBox();
-  assert.equal(image.width, 44); assert.equal(image.height, 44);
-  const choose = await row.getByRole("button", { name: "选择", exact: true }).boundingBox();
-  assert.ok(bounds.x + bounds.width - choose.x - choose.width <= 14);
-  await ui.page.evaluate(() => {
-    window.CharacterMemoryHost.chooseAvatar = async () => ({ uri: "/app/data/plugin/avatars/selected.png", source: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=" });
-  });
-  await row.getByRole("button", { name: "选择", exact: true }).click();
-  await row.getByRole("button", { name: "清除", exact: true }).waitFor();
-  assert.ok(await row.locator("img").getAttribute("src"));
-  await editor.getByRole("button", { name: "保存", exact: true }).click();
-  const saved = await ui.page.evaluate(() => window.testCalls.find(call => call.action === "saveCharacter"));
-  assert.equal(saved.card.avatarUri, "/app/data/plugin/avatars/selected.png");
+/** The browser keeps only management tiles; the actual native CRUD lifecycle is tested against disk in entity-native.test.mjs. */
+test("management create and edit entrypoints use the one native dialog bridge without browser entity modals", async () => {
+  const ui = await page();
+  const checks = [
+    [ui.page.getByRole("button", { name: "编辑 旅行助理", exact: true }), { action: "openEntity", mode: "edit", entity: "card", id: "travel" }],
+    [ui.page.getByRole("button", { name: "编辑群组 日常讨论", exact: true }), { action: "openEntity", mode: "edit", entity: "group", id: "group-one" }],
+    [ui.page.locator('[data-action="create-card"]'), { action: "openEntity", mode: "create", entity: "card", id: "" }],
+    [ui.page.locator('[data-action="create-group"]'), { action: "openEntity", mode: "create", entity: "group", id: "" }],
+  ];
+  for (const [entry, expected] of checks) {
+    await entry.click();
+    await ui.page.waitForFunction(() => !document.querySelector('[aria-busy="true"]'));
+    const calls = await ui.page.evaluate(() => window.testCalls.filter(call => call.action === "openEntity"));
+    assert.deepEqual(calls.at(-1), expected);
+    assert.equal(await ui.page.locator('dialog').count(), 0);
+  }
+  await ui.page.evaluate(() => window.dispatchEvent(new CustomEvent("character-entity-closed", { detail: { operation: "saved", id: "travel" } })));
+  await ui.page.waitForFunction(() => window.testCalls.some(call => call.action === "snapshot"));
   await ui.context.close();
 });

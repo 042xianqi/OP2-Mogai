@@ -8,6 +8,8 @@ import 'package:flutter/services.dart';
 import 'package:desktop_widgets/desktop_widgets.dart';
 
 import '../../../core/bridge/ProxyCoreRuntimeBridge.dart';
+import '../../common/contributions/ChatSidebarTabHost.dart'
+    show ChatSidebarPreparation, ChatSidebarPreparationScope;
 import '../../../core/notifications/NotificationActivationService.dart';
 import '../../../core/proxy/generated/CoreProxyClients.g.dart';
 import '../../../core/proxy/generated/CoreProxyModels.g.dart' as core_proxy;
@@ -44,6 +46,7 @@ class _OperitMainScreenState extends State<OperitMainScreen> {
   late final TopBarController _topBarController;
   late final MainLayoutController _mainLayoutController;
   late final SidebarDockController _sidebarDockController;
+  late final ChatSidebarPreparation _sidebarPreparation;
   List<core_proxy.ToolPkgUiRoute> _toolPkgUiRoutes =
       const <core_proxy.ToolPkgUiRoute>[];
   List<core_proxy.ToolPkgNavigationEntry> _toolPkgNavigationEntries =
@@ -67,10 +70,12 @@ class _OperitMainScreenState extends State<OperitMainScreen> {
     _topBarController = TopBarController();
     _mainLayoutController = MainLayoutController();
     _sidebarDockController = SidebarDockController();
+    _sidebarPreparation = ChatSidebarPreparation(clients: _clients);
     _routerState = AppRouterState(AppRouteCatalog.initialEntry());
     _drawerConversationState = ValueNotifier<DrawerConversationState>(
       const DrawerConversationState(),
     );
+    _drawerConversationState.addListener(_prepareSidebarData);
     _drawerOpenState = ValueNotifier<bool>(false);
     AppRouterGateway.install(handler: _navigateToRoute, reset: _resetToRoute);
     NotificationActivationService.instance.installChatHandler(
@@ -171,6 +176,14 @@ class _OperitMainScreenState extends State<OperitMainScreen> {
     }
   }
 
+  /// Prepares plugin-owned sidebar data even while the desktop drawer is closed.
+  void _prepareSidebarData() {
+    final state = _drawerConversationState.value;
+    if (!state.loading && state.errorMessage == null) {
+      unawaited(_sidebarPreparation.prepare(state.histories));
+    }
+  }
+
   /// Loads drawer data before subscribing to its live updates.
   Future<void> _initializeDrawerData() async {
     await _loadDrawerConversations();
@@ -207,6 +220,8 @@ class _OperitMainScreenState extends State<OperitMainScreen> {
     _drawerHistoriesSubscription?.cancel();
     _drawerCurrentChatSubscription?.cancel();
     _drawerActiveStreamingChatIdsSubscription?.cancel();
+    _drawerConversationState.removeListener(_prepareSidebarData);
+    _sidebarPreparation.dispose();
     _drawerConversationState.dispose();
     _drawerOpenState.dispose();
     _routerState.dispose();
@@ -681,63 +696,70 @@ class _OperitMainScreenState extends State<OperitMainScreen> {
           ],
         );
 
-        return SidebarDockScope(
-          controller: _sidebarDockController,
-          child: MainLayoutScope(
-            controller: _mainLayoutController,
-            child: TopBarScope(
-              controller: _topBarController,
-              child: ValueListenableBuilder<bool>(
-                valueListenable: _drawerOpenState,
-                child: Scaffold(
-                  body: useTabletLayout
-                      ? TabletLayout(
-                          content: content,
-                          navigationEntries: _navigationModel.navigationEntries,
-                          pluginSidebarEntries: pluginSidebarEntries,
-                          selectedRouteId: currentRouteEntry.routeId,
-                          drawerConversationState: _drawerConversationState,
-                          isTabletSidebarExpanded: _isTabletSidebarExpanded,
-                          tabletSidebarWidth: 280,
-                          collapsedTabletSidebarWidth: 56,
-                          onNavigationEntrySelected: _navigateToNavigationEntry,
-                          onConversationActivated: _activateConversationRoute,
-                        )
-                      : PhoneLayout(
-                          content: content,
-                          navigationEntries: _navigationModel.navigationEntries,
-                          pluginSidebarEntries: pluginSidebarEntries,
-                          selectedRouteId: currentRouteEntry.routeId,
-                          drawerConversationState: _drawerConversationState,
-                          drawerWidth: screenSize.width * 0.75,
-                          drawerOpenState: _drawerOpenState,
-                          enableNavigationAnimation: true,
-                          onOpenDrawer: () {
-                            _drawerOpenState.value = true;
-                          },
-                          onCloseDrawer: () {
-                            _drawerOpenState.value = false;
-                          },
-                          onNavigationEntrySelected: _navigateToNavigationEntry,
-                          onConversationActivated: _activateConversationRoute,
-                        ),
+        return ChatSidebarPreparationScope(
+          preparation: _sidebarPreparation,
+          child: SidebarDockScope(
+            controller: _sidebarDockController,
+            child: MainLayoutScope(
+              controller: _mainLayoutController,
+              child: TopBarScope(
+                controller: _topBarController,
+                child: ValueListenableBuilder<bool>(
+                  valueListenable: _drawerOpenState,
+                  child: Scaffold(
+                    body: useTabletLayout
+                        ? TabletLayout(
+                            content: content,
+                            navigationEntries:
+                                _navigationModel.navigationEntries,
+                            pluginSidebarEntries: pluginSidebarEntries,
+                            selectedRouteId: currentRouteEntry.routeId,
+                            drawerConversationState: _drawerConversationState,
+                            isTabletSidebarExpanded: _isTabletSidebarExpanded,
+                            tabletSidebarWidth: 280,
+                            collapsedTabletSidebarWidth: 56,
+                            onNavigationEntrySelected:
+                                _navigateToNavigationEntry,
+                            onConversationActivated: _activateConversationRoute,
+                          )
+                        : PhoneLayout(
+                            content: content,
+                            navigationEntries:
+                                _navigationModel.navigationEntries,
+                            pluginSidebarEntries: pluginSidebarEntries,
+                            selectedRouteId: currentRouteEntry.routeId,
+                            drawerConversationState: _drawerConversationState,
+                            drawerWidth: screenSize.width * 0.75,
+                            drawerOpenState: _drawerOpenState,
+                            enableNavigationAnimation: true,
+                            onOpenDrawer: () {
+                              _drawerOpenState.value = true;
+                            },
+                            onCloseDrawer: () {
+                              _drawerOpenState.value = false;
+                            },
+                            onNavigationEntrySelected:
+                                _navigateToNavigationEntry,
+                            onConversationActivated: _activateConversationRoute,
+                          ),
+                  ),
+                  builder: (context, drawerOpen, child) {
+                    final phoneDrawerOpen = !useTabletLayout && drawerOpen;
+                    return PopScope(
+                      canPop:
+                          defaultTargetPlatform != TargetPlatform.android &&
+                          !phoneDrawerOpen &&
+                          !_routerState.canPop,
+                      onPopInvokedWithResult: (didPop, result) {
+                        if (didPop) {
+                          return;
+                        }
+                        _handleSystemBack(currentScreen);
+                      },
+                      child: child!,
+                    );
+                  },
                 ),
-                builder: (context, drawerOpen, child) {
-                  final phoneDrawerOpen = !useTabletLayout && drawerOpen;
-                  return PopScope(
-                    canPop:
-                        defaultTargetPlatform != TargetPlatform.android &&
-                        !phoneDrawerOpen &&
-                        !_routerState.canPop,
-                    onPopInvokedWithResult: (didPop, result) {
-                      if (didPop) {
-                        return;
-                      }
-                      _handleSystemBack(currentScreen);
-                    },
-                    child: child!,
-                  );
-                },
               ),
             ),
           ),

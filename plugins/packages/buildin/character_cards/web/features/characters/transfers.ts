@@ -1,42 +1,37 @@
-import type { Card } from "../../../src/model";
 import type { EditorContext } from "../../bridge/context";
-import type { NativeRecord } from "../../bridge/contracts";
 import { host } from "../../bridge/transport";
-import { getCard as readCard } from "../characters/data";
 /** Binds characters transfers operations to one editor context. */
 export function createCharactersTransfersFeature(context: EditorContext) {
-  const { snapshot, state, topDialog, pushDialog, popDialog, request, renderMain, toast } = context;
-  /** Resolves one loaded character by exact canonical identity. */
-  const getCard = (id: string): Card => readCard(snapshot(), id);
-
-  /** Serializes native character/group records without a plugin-only envelope. */
-  function openExport(type: "character" | "group", value: NativeRecord): void {
-    pushDialog({ type: "export", path: "", content: JSON.stringify(value, null, 2), typeName: type });
-  }
+  const { state, topDialog, pushDialog, popDialog, request, renderMain, toast, owningGraph } = context;
   /** Executes only this feature's registered actions without choosing another transport. */
   async function handleAction(action: string, _element: HTMLElement | SVGElement): Promise<void> {
     switch (action) {
-      case "export-card": openExport("character", getCard(topDialog("character").card.id)); return;
-
-      case "export-group": {
-        const id = topDialog("group").group.id;
-        for (const group of snapshot().groups) if (group.id === id) { openExport("group", group); return; }
-        throw new Error("群组不存在");
+      case "save-export": {
+        const dialog = topDialog("export");
+        if (dialog.path.trim() === "") throw new Error("请输入导出文件 VFS 路径");
+        if (!await host().exportFile(dialog.path, dialog.content)) throw new Error("宿主未确认文件导出成功");
+        popDialog(); toast("文件已导出"); return;
       }
 
-      case "save-export": await host().exportFile(topDialog("export").path, topDialog("export").content); popDialog(); toast("文件已导出"); return;
-
       case "import-card":
-      case "import-group": pushDialog({ type: "import", target: action === "import-card" ? "card" : "group", content: "" }); return;
+      case "import-group": pushDialog({ type: "import", target: action === "import-card" ? "card" : "group", ownerKey: null, format: "operit", strategy: "SKIP", content: "" }); return;
 
       case "read-import": {
         const dialog = topDialog("import");
-        if (dialog.target === "card") state.snapshot = await request({ action: "importCharacter", format: "operit", content: dialog.content });
-        else state.snapshot = await request({ action: "importGroup", content: dialog.content });
+        if (dialog.target === "card") state.snapshot = await request({ action: "importCharacter", format: dialog.format, content: dialog.content });
+        else if (dialog.target === "group") state.snapshot = await request({ action: "importGroup", content: dialog.content });
+        else {
+          if (dialog.ownerKey === null) throw new Error("缺少导入记忆库标识");
+          const imported = await request({ action: "importMemory", ownerKey: dialog.ownerKey, content: dialog.content, strategy: dialog.strategy });
+          const graph = owningGraph(dialog.ownerKey);
+          graph.data = await request({ action: "graph", ownerKey: dialog.ownerKey });
+          graph.searchIds = null; graph.query = ""; graph.appliedQuery = ""; graph.selected = null; graph.selectedEdge = null;
+          popDialog(); toast(`记忆导入完成：新增 ${imported.result.newMemories}，更新 ${imported.result.updatedMemories}，跳过 ${imported.result.skippedMemories}，关系 ${imported.result.newLinks}`); return;
+        }
         popDialog(); renderMain(); toast("导入完成"); return;
       }
       default: throw new Error(`Unknown characters/transfers action: ${action}`);
     }
   }
-  return { names: ["export-card", "export-group", "save-export", "import-card", "import-group", "read-import"], handleAction, openExport };
+  return { names: ["save-export", "import-card", "import-group", "read-import"], handleAction };
 }

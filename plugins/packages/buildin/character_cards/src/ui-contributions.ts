@@ -14,8 +14,8 @@ export interface ContextSelection { chatId: string | null; selection: string | n
 
 /** Uses the existing owner-qualified route identifier, never a package-specific host entry point. */
 export interface UiAction { routeId: string; input: JsonValue }
-/** Describes the current chat's display identity and its owner-provided preview action. */
-export interface UiIdentity { title: string; avatarUri: string | null; action: UiAction }
+/** Describes display-only title text and an explicitly avatar-scoped preview action. */
+export interface UiIdentity { title: string; avatarUri: string | null; avatarAction: UiAction }
 /** Returns only generic chat context presentation fields at the host boundary. */
 export interface ContextActions { identity: UiIdentity | null; backgroundUri: string | null }
 /** Uses the real generic Flutter chat history summary contract without legacy domain fields. */
@@ -142,7 +142,7 @@ export function encodeSelection(selection: ActivePrompt): string {
 export function contextActions(routes: ChatUiRoutes, target: ContextSelection, directory: Snapshot): ContextActions {
   const selected = target.selection === null ? null : decodeSelection(target.selection, directory);
   return {
-    identity: selected === null ? null : { title: selected.title, avatarUri: selected.avatarUri, action: previewAction(routes.editor, selected.entity, selected.id) },
+    identity: selected === null ? null : { title: selected.title, avatarUri: selected.avatarUri, avatarAction: previewAction(routes.editor, selected.entity, selected.id) },
     backgroundUri: null,
   };
 }

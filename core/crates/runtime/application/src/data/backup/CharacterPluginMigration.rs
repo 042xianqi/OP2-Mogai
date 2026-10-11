@@ -16,7 +16,7 @@ use operit_store::SyncOperationStore::SyncOperationStore;
 use operit_util::RuntimeStorageLayout::RUNTIME_SYNC_DIR_PATH;
 use serde_json::{json, Value};
 use super::CharacterPluginLegacyData::*;
-use operit_util::RuntimeStorageLayout::{CHARACTER_CARDS_PREFERENCES_PATH, CHARACTER_GROUPS_PREFERENCES_PATH, PROMPT_TAGS_PREFERENCES_PATH, SHARED_MEMORY_STORES_PREFERENCES_PATH};
+use operit_util::RuntimeStorageLayout::{CHARACTER_CARDS_PREFERENCES_PATH, CHARACTER_GROUPS_PREFERENCES_PATH, PROMPT_TAGS_PREFERENCES_PATH, SHARED_MEMORY_STORES_PREFERENCES_PATH, API_PREFERENCES_PATH};
 
 pub const PLUGIN_ID: &str = "com.operit.character_cards";
 pub const LEGACY_BINDING_NAMESPACE: &str = "com.operit.character_cards.migration";
@@ -34,6 +34,7 @@ pub struct CharacterMigrationData {
     pub documents: BTreeMap<String, Vec<u8>>,
     pub resources: BTreeMap<String, Vec<u8>>,
     pub active: Option<Value>,
+    pub memory_preferences: Option<Value>,
     pub cleanup_paths: Vec<String>,
 }
 
@@ -174,6 +175,10 @@ impl CharacterPluginWriter {
         }
         if metadata["migrationStatus"] == "writing" && metadata["migrationSource"] != source {
             return Err("Another character migration is incomplete".to_string());
+        }
+        if let Some(preferences) = data.memory_preferences {
+            validateGlobalMemoryPreferences(&preferences)?;
+            metadata["memoryPreferences"] = preferences;
         }
         if let Some(active) = data.active {
             metadata["active"] = active;
@@ -744,6 +749,29 @@ fn preferenceRecord(
     Ok(value)
 }
 
+/// Transfers the original global policy once; subsequent reads/writes belong to the plugin.
+fn legacyGlobalMemoryPreferences(paths: &RuntimeStorePaths) -> Result<Value, String> {
+    let api = preferences(paths.runtime_storage_path(API_PREFERENCES_PATH))?;
+    let boolean = |key: &str, default: bool| -> Result<bool, String> {
+        api.get(&stringPreferencesKey(key))
+            .map(|raw| raw.parse::<bool>().map_err(|_| format!("Invalid legacy boolean: {key}")))
+            .transpose().map(|value| value.unwrap_or(default))
+    };
+    let value = json!({
+        "userDescriptionEnabled": !boolean("disable_user_preference_description", false)?,
+        "autoUpdateEnabled": boolean("enable_memory_auto_update", true)?,
+    });
+    validateGlobalMemoryPreferences(&value)?;
+    Ok(value)
+}
+
+fn validateGlobalMemoryPreferences(value: &Value) -> Result<(), String> {
+    if !value["userDescriptionEnabled"].is_boolean() || !value["autoUpdateEnabled"].is_boolean() {
+        return Err("Invalid global memory preferences".to_string());
+    }
+    Ok(())
+}
+
 /// Collects all v27 preference records using the existing schema and portable host paths.
 fn legacyPreferences(paths: &RuntimeStorePaths) -> Result<CharacterMigrationData, String> {
     let cards = preferences(paths.runtime_storage_path(CHARACTER_CARDS_PREFERENCES_PATH))?;
@@ -751,6 +779,7 @@ fn legacyPreferences(paths: &RuntimeStorePaths) -> Result<CharacterMigrationData
     let tags = preferences(paths.runtime_storage_path(PROMPT_TAGS_PREFERENCES_PATH))?;
     let stores = preferences(paths.runtime_storage_path(SHARED_MEMORY_STORES_PREFERENCES_PATH))?;
     let mut data = CharacterMigrationData::default();
+    data.memory_preferences = Some(legacyGlobalMemoryPreferences(paths)?);
     for id in identityList(&cards, "character_card_list")? {
         let mut value = preferenceRecord(
             &cards,
@@ -972,6 +1001,18 @@ pub fn migrateLegacyCharacters(paths: RuntimeStorePaths) -> Result<(), String> {
         return Ok(());
     }
     let writer = CharacterPluginWriter::open(defaultRuntimeSqliteHost(), storage.clone())?;
+    // Upgrades completed v3 plugin migrations as well as imports made before these flags
+    // became plugin-owned. Never replace a value already saved by the plugin.
+    if let Some(entry) = writer.get(META_COLLECTION, "state")? {
+        let mut metadata = entry["value"].clone();
+        if !metadata.is_object() || metadata["version"] != 3 {
+            return Err("Unsupported character database metadata".to_string());
+        }
+        if metadata.get("memoryPreferences").is_none() && metadata["migrationStatus"] != "writing" {
+            metadata["memoryPreferences"] = legacyGlobalMemoryPreferences(&paths)?;
+            writer.commit(vec![writer.mutation(META_COLLECTION, "state", metadata)?])?;
+        }
+    }
     if !source_exists && writer.get("imports", "operit2-v27")?.is_none() {
         return Ok(());
     }

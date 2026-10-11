@@ -53,6 +53,9 @@ implementation. Applications implement the SDK traits and inject their own host 
   implementations.
 - `toolpkg::ToolPkgComposeDslRuntimeScript`: wraps screen scripts with render, rerender, and action
   entry points.
+- [`toolpkg/compose`](src/toolpkg/compose/README.md): separates compilation, callback ownership,
+  retained revisions, state, host adapters, and execution. Its source manifest is shared by
+  Rust builds and Node tooling; the Rust script builders only expose assembled artifacts.
 - `toolpkg::ToolPkgHooks::ToolPkgHookDispatcher`: lets an embedding application trigger package
   hooks when host events occur.
 - `javascript::JsExecutionEngine`: host-supplied JavaScript execution contract.

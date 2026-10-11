@@ -21,8 +21,21 @@ impl Operit1SnapshotImportManager {
         if writer.get("imports", &source)?.is_some() {
             return Ok((0, 0));
         }
+        let api_preferences = parsed.archive.datastorePreferences.get("payload/files/datastore/api_settings.preferences_pb");
+        let user_description_enabled = match api_preferences {
+            Some(preferences) => !optionalPreferenceBool(preferences, "disable_user_preference_description")?.unwrap_or(false),
+            None => true,
+        };
+        let auto_update_enabled = match api_preferences {
+            Some(preferences) => optionalPreferenceBool(preferences, "enable_memory_auto_update")?.unwrap_or(true),
+            None => true,
+        };
         validateOperit1MemorySpaces(parsed)?;
         let mut data = CharacterMigrationData {
+            memory_preferences: Some(serde_json::json!({
+                "userDescriptionEnabled": user_description_enabled,
+                "autoUpdateEnabled": auto_update_enabled,
+            })),
             cards: buildOperit2CharacterCards(parsed, plan)?,
             groups: buildOperit2CharacterGroups(parsed)?,
             tags: buildOperit2PromptTags(parsed)?,

@@ -58,6 +58,8 @@ const _composeNodeTypes = <String, String>{
   'hoverregion': 'HoverRegion',
   'hoveronly': 'HoverOnly',
   'popupmenu': 'PopupMenu',
+  'horizontalpager': 'HorizontalPager',
+  'inputdecorator': 'InputDecorator',
   'outlinedtextfield': 'OutlinedTextField',
   'asyncimage': 'AsyncImage',
   'navigationbaritem': 'NavigationBarItem',
@@ -169,9 +171,19 @@ class _ComposeDslNode extends ChangeNotifier {
 
   final String? id;
   String _type;
+  bool _disposed = false;
   Map<String, Object?> _props;
   List<_ComposeDslNode> _children;
   Map<String, List<_ComposeDslNode>> _slots;
+
+  /// A modal route may briefly outlive its removed source node until frame cleanup.
+  bool get isDisposed => _disposed;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
 
   /// Records a renderer's dependency before returning this node's type.
   String get type {

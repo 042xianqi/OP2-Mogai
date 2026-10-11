@@ -542,21 +542,6 @@ class _DrawerContentState extends State<DrawerContent> {
     mainAxisSize: MainAxisSize.min,
     children: <Widget>[
       const SizedBox(height: 10),
-      Padding(
-        padding: const EdgeInsetsDirectional.only(
-          start: 28,
-          end: 12,
-          bottom: 2,
-        ),
-        child: Text(
-          '插件',
-          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-            color: widget.appearance.titleColor.withValues(alpha: 0.82),
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ),
-      const SizedBox(height: 6),
       for (final entry in widget.pluginEntries)
         PluginNavigationDrawerItem(
           entry: entry,

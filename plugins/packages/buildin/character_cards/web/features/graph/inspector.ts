@@ -1,5 +1,5 @@
 import type { GraphDialog } from "../../bridge/contracts";
-import { button, escapeHtml, iconButton, notice } from "../../shared/ui/html";
+import { button, escapeHtml, iconButton } from "../../shared/ui/html";
 import { graphData, graphItems, selectedMemory } from "./data";
 /** Builds the graph inspector from loaded memory records and typed relationship endpoints. */
 export function graphInspector(dialog: GraphDialog): string {
@@ -23,7 +23,7 @@ export function graphInspector(dialog: GraphDialog): string {
     );
     if (edge !== undefined) {
       const completeRecord = edge.label !== null && typeof edge.metadata.description === "string";
-      const stage = completeRecord ? "" : notice("图谱关系已读取；完整关系记录尚未接入，当前不能保存关系编辑。");
+      const stage = completeRecord ? `<pre>${escapeHtml(edge.metadata.description)}</pre>` : "";
       detail = `<div class="graph-detail"><h3>记忆关系</h3><p>${escapeHtml(edge.label === null ? "" : edge.label)}</p><p>强度 ${edge.weight.toFixed(2)}</p>${stage}${button("edit-link", "编辑关系", "edit", `data-link="${escapeHtml(edge.id)}"`, "small")}${button("delete-link", "删除关系", "trash", `data-link="${escapeHtml(edge.id)}"`, "danger")}</div>`;
     }
   }

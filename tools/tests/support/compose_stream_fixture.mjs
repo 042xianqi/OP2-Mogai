@@ -26,7 +26,10 @@ export function composeStreamFixture(context, { projectTree = true, inspectStora
       if (update.reset) nodes.clear();
       revision = update.revision;
       for (const node of update.upserts) nodes.set(node.id, node);
-      for (const id of update.removed) nodes.delete(id);
+      for (const id of update.removed) {
+        assert.ok(nodes.has(id), `Compose update removes an unknown node: ${id}`);
+        nodes.delete(id);
+      }
       rootId = update.rootId;
     }
     const projected = { ...response };

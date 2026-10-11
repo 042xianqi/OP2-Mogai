@@ -3,7 +3,7 @@ import type { ActivePrompt, BackupImportResult, Card, ChatBinding, CharacterDire
 import { assertBoolean, assertCard, assertConversationGroups, assertGroup, assertMemory, assertMemorySettings, assertMemoryValues, assertNumber, assertSearchConfig, assertSearchOptions, assertString, assertTag, assertTagValues, normalizeNames, requireDecimal, requireId, requireName } from "./validation";
 import { clone } from "./storage/records";
 import { createDefaultCharacter, createMemorySpace, assertMemorySpace } from "./storage/state";
-import { searchMemorySpace } from "./memory-search";
+import { searchMemorySpace, searchMemorySpaceDebug } from "./memory-search";
 import { requireChatSelection } from "./chat-bindings";
 import { deleteChatExtensionBinding, listChatExtensionBindings, readChatExtensionBinding, writeChatExtensionBinding } from "./chat-extensions";
 
@@ -53,6 +53,14 @@ export class RepositorySession implements CharacterRepository {
 
   /** Receives the operation snapshot and explicitly connected external directory readers. */
   constructor(private readonly state: CharacterState, private readonly directory: string, private readonly directories: CharacterDirectories | null = null) {}
+  async readGlobalMemoryPreferences(): Promise<import("./model").GlobalMemoryPreferences> { return copy(this.state.memoryPreferences); }
+  async writeGlobalMemoryPreference(key: keyof import("./model").GlobalMemoryPreferences, value: boolean): Promise<import("./model").GlobalMemoryPreferences> {
+    if (key !== "userDescriptionEnabled" && key !== "autoUpdateEnabled") throw new Error("Unknown global memory preference");
+    assertBoolean(value, key); this.state.memoryPreferences[key] = value; return this.readGlobalMemoryPreferences();
+  }
+  async searchMemoryDebug(options: MemorySearchOptions, config: MemorySearchConfig): Promise<import("./model").MemorySearchDebug> {
+    assertSearchOptions(options); assertSearchConfig(config); return copy(await searchMemorySpaceDebug(this.space(options.ownerKey), options, config));
+  }
   /** Exposes staged owner documents to the sole file publisher without creating another persistent copy. */
   documentWrites(): UserDocumentWrite[] { return [...this.documents.values()].map(
     /** Copies the exact staged write envelope. */

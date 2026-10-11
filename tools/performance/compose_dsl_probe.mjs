@@ -1,3 +1,4 @@
+import { readSdkScript, wrapComposeScript } from "../runtime/compose_scripts.mjs";
 import { composeStreamFixture } from '../tests/support/compose_stream_fixture.mjs';
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -11,13 +12,7 @@ const output = new URL('target/dsl-performance/', root);
 const { selectorView } = loadModule('src/ui-selector.ts');
 
 /** Reads exactly one production SDK script without building Rust or changing it. */
-function sdkScript(file) {
-  const source = readFileSync(new URL('core/crates/plugin/sdk/src/toolpkg/' + file, root), 'utf8');
-  const start = source.indexOf('r#"');
-  const end = source.lastIndexOf('"#');
-  assert.ok(start >= 0 && end > start);
-  return source.slice(start + 3, end);
-}
+function sdkScript(file) { return readSdkScript(file); }
 
 /** Reports distribution summaries without mixing setup or warmup into measurements. */
 function distribution(values) {
@@ -86,7 +81,7 @@ function runtime(rowCount, stateBytes, asynchronous) {
     },
   });
   vm.runInContext(sdkScript('ToolPkgComposeDslBridge.rs'), context);
-  const wrapper = sdkScript('ToolPkgComposeDslRuntimeScript.rs').replaceAll('{{', '{').replaceAll('}}', '}').replace('{script}', 'module.exports.default = probeScreen;');
+  const wrapper = wrapComposeScript('module.exports.default = probeScreen;');
   vm.runInContext(wrapper, context);
   composeStreamFixture(context, { inspectStorage: false, onResponse(phase, value) { if (phase === "intermediate") capture(value, phase); } }).adapt();
   let current = context.__operit_render_compose_dsl({});
@@ -128,7 +123,7 @@ function runtime(rowCount, stateBytes, asynchronous) {
         eventBytes: wire.reduce(
           /** Counts total response traffic rather than only the final result. */
           (sum, value) => sum + value.eventBytes, 0),
-        actionHandlers: Object.keys(context.__operit_compose_bundle.actionStore).length,
+        actionHandlers: Object.keys(context.__operit_compose_bundle.actions.store).length,
         finalEvent: wire[wire.length - 1].event,
       };
     },

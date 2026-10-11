@@ -1,0 +1,24 @@
+{
+  "context": [
+    "Compiler.js",
+    "Actions.js",
+    "Generation.js",
+    "Retained.js",
+    "Reactive.js",
+    "Nodes.js",
+    "State.js",
+    "Theme.js",
+    "WebView.js",
+    "Host.js",
+    "Context.js"
+  ],
+  "execution": [
+    "Responses.js",
+    "Session.js",
+    "Dispatch.js",
+    "Exports.js"
+  ],
+  "parser": "Parser.js",
+  "parserSource": "../vendor/acorn.js",
+  "compiler": "Compiler.js"
+}

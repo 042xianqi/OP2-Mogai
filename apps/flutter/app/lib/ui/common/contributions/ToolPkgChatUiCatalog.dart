@@ -34,15 +34,25 @@ class ToolPkgChatUiCatalog {
           throw StateError('Multiple API owners published a chat identity.');
         }
         final display = _object(rawIdentity, 'identity');
-        _fields(display, const <String>{
+        _fields(display, <String>{
           'title',
           'avatarUri',
-          'action',
+          if (display.containsKey('avatarAction')) 'avatarAction',
+          // Older producers used action for the same avatar preview route.
+          if (display.containsKey('action')) 'action',
         }, 'identity');
+        if (display['avatarAction'] != null && display['action'] != null) {
+          throw StateError(
+            'Identity cannot publish two avatar preview actions.',
+          );
+        }
+        final avatarAction = display['avatarAction'] ?? display['action'];
         identity = ChatUiIdentity(
           title: _text(display['title'], 'identity.title'),
           avatarUri: _nullableText(display['avatarUri'], 'identity.avatarUri'),
-          action: _action(display['action'], owner, routes),
+          avatarAction: avatarAction == null
+              ? null
+              : _action(avatarAction, owner, routes),
         );
       }
       final background = _nullableText(data['backgroundUri'], 'backgroundUri');

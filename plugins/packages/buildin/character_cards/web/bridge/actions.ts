@@ -36,8 +36,6 @@ export function createDialogActions(context: EditorContext) {
         const dialog = topDialog("confirm"), operation = dialog.operation;
         if (operation.action === "deleteMemory" || operation.action === "deleteLink") owningGraph(operation.ownerKey).data = await request(operation);
         else { state.snapshot = await request(operation); renderMain(); }
-        if (operation.action === "deleteCharacter") await context.entityChanged("card", operation.id, "deleted");
-        if (operation.action === "deleteGroup") await context.entityChanged("group", operation.id, "deleted");
         state.dialogs.pop(); if (dialog.closeParent) state.dialogs.pop(); renderDialogs(); toast("已删除"); return;
       }
       default: throw new Error(`Unknown editor action: ${action}`);

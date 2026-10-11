@@ -1,3 +1,4 @@
+import { readSdkScript, wrapComposeScript } from "../runtime/compose_scripts.mjs";
 import { composeStreamFixture } from './support/compose_stream_fixture.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -7,10 +8,7 @@ import test from 'node:test';
 const sourceRoot = new URL('../../core/crates/plugin/sdk/src/toolpkg/', import.meta.url);
 
 /** Extracts the embedded JavaScript without compiling the Rust crate. */
-function embeddedScript(name) {
-  const source = readFileSync(new URL(name, sourceRoot), 'utf8');
-  return source.slice(source.indexOf('r#"') + 3, source.lastIndexOf('"#'));
-}
+function embeddedScript(name) { return readSdkScript(name); }
 
 /** Runs the production context bridge and action wrapper with a clickable site card. */
 function createRuntime(environment = {}) {
@@ -27,13 +25,8 @@ function createRuntime(environment = {}) {
     /** Captures every intermediate response to verify commands are emitted once. */
     sendIntermediateResult(value) { events.push(value); },
   });
-  for (const name of ['ToolPkgComposeDslCompiler.js', 'ToolPkgComposeDslRetained.js', 'ToolPkgComposeDslReactive.js']) {
-    vm.runInContext(readFileSync(new URL(name, sourceRoot), 'utf8'), context);
-  }
   vm.runInContext(embeddedScript('ToolPkgComposeDslBridge.rs'), context);
-  const wrapper = embeddedScript('ToolPkgComposeDslRuntimeScript.rs')
-    .replaceAll('{{', '{').replaceAll('}}', '}')
-    .replace('{script}', `
+  const wrapper = wrapComposeScript(`
       /** Builds a card whose async callback intentionally returns no value. */
       module.exports.default = function(ctx) {
         return ctx.UI.Card({
@@ -111,7 +104,7 @@ test('navigation preserves ordinary action results and no-render responses', asy
   const { context } = createRuntime();
   await context.__operit_render_compose_dsl({});
   const runtime = context.__operit_compose_bundle;
-  const actionId = runtime.registerAction(async () => {
+  const actionId = runtime.actions.register(async () => {
     await runtime.ctx.navigate('first', { step: 1 });
     await runtime.ctx.navigate('second', { step: 2 });
     return { accepted: true };

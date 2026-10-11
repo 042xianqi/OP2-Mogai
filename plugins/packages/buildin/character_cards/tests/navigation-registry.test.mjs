@@ -65,10 +65,10 @@ test("real registration bootstrap accepts attachment entries from two arbitrary 
 test("real navigation registration rejects unsupported case whitespace and unknown surfaces", () => {
   const actual = registry("arbitrary");
   actual.registerRoute("tab");
-  for (const surface of ["toolbox", "main_sidebar_plugins", "app_bar", "chat_attachments", "chat_sidebar_tabs", "chat_input_menu"]) {
+  for (const surface of ["toolbox", "main_sidebar_plugins", "app_bar", "chat_attachments", "chat_sidebar_tabs", "chat_input_menu", "chat_input_menu_sections"]) {
     actual.evaluate(`ToolPkg.registerNavigationEntry({id:${JSON.stringify(surface)},surface:${JSON.stringify(surface)},route:'toolpkg:arbitrary:ui:tab'});`);
   }
-  assert.equal(actual.entries().length, 6);
+  assert.equal(actual.entries().length, 7);
   for (const surface of ["", "TOOLBOX", "CHAT_ATTACHMENTS", "chat_attachments ", " chat_attachments", "attachments", "CHAT_SIDEBAR_TABS", "chat_sidebar_tabs ", " chat_sidebar_tabs", "chat_sidebar_tab"]) {
     assert.throws(
       /** Passes the explicit invalid surface to the existing production validator. */
@@ -77,7 +77,7 @@ test("real navigation registration rejects unsupported case whitespace and unkno
       error => error.message === "registerNavigationEntry.surface is unsupported: " + surface,
     );
   }
-  assert.equal(actual.entries().length, 6);
+  assert.equal(actual.entries().length, 7);
 });
 
 /** Proves capture serializes the original nested input without modifying it or retaining mutable references. */
@@ -173,7 +173,7 @@ test("generated proxy metadata really contains typed navigation params in catalo
   const declarations = source("plugins/types/toolpkg.d.ts");
   const surface = declarations.match(/export type NavigationSurface = ([^;]+);/);
   assert.ok(surface, "The actual generated SDK declaration must expose its navigation surface type");
-  assert.equal(surface[1], '"toolbox" | "main_sidebar_plugins" | "app_bar" | "chat_attachments" | "chat_sidebar_tabs" | "chat_input_menu"',
+  assert.equal(surface[1], '"toolbox" | "main_sidebar_plugins" | "app_bar" | "chat_attachments" | "chat_sidebar_tabs" | "chat_input_menu" | "chat_input_menu_sections"',
     "Generated SDK surface declaration must be regenerated from the finalized Rust source");
   assert.match(declarations, /interface NavigationEntryRegistration\s*\{[\s\S]*?params\?: JsonValue;/);
 });

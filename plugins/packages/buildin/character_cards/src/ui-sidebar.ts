@@ -1,6 +1,7 @@
 import type { SnapshotRecord } from "./api";
 import { record } from "./domain";
-import { decodeSelection, encodeSelection } from "./ui-contributions";
+import { decodeSelection, encodeSelection, requireUiCaller } from "./ui-contributions";
+import { imageSource } from "./image-source";
 import { decodeChatMarker } from "./chat-markers";
 import { requireChatSelection } from "./chat-bindings";
 import { getService } from "./service-runtime";
@@ -35,6 +36,50 @@ export interface ConversationSidebarGroup { id: string; name: string; pinned: bo
 export interface ConversationSidebarScope { id: string; title: string; ownerSelection: string | null; avatarUri?: string | null; kind?: CharacterSidebarSection["kind"]; groups: ConversationSidebarGroup[]; ungrouped: SidebarChatSummary[] }
 /** Returns only the actual catalog of the explicitly registered sidebar tab. */
 export type SidebarCatalog = { view: "characters"; sections: CharacterSidebarSection[] } | { view: "groups"; scopes: ConversationSidebarScope[] };
+
+/** Opaque warm-start data passed through the generic host without exposing role semantics. */
+export interface PreparedSidebar { context: string; data: SidebarCatalog; defaultAvatar: string | null }
+
+/** Matches only directory-relevant input; current selection and streaming remain live host state. */
+export function sidebarCatalogKey(value: CurrentSidebar): string {
+  return JSON.stringify({ input: value.input, chats: value.chatSidebar.chats });
+}
+
+/** Ignores a superseded preparation instead of rendering another history or view. */
+export function preparedSidebar(value: unknown, current: CurrentSidebar): PreparedSidebar | null {
+  if (value === null || value === undefined) return null;
+  const prepared = exactFields(value, ["context", "data", "defaultAvatar"], "prepared sidebar");
+  if (prepared.context !== sidebarCatalogKey(current)) return null;
+  const data = record(prepared.data, "prepared sidebar data");
+  if (data.view !== current.input.view) return null;
+  const sections = data.view === "characters" ? data.sections : data.scopes;
+  if (!Array.isArray(sections)) throw new Error("Prepared sidebar must contain sections or scopes");
+  if (prepared.defaultAvatar !== null && typeof prepared.defaultAvatar !== "string") throw new Error("Prepared default avatar must be text or null");
+  return { context: prepared.context as string, data: prepared.data as SidebarCatalog, defaultAvatar: prepared.defaultAvatar as string | null };
+}
+
+/** Prepares the registered role tab in the main service runtime, without evaluating its DSL screen. */
+export async function chatSidebarPrepareApi(event: ToolPkg.PublicApiEvent<{ chats: SidebarChatSummary[] }>): Promise<{ entries: { entryId: string; data: PreparedSidebar }[] }> {
+  requireUiCaller(event.callerPackage);
+  const payload = exactFields(event.payload, ["chats"], "sidebar preparation");
+  if (!Array.isArray(payload.chats)) throw new Error("Sidebar preparation chats must be an array");
+  const current = parseCurrentSidebar({ input: { view: "characters" }, chatSidebar: {
+    chats: payload.chats, currentChatId: null, activeStreamingChatIds: [],
+  } });
+  const data = await readSidebarCatalog(current);
+  const sections = data.view === "characters" ? data.sections : data.scopes;
+  let defaultAvatar: string | null = null;
+  if (sections.some(section => section.kind === "card" && section.avatarUri === null)) {
+    defaultAvatar = await imageSource(await ToolPkg.readResource("character_default_avatar", "operit-avatar.png"));
+    if (defaultAvatar.trim() === "") throw new Error("Declared default avatar resource is missing");
+  }
+  for (let offset = 0; offset < sections.length; offset += 8) {
+    await Promise.all(sections.slice(offset, offset + 8).map(async section => {
+      if (section.avatarUri !== null && section.avatarUri !== undefined) section.avatarUri = await imageSource(section.avatarUri);
+    }));
+  }
+  return { entries: [{ entryId: "sidebar-characters", data: { context: sidebarCatalogKey(current), data, defaultAvatar } }] };
+}
 
 /** Requires exactly the documented keys instead of interpreting unknown host business fields. */
 function exactFields(value: unknown, expected: readonly string[], label: string): Record<string, unknown> {

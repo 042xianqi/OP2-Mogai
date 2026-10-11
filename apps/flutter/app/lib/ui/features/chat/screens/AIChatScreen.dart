@@ -2224,25 +2224,27 @@ class _AIChatSurfaceState extends State<_AIChatSurface> {
     }
   }
 
-  /// Opens the registered identity action independently of message long-press menus.
-  Future<void> _showChatIdentity() async {
-    final identity = _chatUiContext?.identity;
-    if (identity == null) return;
+  /// Opens only the plugin-provided avatar preview, not the application title.
+  Future<void> _showChatAvatarPreview() async {
+    final action = _chatUiContext?.identity?.avatarAction;
+    if (action == null) return;
     try {
-      final result = await identity.action.present(
+      final result = await action.present(
         context: context,
         clients: _viewModel.clients,
         hostState: <String, Object?>{'chatId': _currentChatId},
       );
-      if (result?.status == ContributionPresentationStatus.completed) {
-        ToolPkgCatalogChangeBus.notifyCatalogChanged();
+      if (mounted &&
+          result?.status == ContributionPresentationStatus.completed) {
+        // Preview completion may update display data; registered routes stay valid.
+        _requestChatUiContextRefresh();
       }
     } catch (error) {
       if (mounted) _showLocalToast(error.toString());
     }
   }
 
-  /// Publishes native chat title and the plugin-provided identity tap action.
+  /// Publishes a display-only application/chat title, without a tap target.
   void _updateTopBarTitle() {
     final controller = _topBarController;
     if (controller == null || !_isCurrentMainScreen) {
@@ -2253,13 +2255,10 @@ class _AIChatSurfaceState extends State<_AIChatSurface> {
     final secondaryText = _currentChatTitle.trim();
     controller.setTitleContent(
       TopBarTitleContent((context) {
-        return InkWell(
-          onTap: identity == null ? null : _showChatIdentity,
-          child: TopBarTitleText(
-            primaryText: primaryText,
-            secondaryText: secondaryText,
-            contentColor: Theme.of(context).colorScheme.onSurface,
-          ),
+        return TopBarTitleText(
+          primaryText: primaryText,
+          secondaryText: secondaryText,
+          contentColor: Theme.of(context).colorScheme.onSurface,
         );
       }),
       owner: _topBarTitleOwner,
@@ -2426,9 +2425,9 @@ class _AIChatSurfaceState extends State<_AIChatSurface> {
           currentChatId: data.currentChatId,
           chatIdentity: data.chatUiContext?.identity,
           backgroundUri: data.chatUiContext?.backgroundUri,
-          onIdentityTap: data.chatUiContext?.identity == null
+          onIdentityTap: data.chatUiContext?.identity?.avatarAction == null
               ? null
-              : _showChatIdentity,
+              : _showChatAvatarPreview,
           autoScrollToBottomListenable: _autoScrollToBottomNotifier,
           hasOlderDisplayHistory: data.hasOlderDisplayHistory,
           hasNewerDisplayHistory: data.hasNewerDisplayHistory,

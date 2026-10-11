@@ -68,7 +68,7 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
       const result = await action(session); assertCharacterState(state);
       const documents = session.documentWrites();
       const removed = before.owners.filter(owner => !state.owners.some(retained => retained.ownerKey === owner.ownerKey)).map(owner => this.directory + "/" + owner.userDocumentPath.slice(0, owner.userDocumentPath.lastIndexOf("/")));
-      if (!equal(before, state) || documents.length !== 0) {
+      if (!equal(before, state) || documents.length !== 0 || (metadata.value as Record<string, unknown>).memoryPreferences === undefined) {
         try { await this.publish(state, rows, documents, removed, metadata.version, metadata.value as Record<string, Storage.Value>); }
         catch (error) { this.publicationFailure = { error }; throw error; }
       }
@@ -99,7 +99,7 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
       previous.delete(key);
     }
     for (const row of previous.values()) mutations.push({ op: "delete", collection: row.collection, key: row.key, expectedVersion: row.version });
-    mutations.push({ op: "put", collection: "meta", key: "state", value: { ...metadata, version: state.version, nextId: state.nextId, active: state.active as unknown as Storage.Value }, expectedVersion: metadataVersion });
+    mutations.push({ op: "put", collection: "meta", key: "state", value: { ...metadata, version: state.version, nextId: state.nextId, active: state.active as unknown as Storage.Value, memoryPreferences: state.memoryPreferences as unknown as Storage.Value }, expectedVersion: metadataVersion });
     if (mutations.length > 1000) throw new Error("Character operation exceeds the host transaction limit of 1000 records");
     const stagedDocuments: { path: string; stagedPath: string }[] = [];
     for (const document of documents) {

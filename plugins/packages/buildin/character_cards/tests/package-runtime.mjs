@@ -1,15 +1,11 @@
+import { readSdkScript, wrapComposeScript } from "../../../../../tools/runtime/compose_scripts.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 
 /** Reads an actual Rust-owned SDK script; the Node harness does not execute Rust or native hosts. */
-export function sdkScript(file) {
-  const source = readFileSync(new URL("../../../../../core/crates/plugin/sdk/src/toolpkg/" + file, import.meta.url), "utf8");
-  const start = source.indexOf('r#"'), end = source.indexOf('"#', start + 3);
-  assert.ok(start >= 0 && end > start, "Missing SDK script: " + file);
-  return source.slice(start + 3, end);
-}
+export function sdkScript(file) { return readSdkScript(file); }
 
 /** Uses the engine's actual path matching, registration placeholders and root export-tagging behavior. */
 function engineModuleHelpers() {
@@ -30,6 +26,9 @@ function engineModuleHelpers() {
 export function packageRuntime(modules, globals = {}, registrationOnly = false) {
   const context = vm.createContext({ console, TextEncoder, TextDecoder, setTimeout, clearTimeout, ...globals });
   vm.runInContext(engineModuleHelpers(), context);
+  // Built screen functions close over their defining realm, just like the real
+  // engine. Supply the production runtime in that realm, not a second VM.
+  vm.runInContext(sdkScript("ToolPkgComposeDslBridge.rs"), context);
   const cache = new Map();
   function load(modulePath) {
     const normalized = path.posix.normalize(modulePath);

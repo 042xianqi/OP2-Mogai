@@ -19,7 +19,7 @@ export interface SidebarLayoutActions {
 export const legacySidebarMetrics = Object.freeze({
   categoryStart: 20, categoryEnd: 12, categoryAvatar: 22, categoryRadius: 18,
   groupStart: 46, groupEnd: 12, groupRadius: 12,
-  chatStart: 56, chatEnd: 12, chatHeight: 34, chatRadius: 8, railWidth: 20,
+  chatStart: 56, chatEnd: 12, chatHeight: 34, chatRadius: 8, railWidth: 20, swipeIconSize: 18,
   createHeight: 34, createRadius: 17, previewLimit: 4,
 });
 
@@ -54,27 +54,42 @@ export function nativeSidebarRows(ctx: ComposeDslContext, current: CurrentSideba
     content.push(gap(4), more('chat', chat.id, selected));
     const surface = ctx.UI.Row({ key: 'sidebar-chat-hit-' + chat.id, weight: 1, height: 31,
       verticalAlignment: 'center', paddingHorizontal: 6,
-      modifier: (selected ? ctx.Modifier.background(colors.secondaryContainer.copy({ alpha: 0.78 }), { cornerRadius: m.chatRadius })
-        .border(1, colors.onSecondaryContainer.copy({ alpha: 0.08 }), { cornerRadius: m.chatRadius }) : ctx.Modifier).combinedClickable({ onClick: () => actions.activate(chat.id), onLongClick: () => actions.longPress(chat.id) }),
+      // Keep the wrapper hierarchy stable when host selection refreshes. Adding
+      // background/border only for selected rows would dispose the active ripple.
+      modifier: ctx.Modifier.clip({ cornerRadius: m.chatRadius })
+        .background(colors.secondaryContainer.copy({ alpha: selected ? 0.78 : 0 }), { cornerRadius: m.chatRadius })
+        .border(1, colors.onSecondaryContainer.copy({ alpha: selected ? 0.08 : 0 }), { cornerRadius: m.chatRadius })
+        .combinedClickable({ onClick: () => actions.activate(chat.id), onLongClick: () => actions.longPress(chat.id) }),
     }, content);
-    const rail = ctx.UI.Box({ key: 'sidebar-chat-rail-' + chat.id, width: m.railWidth, height: m.chatHeight, contentAlignment: 'center' }, [
-      ctx.UI.Box({ width: 1, height: m.chatHeight, background: colors.outlineVariant.copy({ alpha: 0.45 }) }),
-      ...(selected ? [ctx.UI.Box({ width: 2, height: 16, background: colors.primary, backgroundShape: { cornerRadius: 1.5 } })] : []),
+    // The plugin composes the rail; the host only understands ordinary Box
+    // layout, generic hover styles and implicit visual transitions.
+    const indicatorColor = selected ? colors.primary : colors.onSurface.copy({ alpha: 0 });
+    const rail = ctx.UI.Box({ key: 'sidebar-chat-rail-' + chat.id, width: m.railWidth,
+      height: m.chatHeight, contentAlignment: 'center' }, [
+      ctx.UI.Box({ key: 'sidebar-chat-rail-base-' + chat.id, width: 1, height: m.chatHeight,
+        backgroundColor: colors.outlineVariant.copy({ alpha: 0.45 }) }),
+      ctx.UI.Box({ key: 'sidebar-chat-rail-indicator-' + chat.id, width: selected ? 2 : 1,
+        height: selected ? 16 : 0, backgroundColor: indicatorColor, backgroundShape: { cornerRadius: 1.5 },
+        animation: { durationMillis: 160, curve: 'easeOutCubic' },
+        hoverStyle: { width: 2, height: selected ? 16 : 10,
+          backgroundColor: selected ? colors.primary : colors.onSurface.copy({ alpha: 0.55 }) } }),
     ]);
     return ctx.UI.DragTarget({ key: 'sidebar-chat-drop-' + chat.id, acceptedTypes: ['character-sidebar.chat'],
       acceptedData: section.chats.filter(value => value.id !== chat.id).map(value => value.id),
       hoverBorderColor: colors.primary.copy({ alpha: 0.55 }), shape: { cornerRadius: 8 }, fillMaxWidth: true,
       onDrop: (id) => actions.drop(String(id), section.id, groupId, chat.id) },
+    ctx.UI.HoverRegion({ key: 'sidebar-chat-hover-' + chat.id, fillMaxWidth: true },
     ctx.UI.Row({ key: 'sidebar-chat-' + chat.id, fillMaxWidth: true, height: m.chatHeight,
       paddingStart: m.chatStart, paddingEnd: m.chatEnd, verticalAlignment: 'center' }, [rail, gap(2),
       ctx.UI.HoverRegion({ weight: 1, hoverBackground: colors.onSurfaceVariant.copy({ alpha: 0.07 }), shape: { cornerRadius: m.chatRadius } },
         ctx.UI.SwipeActions({ key: 'sidebar-chat-swipe-' + chat.id, actionThreshold: 0.4,
+          height: 31, modifier: ctx.Modifier.clip({ cornerRadius: m.chatRadius }),
           onStartAction: () => actions.rename(chat.id), onEndAction: () => actions.deleteChat(chat.id),
           startBackground: ctx.UI.Box({ fillMaxSize: true, paddingStart: 12, background: colors.primary, contentAlignment: 'start' },
-            ctx.UI.Icon({ name: 'Edit', size: 18, tint: colors.onPrimary })),
+            ctx.UI.Icon({ name: 'Edit', size: m.swipeIconSize, width: m.swipeIconSize, height: m.swipeIconSize, tint: colors.onPrimary })),
           endBackground: ctx.UI.Box({ fillMaxSize: true, paddingEnd: 12, background: colors.error, contentAlignment: 'end' },
-            ctx.UI.Icon({ name: 'Delete', size: 18, tint: colors.onError })),
-        }, surface))]));
+            ctx.UI.Icon({ name: 'Delete', size: m.swipeIconSize, width: m.swipeIconSize, height: m.swipeIconSize, tint: colors.onError })),
+        }, surface))])));
   }
 
   function chats(values: SidebarChatSummary[], id: string, section: CharacterSidebarSection, groupId: string | null, matchAll = false): ComposeNode[] {

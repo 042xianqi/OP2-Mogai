@@ -74,6 +74,7 @@ __export(main_exports, {
   chatConfigurationResolveApi: () => chatConfigurationResolveApi,
   chatContextActionsApi: () => chatContextActionsApi,
   chatListSectionsApi: () => chatListSectionsApi,
+  chatSidebarPrepareApi: () => chatSidebarPrepareApi,
   groupCreateApi: () => groupCreateApi,
   groupDeleteApi: () => groupDeleteApi,
   groupDuplicateApi: () => groupDuplicateApi,
@@ -151,13 +152,15 @@ __export(main_exports, {
   toolPromptPolicy: () => toolPromptPolicy
 });
 module.exports = __toCommonJS(main_exports);
-var import_index_ui = __toESM(require("./ui/memory/index.ui.js"));
-var import_index_ui2 = __toESM(require("./ui/main/index.ui.js"));
-var import_index_ui3 = __toESM(require("./ui/memory-attachment/index.ui.js"));
-var import_index_ui4 = __toESM(require("./ui/chat-sidebar/index.ui.js"));
-var import_index_ui5 = __toESM(require("./ui/selection/index.ui.js"));
-var import_index_ui6 = __toESM(require("./ui/chat-input-menu/index.ui.js"));
-var import_index_ui7 = __toESM(require("./ui/group-execution/index.ui.js"));
+var import_index_ui = __toESM(require("./ui/chat-input-memory/index.ui.js"));
+var import_index_ui2 = __toESM(require("./ui/memory-status/index.ui.js"));
+var import_index_ui3 = __toESM(require("./ui/memory/index.ui.js"));
+var import_index_ui4 = __toESM(require("./ui/main/index.ui.js"));
+var import_index_ui5 = __toESM(require("./ui/memory-attachment/index.ui.js"));
+var import_index_ui6 = __toESM(require("./ui/chat-sidebar/index.ui.js"));
+var import_index_ui7 = __toESM(require("./ui/selection/index.ui.js"));
+var import_index_ui8 = __toESM(require("./ui/chat-input-menu/index.ui.js"));
+var import_index_ui9 = __toESM(require("./ui/group-execution/index.ui.js"));
 
 // src/drafts.ts
 function createCharacterDraft() {
@@ -982,13 +985,13 @@ function chatParticipant(card, request, directory, service) {
       routes.set(key, { key, readable: mount2.readable || existing?.readable === true, writable: mount2.writable || existing?.writable === true });
     }
     const prompt = yield service.dispatchDomain("character.combine", { id: card.id, promptFunctionType: request.promptFunctionType, additionalTagIds: [] });
-    const document = yield service.dispatchDomain("memory.user.read", { ownerKey: primary });
+    const userPreferencesText = (yield service.readGlobalMemoryPreferences()).userDescriptionEnabled ? (yield service.dispatchDomain("memory.user.read", { ownerKey: primary })).content : "";
     return {
       id: card.id,
       name: card.name,
       avatarUri: card.avatarUri,
       introPrompt: prompt.prompt,
-      userPreferencesText: document.content,
+      userPreferencesText,
       openingStatement: card.openingStatement,
       modelBinding,
       ttsConfigId,
@@ -1398,22 +1401,22 @@ function extractionPrompt(candidates, folders, settings2, profile) {
 }
 function mergeMemories(ownerKey, item, repository) {
   return __async(this, null, function* () {
-    const space = yield repository.readMemorySpace(ownerKey), sources = item.source_titles.map(
+    const space = yield repository.readMemorySpace(ownerKey), sources2 = item.source_titles.map(
       /** Requires every stated source before starting the merge. */
       (title) => memoryByTitle(space.memories, title)
     );
     const ids = /* @__PURE__ */ new Set();
-    for (const source of sources) {
+    for (const source of sources2) {
       if (ids.has(source.id)) throw new Error("Duplicate memory merge source");
       ids.add(source.id);
     }
-    const primary = sources[0], redundant = sources.slice(1);
-    if (sources.some(
+    const primary = sources2[0], redundant = sources2.slice(1);
+    if (sources2.some(
       /** Forbids implicit destruction or reassignment of document chunks during a textual merge. */
       (source) => source.isDocumentNode
     )) throw new Error("Document memories require explicit document composition, not a textual AI merge");
     let credibility = 0, importance = 0;
-    for (const source of sources) {
+    for (const source of sources2) {
       credibility = Math.max(credibility, source.credibility);
       importance = Math.max(importance, source.importance);
     }
@@ -1699,6 +1702,7 @@ function propagateJobFailure(error, publishStatus) {
 }
 function enqueueCandidate(input, repository) {
   return __async(this, null, function* () {
+    if (input.sourceType === "reply_finalized_auto" && !(yield repository.readGlobalMemoryPreferences()).autoUpdateEnabled) return { owners: [], candidateIds: [] };
     yield requireChat(input.chatId);
     assertInteger(input.timestamp, "candidate message timestamp", 0);
     assertInteger(input.variantIndex, "candidate variant index", 0);
@@ -1978,6 +1982,7 @@ var MemoryJobRunner = class {
           const batches = yield this.owner.run(
             /** Claims only due pending records; failed attempts are never automatically retried. */
             (repository) => __async(this, null, function* () {
+              if (!(yield repository.readGlobalMemoryPreferences()).autoUpdateEnabled) return [];
               const space = yield repository.readMemorySpace(ownerKey), now = Date.now();
               if (space.settings.autoSaveIntervalMinutes === 0 || now < space.settings.nextAutoSaveRunAtMs) return [];
               const pending = space.candidates.filter(
@@ -2009,9 +2014,10 @@ var MemoryJobRunner = class {
             })
           );
           for (const batch of batches) {
-            yield this.owner.run(
+            const claimed = yield this.owner.run(
               /** Claims only the next actual batch so a failure leaves later sources genuinely pending. */
               (repository) => __async(this, null, function* () {
+                if (!(yield repository.readGlobalMemoryPreferences()).autoUpdateEnabled) return false;
                 const space = yield repository.readMemorySpace(ownerKey), ids = /* @__PURE__ */ new Set();
                 for (const candidate of batch) ids.add(candidate.id);
                 let count = 0;
@@ -2024,8 +2030,10 @@ var MemoryJobRunner = class {
                 }
                 if (count !== batch.length) throw new Error("A selected candidate no longer exists");
                 yield repository.writeMemorySpace(ownerKey, space);
+                return true;
               })
             );
+            if (!claimed) break;
             yield processCandidates(ownerKey, batch, this.owner);
             report.candidateBatches += 1;
           }
@@ -2070,7 +2078,7 @@ function createMemorySpace(ownerKey) {
   };
 }
 function createInitialState(now) {
-  return { version: 3, conversationGroups: [], nextId: "1", cards: [createDefaultCharacter(now)], groups: [], tags: [], stores: [], active: { CharacterCard: { id: "default" } }, owners: [createMemorySpace("character:default")] };
+  return { version: 3, memoryPreferences: { userDescriptionEnabled: true, autoUpdateEnabled: true }, conversationGroups: [], nextId: "1", cards: [createDefaultCharacter(now)], groups: [], tags: [], stores: [], active: { CharacterCard: { id: "default" } }, owners: [createMemorySpace("character:default")] };
 }
 function array2(value, label) {
   if (!Array.isArray(value)) throw new Error(label + " must be an array");
@@ -2088,8 +2096,11 @@ function identities(records3, label) {
 function assertCharacterState(value) {
   assertObject(value, "character state");
   if (value.version !== 3) throw new Error("Unsupported character database version");
-  const fields4 = /* @__PURE__ */ new Set(["version", "nextId", "cards", "groups", "tags", "stores", "active", "owners", "conversationGroups"]);
+  const fields4 = /* @__PURE__ */ new Set(["memoryPreferences", "version", "nextId", "cards", "groups", "tags", "stores", "active", "owners", "conversationGroups"]);
   for (const key of Object.keys(value)) if (!fields4.has(key)) throw new Error("Unsupported character state field: " + key);
+  assertObject(value.memoryPreferences, "global memory preferences");
+  assertBoolean(value.memoryPreferences.userDescriptionEnabled, "user description enabled");
+  assertBoolean(value.memoryPreferences.autoUpdateEnabled, "auto update enabled");
   const nextId = BigInt(requireDecimal(value.nextId, "nextId", true));
   assertConversationGroups(value.conversationGroups);
   for (const group of value.conversationGroups) if (BigInt(group.id) >= nextId) throw new Error("nextId does not exceed the conversation group identity");
@@ -2637,11 +2648,22 @@ var handlers = {
   /** Enqueues only actual persisted message sources and genuine bound owners. */
   "memory.candidate.enqueue": (input, repository) => enqueueCandidate(input, repository),
   /** Resolves binding, catalogs, prompt and USER.md from one serialized repository operation. */
-  "chat.configuration.resolve": (input, repository) => resolveChatConfiguration(input, {
-    /** Reads the same in-flight directory without reacquiring the publisher. */
-    snapshot: () => snapshot(repository),
-    /** Executes nested resolution reads on this exact snapshot without another service. */
-    dispatchDomain: (operation, payload) => executeDomain(operation, payload, repository)
+  "chat.configuration.resolve": (input, repository) => __async(null, null, function* () {
+    const result2 = yield resolveChatConfiguration(input, {
+      /** Reads the same in-flight directory without reacquiring the publisher. */
+      snapshot: () => snapshot(repository),
+      readGlobalMemoryPreferences: () => repository.readGlobalMemoryPreferences(),
+      /** Executes nested resolution reads on this exact snapshot without another service. */
+      dispatchDomain: (operation, payload) => executeDomain(operation, payload, repository)
+    });
+    if ("profile" in result2 && !(yield repository.readGlobalMemoryPreferences()).userDescriptionEnabled) {
+      return {
+        ...result2,
+        profile: { ...result2.profile, userPreferencesText: "" },
+        participants: result2.participants.map((profile) => ({ ...profile, userPreferencesText: "" }))
+      };
+    }
+    return result2;
   }),
   /** Requires the chat's persisted selection rather than global active state. */
   "chat.configuration.binding.read": (input, repository) => repository.readChatBinding(input.chatId),
@@ -3316,6 +3338,7 @@ function createCharacterCardsService(owner2, configurations = independentConfigu
   return {
     /** Runs the private job scheduler without constructing another store or business service. */
     runMemoryJobs: () => jobs.tick(),
+    readGlobalMemoryPreferences: () => owner2.run((repository) => repository.readGlobalMemoryPreferences()),
     /** Preserves action-specific results through the shared service dispatcher. */
     dispatch: dispatchRequest,
     /** Reads one consistent domain snapshot through the same operation queue. */
@@ -3369,7 +3392,7 @@ function assertActive(value) {
 }
 function snapshot(host) {
   return __async(this, null, function* () {
-    const [cards, groups, stores, tags, active, models, ttsConfigs, toolCatalog] = yield Promise.all([
+    const [cards, groups, stores, tags, active, models, ttsConfigs, toolCatalog, memoryPreferences] = yield Promise.all([
       host.listCharacters(),
       host.listGroups(),
       host.listStores(),
@@ -3377,7 +3400,8 @@ function snapshot(host) {
       host.readActive(),
       host.listModels(),
       host.listTtsConfigs(),
-      host.readToolCatalog()
+      host.readToolCatalog(),
+      host.readGlobalMemoryPreferences()
     ]);
     records(cards, assertCard, "\u89D2\u8272\u5361\u5217\u8868");
     records(groups, assertGroup, "\u89D2\u8272\u7EC4\u5217\u8868");
@@ -3387,7 +3411,7 @@ function snapshot(host) {
     if (!Array.isArray(models) || !Array.isArray(ttsConfigs)) throw new Error("\u6A21\u578B\u6216 TTS \u76EE\u5F55\u8FD4\u56DE\u683C\u5F0F\u4E0D\u6B63\u786E");
     assertObject(toolCatalog, "\u5DE5\u5177\u6765\u6E90\u76EE\u5F55");
     for (const field of ["builtinTools", "packages", "skills", "mcpServers"]) if (!Array.isArray(toolCatalog[field])) throw new Error(`\u5DE5\u5177\u6765\u6E90\u76EE\u5F55\u7F3A\u5C11 ${field}`);
-    return { cards, groups, stores, tags, active, models, ttsConfigs, toolCatalog };
+    return { cards, groups, stores, tags, active, models, ttsConfigs, toolCatalog, memoryPreferences };
   });
 }
 function findRecord(values, id2, label) {
@@ -3632,6 +3656,16 @@ function parseOwner(ownerKey) {
   if (parts[0] === "shared") return { kind: "SHARED", id: parts[1] };
   throw new Error("\u8BB0\u5FC6\u5E93\u547D\u540D\u7A7A\u95F4\u65E0\u6548");
 }
+function menuMemoryOwner(chatId, host) {
+  return __async(this, null, function* () {
+    requireId(chatId, "memory menu chat id");
+    const extension = yield Tools.Chat.readExtension({ kind: "chat", chatId });
+    const selection = extension === null ? null : parseChatSelection(decodeChatMarker(extension).selection);
+    if (selection?.kind === "card") return resolveMemoryOwner(selection.id, host);
+    const active = yield host.readActive();
+    return resolveMemoryOwner("CharacterCard" in active ? active.CharacterCard.id : "default", host);
+  });
+}
 function requireOwner(ownerKey, host) {
   return __async(this, null, function* () {
     const owner2 = parseOwner(ownerKey);
@@ -3757,6 +3791,22 @@ function dispatch(request, host) {
     switch (request.action) {
       case "snapshot":
         return snapshot(host);
+      case "readGlobalMemoryPreferences":
+        return host.readGlobalMemoryPreferences();
+      case "readChatMemoryAutoSaveStatus":
+        return host.readMemoryAutoSaveStatus(yield menuMemoryOwner(request.chatId, host));
+      case "updateCurrentChatMemory":
+        return executeDomain("memory.chat.update", { ownerKey: yield menuMemoryOwner(request.chatId, host), chatId: request.chatId }, host);
+      case "writeGlobalMemoryPreference":
+        return host.writeGlobalMemoryPreference(request.key, request.value);
+      case "searchMemoryDebug": {
+        yield requireOwner(request.ownerKey, host);
+        assertSearchConfig(request.config);
+        return host.searchMemoryDebug({ ownerKey: request.ownerKey, query: request.query, folderPath: null, relevanceThreshold: request.relevanceThreshold, createdAtStartMs: null, createdAtEndMs: null }, request.config);
+      }
+      case "readMemoryLink":
+        yield requireOwner(request.ownerKey, host);
+        return host.readMemoryLink(request.ownerKey, request.linkId);
       case "listThemeChoices":
         return readThemeChoices(independentConfigurations);
       case "listCharacters":
@@ -3900,6 +3950,15 @@ function dispatch(request, host) {
       }
       case "writeMemorySearchConfig":
         return writeMemorySearchConfig(request.ownerKey, request.config, host);
+      case "writeMemoryOwnerSettings": {
+        assertMemorySettings(request.settings);
+        assertSearchConfig(request.config);
+        yield requireOwner(request.ownerKey, host);
+        const current = yield host.readMemorySettings(request.ownerKey);
+        yield host.writeMemorySettings(request.ownerKey, { ...request.settings, nextAutoSaveRunAtMs: current.nextAutoSaveRunAtMs });
+        yield host.writeMemorySearchConfig(request.ownerKey, request.config);
+        return { settings: yield host.readMemorySettings(request.ownerKey), config: yield host.readMemorySearchConfig(request.ownerKey) };
+      }
       case "combinePrompts":
         return combinePrompts(request.characterId, request.additionalTagIds, request.promptFunctionType, host);
       case "importCharacter": {
@@ -3998,7 +4057,7 @@ function records2(state) {
 function stateFromRecords(metadata, rows) {
   if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) throw new Error("Invalid character database metadata");
   if (metadata.migrationStatus === "writing") throw new Error("Character migration has not completed");
-  const state = { version: metadata.version, nextId: metadata.nextId, active: metadata.active, cards: [], groups: [], tags: [], stores: [], conversationGroups: [], owners: [] };
+  const state = { version: metadata.version, nextId: metadata.nextId, active: metadata.active, memoryPreferences: metadata.memoryPreferences === void 0 ? { userDescriptionEnabled: true, autoUpdateEnabled: true } : metadata.memoryPreferences, cards: [], groups: [], tags: [], stores: [], conversationGroups: [], owners: [] };
   const owners = /* @__PURE__ */ new Map();
   for (const row of rows) {
     if (row.collection === "owners") {
@@ -4051,12 +4110,18 @@ function matchesFilters(memory, options) {
 }
 function searchMemorySpace(space, options) {
   return __async(this, null, function* () {
-    const config = space.searchConfig;
+    if (options.query.trim() === "*") return space.memories.filter((memory) => matchesFilters(memory, options));
+    return (yield searchMemorySpaceDebug(space, options, space.searchConfig)).candidates.filter((hit) => hit.passedThreshold).map((hit) => hit.memory);
+  });
+}
+function searchMemorySpaceDebug(space, options, config) {
+  return __async(this, null, function* () {
     const memories = space.memories.filter(
       /** Keeps complete records under the caller's explicit filters. */
       (memory) => matchesFilters(memory, options)
     );
-    if (options.query.trim() === "*") return memories;
+    if (options.query.trim() === "*") throw new Error("\u68C0\u7D22\u8C03\u8BD5\u8BF7\u8F93\u5165\u5177\u4F53\u67E5\u8BE2\u6587\u672C");
+    const result2 = { query: options.query, config: { ...config }, relevanceThreshold: options.relevanceThreshold, memoriesInScopeCount: memories.length, candidates: [] };
     const query = [...new Set(tokens(options.query))];
     if (query.length === 0) throw new Error("Memory search query has no searchable tokens");
     const index = memories.map(
@@ -4077,7 +4142,7 @@ function searchMemorySpace(space, options) {
         )) };
       }
     );
-    if (index.length === 0) return [];
+    if (index.length === 0) return result2;
     const average = index.reduce(
       /** Accumulates actual token lengths for length normalization. */
       (total, document) => total + document.length,
@@ -4161,16 +4226,14 @@ function searchMemorySpace(space, options) {
         vector = value;
       }
       const score3 = (keyword * keywordWeight + tagValue * tagWeight + vector * vectorWeight + edge * edgeWeight) / denominator;
-      if (score3 > 0 && score3 >= options.relevanceThreshold) scores.push({ memory: document.memory, score: score3 });
+      scores.push({ memory: document.memory, score: score3, keywordScore: keyword * keywordWeight / denominator, tagScore: tagValue * tagWeight / denominator, vectorScore: vector * vectorWeight / denominator, edgeScore: edge * edgeWeight / denominator, passedThreshold: score3 > 0 && score3 >= options.relevanceThreshold });
     }
     scores.sort(
       /** Orders actual ranked hits with a stable lossless identity tie breaker. */
       (left, right) => right.score - left.score || (BigInt(left.memory.id) < BigInt(right.memory.id) ? -1 : BigInt(left.memory.id) > BigInt(right.memory.id) ? 1 : 0)
     );
-    return scores.map(
-      /** Returns full records rather than a lossy search projection. */
-      (entry) => entry.memory
-    );
+    result2.candidates = scores;
+    return result2;
   });
 }
 
@@ -4220,6 +4283,26 @@ var RepositorySession = class {
     this.directory = directory;
     this.directories = directories;
     this.documents = /* @__PURE__ */ new Map();
+  }
+  readGlobalMemoryPreferences() {
+    return __async(this, null, function* () {
+      return copy(this.state.memoryPreferences);
+    });
+  }
+  writeGlobalMemoryPreference(key, value) {
+    return __async(this, null, function* () {
+      if (key !== "userDescriptionEnabled" && key !== "autoUpdateEnabled") throw new Error("Unknown global memory preference");
+      assertBoolean(value, key);
+      this.state.memoryPreferences[key] = value;
+      return this.readGlobalMemoryPreferences();
+    });
+  }
+  searchMemoryDebug(options, config) {
+    return __async(this, null, function* () {
+      assertSearchOptions(options);
+      assertSearchConfig(config);
+      return copy(yield searchMemorySpaceDebug(this.space(options.ownerKey), options, config));
+    });
   }
   /** Exposes staged owner documents to the sole file publisher without creating another persistent copy. */
   documentWrites() {
@@ -5082,7 +5165,7 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
         assertCharacterState(state);
         const documents = session.documentWrites();
         const removed = before.owners.filter((owner2) => !state.owners.some((retained2) => retained2.ownerKey === owner2.ownerKey)).map((owner2) => this.directory + "/" + owner2.userDocumentPath.slice(0, owner2.userDocumentPath.lastIndexOf("/")));
-        if (!equal(before, state) || documents.length !== 0) {
+        if (!equal(before, state) || documents.length !== 0 || metadata.value.memoryPreferences === void 0) {
           try {
             yield this.publish(state, rows, documents, removed, metadata.version, metadata.value);
           } catch (error) {
@@ -5123,7 +5206,7 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
         previous.delete(key);
       }
       for (const row of previous.values()) mutations.push({ op: "delete", collection: row.collection, key: row.key, expectedVersion: row.version });
-      mutations.push({ op: "put", collection: "meta", key: "state", value: { ...metadata, version: state.version, nextId: state.nextId, active: state.active }, expectedVersion: metadataVersion });
+      mutations.push({ op: "put", collection: "meta", key: "state", value: { ...metadata, version: state.version, nextId: state.nextId, active: state.active, memoryPreferences: state.memoryPreferences }, expectedVersion: metadataVersion });
       if (mutations.length > 1e3) throw new Error("Character operation exceeds the host transaction limit of 1000 records");
       const stagedDocuments = [];
       for (const document of documents) {
@@ -5156,9 +5239,9 @@ function createServiceRuntime(initialize) {
 }
 var directorySources = null;
 var opening = false;
-function connectDirectorySources(sources) {
+function connectDirectorySources(sources2) {
   if (opening || directorySources !== null) throw new Error("External directory readers must be connected exactly once before service initialization");
-  directorySources = sources;
+  directorySources = sources2;
 }
 var runtime = /* @__PURE__ */ createServiceRuntime(
   /** Opens only this plugin's record database on first use, never during registration. */
@@ -5282,7 +5365,7 @@ function encodeSelection(selection) {
 function contextActions(routes, target, directory) {
   const selected = target.selection === null ? null : decodeSelection(target.selection, directory);
   return {
-    identity: selected === null ? null : { title: selected.title, avatarUri: selected.avatarUri, action: previewAction(routes.editor, selected.entity, selected.id) },
+    identity: selected === null ? null : { title: selected.title, avatarUri: selected.avatarUri, avatarAction: previewAction(routes.editor, selected.entity, selected.id) },
     backgroundUri: null
   };
 }
@@ -5347,7 +5430,7 @@ function registerUiContributionApis() {
 }
 
 // src/host.ts
-function register(definition2, screen2, attachmentScreen2, sidebarScreen2, selectionScreen2, groupExecutionScreen2, memoryScreen2, inputMenuScreen2) {
+function register(definition2, screen2, attachmentScreen2, sidebarScreen2, selectionScreen2, groupExecutionScreen2, memoryScreen2, inputMenuScreen2, memoryMenuScreen2, memoryStatusScreen2) {
   const route = `toolpkg:${definition2.id}:ui:main`;
   ToolPkg.registerUiRoute({ id: "main", route, screen: screen2, runtime: "compose_dsl", keepAlive: true, title: { zh: definition2.title, en: "Characters" } });
   const memoryRoute = `toolpkg:${definition2.id}:ui:memory`;
@@ -5367,6 +5450,10 @@ function register(definition2, screen2, attachmentScreen2, sidebarScreen2, selec
   ToolPkg.registerNavigationEntry({ id: "memory-settings", route: memoryRoute, surface: "main_sidebar_plugins", title: { zh: "\u8BB0\u5FC6", en: "Memory" }, icon: "Memory", order: definition2.order + 1 });
   ToolPkg.registerNavigationEntry({ id: "toolbox", route, surface: "toolbox", title: { zh: definition2.title, en: "Characters" }, icon: definition2.icon, order: definition2.order });
   ToolPkg.registerNavigationEntry({ id: "memory-attachment", route: attachmentRoute, surface: "chat_attachments", title: { zh: "\u8BB0\u5FC6\u9644\u4EF6", en: "Memory attachment" }, icon: "Memory", order: definition2.order, params: { mode: "memory-attachment", ownerKey: null, folderPath: null } });
+  const memoryMenuRoute = `toolpkg:${definition2.id}:ui:chat-input-memory`;
+  ToolPkg.registerUiRoute({ id: "chat-input-memory", route: memoryMenuRoute, screen: memoryMenuScreen2, runtime: "compose_dsl", keepAlive: false, title: { zh: "\u8BB0\u5FC6", en: "Memory" } });
+  ToolPkg.registerNavigationEntry({ id: "memory-menu", route: memoryMenuRoute, surface: "chat_input_menu_sections", title: { zh: "\u8BB0\u5FC6", en: "Memory" }, order: definition2.order, params: {} });
+  ToolPkg.registerUiRoute({ id: "memory-status", route: `toolpkg:${definition2.id}:ui:memory-status`, screen: memoryStatusScreen2, runtime: "compose_dsl", keepAlive: false, title: { zh: "\u8BB0\u5FC6\u72B6\u6001", en: "Memory status" } });
   return true;
 }
 function receiveUiRequest(value) {
@@ -7356,20 +7443,20 @@ function snapshotToolPolicy(context) {
 }
 function toolAllowed(config, name, activationSource) {
   if (!config.enabled) return true;
-  const sources = /* @__PURE__ */ new Set([...config.allowedPackages, ...config.allowedSkills, ...config.allowedMcpServers]);
+  const sources2 = /* @__PURE__ */ new Set([...config.allowedPackages, ...config.allowedSkills, ...config.allowedMcpServers]);
   if (name === "search") return true;
-  if (name === "proxy" || name === "package_proxy") return sources.size !== 0 || config.allowedBuiltinTools.length !== 0;
+  if (name === "proxy" || name === "package_proxy") return sources2.size !== 0 || config.allowedBuiltinTools.length !== 0;
   if (name === "use_package") {
     if (activationSource === void 0) throw new Error("use_package requires its actual package_name");
     return config.allowedBuiltinTools.some(
       /** Matches the explicit builtin activation permission. */
       (tool) => tool === "use_package"
-    ) && sources.has(activationSource);
+    ) && sources2.has(activationSource);
   }
   const separator = name.indexOf(":");
   if (separator !== -1) {
     if (separator === 0 || separator === name.length - 1 || name.indexOf(":", separator + 1) !== -1) throw new Error("Invalid registered package tool name: " + name);
-    return sources.has(name.slice(0, separator));
+    return sources2.has(name.slice(0, separator));
   }
   return config.allowedBuiltinTools.some(
     /** Matches exact builtin identities without case normalization or substring guesses. */
@@ -8088,6 +8175,31 @@ function registerGroupExecutionHooks() {
   );
 }
 
+// src/image-source.ts
+var sources = /* @__PURE__ */ new Map();
+function imageSource(path) {
+  return __async(this, null, function* () {
+    if (/^(data:image\/|https?:\/\/)/i.test(path)) return path;
+    let pending = sources.get(path);
+    if (pending === void 0) {
+      pending = read();
+      sources.set(path, pending);
+      pending.catch(() => sources.delete(path));
+    }
+    return pending;
+    function read() {
+      return __async(this, null, function* () {
+        const file = yield Tools.Files.readBinary(path);
+        if (file.size > 8 * 1024 * 1024) throw new Error("\u5934\u50CF\u56FE\u7247\u4E0D\u80FD\u8D85\u8FC7 8 MB");
+        const b = file.contentBase64;
+        const mime = b.startsWith("iVBOR") ? "image/png" : b.startsWith("/9j/") ? "image/jpeg" : b.startsWith("R0lGOD") ? "image/gif" : b.startsWith("UklGR") ? "image/webp" : b.startsWith("Qk") ? "image/bmp" : null;
+        if (mime === null) throw new Error("\u8BF7\u9009\u62E9 PNG\u3001JPEG\u3001GIF\u3001WebP \u6216 BMP \u56FE\u7247");
+        return `data:${mime};base64,${b}`;
+      });
+    }
+  });
+}
+
 // src/ui-sidebar-native-layout.ts
 var legacySidebarMetrics = Object.freeze({
   categoryStart: 20,
@@ -8102,12 +8214,41 @@ var legacySidebarMetrics = Object.freeze({
   chatHeight: 34,
   chatRadius: 8,
   railWidth: 20,
+  swipeIconSize: 18,
   createHeight: 34,
   createRadius: 17,
   previewLimit: 4
 });
 
 // src/ui-sidebar.ts
+function sidebarCatalogKey(value) {
+  return JSON.stringify({ input: value.input, chats: value.chatSidebar.chats });
+}
+function chatSidebarPrepareApi(event) {
+  return __async(this, null, function* () {
+    requireUiCaller(event.callerPackage);
+    const payload = exactFields(event.payload, ["chats"], "sidebar preparation");
+    if (!Array.isArray(payload.chats)) throw new Error("Sidebar preparation chats must be an array");
+    const current = parseCurrentSidebar({ input: { view: "characters" }, chatSidebar: {
+      chats: payload.chats,
+      currentChatId: null,
+      activeStreamingChatIds: []
+    } });
+    const data = yield readSidebarCatalog(current);
+    const sections = data.view === "characters" ? data.sections : data.scopes;
+    let defaultAvatar = null;
+    if (sections.some((section) => section.kind === "card" && section.avatarUri === null)) {
+      defaultAvatar = yield imageSource(yield ToolPkg.readResource("character_default_avatar", "operit-avatar.png"));
+      if (defaultAvatar.trim() === "") throw new Error("Declared default avatar resource is missing");
+    }
+    for (let offset = 0; offset < sections.length; offset += 8) {
+      yield Promise.all(sections.slice(offset, offset + 8).map((section) => __async(null, null, function* () {
+        if (section.avatarUri !== null && section.avatarUri !== void 0) section.avatarUri = yield imageSource(section.avatarUri);
+      })));
+    }
+    return { entries: [{ entryId: "sidebar-characters", data: { context: sidebarCatalogKey(current), data, defaultAvatar } }] };
+  });
+}
 function exactFields(value, expected, label) {
   const object3 = record(value, label), keys = Object.keys(object3);
   if (keys.length !== expected.length || keys.some(
@@ -8291,5 +8432,6 @@ function registerToolPkg() {
   registerChatInitialization();
   registerGroupExecutionHooks();
   registerUiContributionApis();
-  return register(definition, import_index_ui2.default, import_index_ui3.default, import_index_ui4.default, import_index_ui5.default, import_index_ui7.default, import_index_ui.default, import_index_ui6.default);
+  ToolPkg.registerApi({ name: "chat.sidebar.prepare", function: chatSidebarPrepareApi });
+  return register(definition, import_index_ui4.default, import_index_ui5.default, import_index_ui6.default, import_index_ui7.default, import_index_ui9.default, import_index_ui3.default, import_index_ui8.default, import_index_ui.default, import_index_ui2.default);
 }

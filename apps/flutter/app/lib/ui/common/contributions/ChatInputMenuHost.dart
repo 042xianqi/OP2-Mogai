@@ -32,9 +32,11 @@ class ChatInputMenuHost extends StatefulWidget {
     required this.clients,
     required this.chatId,
     required this.onPresent,
+    this.surface = 'chat_input_menu',
   });
   final GeneratedCoreProxyClients clients;
   final String? chatId;
+  final String surface;
   final Future<void> Function(ChatUiAction) onPresent;
 
   /// Creates a catalog lifetime owned by this exact menu surface.
@@ -73,7 +75,8 @@ class _ChatInputMenuHostState extends State<ChatInputMenuHost> {
   void didUpdateWidget(covariant ChatInputMenuHost oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.clients != widget.clients ||
-        oldWidget.chatId != widget.chatId) {
+        oldWidget.chatId != widget.chatId ||
+        oldWidget.surface != widget.surface) {
       _generation++;
       final languageCode = _languageCode;
       if (languageCode != null) _catalog = _readCatalog(languageCode);
@@ -93,7 +96,7 @@ class _ChatInputMenuHostState extends State<ChatInputMenuHost> {
     final menus = <_EmbeddedMenu>[];
     final ids = <(String, String)>{};
     for (final entry in entries) {
-      if (entry.surface != 'chat_input_menu') continue;
+      if (entry.surface != widget.surface) continue;
       if (entry.containerPackageName.trim().isEmpty ||
           entry.entryId.trim().isEmpty ||
           !ids.add((entry.containerPackageName, entry.entryId))) {
@@ -150,6 +153,15 @@ class _ChatInputMenuHostState extends State<ChatInputMenuHost> {
       if (!mounted || generation != _generation || chatId != widget.chatId) {
         return;
       }
+      if (raw is Map &&
+          raw.length == 2 &&
+          raw['type'] == 'toolpkg.ui.message' &&
+          raw['message'] is String) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(raw['message'] as String)));
+        return;
+      }
       if (raw is! Map ||
           raw.length != 3 ||
           raw['type'] != 'toolpkg.ui.present' ||
@@ -201,7 +213,7 @@ class _ChatInputMenuHostState extends State<ChatInputMenuHost> {
     super.dispose();
   }
 
-  /// Renders the plugin's DSL tree directly above the native statistics section.
+  /// Renders the registered plugin DSL trees at the requested menu surface.
   @override
   Widget build(BuildContext context) => FutureBuilder<List<_EmbeddedMenu>>(
     future: _catalog,

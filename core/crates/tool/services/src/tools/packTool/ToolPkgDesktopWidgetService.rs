@@ -68,7 +68,6 @@ pub(super) async fn render(
     let script = manager
         .getToolPkgComposeDslScript(package_name, Some(&route.uiModuleId))
         .ok_or_else(|| format!("Desktop widget script was not found: {}", route.uiModuleId))?;
-    let resources = manager.toolPkgTextResources(package_name)?;
     let render_id = NEXT_RENDER_ID.fetch_add(1, Ordering::Relaxed);
     let context_key = format!(
         "toolpkg_widget:{}",
