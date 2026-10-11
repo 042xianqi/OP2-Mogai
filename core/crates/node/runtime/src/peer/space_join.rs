@@ -285,7 +285,11 @@ pub(crate) fn applyRemovedMemberLocalEffects(service: &dyn NodeSpaceContext, ope
     let state = service.networkControlStore().currentState()?;
     let applied = removalEffectsApplied(service)?;
     let mut removed = Vec::new();
-    let mut revocations: Vec<(String, Option<String>)> = Vec::new();
+    // Every unprocessed removal of one device contributes its revoked
+    // generation: a device that missed remove -> re-join -> remove receives
+    // them in one batch, and the pairing is revoked when any of them revoked
+    // the generation it was made under.
+    let mut revocations: BTreeMap<String, Vec<Option<String>>> = BTreeMap::new();
     let mut completed = Vec::new();
     for operation in operations {
         let Ok(record) = NetworkControlCommandRecord::deserialize(&operation.payload) else { continue };
@@ -295,13 +299,9 @@ pub(crate) fn applyRemovedMemberLocalEffects(service: &dyn NodeSpaceContext, ope
             // and a removal the replayed policy already superseded is inert.
             if nodeId == &local || state.memberNodeIds.contains(nodeId) { continue; }
             if !removed.contains(nodeId) { removed.push(nodeId.clone()); }
-            // The ledger is written even when the generation check keeps the
-            // pairing: the operation was evaluated against the state it met.
             if !applied.contains(&operation.opId) && !completed.contains(&operation.opId) {
                 completed.push(operation.opId.clone());
-                if !revocations.iter().any(|(revoked, _)| revoked == nodeId) {
-                    revocations.push((nodeId.clone(), revokedIncarnation.clone()));
-                }
+                revocations.entry(nodeId.clone()).or_default().push(revokedIncarnation.clone());
             }
         }
     }
@@ -314,26 +314,30 @@ pub(crate) fn applyRemovedMemberLocalEffects(service: &dyn NodeSpaceContext, ope
             .into_iter().map(|peer| (peer.nodeId, peer.pairingIncarnation)).collect::<BTreeMap<_, _>>();
         let forgotten = revocations.into_iter().filter_map(|(nodeId, revoked)| {
             let held = paired.get(&nodeId)?;
-            removalForgetsPairing(held.as_deref(), revoked.as_deref()).then_some(nodeId)
+            removalForgetsPairing(held.as_deref(), &revoked).then_some(nodeId)
         }).collect::<Vec<_>>();
-        forgetPairingRecords(service, &forgotten);
+        if !forgotten.is_empty() {
+            // Dropping credentials is the step the ledger records: a failed
+            // forget leaves the removals unprocessed for the next round.
+            let peers = service.peers()?;
+            peers.forgetPairingRecords(&forgotten).map_err(|error| error.to_string())?;
+        }
     }
     markRemovalEffectsApplied(service, &completed)
 }
 
-/// Decides whether one removal forgets one pairing. The removal revokes the
-/// pairing generation the device announced while it was admitted: a pairing
-/// stamped with that generation (or with no generation at all, from an older
-/// core) is forgotten, while a pairing made under a later generation — the
-/// device left, reset and paired again to re-apply — survives. This is the
-/// only check that tells "the credential the removal revoked" from "the
-/// credential a re-admission made", because pairing records carry no other
-/// version of themselves.
-fn removalForgetsPairing(paired: Option<&str>, revoked: Option<&str>) -> bool {
-    match (paired, revoked) {
-        (Some(held), Some(revoked)) => held == revoked,
-        _ => true,
-    }
+/// Decides whether the evaluated removals forget one pairing. Each removal
+/// revokes the pairing generation the device announced while it was admitted:
+/// a pairing stamped with any revoked generation (or carrying no generation at
+/// all, from an older core) is forgotten, while a pairing made under a
+/// generation none of them revoked — the device left, reset and paired again
+/// to re-apply — survives. This is the only check that tells "the credential
+/// the removals revoked" from "the credential a re-admission made", because
+/// pairing records carry no other version of themselves.
+fn removalForgetsPairing(paired: Option<&str>, revoked: &[Option<String>]) -> bool {
+    paired.is_none() || revoked.iter().any(|revoked| {
+        revoked.as_deref().is_none() || revoked.as_deref() == paired
+    })
 }
 
 /// Reads the removal operation ids whose local effects were already applied.
@@ -1107,10 +1111,14 @@ mod pairing_generation_tests {
     /// from older cores carry no generation and keep the previous semantics.
     #[test]
     fn removal_forgets_only_the_generation_it_revokes() {
-        assert!(removalForgetsPairing(Some("inc-a"), Some("inc-a")));
-        assert!(!removalForgetsPairing(Some("inc-b"), Some("inc-a")));
-        assert!(removalForgetsPairing(None, Some("inc-a")));
-        assert!(removalForgetsPairing(Some("inc-a"), None));
-        assert!(removalForgetsPairing(None, None));
+        assert!(removalForgetsPairing(Some("inc-a"), &[Some("inc-a".into())]));
+        assert!(!removalForgetsPairing(Some("inc-b"), &[Some("inc-a".into())]));
+        assert!(removalForgetsPairing(None, &[Some("inc-a".into())]));
+        assert!(removalForgetsPairing(Some("inc-a"), &[None]));
+        assert!(removalForgetsPairing(None, &[None]));
+        // Several removals arrive in one batch: any revoked generation locks
+        // its own pairing, and the older revocation never shadows the newer.
+        assert!(removalForgetsPairing(Some("inc-b"), &[Some("inc-a".into()), Some("inc-b".into())]));
+        assert!(!removalForgetsPairing(Some("inc-c"), &[Some("inc-a".into()), Some("inc-b".into())]));
     }
 }

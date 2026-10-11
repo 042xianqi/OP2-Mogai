@@ -819,3 +819,75 @@ async fn a_member_forgets_the_removed_device_when_the_snapshot_arrives_first() {
         .iter()
         .any(|peer| peer.nodeId == routers[remover].localNodeId()));
 }
+
+/// Verifies a member that missed an entire remove -> re-join -> remove cycle
+/// still forgets the pairing it made in between: the removals arrive in one
+/// batch, and the pairing is revoked when any of them revoked the generation
+/// it was made under. The older removal's generation must not shadow the newer.
+#[tokio::test]
+async fn a_member_that_missed_multiple_removals_forgets_the_latest_generation() {
+    let _guard = routeTestGlobalLock().lock().await;
+    installTestRuntimeScheduler();
+    let (routers, access, peers) = revocationMesh("revoke-multi", 3, &[(0, 1), (0, 2), (1, 2)]);
+    let remover = 0;
+    let member = 1;
+    let removed = routers[2].localNodeId();
+
+    // First removal: the member never synchronizes, so it misses everything.
+    access[remover]
+        .removeDeviceSpaceMember(removed.clone())
+        .await
+        .unwrap();
+    assert!(peers[2].pairedPeers().unwrap().is_empty());
+
+    // The device pairs again with the remover and is fully re-admitted.
+    peers[2].link(&routers[remover]);
+    peers[remover].link(&routers[2]);
+    let request = access[2]
+        .requestDeviceSpaceJoin(routers[remover].localNodeId())
+        .await
+        .unwrap();
+    access[remover]
+        .decideDeviceSpaceJoin(request.requestId.clone(), request.assignmentVersion, true)
+        .await
+        .unwrap();
+    let joined = access[2]
+        .refreshDeviceSpaceJoin(request.requestId)
+        .await
+        .unwrap();
+    assert_eq!(joined.status, SpaceJoinStatus::Joined);
+
+    // The still-stale member pairs with the re-admitted device...
+    peers[2].link(&routers[member]);
+    peers[member].link(&routers[2]);
+    // ...and the device is removed a second time.
+    access[remover]
+        .removeDeviceSpaceMember(removed.clone())
+        .await
+        .unwrap();
+
+    // The member synchronizes once and sees both removals in the same batch.
+    let memberSync = crate::SpacePersistenceSyncService::SpacePersistenceSyncService::new(
+        routers[member].localCore.clone(),
+        routers[member].clone(),
+        routers[member].spaceStore.clone(),
+    );
+    memberSync
+        .exchangePairedDeviceSpaceProjection(&routers[remover].localNodeId())
+        .await
+        .unwrap();
+    memberSync
+        .synchronizeReachablePeer(routers[remover].localNodeId(), 512, false)
+        .await
+        .unwrap();
+
+    assert!(!routers[member].spaceStore.contains(removed.clone()).unwrap());
+    assert!(
+        !peers[member]
+            .pairedPeers()
+            .unwrap()
+            .iter()
+            .any(|peer| peer.nodeId == removed),
+        "the latest revoked generation must revoke the pairing made under it"
+    );
+}
