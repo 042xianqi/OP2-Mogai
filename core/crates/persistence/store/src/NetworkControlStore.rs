@@ -441,8 +441,11 @@ impl NetworkControlStore {
 
     /// An authenticated non-administrator may repeat already known authority
     /// facts, but must not invent commands attributed to another device.
+    /// Returns the operations this call newly accepted: a peer's message always
+    /// carries its whole log, and delivery-triggered effects must fire once, at
+    /// the first acceptance, never again on every replay of the same history.
     #[allow(non_snake_case)]
-    pub fn projectPeerControlOperations(&self, peer: &str, operations: &[SyncOperation]) -> Result<(), String> {
+    pub fn projectPeerControlOperations(&self, peer: &str, operations: &[SyncOperation]) -> Result<Vec<SyncOperation>, String> {
         let _lock = networkControlMutationLock().lock()
             .map_err(|error| format!("Network control mutation lock poisoned: {error}"))?;
         let spaceId = self.spaceStore.space()?.spaceId;
@@ -451,6 +454,7 @@ impl NetworkControlStore {
         if !state.memberNodeIds.contains(peer)
             || state.disconnectedNodeIds.contains(peer) { return Err("Control source is not an admitted member".into()); }
         let canRelayAuthority = hasCapability(&state, peer, "*", None);
+        let mut accepted = Vec::new();
         for operation in operations {
             if known.iter().any(|old| old == operation) { continue; }
             let record = decodeControlOperation(operation)?;
@@ -465,8 +469,10 @@ impl NetworkControlStore {
                 // backdated command to resurrect authority revoked in the present.
                 authorizeCommand(&state, peer, &record.command)?;
             }
+            if !accepted.contains(operation) { accepted.push(operation.clone()); }
         }
-        self.projectControlOperationsUnlocked(operations)
+        self.projectControlOperationsUnlocked(operations)?;
+        Ok(accepted)
     }
 
     /// One-time retirement of the old endpoint's replica machinery. Validate

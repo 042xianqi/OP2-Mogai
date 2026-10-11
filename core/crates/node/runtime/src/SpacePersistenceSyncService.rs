@@ -356,8 +356,9 @@ impl SpacePersistenceSyncService {
             serde_json::to_value(control.currentSpaceOperations()?).map_err(|error| error.to_string())?)?;
         let response = self.state.nodeRouter.callNode(targetNodeId.clone(), request).await;
         let remote = crate::NodeSpaceService::decodeControlExchange(response.result)?;
-        control.projectPeerControlOperations(&targetNodeId, &remote)?;
+        let accepted = control.projectPeerControlOperations(&targetNodeId, &remote)?;
         self.applyRemovedMemberEffects(&remote)?;
+        self.forgetRemovedMemberPairings(&accepted)?;
         // Admission is not a storage grant. No business RPC, blob transfer or
         // bootstrap reset may run unless both endpoints currently have it.
         if !self.storageReplicationAllowed(&targetNodeId)? { return Ok(()); }
@@ -380,12 +381,21 @@ impl SpacePersistenceSyncService {
     }
 
     /// Applies the local effects of removals that just reached this device:
-    /// the member projection shrinks here, and the pairing sweep is deferred
-    /// through a one-shot marker.
+    /// the member projection shrinks here for devices the replayed policy
+    /// still excludes, and routing the same check through every exchange makes
+    /// a missed delivery self-heal.
     fn applyRemovedMemberEffects(&self, operations: &[SyncOperation]) -> Result<(), String> {
         let service = crate::RuntimeRemoteLinkService::RuntimeRemoteLinkService::newWithRouter(
             (*self.state.localRuntime).clone(), self.state.nodeRouter.clone());
         crate::NodeSpaceService::space_join::applyRemovedMemberLocalEffects(&service, operations)
+    }
+
+    /// Drops pairing credentials for removals this synchronization round first
+    /// accepted; replaying known history never touches a pairing made later.
+    fn forgetRemovedMemberPairings(&self, accepted: &[SyncOperation]) -> Result<(), String> {
+        let service = crate::RuntimeRemoteLinkService::RuntimeRemoteLinkService::newWithRouter(
+            (*self.state.localRuntime).clone(), self.state.nodeRouter.clone());
+        crate::NodeSpaceService::space_join::forgetRemovedMemberPairings(&service, accepted)
     }
 
     pub(crate) fn replicaBootstrapRequired(&self, spaceId: &str) -> Result<bool, String> {

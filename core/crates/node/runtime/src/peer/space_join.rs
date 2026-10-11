@@ -258,28 +258,58 @@ pub(crate) fn memberRemovalCommitted(service: &dyn NodeSpaceContext, nodeId: &st
     }))
 }
 
-/// Applies the local consequences of removals that just reached this device's
-/// control log: every member shrinks its own membership projection for the
-/// removed device, exactly like the remover does, so the member table and the
-/// device list converge from the shared log instead of a peer's rewrite, and
-/// drops its pairing credentials right here.
+/// Applies the membership consequences of removals that reached this device's
+/// control log from any path: every member shrinks its own membership
+/// projection for the removed device, exactly like the remover does, so the
+/// member table and the device list converge from the shared log instead of a
+/// peer's rewrite. The decision reads the replayed current state, never the
+/// mere presence of the historical removal: a device admitted again since is a
+/// member, so replaying old history can never eject it, and the operation is
+/// idempotent for devices whose projection already shrank.
 pub(crate) fn applyRemovedMemberLocalEffects(service: &dyn NodeSpaceContext, operations: &[SyncOperation]) -> Result<(), String> {
     let local = service.localNodeId();
     let spaceId = service.spaceStore().space()?.spaceId;
+    let state = service.networkControlStore().currentState()?;
     let mut removed = Vec::new();
     for operation in operations {
         let Ok(record) = NetworkControlCommandRecord::deserialize(&operation.payload) else { continue };
         if record.spaceId != spaceId { continue; }
         if let NetworkControlCommand::RemoveMember { nodeId } = &record.command {
-            // The local device's own removal retires the whole Space separately.
-            if nodeId != &local && !removed.contains(nodeId) { removed.push(nodeId.clone()); }
+            // The local device's own removal retires the whole Space separately,
+            // and a removal the replayed policy already superseded is inert.
+            if nodeId != &local && !state.memberNodeIds.contains(nodeId) && !removed.contains(nodeId) {
+                removed.push(nodeId.clone());
+            }
         }
     }
-    if removed.is_empty() { return Ok(()); }
     for nodeId in &removed {
         // No-op when the device is absent or was admitted again since.
         service.spaceStore().removeRemoteMember(nodeId.clone())?;
     }
+    Ok(())
+}
+
+/// Drops pairing credentials for the removals this step first accepted into the
+/// local control log. Forgetting is bound to that first acceptance: a removal
+/// replayed by a later exchange or snapshot must never delete the pairing a
+/// device created to re-join, and a removal the replayed policy already
+/// superseded must not forget the credentials of a current member.
+pub(crate) fn forgetRemovedMemberPairings(service: &dyn NodeSpaceContext, accepted: &[SyncOperation]) -> Result<(), String> {
+    if accepted.is_empty() { return Ok(()); }
+    let local = service.localNodeId();
+    let spaceId = service.spaceStore().space()?.spaceId;
+    let state = service.networkControlStore().currentState()?;
+    let mut removed = Vec::new();
+    for operation in accepted {
+        let Ok(record) = NetworkControlCommandRecord::deserialize(&operation.payload) else { continue };
+        if record.spaceId != spaceId { continue; }
+        if let NetworkControlCommand::RemoveMember { nodeId } = &record.command {
+            if nodeId != &local && !state.memberNodeIds.contains(nodeId) && !removed.contains(nodeId) {
+                removed.push(nodeId.clone());
+            }
+        }
+    }
+    if removed.is_empty() { return Ok(()); }
     let paired = service.peers()?.pairedPeers().map_err(|error| error.to_string())?
         .into_iter().map(|peer| peer.nodeId).collect::<BTreeSet<_>>();
     let forgotten = removed.into_iter().filter(|nodeId| paired.contains(nodeId)).collect::<Vec<_>>();

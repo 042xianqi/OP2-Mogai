@@ -486,3 +486,187 @@ async fn readmitted_device_survives_its_own_removal_record_in_history() {
         .iter()
         .any(|peer| peer.nodeId == routers[1].localNodeId()));
 }
+
+/// Verifies the pairing a device makes for re-admission survives every later
+/// replay of the historical removal. The old `RemoveMember` stays in the shared
+/// history forever, so a synchronization round that re-delivers it must not
+/// delete the fresh pairing — otherwise the re-applicant's own core refuses the
+/// submission ("Join request requires a current directional pairing") while
+/// the paired peer never sees a request.
+#[tokio::test]
+async fn historical_removal_replay_keeps_the_fresh_pairing_of_a_reapplicant() {
+    let _guard = routeTestGlobalLock().lock().await;
+    installTestRuntimeScheduler();
+    let (routers, access, peers) =
+        revocationMesh("revoke-keep-pairing", 3, &[(0, 1), (0, 2), (1, 2)]);
+    let remover = 0;
+    let member = 1;
+    let removed = routers[2].localNodeId();
+
+    access[remover]
+        .removeDeviceSpaceMember(removed.clone())
+        .await
+        .unwrap();
+    assert!(peers[2].pairedPeers().unwrap().is_empty());
+
+    // The member applies the removal in an ordinary synchronization round and
+    // forgets the pairing it held when the removal took effect.
+    let memberSync = crate::SpacePersistenceSyncService::SpacePersistenceSyncService::new(
+        routers[member].localCore.clone(),
+        routers[member].clone(),
+        routers[member].spaceStore.clone(),
+    );
+    memberSync
+        .synchronizeReachablePeer(routers[remover].localNodeId(), 512, false)
+        .await
+        .unwrap();
+    assert!(!routers[member]
+        .networkControlStore
+        .currentState()
+        .unwrap()
+        .memberNodeIds
+        .contains(&removed));
+    assert!(!peers[member]
+        .pairedPeers()
+        .unwrap()
+        .iter()
+        .any(|peer| peer.nodeId == removed));
+
+    // The device pairs again for re-admission and applies. The application is
+    // pending on the member.
+    peers[2].link(&routers[member]);
+    peers[member].link(&routers[2]);
+    let request = access[2]
+        .requestDeviceSpaceJoin(routers[member].localNodeId())
+        .await
+        .expect("a re-paired device applies");
+    assert_eq!(request.status, SpaceJoinStatus::Pending);
+
+    // The next synchronization window replays the same history. The removal
+    // took effect before this pairing existed, so the pairing must survive.
+    memberSync
+        .synchronizeReachablePeer(routers[remover].localNodeId(), 512, false)
+        .await
+        .unwrap();
+    assert!(
+        peers[member]
+            .pairedPeers()
+            .unwrap()
+            .iter()
+            .any(|peer| peer.nodeId == removed),
+        "a replayed historical removal must not forget the pairing made for re-admission"
+    );
+    // The application is still usable: applying again refreshes the pending
+    // request instead of failing locally.
+    let refreshed = access[2]
+        .requestDeviceSpaceJoin(routers[member].localNodeId())
+        .await
+        .expect("the fresh pairing still authorizes the application");
+    assert_eq!(refreshed.requestId, request.requestId);
+}
+
+/// Verifies a device that was admitted again is not ejected by the historical
+/// removal replayed in later exchanges: membership follows the replayed
+/// current policy, never the mere presence of the old command in history.
+#[tokio::test]
+async fn readmitted_device_survives_replayed_history_on_every_replica() {
+    let _guard = routeTestGlobalLock().lock().await;
+    installTestRuntimeScheduler();
+    let (routers, access, peers) =
+        revocationMesh("revoke-readmit-kept", 3, &[(0, 1), (0, 2), (1, 2)]);
+    let remover = 0;
+    let member = 1;
+    let removed = routers[2].localNodeId();
+
+    access[remover]
+        .removeDeviceSpaceMember(removed.clone())
+        .await
+        .unwrap();
+
+    // The member enforces the removal in an ordinary synchronization round.
+    let memberSync = crate::SpacePersistenceSyncService::SpacePersistenceSyncService::new(
+        routers[member].localCore.clone(),
+        routers[member].clone(),
+        routers[member].spaceStore.clone(),
+    );
+    memberSync
+        .synchronizeReachablePeer(routers[remover].localNodeId(), 512, false)
+        .await
+        .unwrap();
+    assert!(!routers[member]
+        .networkControlStore
+        .currentState()
+        .unwrap()
+        .memberNodeIds
+        .contains(&removed));
+
+    // The device pairs again with both devices and completes a full re-admission.
+    peers[2].link(&routers[remover]);
+    peers[remover].link(&routers[2]);
+    peers[2].link(&routers[member]);
+    peers[member].link(&routers[2]);
+    let request = access[2]
+        .requestDeviceSpaceJoin(routers[remover].localNodeId())
+        .await
+        .unwrap();
+    access[remover]
+        .decideDeviceSpaceJoin(request.requestId.clone(), request.assignmentVersion, true)
+        .await
+        .unwrap();
+    let joined = access[2]
+        .refreshDeviceSpaceJoin(request.requestId)
+        .await
+        .unwrap();
+    assert_eq!(joined.status, SpaceJoinStatus::Joined);
+    assert!(routers[remover].spaceStore.contains(removed.clone()).unwrap());
+
+    // The next synchronization window re-delivers the same history. The
+    // re-admission is the current truth; the old removal stays inert.
+    let removerSync = crate::SpacePersistenceSyncService::SpacePersistenceSyncService::new(
+        routers[remover].localCore.clone(),
+        routers[remover].clone(),
+        routers[remover].spaceStore.clone(),
+    );
+    removerSync
+        .synchronizeReachablePeer(routers[member].localNodeId(), 512, false)
+        .await
+        .unwrap();
+    assert!(
+        routers[remover].spaceStore.contains(removed.clone()).unwrap(),
+        "a re-admitted member must survive its historical removal"
+    );
+    assert!(routers[remover]
+        .networkControlStore
+        .currentState()
+        .unwrap()
+        .memberNodeIds
+        .contains(&removed));
+    assert!(
+        peers[remover]
+            .pairedPeers()
+            .unwrap()
+            .iter()
+            .any(|peer| peer.nodeId == removed),
+        "re-admission keeps the pairing it was approved with"
+    );
+
+    // The member learns the re-admission and keeps it too.
+    memberSync
+        .synchronizeReachablePeer(routers[remover].localNodeId(), 512, false)
+        .await
+        .unwrap();
+    assert!(routers[member]
+        .networkControlStore
+        .currentState()
+        .unwrap()
+        .memberNodeIds
+        .contains(&removed));
+    assert!(
+        peers[member]
+            .pairedPeers()
+            .unwrap()
+            .iter()
+            .any(|peer| peer.nodeId == removed),
+        "history replay must not forget a re-admitted member's pairing"
+    );
+}

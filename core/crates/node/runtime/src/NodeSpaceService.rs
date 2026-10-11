@@ -266,7 +266,12 @@ impl NodeSpaceContext for NodeSpaceService {
         );
         let response = self.callNode(peer.clone(), request).await;
         let operations = decodeControlExchange(response.result)?;
-        self.control.projectPeerControlOperations(&peer, &operations)?;
+        let accepted = self.control.projectPeerControlOperations(&peer, &operations)?;
+        // The joined log carries the Space's whole removal history. Its member
+        // projection arrives with the admission, so only the credentials of
+        // devices the replayed policy still excludes are forgotten here.
+        space_join::applyRemovedMemberLocalEffects(self, &operations)?;
+        space_join::forgetRemovedMemberPairings(self, &accepted)?;
         Ok(())
     }
 }
@@ -284,12 +289,14 @@ pub fn acceptSpaceControlCall(service: &dyn NodeSpaceContext, origin: &str, requ
     }
     if request.methodName != "exchange" { return Err("Unknown Space control method".into()); }
     let operations: Vec<SyncOperation> = fromCoreValue(request.args).map_err(|error| error.to_string())?;
-    service.networkControlStore().projectPeerControlOperations(origin, &operations)?;
+    let accepted = service.networkControlStore().projectPeerControlOperations(origin, &operations)?;
     // Removals take effect locally whatever path delivered them: this device
     // retires itself when the command targets it, and shrinks its own member
-    // projection for every other removed device.
+    // projection for every other removed device. Pairing credentials drop only
+    // for the removals this exchange first accepted.
     space_join::retireRemovedLocalDevice(service, None)?;
     space_join::applyRemovedMemberLocalEffects(service, &operations)?;
+    space_join::forgetRemovedMemberPairings(service, &accepted)?;
     toCoreValue(service.networkControlStore().currentSpaceOperations()?).map_err(|error| error.to_string())
 }
 
