@@ -675,7 +675,8 @@ impl RuntimePeerService for HostRuntimePeerService {
             self.state.active.lock().unwrap().insert(pending.peerNodeId.clone());
         }
         self.changed();
-        Ok(PairedPeer { nodeId: pending.peerNodeId, displayName: pending.info.displayName(), inbound: false, outbound: true })
+        Ok(PairedPeer { nodeId: pending.peerNodeId, displayName: pending.info.displayName(),
+            inbound: false, outbound: true, pairingIncarnation: pending.info.pairingIncarnation.clone() })
     }
     async fn cancelPairing(&self, id: &str) -> Result<(), CoreLinkError> {
         let _guard = self.state.mutation.lock().unwrap();

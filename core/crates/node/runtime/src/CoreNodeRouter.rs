@@ -3502,6 +3502,7 @@ mod tests {
                         model: "test".to_string(),
                         coreVersion: None,
                         updatedAt: 1,
+                        pairingIncarnation: None,
                     })
                     .collect(),
             )
@@ -3950,7 +3951,7 @@ mod tests {
             .initializeNamed("route-test-space".to_string())
             .expect("test space must initialize");
         let networkControlStore = NetworkControlStore::new(storage.clone()).unwrap();
-        spaceStore.writeLocalDeviceProfile("Test".into(), "test".into(), "core".into(), "1".into()).unwrap();
+        spaceStore.writeLocalDeviceProfile("Test".into(), "test".into(), "core".into(), "1".into(), None).unwrap();
         networkControlStore.initializeCurrentSpace().unwrap();
         let joinedSpace = CoreSpace {
             spaceId: localSpace.spaceId.clone(),
@@ -4064,7 +4065,7 @@ mod tests {
         let mut singleton = joinedSpace.clone();
         singleton.members = vec![localNodeId.to_string()];
         spaceStore.adopt(singleton).unwrap();
-        spaceStore.writeLocalDeviceProfile("Test".into(), "test".into(), "core".into(), "1".into()).unwrap();
+        spaceStore.writeLocalDeviceProfile("Test".into(), "test".into(), "core".into(), "1".into(), None).unwrap();
         let networkControlStore = NetworkControlStore::new(storage.clone()).unwrap();
         networkControlStore.initializeCurrentSpace().unwrap();
         let members = joinedSpace.members.clone();
@@ -5079,7 +5080,7 @@ mod tests {
 
         // A persistent mutation must still rebind an otherwise silent stream.
         binding.setNodeId(local.into());
-        router.spaceStore.writeLocalDeviceProfile(local.into(), "test".into(), "test".into(), "1".into()).unwrap();
+        router.spaceStore.writeLocalDeviceProfile(local.into(), "test".into(), "test".into(), "1".into(), None).unwrap();
         let next = tokio::time::timeout(Duration::from_secs(5), watch.recv()).await.unwrap().unwrap();
         assert_eq!(next.kind, CoreEventKind::Changed);
         assert!(binding.reads.load(Ordering::SeqCst) > reads);

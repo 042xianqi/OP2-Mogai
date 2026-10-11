@@ -670,3 +670,77 @@ async fn readmitted_device_survives_replayed_history_on_every_replica() {
         "history replay must not forget a re-admitted member's pairing"
     );
 }
+
+/// Verifies the pairing generation closes the late-learner window: a member
+/// that was offline during the removal pairs with the removed device's next
+/// generation, and only then accepts the removal for the first time. The
+/// removal revokes the generation it was issued against, so the pairing made
+/// afterwards must survive that first acceptance, and the application stays
+/// usable instead of failing locally on a vanished pairing.
+#[tokio::test]
+async fn a_late_learner_keeps_the_pairing_made_after_the_removal() {
+    let _guard = routeTestGlobalLock().lock().await;
+    installTestRuntimeScheduler();
+    let (routers, access, peers) =
+        revocationMesh("revoke-generation", 3, &[(0, 1), (0, 2), (1, 2)]);
+    let remover = 0;
+    let member = 1;
+    let removed = routers[2].localNodeId();
+
+    access[remover]
+        .removeDeviceSpaceMember(removed.clone())
+        .await
+        .unwrap();
+    // The removed device retired into its own Space with a fresh generation...
+    assert!(peers[2].pairedPeers().unwrap().is_empty());
+    // ...while the member never learned about the removal.
+    assert!(routers[member]
+        .networkControlStore
+        .currentState()
+        .unwrap()
+        .memberNodeIds
+        .contains(&removed));
+
+    // The device pairs again with the still-stale member and applies.
+    peers[2].link(&routers[member]);
+    peers[member].link(&routers[2]);
+    let request = access[2]
+        .requestDeviceSpaceJoin(routers[member].localNodeId())
+        .await
+        .expect("a re-paired device applies");
+
+    // The member now accepts the removal for the first time. It revokes the
+    // generation the device had while it was admitted, not the one it paired
+    // with afterwards.
+    let memberSync = crate::SpacePersistenceSyncService::SpacePersistenceSyncService::new(
+        routers[member].localCore.clone(),
+        routers[member].clone(),
+        routers[member].spaceStore.clone(),
+    );
+    memberSync
+        .synchronizeReachablePeer(routers[remover].localNodeId(), 512, false)
+        .await
+        .unwrap();
+    assert!(!routers[member]
+        .networkControlStore
+        .currentState()
+        .unwrap()
+        .memberNodeIds
+        .contains(&removed));
+    // The membership projection still shrank...
+    assert!(!routers[member].spaceStore.contains(removed.clone()).unwrap());
+    // ...but the pairing made for re-admission survives the removal.
+    assert!(
+        peers[member]
+            .pairedPeers()
+            .unwrap()
+            .iter()
+            .any(|peer| peer.nodeId == removed),
+        "a removal revokes the generation it was issued against, never the pairing made after it"
+    );
+    let refreshed = access[2]
+        .requestDeviceSpaceJoin(routers[member].localNodeId())
+        .await
+        .expect("the fresh pairing still authorizes the application");
+    assert_eq!(refreshed.requestId, request.requestId);
+}

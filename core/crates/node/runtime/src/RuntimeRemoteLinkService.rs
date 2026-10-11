@@ -230,7 +230,8 @@ impl RuntimeRemoteLinkService {
 
     fn writeDeviceProfile(&self, info: &LinkDeviceInfo) -> Result<(), String> {
         self.spaceStore.writeLocalDeviceProfile(info.displayName(), info.platform.clone(),
-            info.model.clone(), operit_runtime::CORE_VERSION.to_string()).map(|_| ())
+            info.model.clone(), operit_runtime::CORE_VERSION.to_string(),
+            info.pairingIncarnation.clone()).map(|_| ())
     }
 
     /// Returns the converged Space membership owned by this CoreNode.
@@ -728,6 +729,7 @@ impl RuntimeRemoteLinkService {
                         deviceInfo: LinkDeviceInfo {
                             platform: String::new(),
                             model: peer.displayName.clone(),
+                            pairingIncarnation: peer.pairingIncarnation.clone(),
                         },
                         inbound: peer.inbound,
                         outbound: peer.outbound,

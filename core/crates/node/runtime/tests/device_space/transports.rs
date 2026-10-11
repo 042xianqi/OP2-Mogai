@@ -30,7 +30,8 @@ async fn real_tcp_single_pairing_admission_enables_scoped_return_channel() {
         LinkDeviceInfo {
             platform: "mac".into(),
             model: "test".into(),
-        },
+        pairingIncarnation: None,
+    },
     )
     .unwrap();
     let iosPeer = HostRuntimePeerService::new(
@@ -39,7 +40,8 @@ async fn real_tcp_single_pairing_admission_enables_scoped_return_channel() {
         LinkDeviceInfo {
             platform: "ios".into(),
             model: "test".into(),
-        },
+        pairingIncarnation: None,
+    },
     )
     .unwrap();
     macRouter
@@ -350,7 +352,8 @@ async fn real_tcp_space_remove_deletes_pairing_and_allows_repairing() {
         LinkDeviceInfo {
             platform: "mac".into(),
             model: "test".into(),
-        },
+        pairingIncarnation: None,
+    },
     )
     .unwrap();
     let iosPeer = HostRuntimePeerService::new(
@@ -359,7 +362,8 @@ async fn real_tcp_space_remove_deletes_pairing_and_allows_repairing() {
         LinkDeviceInfo {
             platform: "ios".into(),
             model: "test".into(),
-        },
+        pairingIncarnation: None,
+    },
     )
     .unwrap();
     macRouter
@@ -516,7 +520,8 @@ async fn real_tcp_listener_gate_reports_revocation_to_dialer() {
         LinkDeviceInfo {
             platform: "mac".into(),
             model: "test".into(),
-        },
+        pairingIncarnation: None,
+    },
     )
     .unwrap();
     let iosPeer = HostRuntimePeerService::new(
@@ -525,7 +530,8 @@ async fn real_tcp_listener_gate_reports_revocation_to_dialer() {
         LinkDeviceInfo {
             platform: "ios".into(),
             model: "test".into(),
-        },
+        pairingIncarnation: None,
+    },
     )
     .unwrap();
     macRouter
@@ -652,7 +658,8 @@ async fn outbound_only_hosts_pair_over_http_and_websocket() {
         let info = LinkDeviceInfo {
             platform: "test".into(),
             model: scheme.into(),
-        };
+        pairingIncarnation: None,
+    };
         let clientPeer =
             HostRuntimePeerService::new(clientHost.clone(), &clientRouter, info.clone()).unwrap();
         let serverPeer = HostRuntimePeerService::new(serverHost, &serverRouter, info).unwrap();
@@ -733,7 +740,7 @@ async fn outbound_only_hosts_pair_over_http_and_websocket() {
             drop((promptFlow, clientPromptFlow, overview));
             clientPeer.stop().await.unwrap();
             let restored = HostRuntimePeerService::new(clientHost.clone(), &clientRouter,
-                LinkDeviceInfo { platform: "test".into(), model: "restored".into() }).unwrap();
+                LinkDeviceInfo { platform: "test".into(), model: "restored".into(), pairingIncarnation: None }).unwrap();
             let mut changed = restored.subscribePeerChanges();
             while !restored.activePeerNodeIds().unwrap().contains(&serverRouter.localNodeId()) {
                 changed.recv().await.unwrap();
@@ -791,7 +798,8 @@ async fn listener_capabilities_validate_all_transports_before_binding() {
         LinkDeviceInfo {
             platform: "test".into(),
             model: "test".into(),
-        },
+        pairingIncarnation: None,
+    },
     )
     .unwrap();
     router
@@ -919,7 +927,8 @@ async fn core_discovery_returns_only_unpaired_devices_for_all_callers() {
     let info = LinkDeviceInfo {
         platform: "test".into(),
         model: "test".into(),
-    };
+    pairingIncarnation: None,
+};
     let peer = HostRuntimePeerService::new(host, &router, info.clone()).unwrap();
     router
         .installNodeServices(NodeServices::new(peer.clone()))

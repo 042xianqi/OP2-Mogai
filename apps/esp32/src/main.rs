@@ -172,7 +172,8 @@ fn runFirmware(
             LinkDeviceInfo {
                 platform: "esp32".into(),
                 model: "ESP32-2432S028".into(),
-            },
+            pairingIncarnation: None,
+        },
             false,
         )
         .map_err(HostError::new)?;
@@ -305,8 +306,9 @@ fn runFirmware(
             platform: deviceInfo.platform.clone(),
             model: deviceInfo.model.clone(),
             coreVersion: None,
+            pairingIncarnation: deviceInfo.pairingIncarnation.clone(),
             updatedAt: currentTimeMillis(),
-        },
+    },
         scheduler.clone(),
     )?;
     let mut edgeNode = operit_node_edge::EdgeNode::fromHostManager(hostManager.clone())

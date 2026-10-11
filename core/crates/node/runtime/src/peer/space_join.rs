@@ -253,7 +253,7 @@ pub(crate) fn memberRemovalCommitted(service: &dyn NodeSpaceContext, nodeId: &st
     Ok(service.networkControlStore().currentSpaceOperations()?.into_iter().any(|operation| {
         NetworkControlCommandRecord::deserialize(&operation.payload).is_ok_and(|command| {
             command.spaceId == spaceId
-                && matches!(&command.command, NetworkControlCommand::RemoveMember { nodeId: removed } if removed == nodeId)
+                && matches!(&command.command, NetworkControlCommand::RemoveMember { nodeId: removed, .. } if removed == nodeId)
         })
     }))
 }
@@ -274,7 +274,7 @@ pub(crate) fn applyRemovedMemberLocalEffects(service: &dyn NodeSpaceContext, ope
     for operation in operations {
         let Ok(record) = NetworkControlCommandRecord::deserialize(&operation.payload) else { continue };
         if record.spaceId != spaceId { continue; }
-        if let NetworkControlCommand::RemoveMember { nodeId } = &record.command {
+        if let NetworkControlCommand::RemoveMember { nodeId, .. } = &record.command {
             // The local device's own removal retires the whole Space separately,
             // and a removal the replayed policy already superseded is inert.
             if nodeId != &local && !state.memberNodeIds.contains(nodeId) && !removed.contains(nodeId) {
@@ -289,6 +289,21 @@ pub(crate) fn applyRemovedMemberLocalEffects(service: &dyn NodeSpaceContext, ope
     Ok(())
 }
 
+/// Decides whether one removal forgets one pairing. The removal revokes the
+/// pairing generation the device announced while it was admitted: a pairing
+/// stamped with that generation (or with no generation at all, from an older
+/// core) is forgotten, while a pairing made under a later generation — the
+/// device left, reset and paired again to re-apply — survives. This is the
+/// only check that tells "the credential the removal revoked" from "the
+/// credential a re-admission made", because pairing records carry no other
+/// version of themselves.
+fn removalForgetsPairing(paired: Option<&str>, revoked: Option<&str>) -> bool {
+    match (paired, revoked) {
+        (Some(held), Some(revoked)) => held == revoked,
+        _ => true,
+    }
+}
+
 /// Drops pairing credentials for the removals this step first accepted into the
 /// local control log. Forgetting is bound to that first acceptance: a removal
 /// replayed by a later exchange or snapshot must never delete the pairing a
@@ -299,20 +314,26 @@ pub(crate) fn forgetRemovedMemberPairings(service: &dyn NodeSpaceContext, accept
     let local = service.localNodeId();
     let spaceId = service.spaceStore().space()?.spaceId;
     let state = service.networkControlStore().currentState()?;
-    let mut removed = Vec::new();
+    let mut removed: Vec<(String, Option<String>)> = Vec::new();
     for operation in accepted {
         let Ok(record) = NetworkControlCommandRecord::deserialize(&operation.payload) else { continue };
         if record.spaceId != spaceId { continue; }
-        if let NetworkControlCommand::RemoveMember { nodeId } = &record.command {
-            if nodeId != &local && !state.memberNodeIds.contains(nodeId) && !removed.contains(nodeId) {
-                removed.push(nodeId.clone());
+        if let NetworkControlCommand::RemoveMember { nodeId, revokedIncarnation } = &record.command {
+            if nodeId != &local && !state.memberNodeIds.contains(nodeId)
+                && !removed.iter().any(|(removed, _)| removed == nodeId)
+            {
+                removed.push((nodeId.clone(), revokedIncarnation.clone()));
             }
         }
     }
     if removed.is_empty() { return Ok(()); }
     let paired = service.peers()?.pairedPeers().map_err(|error| error.to_string())?
-        .into_iter().map(|peer| peer.nodeId).collect::<BTreeSet<_>>();
-    let forgotten = removed.into_iter().filter(|nodeId| paired.contains(nodeId)).collect::<Vec<_>>();
+        .into_iter().map(|peer| (peer.nodeId, peer.pairingIncarnation)).collect::<BTreeMap<_, _>>();
+    let forgotten = removed.into_iter().filter_map(|(nodeId, revoked)| {
+        let held = paired.get(&nodeId)?;
+        removalForgetsPairing(held.as_deref(), revoked.as_deref()).then_some(nodeId)
+    }).collect::<Vec<_>>();
+    if forgotten.is_empty() { return Ok(()); }
     forgetPairingRecords(service, &forgotten);
     Ok(())
 }
@@ -404,6 +425,31 @@ pub(crate) fn leave(service: &dyn NodeSpaceContext) -> Result<CoreSpace, String>
         if !active(&record.request.status) && record.targetSpaceId != space.spaceId
             && record.sourceSpaceId != space.spaceId {
             store(service).deleteRecord(OUTBOUND, &id)?;
+        }
+    }
+    // The pairing world resets with the Space: this device takes a new pairing
+    // generation. A removal still in flight revokes the generation it was
+    // issued against, so it can never match the credentials this device pairs
+    // again with, and the profile announces the new generation from now on.
+    // Failures keep the previous generation and only prolong the known benign
+    // window, so they never fail an already-completed leave.
+    match store(service).renewPairingIncarnation() {
+        Ok(incarnation) => {
+            if let Some(profile) = service.spaceStore().deviceProfiles()?.remove(&service.localNodeId()) {
+                if let Some(coreVersion) = profile.coreVersion.clone() {
+                    if let Err(error) = service.spaceStore().writeLocalDeviceProfile(
+                        profile.displayName.clone(), profile.platform.clone(), profile.model.clone(),
+                        coreVersion, Some(incarnation),
+                    ) {
+                        operit_util::AppLogger::AppLogger::w("SpaceJoin",
+                            &format!("Pairing generation profile refresh failed error={error}"));
+                    }
+                }
+            }
+        }
+        Err(error) => {
+            operit_util::AppLogger::AppLogger::w("SpaceJoin",
+                &format!("Pairing generation renewal failed error={error}"));
         }
     }
     Ok(space)
@@ -1032,4 +1078,22 @@ async fn callPeerSpace<T: serde::de::DeserializeOwned>(service: &dyn NodeSpaceCo
         format!("node-space-{method}-{}", currentTimeMillis()), NODE_SPACE_TARGET, method, args,
     )).await;
     fromCoreValue(response.result.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod pairing_generation_tests {
+    use super::removalForgetsPairing;
+
+    /// One removal revokes exactly the generation it was issued against: a
+    /// credential stamped with a later generation — the device left, reset and
+    /// paired again to re-apply — always survives, while records and removals
+    /// from older cores carry no generation and keep the previous semantics.
+    #[test]
+    fn removal_forgets_only_the_generation_it_revokes() {
+        assert!(removalForgetsPairing(Some("inc-a"), Some("inc-a")));
+        assert!(!removalForgetsPairing(Some("inc-b"), Some("inc-a")));
+        assert!(removalForgetsPairing(None, Some("inc-a")));
+        assert!(removalForgetsPairing(Some("inc-a"), None));
+        assert!(removalForgetsPairing(None, None));
+    }
 }
