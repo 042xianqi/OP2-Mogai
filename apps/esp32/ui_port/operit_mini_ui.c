@@ -11,7 +11,7 @@
 enum { WIDTH = 320, HEIGHT = 240, ROWS = 2, NODE_LIMIT = 14,
        CHAT_X = 126, CHAT_W = 182, CHAT_WRAP = CHAT_W - 10, CHAT_ROWS = 6 };
 enum { ICON_NONE, ICON_MENU, ICON_CLOSE, ICON_BACK, ICON_CHAT, ICON_FACE,
-       ICON_PLUGIN, ICON_SETTINGS, ICON_LINK, ICON_SPACE, ICON_DEVICE, ICON_SEND, ICON_BOLT };
+       ICON_PLUGIN, ICON_SETTINGS, ICON_LINK, ICON_SPACE, ICON_DEVICE, ICON_SEND, ICON_BOLT, ICON_MIC };
 typedef struct {
     const char *id, *text, *action;
     int16_t x, y, w, h;
@@ -361,7 +361,8 @@ static void scene(void) {
         node("home_face","",NULL,8,92,104,65,true,1);
         node("chat_task",ui.task[0]?ui.task:ui.connected?"就绪":"离线",NULL,14,170,98,50,true,1);
         node("chat_text",ui.chat[0] ? chat_line(ui.chat_scroll) : "连接 Operit 后\n开始聊天",NULL,CHAT_X,44,CHAT_W,132,true,1);
-        node("chat_draft",ui.draft[0]?ui.draft:"电脑输入…",NULL,CHAT_X,191,132,34,true,1);
+        icon_node("edge_voice","","edge_voice",CHAT_X,187,40,40,ui.connected&&!ui.sending,ICON_MIC);
+        node("chat_draft",ui.draft[0]?ui.draft:"电脑输入…",NULL,170,191,88,34,true,1);
         icon_node("edge_send","","edge_send",268,187,40,40,ui.connected&&ui.draft[0]&&!ui.sending,ICON_SEND);
     }
 }
@@ -507,6 +508,21 @@ static const icon_line_t icon_lines[] = {
     {ICON_BOLT, 9, 22, 20, 10},
     {ICON_BOLT, 20, 10, 13, 10},
     {ICON_BOLT, 13, 10, 14, 2},
+    {ICON_MIC, 10, 3, 14, 3},
+    {ICON_MIC, 14, 3, 16, 5},
+    {ICON_MIC, 16, 5, 16, 11},
+    {ICON_MIC, 16, 11, 14, 13},
+    {ICON_MIC, 14, 13, 10, 13},
+    {ICON_MIC, 10, 13, 8, 11},
+    {ICON_MIC, 8, 11, 8, 5},
+    {ICON_MIC, 8, 5, 10, 3},
+    {ICON_MIC, 5, 10, 5, 13},
+    {ICON_MIC, 5, 13, 8, 17},
+    {ICON_MIC, 8, 17, 16, 17},
+    {ICON_MIC, 16, 17, 19, 13},
+    {ICON_MIC, 19, 13, 19, 10},
+    {ICON_MIC, 12, 17, 12, 21},
+    {ICON_MIC, 8, 21, 16, 21},
     {ICON_SEND, 3, 11, 21, 3},
     {ICON_SEND, 21, 3, 13, 21},
     {ICON_SEND, 13, 21, 11, 11},
@@ -637,7 +653,7 @@ static void paint_page(void) {
     if(page()==12 && ui.scene_painter) ui.scene_painter(strip,sizeof(strip),ui.render_y,ROWS,ui.frame_tick,ui.context);
     if(page()==2&&!ui.error[0]) {
         rect(117,58,1,116,rgb(0x25332e));
-        outline(CHAT_X,187,132,40,rgb(0x344b3d));
+        outline(170,187,88,40,rgb(0x344b3d));
     }
     paint_nodes();
 }

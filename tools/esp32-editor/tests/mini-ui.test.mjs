@@ -438,3 +438,30 @@ test('exclusive/general tabs and simple package details hide absent tools and re
   frame();assert(inspect().staticBytes<10*1024);assert.equal(inspect().heapBytes,0);
   tap('plugin_dialog_close');assert.equal(actions.at(-1),'edge_plugin_close');
 });
+
+test('chat microphone is visible offline and emits a distinct action only when connected and idle',options,async()=>{
+  const {call,ui,actions,inspect,tap,frame}=await fixture();call('set_paired',['number'],[1]);
+  let voice=inspect().nodes.find(n=>n.id==='edge_voice');
+  assert(voice);assert.equal(voice.action,'edge_voice');assert.equal(voice.enabled,false);
+  assert.equal(tap('edge_voice'),0);assert.deepEqual(actions,[]);
+  call('set_connection',['number','number'],[1,1]);
+  const state=inspect();voice=state.nodes.find(n=>n.id==='edge_voice');
+  const draft=state.nodes.find(n=>n.id==='chat_draft'),send=state.nodes.find(n=>n.id==='edge_send');
+  assert(voice.rect.x+voice.rect.w<=draft.rect.x);
+  assert(draft.rect.x+draft.rect.w<=send.rect.x);
+  const pixels=frame(),iconColor=0xb1c7b8;
+  const rgb565=((iconColor>>8)&0xf800)|((iconColor>>5)&0x07e0)|((iconColor>>3)&31);
+  let painted=0;
+  for(let y=voice.rect.y;y<voice.rect.y+voice.rect.h;y++)for(let x=voice.rect.x;x<voice.rect.x+voice.rect.w;x++)
+    if(pixels.readUInt16LE((y*320+x)*2)===rgb565)painted++;
+  assert(painted>20,'microphone must be painted into the real RGB565 frame');
+  ui._simulator_touch(voice.rect.x+20,voice.rect.y+20,1);
+  ui._simulator_touch(voice.rect.x+20,voice.rect.y+20,0);
+  assert.deepEqual(actions,['edge_voice']);
+  assert.equal(ui.ccall('operit_ui_chat_draft','string',[],[]),'');
+  call('set_chat_draft',['string'],['你好']);call('submit_chat');
+  assert.deepEqual(actions,['edge_voice','edge_send']);
+  assert.equal(tap('edge_voice'),0);
+  call('chat_send_result',['number','string'],[1,'']);
+  assert.equal(tap('edge_voice'),1);assert.equal(actions.at(-1),'edge_voice');
+});

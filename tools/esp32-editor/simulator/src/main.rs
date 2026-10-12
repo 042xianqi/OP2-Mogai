@@ -335,6 +335,10 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
                     chatRoute.reset();
                 } else if action == "edge_history_older" || action == "edge_history_newer" {
                     edge_chat::moveHistory(action == "edge_history_older")?;
+                } else if action == "edge_voice" {
+                    // The test microphone is consumed through Core plugins;
+                    // a chat UI gesture must not bypass that authenticated path.
+                    return Err("语音输入未接入聊天\n请通过 Core 插件启动音频采集".to_string());
                 } else if action == "edge_new" {
                     edge_chat::newChat()?;
                 } else if let Some(chatId) = action.strip_prefix("edge_select:") {

@@ -525,6 +525,11 @@ fn runFirmware(
                         ui.actionError(&error);
                     }
                 }
+                "edge_voice" => {
+                    // This board has no registered audio source yet. Do not
+                    // pretend to record or start capture outside Core plugins.
+                    ui.actionError("当前设备未接入麦克风\n请先配置音频采集源");
+                }
                 "edge_send" => {
                     let draft = ui.chatDraft();
                     if let Err(error) = crate::edge_chat::send(draft) {
