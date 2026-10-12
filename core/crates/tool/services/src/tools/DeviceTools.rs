@@ -44,6 +44,24 @@ pub fn failure(message: impl Into<String>) -> JsToolCallResult {
     }
 }
 
+pub fn tool_from_request(request: &JsToolCallRequest) -> AITool {
+    AITool {
+        name: request.qualified_tool_name(),
+        parameters: request
+            .parameters
+            .iter()
+            .map(|(name, value)| ToolParameter {
+                name: name.clone(),
+                value: match value {
+                    serde_json::Value::Null => String::new(),
+                    serde_json::Value::String(value) => value.clone(),
+                    value => value.to_string(),
+                },
+            })
+            .collect(),
+    }
+}
+
 pub fn result_to_js(result: ToolResult) -> JsToolCallResult {
     let data = match result.result {
         ToolResultData::BinaryResultData(data) => JsToolCallResultData::Binary(data.value),
@@ -69,9 +87,6 @@ impl AIToolHandler {
         request: JsToolCallRequest,
         origin: &str,
     ) -> JsToolCallResult {
-        if request.device.is_some() {
-            return failure("Nested device metadata is not allowed at the receiver");
-        }
         let name = request.qualified_tool_name();
         if let Some((package, _)) = name.split_once(':') {
             let manager = self.getOrCreatePackageManager();
@@ -94,26 +109,46 @@ impl AIToolHandler {
         if self.getToolVisibility(&name) != Some(ToolRegistrationVisibility::PUBLIC) {
             return failure(format!("Tool is not public on target device: {name}"));
         }
-        let tool = AITool {
-            name,
-            parameters: request
-                .parameters
-                .into_iter()
-                .map(|(name, value)| ToolParameter {
-                    name,
-                    value: match value {
-                        serde_json::Value::Null => String::new(),
-                        serde_json::Value::String(value) => value,
-                        value => value.to_string(),
-                    },
-                })
-                .collect(),
-        };
+        let tool = tool_from_request(&request);
         operit_util::AppLogger::AppLogger::i(
             "DeviceTools",
             &format!("Execute {} from authenticated node {origin}", tool.name),
         );
         result_to_js(self.executeToolWithPermissions(tool).await)
+    }
+
+    fn device_tool_catalog(&self) -> JsToolCallResult {
+        let mut catalog = match JsExecutionHost::get_tool_catalog(self) {
+            Ok(catalog) => catalog,
+            Err(error) => return failure(error),
+        };
+        // The local catalog includes internal tools and disabled packages.
+        if let Some(tools) = catalog
+            .get_mut("tools")
+            .and_then(|value| value.as_array_mut())
+        {
+            tools.retain(|tool| {
+                if tool["source"] == "package" {
+                    tool["packageName"].as_str().is_some_and(|package| {
+                        self.getOrCreatePackageManager()
+                            .lock()
+                            .is_ok_and(|manager| {
+                                manager.isPackageEnabled(package)
+                                    || manager.getAvailableServerPackages().contains_key(package)
+                            })
+                    })
+                } else {
+                    tool["name"].as_str().is_some_and(|name| {
+                        self.getToolVisibility(name) == Some(ToolRegistrationVisibility::PUBLIC)
+                    })
+                }
+            });
+        }
+        JsToolCallResult {
+            success: true,
+            data: JsToolCallResultData::Value(catalog),
+            error: None,
+        }
     }
 }
 
@@ -158,43 +193,40 @@ impl DeviceToolService for AIToolHandler {
             })?;
         let mut handler = self.clone();
         let (sender, stream) = CoreEventStream::channel();
-        scheduler.scheduleHostRuntimeAsyncTask("device-tool-receiver", Box::new(move || Box::pin(async move {
-            let execution = async {
-                match invocation {
-                    Some(invocation) => handler.execute_device_tool(invocation, &origin_node_id).await,
-                    None => match JsExecutionHost::get_tool_catalog(&handler) {
-                        Ok(mut catalog) => {
-                            // The local catalog also describes internal tools; never export them.
-                            if let Some(tools) = catalog.get_mut("tools").and_then(|value| value.as_array_mut()) {
-                                tools.retain(|tool| {
-                                    if tool["source"] == "package" {
-                                        tool["packageName"].as_str().is_some_and(|package| {
-                                            handler.getOrCreatePackageManager().lock().is_ok_and(|manager|
-                                                manager.isPackageEnabled(package) || manager.getAvailableServerPackages().contains_key(package))
-                                        })
-                                    } else {
-                                        tool["name"].as_str().is_some_and(|name|
-                                            handler.getToolVisibility(name) == Some(ToolRegistrationVisibility::PUBLIC))
-                                    }
-                                });
+        scheduler
+            .scheduleHostRuntimeAsyncTask(
+                "device-tool-receiver",
+                Box::new(move || {
+                    Box::pin(async move {
+                        let execution = async {
+                            match invocation {
+                                Some(invocation) => {
+                                    handler
+                                        .execute_device_tool(invocation, &origin_node_id)
+                                        .await
+                                }
+                                None => handler.device_tool_catalog(),
                             }
-                            JsToolCallResult { success: true, data: JsToolCallResultData::Value(catalog), error: None }
+                        };
+                        tokio::select! {
+                            biased;
+                            _ = sender.closed() => {},
+                            result = execution => {
+                                if let Ok(value) = toCoreValue(result) {
+                                    let _ = sender.send(CoreEvent {
+                                        requestId: Some(request.requestId),
+                                        target: DEVICE_TOOL_TARGET.into(),
+                                        propertyName: request.propertyName,
+                                        kind: CoreEventKind::Completed,
+                                        value,
+                                    });
+                                }
+                            }
                         }
-                        Err(error) => failure(error),
-                    },
-                }
-            };
-            tokio::select! {
-                biased;
-                _ = sender.closed() => {},
-                result = execution => {
-                    if let Ok(value) = toCoreValue(result) {
-                        let _ = sender.send(CoreEvent {requestId: Some(request.requestId), target: DEVICE_TOOL_TARGET.into(),
-                            propertyName: request.propertyName, kind: CoreEventKind::Completed, value});
-                    }
-                }
-            }
-        }))).map_err(|error| CoreLinkError::internal(error.to_string()))?;
+                    })
+                }),
+            )
+            .map_err(|error| CoreLinkError::internal(error.to_string()))?;
         Ok(stream)
     }
 }

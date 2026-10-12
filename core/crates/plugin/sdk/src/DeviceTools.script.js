@@ -28,6 +28,15 @@ Tools.device = __operitToolPkgApi.method().since("2.0.0", function(nodeId, optio
         return target;
     }
     var target = namespace(__operitCanonicalTools);
+    function port(name) {
+        return {execute: function(interfaceInfo, args) {
+            if (arguments.length > 2) return Promise.reject(new TypeError("Hardware calls take interfaceInfo and args; select the node with Tools.device"));
+            return __operitDeviceToolCall(nodeId, "default", name,
+                {interface_info: interfaceInfo, args: args === undefined ? {} : args}, context.options, "port");
+        }};
+    }
+    target.Edge = port("edge_execute");
+    target.Io = port("io_execute");
     target.call = function(name, params) {
         if (typeof name !== "string" || !name.trim()) return Promise.reject(new TypeError("Tool name is required"));
         return __operitDeviceToolCall(nodeId, "default", name, params, context.options);

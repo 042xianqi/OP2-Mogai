@@ -68,15 +68,21 @@ test('nested namespaces and version-gated Chat retain the selected device', asyn
   assert.equal(requests[0][3].action, 'get');
 });
 
-test('static Edge and Io namespaces retain the selected Core device', async () => {
+test('hardware device views use one selected node and remove the old global APIs', async () => {
   const {context, requests} = runtime();
-  await vm.runInContext(`Tools.device('desktop').Edge.execute('edge-node', {id:'probe'}, {value:1})`, context);
-  await vm.runInContext(`Tools.device('phone').Io.execute('io-node', {id:'probe'}, {})`, context);
-  assert.equal(requests[0][4].nodeId, 'desktop');
-  assert.equal(requests[1][4].nodeId, 'phone');
+  assert.equal(context.Tools.Edge, undefined);
+  assert.equal(context.Tools.Io, undefined);
+  await vm.runInContext(`Tools.device('edge-node').Edge.execute({pluginId:'device.status',action:'read'}, {value:1})`, context);
+  await vm.runInContext(`Tools.device('io-node').Io.execute({port:'gpio',operation:'read'}, {pin:2})`, context);
+  assert.equal(requests[0][4].nodeId, 'edge-node');
+  assert.equal(requests[1][4].nodeId, 'io-node');
+  assert.equal(requests[0][4].action, 'port');
+  assert.equal(requests[1][4].action, 'port');
   assert.equal(requests[0][2], 'edge_execute');
   assert.equal(requests[1][2], 'io_execute');
-  assert.equal(requests[0][3].node_id, 'edge-node');
+  assert.equal(requests[0][3].node_id, undefined);
+  await assert.rejects(vm.runInContext(`Tools.device('edge-node').Edge.execute('second-node', {}, {})`, context), /select the node/);
+  assert.equal(requests.length, 2);
 });
 
 test('package names and catalog operations use the device transport', async () => {

@@ -979,6 +979,7 @@ impl CoreNodeRouter {
         routeKind: RoutedCoreRequestKind,
         originNodeId: String,
     ) -> CoreCallResponse {
+        let retry = canRetryRouteTarget(&request.target);
         let requestId = request.requestId.clone();
         let route = match if routeKind == RoutedCoreRequestKind::SpaceRoute {
             self.initialSpaceRouteWithOrigin(targetNodeId, request, originNodeId)
@@ -1000,7 +1001,7 @@ impl CoreNodeRouter {
                 .result
                 .as_ref()
                 .err()
-                .map(isRouteUnavailableError)
+                .map(|error| retry && isRouteUnavailableError(error))
                 .unwrap_or(false)
             {
                 excludedPeerNodeIds.insert(peerNodeId);
@@ -1192,13 +1193,14 @@ impl CoreNodeRouter {
         request: CoreWatchRequest,
         originNodeId: String,
     ) -> Result<CoreEventStream, CoreLinkError> {
+        let retry = canRetryRouteTarget(&request.target);
         let route = self.initialRouteWithOrigin(targetNodeId, request, originNodeId)?;
         let mut excludedPeerNodeIds = BTreeSet::new();
         loop {
             let (peer, peerNodeId, forwardedRoute) =
                 self.forwardRouteAvoiding(None, &excludedPeerNodeIds, route.clone())?;
             match peer.watch(&peerNodeId, forwardedRoute).await {
-                Err(error) if isRouteUnavailableError(&error) => {
+                Err(error) if retry && isRouteUnavailableError(&error) => {
                     excludedPeerNodeIds.insert(peerNodeId);
                 }
                 result => return result,
@@ -2104,6 +2106,12 @@ fn routeTtl(space: &CoreSpace) -> Result<u32, CoreLinkError> {
         .map_err(|_| CoreLinkError::new("SPACE_TOO_LARGE", "Space member count exceeds u32"))
 }
 
+/// A missing ACK or watch-open reply does not prove a tool/firmware action never ran.
+/// Resolve the normal route once; never submit these operations via another next hop.
+fn canRetryRouteTarget(target: &str) -> bool {
+    !matches!(target, DEVICE_TOOL_TARGET | "edge.plugins" | "edge.deviceIo")
+}
+
 /// Returns whether a routed operation failed before reaching its selected device.
 #[allow(non_snake_case)]
 fn isRouteUnavailableError(error: &CoreLinkError) -> bool {
@@ -2171,6 +2179,7 @@ impl CoreNodeRouter {
         previousNodeId: String,
         request: RoutedCoreRequest<CoreCallRequest>,
     ) -> CoreCallResponse {
+        let retry = canRetryRouteTarget(&request.payload.target);
         let requestId = request.payload.requestId.clone();
         if request.payload.target.starts_with("core/server.") {
             return CoreCallResponse::err(requestId, CoreLinkError::new(
@@ -2265,7 +2274,7 @@ impl CoreNodeRouter {
                         .result
                         .as_ref()
                         .err()
-                        .map(isRouteUnavailableError)
+                        .map(|error| retry && isRouteUnavailableError(error))
                         .unwrap_or(false)
                     {
                         excludedPeerNodeIds.insert(peerNodeId);
@@ -2326,6 +2335,7 @@ impl CoreNodeRouter {
         previousNodeId: String,
         request: RoutedCoreRequest<CoreWatchRequest>,
     ) -> Result<CoreEventStream, CoreLinkError> {
+        let retry = canRetryRouteTarget(&request.payload.target);
         // 节点控制 Service 是本机 Proxy 表面；远端只能进入业务路由。
         if request.payload.target.starts_with("core/server.") {
             return Err(CoreLinkError::new("LOCAL_MANAGEMENT_ONLY", "Node management is only available to the local application"));
@@ -2373,7 +2383,7 @@ impl CoreNodeRouter {
                 request.clone(),
             )?;
             match peer.watch(&peerNodeId, forwardedRequest).await {
-                Err(error) if isRouteUnavailableError(&error) => {
+                Err(error) if retry && isRouteUnavailableError(&error) => {
                     excludedPeerNodeIds.insert(peerNodeId);
                 }
                 result => return result,

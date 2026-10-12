@@ -38,6 +38,8 @@ pub struct JsDeviceToolCall {
 pub enum JsDeviceToolAction {
     #[default]
     Execute,
+    /// Executes a firmware-declared hardware port on the selected device.
+    Port,
     Catalog,
     Cancel,
 }

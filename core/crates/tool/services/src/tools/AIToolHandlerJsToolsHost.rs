@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use operit_plugin_sdk::javascript::{JsExecutionHost, JsToolCallRequest, JsToolCallResultData};
 use operit_plugin_sdk::js_sdk::chat::*;
 use operit_plugin_sdk::js_sdk::files::*;
-use operit_plugin_sdk::js_sdk::edge::*;
 use operit_plugin_sdk::js_sdk::memory::*;
 use operit_plugin_sdk::js_sdk::network::*;
 use operit_plugin_sdk::js_sdk::results::*;

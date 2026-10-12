@@ -6,7 +6,7 @@
  */
 
 // Import types that will be used in global declarations
-import { Edge as EdgeType, Io as IoType } from './edge';
+import { DeviceEdge, DeviceIo } from './edge';
 import { ToolReturnType, ToolCatalogEntry, ToolCatalog, DeviceToolOptions } from './core';
 import {
     JavaBridgeApi as JavaBridgeApiType,
@@ -285,8 +285,8 @@ declare global {
         SoftwareSettings: typeof SoftwareSettingsType;
         Chat: typeof ChatType;
         Memory: typeof MemoryType;
-        Edge: typeof EdgeType;
-        Io: typeof IoType;
+        Edge: DeviceEdge;
+        Io: DeviceIo;
         call<T extends string>(name: T, params?: Record<string, unknown>): Promise<ToolReturnType<T>>;
         catalog(): Promise<ToolCatalog>;
         /** Cancels this view's pending calls; subsequent calls remain available. */
@@ -303,8 +303,6 @@ declare global {
         UI: typeof UIType;
         Chat: typeof ChatType;
         Memory: typeof MemoryType;
-        Edge: typeof EdgeType;
-        Io: typeof IoType;
     };
 
     /** Lowercase alias of the existing Core plugin Tools object. */
