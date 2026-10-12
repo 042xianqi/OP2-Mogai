@@ -55,7 +55,7 @@ let pendingSend: string | undefined;
 let latestDeviceState: DeviceState | null = null;
 const composer = document.createElement('form');
 composer.className = 'host-composer';
-composer.innerHTML = '<label>电脑键盘输入（支持中文输入法）<input name="message" maxlength="120" autocomplete="off" placeholder="输入后发送到屏幕中的当前对话"></label><button type="submit">发送</button><label class="image-picker">发送图片（PNG/JPEG，≤512 KiB）<input id="host-image" type="file" accept="image/png,image/jpeg"></label><output aria-live="polite"></output>';
+composer.innerHTML = '<label><input name="message" aria-label="消息" maxlength="120" autocomplete="off" placeholder="输入后发送到屏幕中的当前对话"></label><button type="submit">发送</button><label class="image-picker">发送图片（PNG/JPEG，≤512 KiB）<input id="host-image" type="file" accept="image/png,image/jpeg"></label><output aria-live="polite"></output>';
 stage.after(composer);
 const hostInput = composer.querySelector<HTMLInputElement>('input')!;
 const hostStatus = composer.querySelector<HTMLOutputElement>('output')!;
