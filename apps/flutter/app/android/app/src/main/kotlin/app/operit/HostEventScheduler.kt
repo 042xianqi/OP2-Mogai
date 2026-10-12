@@ -8,6 +8,7 @@ import android.content.Intent
 import android.net.Uri
 import android.util.Log
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 
 internal data class AndroidHostEventSchedule(
@@ -34,17 +35,19 @@ internal data class AndroidHostEventSchedule(
         .put("nextFireAtMillis", nextFireAtMillis)
 
     companion object {
-        /** Decodes and validates one schedule command received from Core. */
-        fun fromCommand(value: JSONObject, nowMillis: Long): AndroidHostEventSchedule {
-            val scheduleId = value.getString("scheduleId")
-            require(scheduleId.isNotBlank()) { "host event scheduleId is required" }
-            val kind = value.getString("kind")
+        /** Shared configuration rules; [source] names where the schedule came from in error messages. */
+        private fun requireValidConfiguration(
+            scheduleId: String,
+            kind: String,
+            delayMs: Long,
+            intervalMs: Long?,
+            source: String,
+        ) {
+            require(scheduleId.isNotBlank()) { "$source scheduleId is required" }
             require(kind == "timer" || kind == "interval") {
-                "host event schedule kind must be timer or interval"
+                "$source schedule kind must be timer or interval"
             }
-            val delayMs = value.getLong("delayMs")
-            require(delayMs > 0L) { "host event schedule delayMs must be positive" }
-            val intervalMs = if (value.isNull("intervalMs")) null else value.getLong("intervalMs")
+            require(delayMs > 0L) { "$source schedule delayMs must be positive" }
             if (kind == "timer") {
                 require(intervalMs == null) { "timer schedule must not define intervalMs" }
             }
@@ -53,6 +56,15 @@ internal data class AndroidHostEventSchedule(
                     "interval schedule intervalMs must be positive"
                 }
             }
+        }
+
+        /** Decodes and validates one schedule command received from Core. */
+        fun fromCommand(value: JSONObject, nowMillis: Long): AndroidHostEventSchedule {
+            val scheduleId = value.getString("scheduleId")
+            val kind = value.getString("kind")
+            val delayMs = value.getLong("delayMs")
+            val intervalMs = if (value.isNull("intervalMs")) null else value.getLong("intervalMs")
+            requireValidConfiguration(scheduleId, kind, delayMs, intervalMs, "host event")
             return AndroidHostEventSchedule(
                 scheduleId = scheduleId,
                 kind = kind,
@@ -62,14 +74,29 @@ internal data class AndroidHostEventSchedule(
             )
         }
 
-        /** Decodes one schedule persisted by the Android host. */
+        /**
+         * Decodes one schedule persisted by the Android host.
+         * Storage is validated with the same rules as incoming commands: corrupt data is
+         * rejected here explicitly instead of surfacing later as a swallowed failure.
+         */
         fun fromStored(value: JSONObject): AndroidHostEventSchedule {
+            val scheduleId = value.getString("scheduleId")
+            val kind = value.getString("kind")
+            val delayMs = value.getLong("delayMs")
+            val intervalMs = if (value.isNull("intervalMs")) null else value.getLong("intervalMs")
+            val nextFireAtMillis = value.getLong("nextFireAtMillis")
+            requireValidConfiguration(scheduleId, kind, delayMs, intervalMs, "stored host event")
+            // Commands can never produce a negative instant; a stored one is corrupt storage.
+            // Reject it here, before the rescheduler or the Core payload sees it.
+            require(nextFireAtMillis >= 0L) {
+                "stored host event schedule nextFireAtMillis must not be negative"
+            }
             return AndroidHostEventSchedule(
-                scheduleId = value.getString("scheduleId"),
-                kind = value.getString("kind"),
-                delayMs = value.getLong("delayMs"),
-                intervalMs = if (value.isNull("intervalMs")) null else value.getLong("intervalMs"),
-                nextFireAtMillis = value.getLong("nextFireAtMillis"),
+                scheduleId = scheduleId,
+                kind = kind,
+                delayMs = delayMs,
+                intervalMs = intervalMs,
+                nextFireAtMillis = nextFireAtMillis,
             )
         }
     }
@@ -122,7 +149,9 @@ object AndroidHostEventScheduler {
             if (schedule.kind == "timer") {
                 schedules.remove(scheduleId)
             } else {
-                val intervalMs = requireNotNull(schedule.intervalMs)
+                val intervalMs = requireNotNull(schedule.intervalMs) {
+                    "stored interval schedule ${schedule.scheduleId} is missing intervalMs"
+                }
                 val nextFireAtMillis = nextIntervalTime(
                     schedule.nextFireAtMillis,
                     intervalMs,
@@ -250,8 +279,44 @@ class HostEventScheduleReceiver : BroadcastReceiver() {
                 pendingResult.finish()
                 return
             }
-            val schedule = AndroidHostEventScheduler.consumeFire(context, scheduleId)
+            val schedule = try {
+                AndroidHostEventScheduler.consumeFire(context, scheduleId)
+            } catch (error: Exception) {
+                // Classify the failure explicitly: malformed input, interval overflow,
+                // corrupt storage and storage write failure are distinguishable in the
+                // log instead of collapsing into one generic "dropped broadcast" line.
+                when (error) {
+                    is IllegalArgumentException -> Log.e(
+                        LOG_TAG,
+                        "Rejected malformed host event schedule (scheduleId=$scheduleId); broadcast dropped",
+                        error,
+                    )
+                    is ArithmeticException -> Log.e(
+                        LOG_TAG,
+                        "Interval overflow while rescheduling (scheduleId=$scheduleId); schedule not re-armed, broadcast dropped",
+                        error,
+                    )
+                    is JSONException -> Log.e(
+                        LOG_TAG,
+                        "Corrupt stored host event schedule (scheduleId=$scheduleId); broadcast dropped",
+                        error,
+                    )
+                    is IllegalStateException -> Log.e(
+                        LOG_TAG,
+                        "Host event schedule storage failed (scheduleId=$scheduleId); broadcast dropped",
+                        error,
+                    )
+                    else -> Log.e(
+                        LOG_TAG,
+                        "Host event schedule dispatch failed (scheduleId=$scheduleId); broadcast dropped",
+                        error,
+                    )
+                }
+                pendingResult.finish()
+                return
+            }
             if (schedule == null) {
+                Log.w(LOG_TAG, "No stored host event schedule for scheduleId=$scheduleId; dropping broadcast")
                 pendingResult.finish()
                 return
             }
@@ -276,7 +341,7 @@ class HostEventScheduleReceiver : BroadcastReceiver() {
                     pendingResult.finish()
                 }
             }
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
             Log.e(LOG_TAG, "Host event schedule dispatch failed; dropping broadcast", error)
             pendingResult.finish()
         }

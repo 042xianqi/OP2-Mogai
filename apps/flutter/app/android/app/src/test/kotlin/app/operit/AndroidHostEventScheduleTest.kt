@@ -1,0 +1,123 @@
+package app.operit
+
+import org.json.JSONException
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * JVM unit tests for the three bad-input classes named in the upstream review:
+ * illegal interval, integer overflow and corrupt storage.
+ *
+ * These cover the parse/validation layer (fromCommand / fromStored), where the
+ * explicit rejection now happens; the receiver-side log classification needs an
+ * Android runtime and is not covered here.
+ */
+class AndroidHostEventScheduleTest {
+    private fun command(kind: String, delayMs: Long, intervalMs: Any?): JSONObject =
+        JSONObject()
+            .put("scheduleId", "hook-1")
+            .put("kind", kind)
+            .put("delayMs", delayMs)
+            .put("intervalMs", intervalMs ?: JSONObject.NULL)
+
+    private fun stored(kind: String, delayMs: Long, intervalMs: Any?, nextFireAtMillis: Long): JSONObject =
+        JSONObject()
+            .put("scheduleId", "hook-1")
+            .put("kind", kind)
+            .put("delayMs", delayMs)
+            .put("intervalMs", intervalMs ?: JSONObject.NULL)
+            .put("nextFireAtMillis", nextFireAtMillis)
+
+    // --- happy path: valid schedules still parse, and storage round-trips ---
+
+    @Test
+    fun validTimerCommandParses() {
+        val schedule = AndroidHostEventSchedule.fromCommand(command("timer", 1000L, null), 100L)
+        assertEquals("hook-1", schedule.scheduleId)
+        assertEquals(1100L, schedule.nextFireAtMillis)
+    }
+
+    @Test
+    fun storedScheduleRoundTripsThroughJson() {
+        val original = AndroidHostEventSchedule.fromCommand(command("interval", 1000L, 5000L), 100L)
+        val decoded = AndroidHostEventSchedule.fromStored(original.toJson())
+        assertEquals(original, decoded)
+    }
+
+    // --- bad input 1: illegal interval (rejected on both entry paths) ---
+
+    @Test
+    fun commandRejectsNonPositiveInterval() {
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            AndroidHostEventSchedule.fromCommand(command("interval", 1000L, 0L), 0L)
+        }
+        assertTrue(error.message!!.contains("interval"))
+    }
+
+    @Test
+    fun storedRejectsNonPositiveInterval() {
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            AndroidHostEventSchedule.fromStored(stored("interval", 1000L, -5L, 42L))
+        }
+        assertTrue(error.message!!.contains("interval"))
+    }
+
+    @Test
+    fun storedRejectsNegativeDelay() {
+        assertThrows(IllegalArgumentException::class.java) {
+            AndroidHostEventSchedule.fromStored(stored("timer", -1L, null, 42L))
+        }
+    }
+
+    // --- bad input 2: integer overflow is propagated explicitly, not swallowed ---
+
+    @Test
+    fun commandOverflowPropagatesAsArithmeticException() {
+        // nowMillis + delayMs overflows Long.MAX_VALUE
+        assertThrows(ArithmeticException::class.java) {
+            AndroidHostEventSchedule.fromCommand(command("timer", 1000L, null), Long.MAX_VALUE - 1)
+        }
+    }
+
+    // --- bad input 3: corrupt storage is rejected explicitly at decode time ---
+
+    @Test
+    fun storedRejectsUnknownKind() {
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            AndroidHostEventSchedule.fromStored(stored("reboot", 1000L, null, 42L))
+        }
+        assertTrue(error.message!!.contains("kind"))
+    }
+
+    @Test
+    fun storedRejectsMissingField() {
+        assertThrows(JSONException::class.java) {
+            AndroidHostEventSchedule.fromStored(JSONObject())
+        }
+    }
+
+    @Test
+    fun storedTimerRejectsDefinedInterval() {
+        assertThrows(IllegalArgumentException::class.java) {
+            AndroidHostEventSchedule.fromStored(stored("timer", 1000L, 5000L, 42L))
+        }
+    }
+
+    @Test
+    fun storedIntervalRejectsMissingInterval() {
+        assertThrows(IllegalArgumentException::class.java) {
+            AndroidHostEventSchedule.fromStored(stored("interval", 1000L, null, 42L))
+        }
+    }
+
+    @Test
+    fun storedRejectsNegativeNextFireAtMillis() {
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            AndroidHostEventSchedule.fromStored(stored("interval", 1000L, 5000L, -1L))
+        }
+        assertTrue(error.message!!.contains("nextFireAtMillis"))
+    }
+}
