@@ -732,11 +732,31 @@ async fn outbound_only_hosts_pair_over_http_and_websocket() {
             let reverse = serverPeer.startPairing(PeerEndpoint { nodeId: clientRouter.localNodeId(), address: endpoint.clone() },
                 transport, Some("required-test-token")).await.unwrap_err();
             assert_eq!(reverse.code, "PEER_ALREADY_PAIRED");
-            assert!(server.pairingPrompts().unwrap().is_empty());
+            // Address-only discovery learned the identity after starting a new
+            // challenge. Receiver now allows challenges for retained pairings;
+            // without a fresh code this must not alter the stored credential.
+            assert_eq!(server.pairingPrompts().unwrap().len(), 1);
             let clientStore = PeerStateStore::new(clientRouter.localCore.runtimeStorageHost());
             let serverStore = PeerStateStore::new(serverRouter.localCore.runtimeStorageHost());
             assert_eq!(clientStore.records::<crate::PeerStateStore::StoredOutbound>(operit_util::RuntimeStorageLayout::RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH).unwrap().len(), 1);
             assert_eq!(serverStore.records::<crate::PeerStateStore::StoredInbound>(operit_util::RuntimeStorageLayout::RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH).unwrap().len(), 1);
+            // One-sided unpair and a new code replace the receiver's credential
+            // over both HTTP and WebSocket, without deleting the remote record
+            // until confirmation succeeds.
+            let old = serverStore.records::<crate::PeerStateStore::StoredInbound>(operit_util::RuntimeStorageLayout::RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH).unwrap();
+            clientPeer.removePairedPeer(&serverRouter.localNodeId()).await.unwrap();
+            assert_eq!(serverPeer.pairedPeers().unwrap().len(), 1);
+            let fresh = client.startPairing(serverRouter.localNodeId(), endpoint.clone(), transport,
+                Some("required-test-token".into())).await.unwrap();
+            let code = server.pairingPrompts().unwrap().into_iter()
+                .find(|prompt| prompt.pairingId == fresh.pairingId).unwrap().confirmationCode;
+            assert!(old.keys().all(|id| serverStore.records::<crate::PeerStateStore::StoredInbound>(operit_util::RuntimeStorageLayout::RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH).unwrap().contains_key(id)));
+            client.finishPairing(fresh.pairingId.clone(), code).await.unwrap();
+            let updated = serverStore.records::<crate::PeerStateStore::StoredInbound>(operit_util::RuntimeStorageLayout::RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH).unwrap();
+            assert_eq!(updated.len(), 1);
+            assert!(updated.contains_key(&fresh.pairingId));
+            assert!(old.keys().all(|id| !updated.contains_key(id)));
+            assert!(server.pairingPrompts().unwrap().is_empty());
             drop((promptFlow, clientPromptFlow, overview));
             clientPeer.stop().await.unwrap();
             let restored = HostRuntimePeerService::new(clientHost.clone(), &clientRouter,

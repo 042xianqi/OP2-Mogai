@@ -643,7 +643,8 @@ impl HostRuntimePeerService {
             crypto::verify(&key, &context, b"client", &authorization.keyProof)?;
             if hello.purpose == "start" {
                 let _guard = self.state.mutation.lock().unwrap();
-                self.ensureDeviceUnpaired(&hello.nodeId)?;
+                // The initiator may have forgotten this one-way pairing. A new
+                // challenge is allowed, but must not revoke the old credential.
                 self.state.store.putPending(RUNTIME_LINK_ACCESS_PENDING_PAIRINGS_PATH, &id, &Pending {
                     version: PAIRING_SERVICE_VERSION, id: id.clone(), clientDeviceId: hello.nodeId.clone(), peerNodeId: self.state.nodeId.clone(),
                     endpoint: String::new(), transport: raw.transport(), info: hello.info.clone(),
@@ -659,16 +660,14 @@ impl HostRuntimePeerService {
         if hello.purpose == "start" { return Ok(()); }
         let channel = Channel::new(raw.clone(), &key, &context, false)?;
         channel.setPeerDuplex(hello.duplex);
-        self.learnObservedEndpoint(&hello.nodeId, raw.remoteAddress());
-        self.track(&hello.nodeId, &raw);
         if hello.purpose == "finish" {
             let Some(PeerMessage::Request(CoreLinkRequest::Call(request))) = channel.receive().await? else { return Err(error("Encrypted confirmation Call required")); };
             if request.target != HANDSHAKE || request.methodName != "finish" { return Err(error("Confirmation required before business")); }
             let proof: Vec<u8> = fromCoreValue(request.args).map_err(|e| error(e.to_string()))?;
+            let mut replacing = false;
             let result = (|| {
                 let _guard = self.state.mutation.lock().unwrap();
                 let mut pending = self.pending(true, &id)?;
-                self.ensureDeviceUnpaired(&hello.nodeId)?;
                 if pending.attempts >= 5 { return Err(error("Confirmation attempt limit reached")); }
                 pending.attempts += 1;
                 self.state.store.putRecord(RUNTIME_LINK_ACCESS_PENDING_PAIRINGS_PATH, &id, &pending).map_err(error)?;
@@ -676,16 +675,32 @@ impl HostRuntimePeerService {
                 crypto::verify(&pending.root, id.as_bytes(), code.as_bytes(), &proof)?;
                 let record = StoredInbound { deviceId: hello.nodeId.clone(), deviceInfo: hello.info.clone(),
                     pairingServiceVersion: PAIRING_SERVICE_VERSION, sessionSecret: BASE64.encode(&pending.root) };
+                // Only a verified fresh code can replace this device's old
+                // credentials (both directions), grants and pending consent.
+                // Membership/policy are not changed. Cross-file writes are not
+                // atomic: on any failure close old sessions and report failure.
+                replacing = true;
+                self.state.store.removePairedPeer(&hello.nodeId).map_err(error)?;
+                self.removeSpaceChannels(&hello.nodeId)?;
                 self.state.store.putRecord(RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH, &id, &record).map_err(error)?;
                 self.state.store.deleteRecord(RUNTIME_LINK_ACCESS_PENDING_PAIRINGS_PATH, &id).map_err(error)?;
-                // The receiver just verified a live authenticated Mac too. Do not
-                // wait for Mac to make a subsequent application call to show it online.
-                self.state.active.lock().unwrap().insert(hello.nodeId.clone());
-                self.changed(); Ok(CoreValue::Null)
+                Ok(CoreValue::Null)
             })();
+            if replacing {
+                // The confirmation channel is intentionally not tracked yet;
+                // disconnect only old business channels before acknowledging.
+                self.disconnectPeer(&hello.nodeId).await?;
+                if result.is_ok() {
+                    // A verified confirmation also proves this peer is online.
+                    self.state.active.lock().unwrap().insert(hello.nodeId.clone());
+                    self.changed();
+                }
+            }
             channel.send(PeerMessage::Response(CoreLinkResponse::Call(CoreCallResponse { requestId: request.requestId, result }))).await?;
             return Ok(());
         }
+        self.learnObservedEndpoint(&hello.nodeId, raw.remoteAddress());
+        self.track(&hello.nodeId, &raw);
         if raw.requiresSessionReuse() && hello.purpose == "session" {
             self.startDuplex(&channel, &hello.nodeId)?;
             self.state.sharedSessions.lock().unwrap().insert(hello.nodeId.clone(), channel.clone());

@@ -51,7 +51,9 @@ pub trait RuntimePeerService: Send + Sync {
 
     /// 按配对标识取出本地待确认状态，通过同一 Link Call 流程提交确认码。
     /// token（如果有）已通过也不能跳过配对码；禁止旧 bootstrap/autoBootstrap 捷径。
-    /// 授权方向分别记录；一次配对不自动创建反向授权，按设备撤销时则同时清除两边。
+    /// 授权方向分别记录；一次配对不自动创建反向授权，本地撤销清除本机两个方向。
+    /// 单向解除后允许重新向仍有旧记录的接收端配对；仅新配对码验证成功后，
+    /// 接收端替换该设备的旧凭证并关闭旧会话，不改变 Space 成员或审批规则。
     /// 必要时使用已保存的端点和传输方式重新连接；双方身份与证明校验通过后才保存配对。
     /// 配对成功不等于获得 Space 成员资格，也不等于获得任意业务调用权限。
     async fn finishPairing(
@@ -136,7 +138,7 @@ pub trait RuntimePeerService: Send + Sync {
     async fn disconnectPeer(&self, peerNodeId: &str) -> Result<(), CoreLinkError>;
 
     /// 按设备撤销全部入站/出站授权、所有传输渠道及关联凭证；不让用户选择方向。
-    /// 这是需要本地管理权限的操作，不属于匿名配对入口。
+    /// 这是需要本地管理权限的单向本地操作，不通知对端，不属于匿名配对入口。
     async fn removePairedPeer(&self, peerNodeId: &str) -> Result<(), CoreLinkError>;
 
     /// 同步撤销这些设备的配对凭证（入站/出站授权与关联会话），不等待关闭在用渠道。

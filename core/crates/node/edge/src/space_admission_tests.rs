@@ -638,6 +638,96 @@ mod core_edge {
         outcome.unwrap();
     }
 
+    #[tokio::test]
+    async fn one_sided_unpair_allows_code_verified_replacement_without_space_admission() {
+        const RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH: &str = "runtime/link_access/inbound_sessions.preferences.json";
+        const RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH: &str = "runtime/link_access/outbound_sessions.preferences.json";
+        let _guard = TEST_LOCK.lock().await;
+        for core_initiates in [true, false] {
+            for reverse_original in [false, true] {
+                let core = core_node();
+                let edge = fresh_edge();
+                start(&core, &edge).await;
+                let outcome = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                    let core_id = core.router.localNodeId();
+                    let edge_id = edge.service.localNodeId();
+                    let (source, target, source_id, target_id, target_storage) = if core_initiates {
+                        (&core.peers, &edge.peers, core_id.clone(), edge_id.clone(), &edge.storage)
+                    } else {
+                        (&edge.peers, &core.peers, edge_id.clone(), core_id.clone(), &core.storage)
+                    };
+                    if reverse_original {
+                        let source_storage = if core_initiates { &core.storage } else { &edge.storage };
+                        pair(target, source, source_storage, source_id.clone()).await;
+                    } else {
+                        pair(source, target, target_storage, target_id.clone()).await;
+                    }
+                    let stale_source_storage = reopened(if core_initiates { &core.storage } else { &edge.storage });
+                    let core_space = core.service.deviceSpace().unwrap();
+                    let edge_space = edge.service.spaceStore().space().unwrap();
+                    let credentials = |path: &str| -> BTreeMap<String, String> {
+                        serde_json::from_slice(&target_storage.readBytes(path).unwrap_or_else(|_| b"{}".to_vec())).unwrap()
+                    };
+                    let old_inbound = credentials(RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH);
+                    let old_outbound = credentials(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH);
+                    source.removePairedPeer(&target_id).await.unwrap();
+                    assert!(source.pairedPeers().unwrap().is_empty());
+                    assert_eq!(target.pairedPeers().unwrap().len(), 1, "unpair remains local-only");
+                    let config = PeerStateStore::new(target_storage.clone()).hostConfig().unwrap().unwrap();
+                    let begin = || source.startPairing(PeerEndpoint {
+                        nodeId: target_id.clone(), address: config.bindAddress.clone(),
+                    }, PeerTransport::Tcp, if config.token.is_empty() { None } else { Some(config.token.as_str()) });
+                    let cancelled = begin().await.unwrap();
+                    source.cancelPairing(&cancelled.pairingId).await.unwrap();
+                    assert!(source.finishPairing(&cancelled.pairingId, "123456").await.is_err());
+                    assert_eq!(credentials(RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH), old_inbound);
+                    assert_eq!(credentials(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH), old_outbound);
+                    let pending = begin().await.unwrap();
+                    let code = target.pairingPrompts().unwrap().into_iter()
+                        .find(|p| p.pairingId == pending.pairingId).unwrap().confirmationCode;
+                    let wrong = if code == "000000" { "111111" } else { "000000" };
+                    assert!(source.finishPairing(&pending.pairingId, wrong).await.is_err());
+                    assert_eq!(credentials(RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH), old_inbound);
+                    assert_eq!(credentials(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH), old_outbound);
+                    source.finishPairing(&pending.pairingId, &code).await.unwrap();
+                    let new_inbound = credentials(RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH);
+                    assert!(new_inbound.contains_key(&pending.pairingId));
+                    assert!(old_inbound.keys().filter(|k| k.as_str() != "__operit_preferences_schema_version")
+                        .all(|key| !new_inbound.contains_key(key)));
+                    assert!(credentials(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH).values()
+                        .all(|v| !v.contains(&source_id)));
+                    let peers = target.pairedPeers().unwrap();
+                    assert_eq!(peers.len(), 1);
+                    assert!(peers[0].inbound && !peers[0].outbound);
+                    assert!(target.pairingPrompts().unwrap().is_empty());
+                    assert!(source.finishPairing(&pending.pairingId, &code).await.is_err(), "no replay");
+                    assert_eq!(core.service.deviceSpace().unwrap(), core_space);
+                    assert_eq!(edge.service.spaceStore().space().unwrap(), edge_space);
+                    // A restarted copy of the previous initiator still holding
+                    // the old secret cannot authenticate after replacement.
+                    if !reverse_original {
+                        if core_initiates {
+                            let stale = core_node_with_storage(stale_source_storage);
+                            assert!(stale.service.requestDeviceSpaceJoin(edge_id.clone()).await.is_err());
+                            stale.peers.stop().await.unwrap();
+                        } else {
+                            let stale = edge_node(stale_source_storage);
+                            assert!(stale.service.requestDeviceSpaceJoin(core_id.clone()).await.is_err());
+                            stale.peers.stop().await.unwrap();
+                        }
+                    }
+                    let join = if core_initiates {
+                        core.service.requestDeviceSpaceJoin(edge_id).await.unwrap()
+                    } else { edge.service.requestDeviceSpaceJoin(core_id).await.unwrap() };
+                    assert_eq!(join.status, SpaceJoinStatus::Pending, "replacement is not Space approval");
+                }).await;
+                core.peers.stop().await.unwrap();
+                edge.peers.stop().await.unwrap();
+                outcome.unwrap();
+            }
+        }
+    }
+
     fn assert_no_replica(core: &CoreFixture, edge: &EdgeFixture) {
         assert!(
             core.application.0.lock().unwrap().is_empty(),

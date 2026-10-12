@@ -157,3 +157,20 @@ cargo test --manifest-path core/Cargo.toml -p operit-node-edge --lib rejoin
 cargo test --manifest-path core/Cargo.toml -p operit-node-edge --lib uncommitted_claim
 cargo test --manifest-path core/Cargo.toml -p operit-store --lib node_local_
 ```
+
+## One-sided unpair and pairing replacement
+
+`removePairedPeer` forgets only the local node's credentials (both authorization
+directions); it neither sends a remote unpair notice nor removes Space membership.
+The initiator must forget its own record before starting another pairing. A
+receiver retaining an old record now accepts a fresh pairing challenge for that
+node instead of rejecting it as already paired.
+
+Starting, cancelling, expiring or failing a code challenge never replaces the
+receiver's old credential. Only successful proof of the new six-digit code
+replaces the retained device's inbound/outbound credentials, invalidates scoped
+return grants and old pending consent, and disconnects old business sessions.
+The replacement uses the existing Link handshake and storage schema. It does
+not import membership or bypass Space approval/revocation checks. Cross-file
+persistence is not atomic: write failures are reported and old sessions closed;
+the user may need to restart the code-confirmed pairing after a storage error.
