@@ -24,10 +24,10 @@ export async function selectorEnvironment(t, configurationSettings = {}, runtime
   };
   const tools = { Files: disk.files, Storage: disk.storage, Chat: chat, Models: {
     /** Provides the labelled readonly real SDK-shaped model catalog, not character storage or CRUD. */
-    async listSummaries() { directoryCalls.push("models"); return plain(readonly.models); }
+    async listSummaries() { directoryCalls.push("models"); return { models: plain(readonly.models) }; }
   }, Tts: {
     /** Provides the labelled readonly TTS input required by the actual snapshot operation. */
-    async listConfigs() { directoryCalls.push("tts"); return plain(readonly.ttsConfigs); },
+    async listConfigs() { directoryCalls.push("tts"); return { configs: plain(readonly.ttsConfigs) }; },
     ...configurationSettings.Tts
   }, Catalog: {
     /** Provides explicitly labelled readonly tool sources without synthesizing a production policy result. */

@@ -1,4 +1,4 @@
-import type { ActivePrompt, JsonValue } from "./model";
+import type { ActivePrompt, JsonValue, Snapshot, Theme } from "./model";
 
 /** Identifies the two plugin-owned entity categories without exposing them to Core. */
 export type EntityKind = "card" | "group";
@@ -20,6 +20,8 @@ export type ScreenInput = ManageScreen | SelectScreen | PreviewScreen | EditScre
 export type PresentedScreen = Exclude<ScreenInput, ManageScreen>;
 /** Carries a known plugin screen input inside the generic host presentation envelope. */
 export interface ScreenPresentation<I extends PresentedScreen = PresentedScreen> { readonly requestId: string; readonly input: I }
+/** Supplies one authoritative initial screen response through the registered WebView bridge. */
+export interface ScreenBootstrap { readonly theme: Theme; readonly screen: CurrentScreen; readonly snapshot: Snapshot }
 /** Defines results interpreted by the plugin's consumer, not by the generic host. */
 export type ScreenResult =
   | { mode: "select"; selection: ActivePrompt }

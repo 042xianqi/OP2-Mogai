@@ -10,12 +10,12 @@ const root = new URL('../../core/crates/plugin/sdk/src/toolpkg/', import.meta.ur
 /** Extracts the exact production SDK string without building an application. */
 function embedded(name) { return readSdkScript(name); }
 /** Starts a genuine compiled SDK screen in an isolated JS session. */
-function session(source, { forbidCompilation = false } = {}) {
+function session(source, { forbidCompilation = false, captureLog = null } = {}) {
   const events = [];
   const nodes = new Map();
   let rootId;
   let revision = 0;
-  const context = vm.createContext({ console, module: { exports: {} },
+  const context = vm.createContext({ console: captureLog ? { ...console, log: captureLog } : console, module: { exports: {} },
     __operit_call_runtime_ref: {
       /** Receives each commit synchronously before the host polls command completion. */
       sendComposeResponse() { throw new Error("Fixture sink must be attached before execution"); }
@@ -347,4 +347,20 @@ test('state flush failures reject the owning action without publishing a success
   const finalBefore = s.events.length;
   await assert.rejects(s.action('edit', 9), /controlled state flush failure/);
   assert.equal(s.events.slice(finalBefore).some(event => Object.hasOwn(event, 'actionResult')), false);
+});
+
+
+test('pipeline diagnostics are opt-in and preserve the production retained response', () => {
+  const source = `module.exports.default = ctx => ctx.UI.Text({ text: 'measured content' });`;
+  const normalLogs = [], profiledLogs = [];
+  const normal = session(source, { captureLog: value => normalLogs.push(value) });
+  const profiled = session(source, { captureLog: value => profiledLogs.push(value) });
+  const first = normal.render();
+  const second = profiled.render({ __operit_profile_compose_stages: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(first)), JSON.parse(JSON.stringify(second)));
+  assert.equal(normalLogs.filter(line => line.includes('compose_pipeline_stage')).length, 0);
+  assert.ok(profiledLogs.some(line => line.includes('stage=js-render-sync')));
+  assert.ok(profiledLogs.some(line => line.includes('stage=js-retained-commit')));
+  assert.ok(profiledLogs.some(line => line.includes('stage=js-send-inclusive')));
+  assert.equal(Object.hasOwn(second, 'metrics'), false);
 });

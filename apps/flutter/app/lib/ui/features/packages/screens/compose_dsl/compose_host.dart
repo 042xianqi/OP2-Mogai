@@ -38,6 +38,7 @@ class _ComposeHost extends StatefulWidget {
 
 class _ComposeHostState extends State<_ComposeHost> {
   bool _hasDispatchedInitialOnLoad = false;
+  bool _initialOnLoadScheduled = false;
 
   /// Synchronizes widget state with the latest DSL node.
   @override
@@ -106,6 +107,7 @@ class _ComposeHostState extends State<_ComposeHost> {
       children: [
         _ComposeDslRenderer(
           node: tree,
+          onLoadHandledByHost: true,
           onAction: widget.onAction,
           onTextInput: widget.onTextInput,
           webViewHostContext: widget.webViewHostContext,
@@ -120,7 +122,10 @@ class _ComposeHostState extends State<_ComposeHost> {
 
   /// Runs initial loading once and measures its first subsequent content frame.
   void _dispatchRootOnLoad() {
-    if (_hasDispatchedInitialOnLoad || widget.loading || widget.error != null) {
+    if (_hasDispatchedInitialOnLoad ||
+        _initialOnLoadScheduled ||
+        widget.loading ||
+        widget.error != null) {
       return;
     }
     final rootNode = widget.renderResult?.tree;
@@ -131,8 +136,13 @@ class _ComposeHostState extends State<_ComposeHost> {
     if (rootOnLoadActionId == null) {
       return;
     }
+    _initialOnLoadScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted || _hasDispatchedInitialOnLoad) {
+      _initialOnLoadScheduled = false;
+      if (!mounted ||
+          _hasDispatchedInitialOnLoad ||
+          widget.loading ||
+          widget.error != null) {
         return;
       }
       final currentRootNode = widget.renderResult?.tree;
@@ -142,13 +152,14 @@ class _ComposeHostState extends State<_ComposeHost> {
       final currentRootOnLoadActionId = _actionId(
         currentRootNode.props['onLoad'],
       );
-      if (currentRootOnLoadActionId != rootOnLoadActionId) {
+      if (currentRootOnLoadActionId == null) {
         return;
       }
       _hasDispatchedInitialOnLoad = true;
       final watch = Stopwatch()..start();
       final owner = widget.webViewHostContext;
-      await widget.onAction(rootOnLoadActionId, null);
+      await widget.onAction(currentRootOnLoadActionId, null);
+      final actionMicros = watch.elapsedMicroseconds;
       if (!mounted || widget.error != null) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted ||
@@ -160,7 +171,9 @@ class _ComposeHostState extends State<_ComposeHost> {
         watch.stop();
         ClientLogger.i(
           'event=compose_onload_frame package=${owner.packageName} '
-          'context=${owner.executionContextKey} elapsedMs=${watch.elapsedMilliseconds}',
+          'context=${owner.executionContextKey} elapsedMs=${watch.elapsedMilliseconds} '
+          'actionMs=${(actionMicros / 1000).toStringAsFixed(3)} '
+          'frameWaitMs=${((watch.elapsedMicroseconds - actionMicros) / 1000).toStringAsFixed(3)}',
           tag: 'ToolPkgUiLauncher',
         );
       });

@@ -2,7 +2,8 @@ import type {
   Memory, MemoryGraphResult, MemorySettings, MemorySearchConfig, MemoryAutoSaveStatus, MemoryRebuildProgress, MemoryChat, Snapshot,
   Request, RequestResults, StoreValues, Theme,
 } from "../../src/model";
-import type { CurrentScreen, EntityKind, PresentationCancel, PresentationComplete, ScreenResult } from "./screens";
+import type { EntityKind, PresentationCancel, PresentationComplete, ScreenResult } from "./screens";
+import type { ScreenBootstrap } from "../../src/presentation";
 import type { GraphCamera, NodeSize, Point } from "../features/graph/layout";
 
 /** Describes actual service results used by this finite editor bridge. */
@@ -12,10 +13,8 @@ export type WebRequest<A extends WebAction> = Extract<Request, { action: A }>;
 
 /** Declares the existing WebView interface registered by the package's Compose host. */
 export interface CharacterMemoryBridge {
-  /** Reads the host Material palette without substituting a local theme. */
-  currentTheme(): Promise<Theme>;
-  /** Reads the exact input and request owned by this existing UiRoute instance. */
-  currentScreen(): Promise<CurrentScreen>;
+  /** Reads the actual palette, route input and fresh aggregate in one startup response. */
+  loadScreen(): Promise<ScreenBootstrap>;
   /** Returns an explicit completion event through the host's existing Compose action channel. */
   completeScreen(result: ScreenResult): Promise<PresentationComplete>;
   /** Returns an explicit cancellation event without modifying plugin records. */

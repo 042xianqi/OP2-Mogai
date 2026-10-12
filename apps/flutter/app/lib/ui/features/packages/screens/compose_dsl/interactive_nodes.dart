@@ -369,6 +369,7 @@ extension _ComposeInteractiveNodes on _ComposeDslRendererState {
                           onTextInput: onTextInput,
                           webViewHostContext: webViewHostContext,
                           splitMarkdownContent: splitMarkdownContent,
+                          dispatchOnLoad: widget.dispatchOnLoad,
                         ),
                       ..._slotChildren('content', useChildren: true),
                     ],
@@ -541,6 +542,7 @@ extension _ComposeInteractiveNodes on _ComposeDslRendererState {
       onTextInput: onTextInput,
       webViewHostContext: webViewHostContext,
       splitMarkdownContent: splitMarkdownContent,
+      dispatchOnLoad: widget.dispatchOnLoad,
       nodePath: '$nodePath:$name/0',
     );
   }
@@ -582,6 +584,7 @@ extension _ComposeInteractiveNodes on _ComposeDslRendererState {
         onTextInput: onTextInput,
         webViewHostContext: webViewHostContext,
         splitMarkdownContent: splitMarkdownContent,
+        dispatchOnLoad: widget.dispatchOnLoad,
         nodePath: '$nodePath:content/$index',
       ),
     );

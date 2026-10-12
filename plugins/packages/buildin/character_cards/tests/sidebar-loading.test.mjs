@@ -11,7 +11,7 @@ const context = chats => ({ input: { view: 'characters' }, chatSidebar: { chats,
 /** Exercises real registration, file initialization and catalog projection; only extension IO is adapted. */
 function sidebarPlugin(disk, readExtension) {
   return openPlugin({ ...disk, globals: { ...disk.globals, Tools: {
-    Files: disk.files, Storage: disk.storage, Chat: { readExtension },
+    Files: disk.files, Storage: disk.storage, Chat: { readExtension: async target => ({ extension: await readExtension(target) }) },
     // The sidebar must work without these unrelated management-page dependencies.
     ...Object.fromEntries(['Models', 'Tts', 'Theme', 'Catalog'].map(
       /** Rejects each unrelated domain directory if sidebar loading attempts to read it. */

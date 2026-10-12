@@ -5,6 +5,7 @@ import path from "node:path";
 import { selectorEnvironment } from "./selector-environment.mjs";
 import { composeNodes, keyedNode, mountRegisteredSelector } from "./selector-render.mjs";
 import { plain } from "./runtime.mjs";
+import { buildUiScreenScripts } from "../scripts/build.mjs";
 
 /** Creates the explicit plugin request used by the existing generic modal host, including global-null semantics. */
 function presentation(requestId, chatId, kind = "card", selected = null) { return { requestId, input: { mode: "select", chatId, kind, selected } }; }
@@ -56,10 +57,14 @@ test("registered native selector loads real records, avatars, current checks and
     /** Displays the native list's actual description without substituting a sample value. */
     node => node.type === "Text" && node.props.text === card.description,
   ).length, 1);
-  assert.equal(composeNodes(tree,
-    /** Verifies the real declared static image resource for genuinely avatar-free records. */
-    node => node.type === "Image" && typeof node.props.path === "string",
-  ).length, 1);
+  const deadline = Date.now() + 2000;
+  let avatars;
+  do {
+    avatars = composeNodes(ui.render().tree, node => node.type === "Image" && typeof node.props.path === "string");
+    if (avatars.length === 1) break;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  } while (Date.now() < deadline);
+  assert.equal(avatars.length, 1, "The default avatar resolves independently after the selector rows appear");
 });
 
 /** Exercises the actual SDK callback dispatch and waits for the one real namespace write before V1 completion. */
@@ -217,4 +222,25 @@ test("stale native selector row load and cancel actions cannot write or complete
   );
   await assert.rejects(ui.load(), /cannot change its owning presentation request/);
   assert.equal(runtime.calls.length, count); assert.equal(runtime.records.get("selector-chat").extension, null);
+});
+
+
+test("selector rows and actions are usable before default avatar resources resolve", async t => {
+  const runtime = await selectorEnvironment(t, {}, {}, await buildUiScreenScripts());
+  const open = runtime.openComposeRoute;
+  let complete;
+  const gate = new Promise(resolve => { complete = resolve; });
+  runtime.openComposeRoute = route => {
+    const page = open(route);
+    const original = page.context.ToolPkg.readResource;
+    page.context.ToolPkg.readResource = async (...args) => { await gate; return original(...args); };
+    return page;
+  };
+  const ui = mountRegisteredSelector(runtime, presentation("without-avatar-wait", "selector-chat"));
+  const loaded = await ui.load();
+  assert.ok(keyedNode(loaded.tree, "card:default"));
+  assert.equal(composeNodes(loaded.tree, node => node.type === "CircularProgressIndicator").length, 0);
+  assert.equal(composeNodes(loaded.tree, node => node.type === "Icon" && node.props.name === "Person").length, 1);
+  complete();
+  await ui.dispatch(loaded.tree.props.onDismissRequest);
 });

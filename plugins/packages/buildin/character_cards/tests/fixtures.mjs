@@ -45,7 +45,7 @@ export function installBrowserFixture(data) {
   window.testProfile = "# 用户资料\n\n喜欢安静的旅行。";
   window.CharacterMemoryHost = {
     /** Supplies the explicit browser-test theme without proving host integration. */
-    async currentTheme() { return copy(data.theme); },
+    async loadScreen() { return { theme: copy(data.theme), screen: { requestId: null, input: { mode: "manage" } }, snapshot: await this.request({ action: "snapshot" }) }; },
     /** Implements only the finite test operations asserted by the browser suite. */
     async request(operation) {
       window.testCalls.push(copy(operation));

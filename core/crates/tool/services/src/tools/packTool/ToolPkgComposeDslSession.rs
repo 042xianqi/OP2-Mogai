@@ -89,6 +89,7 @@ struct ComposeSessionState {
     closed: AtomicBool,
     cancellation: Notify,
     commandOwner: AtomicBool,
+    profileStages: AtomicBool,
 }
 
 /// Owns an application-level composition session over unchanged CoreLink streams.
@@ -127,7 +128,7 @@ impl ToolPkgComposeDslSession {
         let state = Arc::new(ComposeSessionState {
             id: uuid::Uuid::new_v4().to_string(), engine, resources,
             sender: Mutex::new(Some(sender)), receiver: Mutex::new(Some(receiver)),
-            closed: AtomicBool::new(false), cancellation: Notify::new(), commandOwner: AtomicBool::new(false),
+            closed: AtomicBool::new(false), cancellation: Notify::new(), commandOwner: AtomicBool::new(false), profileStages: AtomicBool::new(false),
         });
         sessionRegistry().lock().expect("Compose registry mutex poisoned").insert(state.id.clone(), Arc::downgrade(&state));
         Self { state }
@@ -192,9 +193,11 @@ impl ToolPkgComposeDslSession {
 
     /// Forwards structured UI changes without exporting or comparing JS-owned state and memo.
     fn deliver(&self, requestId: &str, value: Value) -> Result<(), String> {
+        let finish_profile = self.state.profileStages.load(Ordering::Relaxed).then(|| profileComposeResponse(requestId.to_owned()));
         let streamed: StreamedComposeResponse = serde_json::from_value(value).map_err(|error| error.to_string())?;
         let phase = match streamed.phase { ComposeResponsePhase::Intermediate => "intermediate", ComposeResponsePhase::Final => "final" };
         let response = streamed.response;
+        if let Some(finish_profile) = finish_profile { finish_profile(&response); }
         self.emit(ToolPkgComposeDslEvent { requestId: requestId.into(), phase: phase.into(), update: response.update, actionResult: response.actionResult, navigationCommands: response.navigationCommands, error: None });
         Ok(())
     }
@@ -210,6 +213,7 @@ impl ToolPkgComposeDslSession {
         if self.state.closed.load(Ordering::Acquire) { return; }
         // The native engine may outlive a transport capability. Its JS retained
         // bundle must start a full document when a new session reuses that engine.
+        self.state.profileStages.store(command.runtimeOptions.get("__operit_profile_compose_stages") == Some(&Value::Bool(true)), Ordering::Relaxed);
         command.runtimeOptions.insert("__operit_compose_session_id".into(), Value::String(self.id()));
         let work = async {
             let session = self.clone();
@@ -241,6 +245,28 @@ impl ToolPkgComposeDslSession {
             _ = cancellation => {},
         }
     }
+}
+
+
+/// Uses native high-resolution clocks only in explicitly profiled native runs.
+#[cfg(not(target_arch = "wasm32"))]
+fn profileComposeResponse(request_id: String) -> impl FnOnce(&ComposeResponse) {
+    let started = std::time::Instant::now();
+    move |response: &ComposeResponse| {
+        let duration = started.elapsed().as_secs_f64() * 1000.0;
+        let (revision, nodes, string_bytes) = response.update.as_ref().map(|update| (
+            update.revision, update.upserts.len(),
+            update.upserts.iter().flat_map(|node| node.props.values()).filter_map(Value::as_str).map(str::len).sum::<usize>(),
+        )).unwrap_or_default();
+        let line = format!("event=compose_pipeline_stage stage=rust-typed-response durationMs={duration:.3} wallMicros={} request={request_id} revision={revision} nodes={nodes} directStringBytes={string_bytes}\n",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_micros());
+        let _ = std::io::Write::write_all(&mut std::io::stderr().lock(), line.as_bytes());
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn profileComposeResponse(_request_id: String) -> impl FnOnce(&ComposeResponse) {
+    |_: &ComposeResponse| {}
 }
 
 struct ComposeCommandOwner(ToolPkgComposeDslSession);

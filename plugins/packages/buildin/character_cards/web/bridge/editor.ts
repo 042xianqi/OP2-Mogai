@@ -20,6 +20,7 @@ import type { Dialog, DialogInput, DialogOf, DialogType, GraphDialog, WebAction,
 import { createDialogRenderer } from "./dialogs";
 import { createEditorEvents } from "./events";
 import { createState } from "./state";
+import { createAvatarLoader } from "./avatar-loader";
 import { createScreenController } from "./screens";
 import type { PresentedScreen, ScreenReceiver } from "./screens";
 import { host } from "./transport";
@@ -27,6 +28,7 @@ import { host } from "./transport";
 export function createEditor() {
   const state = createState();
   const app = requireElement(document.getElementById("app"), HTMLElement);
+  const avatars = createAvatarLoader(app, state.avatarSources, path => host().avatarImage(path));
   const dialogsRoot = requireElement(document.getElementById("dialogs"), HTMLElement);
   /** Returns the current nested dialog without selecting a different owner implicitly. */
   function topDialog(): Dialog;
@@ -88,7 +90,14 @@ export function createEditor() {
     finally { if (dialog !== null) dialog.busy = false; }
   }
   /** Delegates top-level painting to the role-card page composer. */
-  function renderMain(): void { screens.renderMain(); }
+  function renderMain(): void {
+    const started = performance.now();
+    screens.renderMain();
+    // Retain only the latest render duration instead of accumulating entries on edits.
+    performance.clearMeasures("character-memory.dom-render");
+    performance.measure("character-memory.dom-render", { start: started, end: performance.now() });
+    if (state.snapshot !== null) avatars.load(state.snapshot.cards.map(card => card.avatarUri));
+  }
   /** Delegates stack painting to the shared Material dialog surface. */
   function renderDialogs(): void { dialogs.renderDialogs(); }
   const context: EditorContext = {
@@ -116,7 +125,7 @@ state, app, dialogsRoot, snapshot, topDialog, pushDialog, popDialog, request, re
   function mount(): void {
     window.addEventListener("character-entity-closed", () => {
       void (async () => {
-        try { state.snapshot = await request({ action: "snapshot" }); await loadAvatars(); }
+        try { state.snapshot = await request({ action: "snapshot" }); }
         catch (error) { state.error = String(error); }
         finally { renderMain(); }
       })();
@@ -133,32 +142,20 @@ state, app, dialogsRoot, snapshot, topDialog, pushDialog, popDialog, request, re
     dialogsRoot.addEventListener("wheel", gestures.onWheel, { passive: false });
     dialogsRoot.addEventListener("keydown", gestures.onKeyDown);
   }
-  /** Hydrates image sources without modifying persisted character paths. */
-  async function loadAvatars(): Promise<void> {
-    await Promise.all(snapshot().cards.map(async card => {
-      const key = card.avatarUri ?? "";
-      if (!state.avatarSources.has(key)) state.avatarSources.set(key, await host().avatarImage(card.avatarUri));
-    }));
-  }
   /** Loads the real package aggregate before exposing editable controls. */
-  async function initialize(view: "characters" | "memory" = "characters"): Promise<void> {
+  async function initialize(view: "characters" | "memory" = "characters", initial: Snapshot): Promise<void> {
     state.managementView = view;
     state.busy = true;
-    try { await loadCatalogs(); await loadAvatars(); }
+    try { state.snapshot = initial; }
     finally { state.busy = false; renderMain(); }
-  }
-  /** Loads the real record and independent theme catalogs before presenting a binding editor. */
-  async function loadCatalogs(): Promise<void> {
-    state.snapshot = await request({ action: "snapshot" });
   }
   /** Presents a startup failure without substituting records or transports. */
   function showStartupError(error: unknown): void { app.innerHTML = `<div class="scroll"><h1>角色卡插件未能加载</h1><p role="alert">${escapeHtml(String(error))}</p></div>`; }
-  /** Initializes a typed popup with its actual bridge receiver and serializes initial repository reads. */
-  async function initializeScreen(input: PresentedScreen, receiver: ScreenReceiver): Promise<void> {
+  /** Initializes a typed popup with its actual bridge receiver and uses the initial authoritative repository response. */
+  async function initializeScreen(input: PresentedScreen, receiver: ScreenReceiver, initial: Snapshot): Promise<void> {
     state.busy = true;
     try {
-      await loadCatalogs();
-      await loadAvatars();
+      state.snapshot = initial;
       await screens.enter(input, receiver);
     } finally { state.busy = false; renderMain(); }
   }

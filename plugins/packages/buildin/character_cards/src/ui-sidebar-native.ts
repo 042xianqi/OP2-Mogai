@@ -2,7 +2,6 @@ import type { ComposeDslContext, ComposeNode } from "../../../../types/compose-d
 import { reconcileSidebarCatalog, parseCurrentSidebar, preparedSidebar, sidebarCatalogKey, type CurrentSidebar, type SidebarCatalog, type ConversationSidebarGroup, type ConversationSidebarScope } from "./ui-sidebar";
 import { callMainDomain, encodeSelection } from "./ui-contributions";
 import { createChatInput } from "./chat-lifecycle";
-import { imageSource } from "./image-source";
 import { nativeSidebarRows } from "./ui-sidebar-native-layout";
 import { deleteConversationGroupMembers, type SidebarDeletionProgress } from "./sidebar-group-delete";
 
@@ -31,6 +30,7 @@ export function renderSidebarScreen(ctx: ComposeDslContext): ComposeNode {
   });
   const latest = ctx.useRef("native-sidebar-state-ref", state); latest.current = state;
   const pending = ctx.useRef<{ key: string; promise: Promise<void> } | null>("native-sidebar-pending", null);
+  const avatarResource = ctx.useRef<Promise<string> | null>("native-sidebar-avatar-resource", null);
   /** Publishes only local state, preserving any changes made while an asynchronous read was pending. */
   function update(change: Partial<SidebarState>): void { latest.current = { ...latest.current, ...change }; setState(latest.current); }
   /** Rejects stale callbacks before changing any chat or group in a different supplied host context. */
@@ -49,19 +49,18 @@ export function renderSidebarScreen(ctx: ComposeDslContext): ComposeNode {
       const data = await ToolPkg.ipc.call<CurrentSidebar, SidebarCatalog>("character-sidebar.catalog", request, { targetRuntime: "main" });
       if (catalogKey(current.current) === key) {
         if (data.view !== request.input.view) throw new Error("The sidebar catalog belongs to another view");
-        let defaultAvatar = latest.current.defaultAvatar;
-        if ((data.view === "characters" ? data.sections : data.scopes).some(section => section.kind === "card" && section.avatarUri === null) && defaultAvatar === null) {
-          defaultAvatar = await imageSource(await ToolPkg.readResource("character_default_avatar", "operit-avatar.png"));
-          if (defaultAvatar.trim() === "") throw new Error("Declared default avatar resource is missing");
+        update({ data, context: key, loading: false });
+        if ((data.view === "characters" ? data.sections : data.scopes).some(section => section.kind === "card" && section.avatarUri === null) && latest.current.defaultAvatar === null) {
+          const resource = avatarResource.current ?? ToolPkg.readResource("character_default_avatar", "operit-avatar.png");
+          avatarResource.current = resource;
+          // The catalog is already visible; image lookup cannot hold up onLoad.
+          void resource.then(path => {
+            if (path.trim() === "") throw new Error("Declared default avatar resource is missing");
+            if (catalogKey(current.current) === key) update({ defaultAvatar: path });
+          }).catch(() => {
+            if (avatarResource.current === resource) avatarResource.current = null;
+          });
         }
-        const sections = data.view === "characters" ? data.sections : data.scopes;
-        for (let offset = 0; offset < sections.length; offset += 8) {
-          await Promise.all(sections.slice(offset, offset + 8).map(async section => {
-            if (section.avatarUri !== null && section.avatarUri !== undefined)
-              section.avatarUri = await imageSource(section.avatarUri);
-          }));
-        }
-        if (catalogKey(current.current) === key) update({ data, defaultAvatar, context: key, loading: false });
       }
     } catch (failure) {
       if (catalogKey(current.current) === key) update({ loading: false, context: key, error: String(failure) });

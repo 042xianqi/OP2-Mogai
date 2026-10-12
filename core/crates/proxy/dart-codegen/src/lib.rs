@@ -369,11 +369,7 @@ fn render_dart_client_class(
             output.push_str(&render_dart_call_method(object, method, serializable_types));
         }
         if method.watch_protocol().is_some() {
-            output.push_str(&render_dart_watch_method(
-                object,
-                method,
-                serializable_types,
-            ));
+            output.push_str(&render_dart_watch_method(method, serializable_types));
         }
         if method.reverse_stream_protocol().is_some() {
             output.push_str(&render_dart_reverse_stream_method(
@@ -574,9 +570,8 @@ fn render_dart_factory_method(
     output
 }
 
-/// Renders a typed watch, decoding list deltas at the element boundary.
+/// Renders a typed watch using the declared full-stream or incremental protocol.
 fn render_dart_watch_method(
-    _object: &SourceObject,
     method: &SourceMethod,
     serializable_types: &HashMap<String, SerializableType>,
 ) -> String {
@@ -593,7 +588,14 @@ fn render_dart_watch_method(
     let list_item_type = value_type
         .strip_prefix("List<")
         .and_then(|inner| inner.strip_suffix('>'));
-    if let Some(item_type) = list_item_type {
+    let full_stream = matches!(
+        watch.stream,
+        WatchStreamProtocol::JsonStream | WatchStreamProtocol::StringStream
+    );
+    let incremental_list_item_type = list_item_type.filter(|_| !full_stream);
+    if full_stream {
+        output.push_str("    final eventValueDecoder = CoreLinkStreamEventValueDecoder();\n");
+    } else if let Some(item_type) = incremental_list_item_type {
         output.push_str(&format!(
             "    final eventValueDecoder = CoreLinkListEventDecoder<{item_type}>();\n"
         ));
@@ -607,7 +609,7 @@ fn render_dart_watch_method(
     ));
     output.push_str("        .where((event) => event.kind != 'Completed')\n");
     output.push_str("        .map((event) {\n");
-    if let Some(item_type) = list_item_type {
+    if let Some(item_type) = incremental_list_item_type {
         output.push_str(&format!(
             "          return eventValueDecoder.decode(event, decodeItem: (reader) => {}, embeddedStreamFactory: bridge.openEmbeddedCoreStream);\n",
             dart_message_pack_decode_expr("reader", item_type, serializable_types)
@@ -2111,6 +2113,64 @@ fn render_dart_doc_comments(method: &SourceMethod, indent: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn watch_method(item_type: &str, stream: WatchStreamProtocol) -> SourceMethod {
+        SourceMethod {
+            name: "updates".to_string(),
+            sdk_exposed: false,
+            args: vec![],
+            rust_return_type: String::new(),
+            is_async: false,
+            cfg_attrs: vec![],
+            doc_lines: vec![],
+            protocol: MethodProtocol::Watch(operit_rslink_codegen::WatchProtocol {
+                snapshot_type: None,
+                item_type: item_type.to_string(),
+                stream,
+            }),
+        }
+    }
+
+    #[test]
+    fn full_stream_watches_decode_directly_for_scalars_and_lists() {
+        for (protocol, item_type, dart_type) in [
+            (WatchStreamProtocol::JsonStream, "String", "String"),
+            (WatchStreamProtocol::JsonStream, "Vec<String>", "List<String>"),
+            (WatchStreamProtocol::StringStream, "String", "String"),
+        ] {
+            let output = render_dart_watch_method(&watch_method(item_type, protocol), &HashMap::new());
+            assert!(output.contains("CoreLinkStreamEventValueDecoder()"));
+            assert!(output.contains(&format!("eventValueDecoder.decode<{dart_type}>")));
+            assert!(!output.contains("CoreLinkListEventDecoder"));
+            assert!(!output.contains("CoreLinkEventValueDecoder()"));
+            assert!(output.contains("event.target"));
+            assert!(output.contains("bridge.openEmbeddedCoreStream"));
+        }
+    }
+
+    #[test]
+    fn flow_and_state_watches_keep_incremental_decoding() {
+        for fallible in [false, true] {
+            for protocol in [
+                WatchStreamProtocol::JsonFlow { fallible },
+                WatchStreamProtocol::JsonState { fallible },
+            ] {
+                let scalar = render_dart_watch_method(
+                    &watch_method("String", protocol.clone()),
+                    &HashMap::new(),
+                );
+                let list = render_dart_watch_method(
+                    &watch_method("Vec<String>", protocol),
+                    &HashMap::new(),
+                );
+                assert!(scalar.contains("CoreLinkEventValueDecoder()"));
+                assert!(list.contains("CoreLinkListEventDecoder<String>()"));
+                assert!(list.contains("decodeItem:"));
+                assert!(!scalar.contains("CoreLinkStreamEventValueDecoder"));
+                assert!(!list.contains("CoreLinkStreamEventValueDecoder"));
+            }
+        }
+    }
 
     fn variant(name: &str, fields: &[(&str, &str)]) -> SerializableEnumVariant {
         SerializableEnumVariant {

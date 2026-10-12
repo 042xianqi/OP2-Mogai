@@ -1401,22 +1401,22 @@ function extractionPrompt(candidates, folders, settings2, profile) {
 }
 function mergeMemories(ownerKey, item, repository) {
   return __async(this, null, function* () {
-    const space = yield repository.readMemorySpace(ownerKey), sources2 = item.source_titles.map(
+    const space = yield repository.readMemorySpace(ownerKey), sources = item.source_titles.map(
       /** Requires every stated source before starting the merge. */
       (title) => memoryByTitle(space.memories, title)
     );
     const ids = /* @__PURE__ */ new Set();
-    for (const source of sources2) {
+    for (const source of sources) {
       if (ids.has(source.id)) throw new Error("Duplicate memory merge source");
       ids.add(source.id);
     }
-    const primary = sources2[0], redundant = sources2.slice(1);
-    if (sources2.some(
+    const primary = sources[0], redundant = sources.slice(1);
+    if (sources.some(
       /** Forbids implicit destruction or reassignment of document chunks during a textual merge. */
       (source) => source.isDocumentNode
     )) throw new Error("Document memories require explicit document composition, not a textual AI merge");
     let credibility = 0, importance = 0;
-    for (const source of sources2) {
+    for (const source of sources) {
       credibility = Math.max(credibility, source.credibility);
       importance = Math.max(importance, source.importance);
     }
@@ -5132,18 +5132,24 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
       return repository;
     });
   }
-  /** Loads bounded collection pages through the host without reading a serialized collection file. */
+  /** Overlaps the fixed collection reads while preserving each collection's ordered pagination. */
   readRecords() {
     return __async(this, null, function* () {
-      const rows = [];
-      for (const collection of collections) {
+      const results = yield Promise.allSettled(collections.map((collection) => __async(this, null, function* () {
+        const rows2 = [];
         let after = null;
         for (; ; ) {
           const page = yield this.database.collection(collection).list(after, 1e3);
-          for (const entry of page) rows.push({ collection, ...entry });
+          for (const entry of page) rows2.push({ collection, ...entry });
           if (page.length < 1e3) break;
           after = page[page.length - 1].key;
         }
+        return rows2;
+      })));
+      const rows = [];
+      for (const result2 of results) {
+        if (result2.status === "rejected") throw result2.reason;
+        for (const row of result2.value) rows.push(row);
       }
       return rows;
     });
@@ -5239,9 +5245,9 @@ function createServiceRuntime(initialize) {
 }
 var directorySources = null;
 var opening = false;
-function connectDirectorySources(sources2) {
+function connectDirectorySources(sources) {
   if (opening || directorySources !== null) throw new Error("External directory readers must be connected exactly once before service initialization");
-  directorySources = sources2;
+  directorySources = sources;
 }
 var runtime = /* @__PURE__ */ createServiceRuntime(
   /** Opens only this plugin's record database on first use, never during registration. */
@@ -7443,20 +7449,20 @@ function snapshotToolPolicy(context) {
 }
 function toolAllowed(config, name, activationSource) {
   if (!config.enabled) return true;
-  const sources2 = /* @__PURE__ */ new Set([...config.allowedPackages, ...config.allowedSkills, ...config.allowedMcpServers]);
+  const sources = /* @__PURE__ */ new Set([...config.allowedPackages, ...config.allowedSkills, ...config.allowedMcpServers]);
   if (name === "search") return true;
-  if (name === "proxy" || name === "package_proxy") return sources2.size !== 0 || config.allowedBuiltinTools.length !== 0;
+  if (name === "proxy" || name === "package_proxy") return sources.size !== 0 || config.allowedBuiltinTools.length !== 0;
   if (name === "use_package") {
     if (activationSource === void 0) throw new Error("use_package requires its actual package_name");
     return config.allowedBuiltinTools.some(
       /** Matches the explicit builtin activation permission. */
       (tool) => tool === "use_package"
-    ) && sources2.has(activationSource);
+    ) && sources.has(activationSource);
   }
   const separator = name.indexOf(":");
   if (separator !== -1) {
     if (separator === 0 || separator === name.length - 1 || name.indexOf(":", separator + 1) !== -1) throw new Error("Invalid registered package tool name: " + name);
-    return sources2.has(name.slice(0, separator));
+    return sources.has(name.slice(0, separator));
   }
   return config.allowedBuiltinTools.some(
     /** Matches exact builtin identities without case normalization or substring guesses. */
@@ -8175,31 +8181,6 @@ function registerGroupExecutionHooks() {
   );
 }
 
-// src/image-source.ts
-var sources = /* @__PURE__ */ new Map();
-function imageSource(path) {
-  return __async(this, null, function* () {
-    if (/^(data:image\/|https?:\/\/)/i.test(path)) return path;
-    let pending = sources.get(path);
-    if (pending === void 0) {
-      pending = read();
-      sources.set(path, pending);
-      pending.catch(() => sources.delete(path));
-    }
-    return pending;
-    function read() {
-      return __async(this, null, function* () {
-        const file = yield Tools.Files.readBinary(path);
-        if (file.size > 8 * 1024 * 1024) throw new Error("\u5934\u50CF\u56FE\u7247\u4E0D\u80FD\u8D85\u8FC7 8 MB");
-        const b = file.contentBase64;
-        const mime = b.startsWith("iVBOR") ? "image/png" : b.startsWith("/9j/") ? "image/jpeg" : b.startsWith("R0lGOD") ? "image/gif" : b.startsWith("UklGR") ? "image/webp" : b.startsWith("Qk") ? "image/bmp" : null;
-        if (mime === null) throw new Error("\u8BF7\u9009\u62E9 PNG\u3001JPEG\u3001GIF\u3001WebP \u6216 BMP \u56FE\u7247");
-        return `data:${mime};base64,${b}`;
-      });
-    }
-  });
-}
-
 // src/ui-sidebar-native-layout.ts
 var legacySidebarMetrics = Object.freeze({
   categoryStart: 20,
@@ -8238,13 +8219,8 @@ function chatSidebarPrepareApi(event) {
     const sections = data.view === "characters" ? data.sections : data.scopes;
     let defaultAvatar = null;
     if (sections.some((section) => section.kind === "card" && section.avatarUri === null)) {
-      defaultAvatar = yield imageSource(yield ToolPkg.readResource("character_default_avatar", "operit-avatar.png"));
+      defaultAvatar = yield ToolPkg.readResource("character_default_avatar", "operit-avatar.png");
       if (defaultAvatar.trim() === "") throw new Error("Declared default avatar resource is missing");
-    }
-    for (let offset = 0; offset < sections.length; offset += 8) {
-      yield Promise.all(sections.slice(offset, offset + 8).map((section) => __async(null, null, function* () {
-        if (section.avatarUri !== null && section.avatarUri !== void 0) section.avatarUri = yield imageSource(section.avatarUri);
-      })));
     }
     return { entries: [{ entryId: "sidebar-characters", data: { context: sidebarCatalogKey(current), data, defaultAvatar } }] };
   });

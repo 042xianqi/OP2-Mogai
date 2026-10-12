@@ -53,6 +53,7 @@ class ToolPkgDesktopWidgetFrame {
           child: _ComposeDslRenderer(
             node: _render.tree,
             nodePath: 'desktop-widget:$instanceId',
+            dispatchOnLoad: false,
             onAction: openRoute,
             onTextInput: openRoute,
             webViewHostContext: ComposeDslWebViewHostContext(

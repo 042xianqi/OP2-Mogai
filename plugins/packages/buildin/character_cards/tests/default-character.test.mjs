@@ -28,16 +28,16 @@ test("initial state uses the current default without an unreleased JSON upgrade 
   assert.equal(state.decodeCharacterState, undefined);
 });
 
-test("VFS avatar bytes become portable sources and failed reads can retry", async () => {
+test("avatar import reads fresh bytes on each selection and failed reads can retry", async () => {
   let reads = 0;
   const source = loadModule("src/image-source.ts", { Tools: { Files: { async readBinary(path) {
     reads++; if (reads === 1) throw new Error("resource temporarily unavailable");
     const image = await readFile(new URL("../resources/operit-avatar.png", import.meta.url));
     return { path, size: image.length, contentBase64: image.toString("base64") };
   } } } });
-  await assert.rejects(source.imageSource("/app/data/avatar.png"), /temporarily unavailable/);
-  const image = await source.imageSource("/app/data/avatar.png"); assert.ok(image.startsWith("data:image/png;base64,"));
-  assert.equal(await source.imageSource("/app/data/avatar.png"), image); assert.equal(reads, 2);
+  await assert.rejects(source.readAvatarImport("/app/data/avatar.png"), /temporarily unavailable/);
+  const image = await source.readAvatarImport("/app/data/avatar.png"); assert.ok(image.startsWith("iVBOR"));
+  assert.equal(await source.readAvatarImport("/app/data/avatar.png"), image); assert.equal(reads, 3);
   assert.equal(source.pickedImagePath("/Users/test/avatar.png", "macos"), "/mnt/macos/Users/test/avatar.png");
   assert.equal(source.pickedImagePath("C:\\Users\\test\\avatar.png", "windows"), "/mnt/windows/c/Users/test/avatar.png");
   assert.throws(() => source.pickedImagePath("blob:fake", "web"), /文件路径/);

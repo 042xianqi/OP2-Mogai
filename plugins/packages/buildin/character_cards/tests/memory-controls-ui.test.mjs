@@ -27,13 +27,13 @@ async function controlsPage(t, width = 390, view = "memory") {
   const harness = await createMemoryJobsHarness(t), presentation = fixture();
   // Only readonly independent host directories are controlled; all domain settings and job state belong to production.
   Object.assign(harness.tools, {Models: {
-    async listSummaries() { return plain(presentation.snapshot.models); }
+    async listSummaries() { return { models: plain(presentation.snapshot.models) }; }
   }, Tts: {
-    async listConfigs() { return plain(presentation.snapshot.ttsConfigs); }
+    async listConfigs() { return { configs: plain(presentation.snapshot.ttsConfigs) }; }
   }, Catalog: {
     async readToolSources() { return plain(presentation.snapshot.toolCatalog); }
   }, Theme: {
-    async listConfigs() { return []; }
+    async listConfigs() { return { configs: [] }; }
   }});
   const runtime = harness.openRuntime(); await runtime.initialize(); await runtime.bind();
   const context = await browser.newContext({ viewport: { width, height: 844 }, timezoneId: "Asia/Shanghai" });
@@ -48,8 +48,7 @@ async function controlsPage(t, width = 390, view = "memory") {
   await context.addInitScript(({ theme, view }) => {
     window.rejectMemoryAction = null;
     window.CharacterMemoryHost = {
-      async currentTheme() { return theme; },
-      async currentScreen() { return { requestId: null, input: { mode: "manage", view } }; },
+      async loadScreen() { return { theme, screen: { requestId: null, input: { mode: "manage", view } }, snapshot: await this.request({ action: "snapshot" }) }; },
       async request(request) {
         if (window.rejectMemoryAction === request.action) throw new Error("Explicit test transport rejection");
         const result = await window.dispatchRealMemoryControlRequest(request);

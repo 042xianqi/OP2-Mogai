@@ -45,38 +45,48 @@ __export(index_ui_exports, {
 });
 module.exports = __toCommonJS(index_ui_exports);
 
-// src/image-source.ts
-var sources = /* @__PURE__ */ new Map();
-function imageSource(path) {
-  return __async(this, null, function* () {
-    if (/^(data:image\/|https?:\/\/)/i.test(path)) return path;
-    let pending = sources.get(path);
-    if (pending === void 0) {
-      pending = read();
-      sources.set(path, pending);
-      pending.catch(() => sources.delete(path));
-    }
-    return pending;
-    function read() {
-      return __async(this, null, function* () {
-        const file = yield Tools.Files.readBinary(path);
-        if (file.size > 8 * 1024 * 1024) throw new Error("\u5934\u50CF\u56FE\u7247\u4E0D\u80FD\u8D85\u8FC7 8 MB");
-        const b = file.contentBase64;
-        const mime = b.startsWith("iVBOR") ? "image/png" : b.startsWith("/9j/") ? "image/jpeg" : b.startsWith("R0lGOD") ? "image/gif" : b.startsWith("UklGR") ? "image/webp" : b.startsWith("Qk") ? "image/bmp" : null;
-        if (mime === null) throw new Error("\u8BF7\u9009\u62E9 PNG\u3001JPEG\u3001GIF\u3001WebP \u6216 BMP \u56FE\u7247");
-        return `data:${mime};base64,${b}`;
-      });
-    }
-  });
-}
-function pickedImagePath(path, platform) {
-  const normalized = path.replace(/\\/g, "/");
-  if (normalized.startsWith("/app/") || normalized.startsWith("/mnt/")) return normalized;
-  if (platform === "windows" && /^[a-z]:\//i.test(normalized)) return `/mnt/windows/${normalized[0].toLowerCase()}/${normalized.slice(3)}`;
-  if (!normalized.startsWith("/")) throw new Error("\u9009\u62E9\u5668\u6CA1\u6709\u8FD4\u56DE\u53EF\u8BFB\u53D6\u7684\u6587\u4EF6\u8DEF\u5F84");
-  if (platform === "macos" || platform === "linux") return `/mnt/${platform}${normalized}`;
-  if (platform === "android") return `/mnt/android/root${normalized}`;
-  throw new Error("\u5F53\u524D\u5E73\u53F0\u4E0D\u652F\u6301\u5BFC\u5165\u6B64\u56FE\u7247\u8DEF\u5F84");
+// src/avatar-resources.ts
+function createAvatarResources(origin) {
+  const references = /* @__PURE__ */ new Map();
+  const files = /* @__PURE__ */ new Map();
+  const remote = /* @__PURE__ */ new Set();
+  let defaultPath = null;
+  let next = 0;
+  function source(path) {
+    return __async(this, null, function* () {
+      if (path === null) {
+        if (defaultPath === null) {
+          const pending = ToolPkg.readResource("character_default_avatar", "operit-avatar.png").then((path2) => {
+            if (path2.trim() === "") throw new Error("\u9ED8\u8BA4\u5934\u50CF\u8D44\u6E90\u8DEF\u5F84\u4E0D\u80FD\u4E3A\u7A7A");
+            return path2;
+          });
+          defaultPath = pending;
+          pending.catch(() => {
+            if (defaultPath === pending) defaultPath = null;
+          });
+        }
+        path = yield defaultPath;
+      }
+      if (path.trim() === "") throw new Error("\u5934\u50CF\u8D44\u6E90\u8DEF\u5F84\u4E0D\u80FD\u4E3A\u7A7A");
+      if (/^data:image\//i.test(path)) return path;
+      const existing = references.get(path);
+      if (existing !== void 0) return existing;
+      const reference = "avatars/" + ++next;
+      references.set(path, reference);
+      files.set(origin + reference, path);
+      if (/^https?:\/\//i.test(path)) remote.add(path);
+      return reference;
+    });
+  }
+  function intercept(request2) {
+    if (remote.has(request2.url) && !request2.isMainFrame && (request2.method === "GET" || request2.method === "HEAD")) return { action: "allow" };
+    const path = files.get(request2.url);
+    if (path === void 0) return null;
+    if (request2.isMainFrame || request2.method !== "GET" && request2.method !== "HEAD") return { action: "block" };
+    if (remote.has(path)) return { action: "rewrite", url: path };
+    return { action: "respond", response: { statusCode: 200, reasonPhrase: "OK", filePath: path } };
+  }
+  return { source, intercept };
 }
 
 // src/validation.ts
@@ -638,24 +648,46 @@ function createUiScreenSession(presentation) {
   };
 }
 
+// src/image-source.ts
+function readAvatarImport(path) {
+  return __async(this, null, function* () {
+    const file = yield Tools.Files.readBinary(path);
+    if (file.size > 8 * 1024 * 1024) throw new Error("\u5934\u50CF\u56FE\u7247\u4E0D\u80FD\u8D85\u8FC7 8 MB");
+    const b = file.contentBase64;
+    if (!(b.startsWith("iVBOR") || b.startsWith("/9j/") || b.startsWith("R0lGOD") || b.startsWith("UklGR") || b.startsWith("Qk"))) {
+      throw new Error("\u8BF7\u9009\u62E9 PNG\u3001JPEG\u3001GIF\u3001WebP \u6216 BMP \u56FE\u7247");
+    }
+    return b;
+  });
+}
+function pickedImagePath(path, platform) {
+  const normalized = path.replace(/\\/g, "/");
+  if (normalized.startsWith("/app/") || normalized.startsWith("/mnt/")) return normalized;
+  if (platform === "windows" && /^[a-z]:\//i.test(normalized)) return `/mnt/windows/${normalized[0].toLowerCase()}/${normalized.slice(3)}`;
+  if (!normalized.startsWith("/")) throw new Error("\u9009\u62E9\u5668\u6CA1\u6709\u8FD4\u56DE\u53EF\u8BFB\u53D6\u7684\u6587\u4EF6\u8DEF\u5F84");
+  if (platform === "macos" || platform === "linux") return `/mnt/${platform}${normalized}`;
+  if (platform === "android") return `/mnt/android/root${normalized}`;
+  throw new Error("\u5F53\u524D\u5E73\u53F0\u4E0D\u652F\u6301\u5BFC\u5165\u6B64\u56FE\u7247\u8DEF\u5F84");
+}
+
 // src/ui-entity-preview.ts
 function renderEntityPreview(ctx, input) {
   const colors = ctx.MaterialTheme.colorScheme;
   const entity = input.card ?? input.group;
   if (entity === null) return [];
   const card = input.card;
-  const selectable = (key, value, subdued = false) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:32154",[{ key },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:32189",[{ text: value, fillMaxWidth: true, style: "bodyMedium", color: subdued ? colors.onSurfaceVariant : colors.onSurface }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))],(...__operitArgs)=>ctx.UI.SelectionContainer(...__operitArgs));
-  const pill = (key, label) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:32353",[{
+  const selectable = (key, value, subdued = false) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:33545",[{ key },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:33580",[{ text: value, fillMaxWidth: true, style: "bodyMedium", color: subdued ? colors.onSurfaceVariant : colors.onSurface }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))],(...__operitArgs)=>ctx.UI.SelectionContainer(...__operitArgs));
+  const pill = (key, label) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:33744",[{
     key,
     paddingHorizontal: 10,
     paddingVertical: 5,
     backgroundColor: colors.primaryContainer.copy({ alpha: 0.38 }),
     backgroundShape: { cornerRadius: 8 }
-  },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:32540",[{ text: label, style: "labelMedium", color: colors.onPrimaryContainer }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
+  },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:33931",[{ text: label, style: "labelMedium", color: colors.onPrimaryContainer }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
   const attachedTags = card === null ? [] : input.tags.filter((tag) => card.attachedTagIds.includes(tag.id));
-  const identity2 = OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:32757",[{ key: "entity-preview-identity", fillMaxWidth: true, spacing: 14, paddingBottom: 22 },[
-    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:32865",[{ fillMaxWidth: true, spacing: 16, verticalAlignment: "center" },[
-      card === null ? OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:32966",[{ width: 72, height: 72, contentAlignment: "center", backgroundColor: colors.primaryContainer.copy({ alpha: 0.48 }), backgroundShape: { cornerRadius: 20 } },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:33135",[{ name: "GroupsOutlined", size: 34, tint: colors.primary }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)) : OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:33210",[{
+  const identity2 = OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:34148",[{ key: "entity-preview-identity", fillMaxWidth: true, spacing: 14, paddingBottom: 22 },[
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:34256",[{ fillMaxWidth: true, spacing: 16, verticalAlignment: "center" },[
+      card === null ? OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:34357",[{ width: 72, height: 72, contentAlignment: "center", backgroundColor: colors.primaryContainer.copy({ alpha: 0.48 }), backgroundShape: { cornerRadius: 20 } },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:34526",[{ name: "GroupsOutlined", size: 34, tint: colors.primary }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)) : OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:34601",[{
         key: "entity-avatar",
         ...card.avatarUri === null ? { path: input.avatar ?? void 0 } : { uri: card.avatarUri },
         width: 72,
@@ -664,23 +696,23 @@ function renderEntityPreview(ctx, input) {
         contentDescription: card.name,
         modifier: ctx.Modifier.clip({ cornerRadius: 20 })
       }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs)),
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:33534",[{ weight: 1, spacing: 6 },[
-        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:33585",[{ key: "entity-preview-name", text: entity.name, style: "headlineSmall", fontSize: 24, fontWeight: "700", fillMaxWidth: true }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
-        ...card === null || card.isDefault ? [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:33772",[{ text: card === null ? input.group.members.length + " \u4F4D\u89D2\u8272" : "\u9ED8\u8BA4\u89D2\u8272\u5361", style: "labelMedium", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))] : []
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:34925",[{ weight: 1, spacing: 6 },[
+        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:34976",[{ key: "entity-preview-name", text: entity.name, style: "headlineSmall", fontSize: 24, fontWeight: "700", fillMaxWidth: true }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+        ...card === null || card.isDefault ? [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:35163",[{ text: card === null ? input.group.members.length + " \u4F4D\u89D2\u8272" : "\u9ED8\u8BA4\u89D2\u8272\u5361", style: "labelMedium", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))] : []
       ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs))
     ]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs)),
     ...entity.description.trim() === "" ? [] : [selectable("entity-preview-description", entity.description, true)],
-    ...attachedTags.length === 0 ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:34132",[{ key: "entity-preview-tags", spacing: 6, runSpacing: 6 },attachedTags.map((tag) => pill("entity-preview-tag-" + tag.id, tag.name))],(...__operitArgs)=>ctx.UI.FlowRow(...__operitArgs))]
+    ...attachedTags.length === 0 ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:35523",[{ key: "entity-preview-tags", spacing: 6, runSpacing: 6 },attachedTags.map((tag) => pill("entity-preview-tag-" + tag.id, tag.name))],(...__operitArgs)=>ctx.UI.FlowRow(...__operitArgs))]
   ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs));
   const contentSection = (key, title, value, quote = false) => value.trim() === "" ? [] : [
-    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:34384",[{ key: "entity-preview-" + key, fillMaxWidth: true, paddingBottom: 22 },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:34481",[{
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:35775",[{ key: "entity-preview-" + key, fillMaxWidth: true, paddingBottom: 22 },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:35872",[{
         fillMaxWidth: true,
         spacing: 10,
         ...quote ? { padding: 18, backgroundColor: colors.primaryContainer.copy({ alpha: 0.22 }), backgroundShape: { cornerRadius: 16 } } : {}
       },[
-        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:34708",[{ fillMaxWidth: true, spacing: 8, verticalAlignment: "center" },[
-          ...quote ? [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:34808",[{ name: "FormatQuote", size: 20, tint: colors.primary }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))] : [],
-          OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:34894",[{ text: title, style: "titleSmall", fontWeight: "600", color: quote ? colors.primary : colors.onSurfaceVariant, weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))
+        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:36099",[{ fillMaxWidth: true, spacing: 8, verticalAlignment: "center" },[
+          ...quote ? [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:36199",[{ name: "FormatQuote", size: 20, tint: colors.primary }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))] : [],
+          OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:36285",[{ text: title, style: "titleSmall", fontWeight: "600", color: quote ? colors.primary : colors.onSurfaceVariant, weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))
         ]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs)),
         selectable("entity-preview-" + key + "-text", value)
       ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs))
@@ -719,33 +751,33 @@ function renderEntityPreview(ctx, input) {
     rows.push({ key: "tools", label: "\u5DE5\u5177\u8BBF\u95EE", value: !policy.enabled ? "\u8DDF\u968F\u5168\u5C40\u5DE5\u5177\u914D\u7F6E" : toolNames.length === 0 ? "\u672A\u5141\u8BB8\u4EFB\u4F55\u5DE5\u5177\u6765\u6E90" : toolNames.join("\u3001") });
   } else {
     const members = [...input.group.members].sort((a, b) => a.orderIndex - b.orderIndex);
-    contents.push(OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:38670",[{ key: "entity-preview-members", fillMaxWidth: true, spacing: 10, paddingBottom: 22 },[
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:38779",[{ text: "\u7EC4\u5185\u89D2\u8272", style: "titleSmall", fontWeight: "600", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
-      ...members.length === 0 ? [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:38935",[{ text: "\u6682\u672A\u6DFB\u52A0\u89D2\u8272", style: "bodyMedium", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))] : members.map((member2, index) => {
+    contents.push(OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:40061",[{ key: "entity-preview-members", fillMaxWidth: true, spacing: 10, paddingBottom: 22 },[
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:40170",[{ text: "\u7EC4\u5185\u89D2\u8272", style: "titleSmall", fontWeight: "600", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+      ...members.length === 0 ? [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:40326",[{ text: "\u6682\u672A\u6DFB\u52A0\u89D2\u8272", style: "bodyMedium", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))] : members.map((member2, index) => {
         const record2 = input.snapshot.cards.find((card2) => card2.id === member2.characterCardId);
-        return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:39202",[{ key: "entity-preview-member-" + member2.characterCardId, fillMaxWidth: true, paddingVertical: 10, spacing: 12, verticalAlignment: "center" },[
-          OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:39369",[{ text: String(index + 1).padStart(2, "0"), style: "labelMedium", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
-          OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:39492",[{ width: 40, height: 40, ...record2?.avatarUri == null ? { path: input.avatar ?? void 0 } : { uri: record2.avatarUri }, contentScale: "crop", contentDescription: record2?.name ?? "\u89D2\u8272\u5DF2\u79FB\u9664", modifier: ctx.Modifier.clip({ cornerRadius: 12 }) }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs)),
-          OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:39782",[{ weight: 1, spacing: 4 },[
-            OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:39837",[{ text: record2?.name ?? "\u89D2\u8272\u5DF2\u79FB\u9664", style: "titleSmall", fontWeight: "600", fillMaxWidth: true }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
-            ...record2?.description.trim() ? [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:40017",[{ text: record2.description, style: "bodySmall", color: colors.onSurfaceVariant, fillMaxWidth: true }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))] : []
+        return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:40593",[{ key: "entity-preview-member-" + member2.characterCardId, fillMaxWidth: true, paddingVertical: 10, spacing: 12, verticalAlignment: "center" },[
+          OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:40760",[{ text: String(index + 1).padStart(2, "0"), style: "labelMedium", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+          OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:40883",[{ width: 40, height: 40, ...record2?.avatarUri == null ? { path: input.avatar ?? void 0 } : { uri: record2.avatarUri }, contentScale: "crop", contentDescription: record2?.name ?? "\u89D2\u8272\u5DF2\u79FB\u9664", modifier: ctx.Modifier.clip({ cornerRadius: 12 }) }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs)),
+          OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:41173",[{ weight: 1, spacing: 4 },[
+            OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:41228",[{ text: record2?.name ?? "\u89D2\u8272\u5DF2\u79FB\u9664", style: "titleSmall", fontWeight: "600", fillMaxWidth: true }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+            ...record2?.description.trim() ? [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:41408",[{ text: record2.description, style: "bodySmall", color: colors.onSurfaceVariant, fillMaxWidth: true }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))] : []
           ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs))
         ]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs));
       })
     ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs)));
     rows.push({ key: "theme", label: "\u4E3B\u9898", value: themeLabel });
   }
-  contents.push(OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:40276",[{ key: "entity-preview-config", fillMaxWidth: true, backgroundColor: colors.surfaceContainerLow, backgroundShape: { cornerRadius: 16 } },[
-    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:40434",[{ key: "entity-preview-config-toggle", fillMaxWidth: true, color: "transparent", shape: { cornerRadius: 16 }, onClick: input.onToggleConfiguration },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:40612",[{ fillMaxWidth: true, padding: 16, spacing: 10, verticalAlignment: "center" },[
-        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:40712",[{ name: "Tune", size: 20, tint: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs)),
-        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:40792",[{ weight: 1, spacing: 3 },[
-          OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:40845",[],()=>[{ text: "\u914D\u7F6E\u6458\u8981", style: "titleSmall", fontWeight: "600" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
-          OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:40946",[{ text: card === null ? "\u4E3B\u9898\u914D\u7F6E" : "\u6A21\u578B\u3001\u8BED\u97F3\u4E0E\u8BB0\u5FC6", style: "bodySmall", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))
+  contents.push(OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:41667",[{ key: "entity-preview-config", fillMaxWidth: true, backgroundColor: colors.surfaceContainerLow, backgroundShape: { cornerRadius: 16 } },[
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:41825",[{ key: "entity-preview-config-toggle", fillMaxWidth: true, color: "transparent", shape: { cornerRadius: 16 }, onClick: input.onToggleConfiguration },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:42003",[{ fillMaxWidth: true, padding: 16, spacing: 10, verticalAlignment: "center" },[
+        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:42103",[{ name: "Tune", size: 20, tint: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs)),
+        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:42183",[{ weight: 1, spacing: 3 },[
+          OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:42236",[],()=>[{ text: "\u914D\u7F6E\u6458\u8981", style: "titleSmall", fontWeight: "600" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+          OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:42337",[{ text: card === null ? "\u4E3B\u9898\u914D\u7F6E" : "\u6A21\u578B\u3001\u8BED\u97F3\u4E0E\u8BB0\u5FC6", style: "bodySmall", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))
         ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs)),
-        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:41137",[{ name: input.configurationExpanded ? "ExpandLess" : "ExpandMore", size: 20, tint: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))
+        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:42528",[{ name: input.configurationExpanded ? "ExpandLess" : "ExpandMore", size: 20, tint: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))
       ]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs))],(...__operitArgs)=>ctx.UI.Surface(...__operitArgs)),
-    ...input.configurationExpanded ? [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:41313",[{ key: "entity-preview-config-details", fillMaxWidth: true, paddingStart: 16, paddingEnd: 16, paddingBottom: 18, spacing: 14 },rows.map((row) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:41486",[{ key: "entity-preview-config-" + row.key, fillMaxWidth: true, spacing: 4 },[
-        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:41587",[{ text: row.label, style: "labelMedium", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+    ...input.configurationExpanded ? [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:42704",[{ key: "entity-preview-config-details", fillMaxWidth: true, paddingStart: 16, paddingEnd: 16, paddingBottom: 18, spacing: 14 },rows.map((row) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:42877",[{ key: "entity-preview-config-" + row.key, fillMaxWidth: true, spacing: 4 },[
+        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:42978",[{ text: row.label, style: "labelMedium", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
         selectable("entity-preview-config-" + row.key + "-value", row.value)
       ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs)))],(...__operitArgs)=>ctx.UI.Column(...__operitArgs))] : []
   ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs)));
@@ -896,6 +928,17 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
       }
     });
   }
+  function loadDefaultAvatar() {
+    return __async(this, null, function* () {
+      try {
+        const avatar = yield ToolPkg.readResource("character_default_avatar", "operit-avatar.png");
+        if (avatar.trim() === "" || live.current.finished) return;
+        assertOwner();
+        update({ avatar });
+      } catch {
+      }
+    });
+  }
   function load() {
     return __async(this, null, function* () {
       yield act(() => __async(null, null, function* () {
@@ -903,9 +946,9 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
         assertOwner();
         const record2 = input.mode === "create" ? input.entity === "card" ? createCharacterDraft() : createGroupDraft() : input.entity === "card" ? snapshot2.cards.find((value) => value.id === input.id) : snapshot2.groups.find((value) => value.id === input.id);
         if (record2 === void 0) throw new Error("\u9884\u89C8\u5B9E\u4F53\u4E0D\u5B58\u5728\uFF1A" + input.id);
-        const avatar = input.entity === "group" || record2.avatarUri === null ? yield ToolPkg.readResource("character_default_avatar", "operit-avatar.png") : null;
         assertOwner();
-        update({ snapshot: snapshot2, tags: copy(snapshot2.tags), card: input.entity === "card" ? copy(record2) : null, group: input.entity === "group" ? copy(record2) : null, avatar, loading: false });
+        update({ snapshot: snapshot2, tags: copy(snapshot2.tags), card: input.entity === "card" ? copy(record2) : null, group: input.entity === "group" ? copy(record2) : null, loading: false });
+        if (input.entity === "group" || record2.avatarUri === null) void loadDefaultAvatar();
         if (live.current.editing) void loadThemes();
       }));
       if (live.current.loading) update({ loading: false });
@@ -1066,13 +1109,13 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
         assertOwner();
         if (selected.cancelled) return;
         if (selected.files.length !== 1) throw new Error("\u8BF7\u9009\u62E9\u4E00\u4E2A\u5934\u50CF\u6587\u4EF6");
-        const platform = (yield Tools.System.terminal.info()).platform, source = yield imageSource(pickedImagePath(selected.files[0].path, platform));
+        const platform = (yield Tools.System.terminal.info()).platform, contentBase64 = yield readAvatarImport(pickedImagePath(selected.files[0].path, platform));
         assertOwner();
         const directory = ToolPkg.getConfigDir().replace(/\/$/, "") + "/avatars";
         const created = yield Tools.Files.mkdir(directory, true);
         if (!created.successful) throw new Error(created.details);
         const uri = directory + "/" + Date.now() + "-" + Math.random().toString(36).slice(2) + ".image";
-        const written = yield Tools.Files.writeBinary(uri, source.slice(source.indexOf(",") + 1));
+        const written = yield Tools.Files.writeBinary(uri, contentBase64);
         if (!written.successful) throw new Error(written.details);
         assertOwner();
         update({ card: { ...card(), avatarUri: uri } });
@@ -1080,13 +1123,13 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
     });
   }
   const colors = ctx.MaterialTheme.colorScheme, enabled = !state.busy && !state.finished;
-  const text3 = (value) => OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:56504",[value],()=>[{ text: value, fillMaxWidth: true, style: "bodyMedium" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs));
-  const caption = (value) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:56604",[{ text: value, fillMaxWidth: true, style: "bodySmall", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs));
-  const section = (title, value) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:56742",[{ key: "preview-" + title, fillMaxWidth: true, paddingBottom: 12, spacing: 6 },[
-    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:56842",[{ text: title, style: "labelLarge", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
-    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:56929",[{},text3(value)],(...__operitArgs)=>ctx.UI.SelectionContainer(...__operitArgs))
+  const text3 = (value) => OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58150",[value],()=>[{ text: value, fillMaxWidth: true, style: "bodyMedium" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs));
+  const caption = (value) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58250",[{ text: value, fillMaxWidth: true, style: "bodySmall", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs));
+  const section = (title, value) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58388",[{ key: "preview-" + title, fillMaxWidth: true, paddingBottom: 12, spacing: 6 },[
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58488",[{ text: title, style: "labelLarge", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58575",[{},text3(value)],(...__operitArgs)=>ctx.UI.SelectionContainer(...__operitArgs))
   ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs));
-  const field = (key, label, value, apply, maxLines = 1) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57039",[{ fillMaxWidth: true, paddingBottom: 12 },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57093",[{
+  const field = (key, label, value, apply, maxLines = 1) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58685",[{ fillMaxWidth: true, paddingBottom: 12 },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58739",[{
     key: "entity-field-" + key,
     label,
     value,
@@ -1097,7 +1140,7 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
     maxLines,
     style: {},
     onValueChange: apply,
-    ...maxLines === 1 ? {} : { suffixIconWidth: 36, suffixIconHeight: 36, trailingIcon: OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57402",[{ width: 36, height: 36, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57468",[{
+    ...maxLines === 1 ? {} : { suffixIconWidth: 36, suffixIconHeight: 36, trailingIcon: OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59048",[{ width: 36, height: 36, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59114",[{
       key: "entity-expand-" + key,
       width: 28,
       height: 28,
@@ -1107,22 +1150,22 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
         assertOwner();
         update({ expanded: { key, label, value, apply }, fullscreen: true });
       }
-    },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57766",[],()=>[{ name: "Fullscreen", size: 18 }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.IconButton(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)) }
+    },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59412",[],()=>[{ name: "Fullscreen", size: 18 }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.IconButton(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)) }
   }],(...__operitArgs)=>ctx.UI.TextField(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
-  const check = (key, label, checked, apply) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57871",[{ key, fillMaxWidth: true, verticalAlignment: "center", spacing: 8 },[OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57953",[checked,enabled,apply],()=>[{ checked, enabled, onCheckedChange: apply }],(...__operitArgs)=>ctx.UI.Checkbox(...__operitArgs)), OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58016",[label],()=>[{ text: label, weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs));
-  const configure = (key, label, value, apply) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58109",[{ fillMaxWidth: true, paddingBottom: 12 },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58172",[{ key, fillMaxWidth: true, color: "transparent", onClick: enabled ? apply : void 0 },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58286",[{ label, enabled },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58328",[{ fillMaxWidth: true, verticalAlignment: "center", spacing: 12 },[OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58406",[value],()=>[{ text: value, weight: 1, maxLines: 1, overflow: "ellipsis", style: "bodyMedium" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)), OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58503",[],()=>[{ name: "Tune", size: 24 }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs))],(...__operitArgs)=>ctx.UI.InputDecorator(...__operitArgs))],(...__operitArgs)=>ctx.UI.Surface(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
+  const check = (key, label, checked, apply) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59517",[{ key, fillMaxWidth: true, verticalAlignment: "center", spacing: 8 },[OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59599",[checked,enabled,apply],()=>[{ checked, enabled, onCheckedChange: apply }],(...__operitArgs)=>ctx.UI.Checkbox(...__operitArgs)), OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59662",[label],()=>[{ text: label, weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs));
+  const configure = (key, label, value, apply) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59755",[{ fillMaxWidth: true, paddingBottom: 12 },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59818",[{ key, fillMaxWidth: true, color: "transparent", onClick: enabled ? apply : void 0 },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59932",[{ label, enabled },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59974",[{ fillMaxWidth: true, verticalAlignment: "center", spacing: 12 },[OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:60052",[value],()=>[{ text: value, weight: 1, maxLines: 1, overflow: "ellipsis", style: "bodyMedium" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)), OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:60149",[],()=>[{ name: "Tune", size: 24 }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs))],(...__operitArgs)=>ctx.UI.InputDecorator(...__operitArgs))],(...__operitArgs)=>ctx.UI.Surface(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
   const select = (key, label, value, choices, apply, empty2 = "\u4E0D\u7ED1\u5B9A") => configure(key, label, choices.find((option) => option.id === value)?.label ?? (value === null ? empty2 : "\u5DF2\u7ED1\u5B9A\u914D\u7F6E\u4E0D\u5B58\u5728\uFF1A" + value), () => {
     assertOwner();
     update({ picker: { title: "\u9009\u62E9" + label, key, value, choices, apply, query: "" } });
   });
-  const binding = (key, title, subtitleOff, subtitleOn, checked, apply, children, switchEnabled = true) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59054",[{ key, fillMaxWidth: true, paddingBottom: 7 },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59112",[{ fillMaxWidth: true, modifier: ctx.Modifier.border(1, colors.outlineVariant.copy({ alpha: 0.24 }), { cornerRadius: 12 }), paddingHorizontal: 10, paddingVertical: 6 },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59300",[{ fillMaxWidth: true },[
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59346",[{ fillMaxWidth: true, modifier: ctx.Modifier.heightIn({ minHeight: 46 }), verticalAlignment: "center", spacing: 8 },[
-        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59484",[{ weight: 1, spacing: 1 },[OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59526",[{ text: title, fontSize: 14, fontWeight: "700", color: enabled && switchEnabled ? colors.onSurface : colors.onSurface.copy({ alpha: 0.46 }) }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)), OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59682",[{ text: checked ? subtitleOn : subtitleOff, fontSize: 12, color: enabled && switchEnabled ? colors.onSurfaceVariant : colors.onSurfaceVariant.copy({ alpha: 0.46 }) }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs)),
-        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59872",[{ key: key + "-switch", checked, enabled: enabled && switchEnabled, modifier: ctx.Modifier.scale(0.82), onCheckedChange: apply }],(...__operitArgs)=>ctx.UI.Switch(...__operitArgs))
+  const binding = (key, title, subtitleOff, subtitleOn, checked, apply, children, switchEnabled = true) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:60700",[{ key, fillMaxWidth: true, paddingBottom: 7 },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:60758",[{ fillMaxWidth: true, modifier: ctx.Modifier.border(1, colors.outlineVariant.copy({ alpha: 0.24 }), { cornerRadius: 12 }), paddingHorizontal: 10, paddingVertical: 6 },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:60946",[{ fillMaxWidth: true },[
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:60992",[{ fillMaxWidth: true, modifier: ctx.Modifier.heightIn({ minHeight: 46 }), verticalAlignment: "center", spacing: 8 },[
+        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:61130",[{ weight: 1, spacing: 1 },[OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:61172",[{ text: title, fontSize: 14, fontWeight: "700", color: enabled && switchEnabled ? colors.onSurface : colors.onSurface.copy({ alpha: 0.46 }) }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)), OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:61328",[{ text: checked ? subtitleOn : subtitleOff, fontSize: 12, color: enabled && switchEnabled ? colors.onSurfaceVariant : colors.onSurfaceVariant.copy({ alpha: 0.46 }) }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs)),
+        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:61518",[{ key: key + "-switch", checked, enabled: enabled && switchEnabled, modifier: ctx.Modifier.scale(0.82), onCheckedChange: apply }],(...__operitArgs)=>ctx.UI.Switch(...__operitArgs))
       ]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs)),
-      ...checked || !switchEnabled ? [OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:60064",[],()=>[{ height: 6 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)), ...children] : []
+      ...checked || !switchEnabled ? [OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:61710",[],()=>[{ height: 6 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)), ...children] : []
     ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
-  const body = (key, children, padding = { paddingStart: 18, paddingTop: 10, paddingEnd: 18, paddingBottom: 10 }) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:60242",[{ key, fillMaxWidth: true },children.map((child, index) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:60320",[{
+  const body = (key, children, padding = { paddingStart: 18, paddingTop: 10, paddingEnd: 18, paddingBottom: 10 }) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:61888",[{ key, fillMaxWidth: true },children.map((child, index) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:61966",[{
     key: key + "-item-" + String(child.props?.key ?? index),
     fillMaxWidth: true,
     paddingStart: padding.paddingStart,
@@ -1130,33 +1173,33 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
     paddingTop: index === 0 ? padding.paddingTop : 0,
     paddingBottom: index === children.length - 1 ? padding.paddingBottom : 0
   },child],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)))],(...__operitArgs)=>ctx.UI.LazyColumn(...__operitArgs));
-  const tabs = (key, labels, selected, apply) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:60689",[{
+  const tabs = (key, labels, selected, apply) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:62335",[{
     key,
     fillMaxWidth: true,
     selectedTabIndex: selected,
-    tabs: labels.map((label, tab) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:60814",[{ key: key + "-" + tab, selected: selected === tab, enabled, onClick: () => {
+    tabs: labels.map((label, tab) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:62460",[{ key: key + "-" + tab, selected: selected === tab, enabled, onClick: () => {
       assertOwner();
       apply(tab);
-    } },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:60951",[label],()=>[{ text: label, style: "titleSmall" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))],(...__operitArgs)=>ctx.UI.Tab(...__operitArgs)))
+    } },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:62597",[label],()=>[{ text: label, style: "titleSmall" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))],(...__operitArgs)=>ctx.UI.Tab(...__operitArgs)))
   }],(...__operitArgs)=>ctx.UI.PrimaryTabRow(...__operitArgs));
-  const standardButton = (key, label, action, filled = false) => filled ? OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:61083",[key,label,enabled,action],()=>[{ key, text: label, enabled, onClick: action }],(...__operitArgs)=>ctx.UI.Button(...__operitArgs)) : OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:61147",[key,label,enabled,action],()=>[{ key, text: label, enabled, onClick: action }],(...__operitArgs)=>ctx.UI.TextButton(...__operitArgs));
+  const standardButton = (key, label, action, filled = false) => filled ? OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:62729",[key,label,enabled,action],()=>[{ key, text: label, enabled, onClick: action }],(...__operitArgs)=>ctx.UI.Button(...__operitArgs)) : OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:62793",[key,label,enabled,action],()=>[{ key, text: label, enabled, onClick: action }],(...__operitArgs)=>ctx.UI.TextButton(...__operitArgs));
   function shell(title, child, actions, width = 760, height = 820, plainBody = false, reading = false) {
-    return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:61330",[{ key: "native-entity-panel", ...state.fullscreen ? { fillMaxSize: true } : { width, height }, modifier: ctx.Modifier.clip({ cornerRadius: state.fullscreen ? 0 : 28 }) },[
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:61523",[{ key: "entity-header", fillMaxWidth: true, paddingStart: 24, paddingTop: reading ? 18 : 22, paddingEnd: 16, paddingBottom: reading ? 8 : 12, verticalAlignment: "center" },[
-        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:61717",[{ text: title, style: reading ? "labelLarge" : "headlineSmall", fontWeight: reading ? "600" : "700", ...reading ? { color: colors.onSurfaceVariant, fontSize: 14 } : {}, maxLines: 2, overflow: "ellipsis", weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
-        OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:61955",[enabled,close],()=>[{ key: "entity-close", icon: "Close", enabled, onClick: close }],(...__operitArgs)=>ctx.UI.IconButton(...__operitArgs))
+    return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:62976",[{ key: "native-entity-panel", ...state.fullscreen ? { fillMaxSize: true } : { width, height }, modifier: ctx.Modifier.clip({ cornerRadius: state.fullscreen ? 0 : 28 }) },[
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:63169",[{ key: "entity-header", fillMaxWidth: true, paddingStart: 24, paddingTop: reading ? 18 : 22, paddingEnd: 16, paddingBottom: reading ? 8 : 12, verticalAlignment: "center" },[
+        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:63363",[{ text: title, style: reading ? "labelLarge" : "headlineSmall", fontWeight: reading ? "600" : "700", ...reading ? { color: colors.onSurfaceVariant, fontSize: 14 } : {}, maxLines: 2, overflow: "ellipsis", weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+        OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:63601",[enabled,close],()=>[{ key: "entity-close", icon: "Close", enabled, onClick: close }],(...__operitArgs)=>ctx.UI.IconButton(...__operitArgs))
       ]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs)),
-      ...state.busy ? [OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:62071",[],()=>[{ fillMaxWidth: true }],(...__operitArgs)=>ctx.UI.LinearProgressIndicator(...__operitArgs))] : [],
-      ...state.error === "" ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:62169",[{ key: "entity-error", text: state.error, color: colors.error, fillMaxWidth: true, paddingHorizontal: 24, paddingBottom: 12 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))],
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:62316",[{ key: "entity-content", weight: 1, fillMaxWidth: true, ...plainBody ? {} : { paddingStart: 24, paddingTop: 16, paddingEnd: 24, paddingBottom: 20 } },child],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)),
-      OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:62492",[actions],()=>[{ key: "entity-footer", fillMaxWidth: true, paddingStart: 24, paddingTop: 0, paddingEnd: 24, paddingBottom: 20, horizontalArrangement: "end", spacing: 8, runSpacing: 8 },actions],(...__operitArgs)=>ctx.UI.FlowRow(...__operitArgs))
+      ...state.busy ? [OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:63717",[],()=>[{ fillMaxWidth: true }],(...__operitArgs)=>ctx.UI.LinearProgressIndicator(...__operitArgs))] : [],
+      ...state.error === "" ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:63815",[{ key: "entity-error", text: state.error, color: colors.error, fillMaxWidth: true, paddingHorizontal: 24, paddingBottom: 12 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))],
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:63962",[{ key: "entity-content", weight: 1, fillMaxWidth: true, ...plainBody ? {} : { paddingStart: 24, paddingTop: 16, paddingEnd: 24, paddingBottom: 20 } },child],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)),
+      OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64138",[actions],()=>[{ key: "entity-footer", fillMaxWidth: true, paddingStart: 24, paddingTop: 0, paddingEnd: 24, paddingBottom: 20, horizontalArrangement: "end", spacing: 8, runSpacing: 8 },actions],(...__operitArgs)=>ctx.UI.FlowRow(...__operitArgs))
     ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs));
   }
   let panel;
   const cancel = standardButton("entity-cancel", "\u53D6\u6D88", close);
   if (state.expanded !== null) {
     const expanded = state.expanded;
-    panel = shell(expanded.label, OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:62889",[{ key: "entity-expanded-input", label: expanded.label, value: expanded.value, fillMaxSize: true, minLines: 16, maxLines: 40, enabled, onValueChange: (value) => {
+    panel = shell(expanded.label, OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64535",[{ key: "entity-expanded-input", label: expanded.label, value: expanded.value, fillMaxSize: true, minLines: 16, maxLines: 40, enabled, onValueChange: (value) => {
       assertOwner();
       if (live.current.expanded !== null) update({ expanded: { ...live.current.expanded, value } });
     } }],(...__operitArgs)=>ctx.UI.TextField(...__operitArgs)), [
@@ -1179,15 +1222,15 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
       update({ picker: null });
     };
     const choices = picker.choices.filter((option) => (option.label + " " + (option.subtitle ?? "")).toLowerCase().includes(picker.query.trim().toLowerCase()));
-    panel = shell(picker.title, OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64008",[{ fillMaxSize: true },[
+    panel = shell(picker.title, OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:65654",[{ fillMaxSize: true },[
       field("picker-query", "\u641C\u7D22", picker.query, (query) => {
         assertOwner();
         if (live.current.picker !== null) update({ picker: { ...live.current.picker, query } });
       }),
-      ...themePending ? [state.themeError === "" ? caption("\u6B63\u5728\u8BFB\u53D6\u4E3B\u9898\u914D\u7F6E\u2026") : OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64367",[{ fillMaxWidth: true },[OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64406",[{ text: state.themeError, color: colors.error }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)), standardButton("entity-picker-retry", "\u91CD\u65B0\u52A0\u8F7D\u4E3B\u9898", loadThemes)]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs))] : [],
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64573",[{ key: "entity-picker-list", weight: 1, fillMaxWidth: true },[
-        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64663",[{ key: "entity-picker-clear", fillMaxWidth: true, paddingHorizontal: 8, paddingVertical: 9, verticalAlignment: "center", spacing: 10, onClick: () => choose(null) },[OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64840",[{ name: picker.value === null ? "CheckCircle" : "CircleOutlined", size: 20, tint: picker.value === null ? colors.primary : colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs)), text3("\u8DDF\u968F\u5168\u5C40 / \u4E0D\u7ED1\u5B9A")]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs)),
-        ...choices.map((option) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:65096",[{ key: "entity-picker-" + option.id, fillMaxWidth: true, paddingHorizontal: 8, paddingVertical: 9, verticalAlignment: "center", spacing: 10, onClick: () => choose(option.id) },[OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:65285",[{ name: picker.value === option.id ? "CheckCircle" : "CircleOutlined", size: 20, tint: picker.value === option.id ? colors.primary : colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs)), OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:65458",[{ weight: 1 },[text3(option.label), ...option.subtitle === void 0 ? [] : [caption(option.subtitle)]]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs))]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs)))
+      ...themePending ? [state.themeError === "" ? caption("\u6B63\u5728\u8BFB\u53D6\u4E3B\u9898\u914D\u7F6E\u2026") : OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:66013",[{ fillMaxWidth: true },[OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:66052",[{ text: state.themeError, color: colors.error }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)), standardButton("entity-picker-retry", "\u91CD\u65B0\u52A0\u8F7D\u4E3B\u9898", loadThemes)]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs))] : [],
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:66219",[{ key: "entity-picker-list", weight: 1, fillMaxWidth: true },[
+        OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:66309",[{ key: "entity-picker-clear", fillMaxWidth: true, paddingHorizontal: 8, paddingVertical: 9, verticalAlignment: "center", spacing: 10, onClick: () => choose(null) },[OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:66486",[{ name: picker.value === null ? "CheckCircle" : "CircleOutlined", size: 20, tint: picker.value === null ? colors.primary : colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs)), text3("\u8DDF\u968F\u5168\u5C40 / \u4E0D\u7ED1\u5B9A")]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs)),
+        ...choices.map((option) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:66742",[{ key: "entity-picker-" + option.id, fillMaxWidth: true, paddingHorizontal: 8, paddingVertical: 9, verticalAlignment: "center", spacing: 10, onClick: () => choose(option.id) },[OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:66931",[{ name: picker.value === option.id ? "CheckCircle" : "CircleOutlined", size: 20, tint: picker.value === option.id ? colors.primary : colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs)), OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:67104",[{ weight: 1 },[text3(option.label), ...option.subtitle === void 0 ? [] : [caption(option.subtitle)]]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs))]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs)))
       ]],(...__operitArgs)=>ctx.UI.LazyColumn(...__operitArgs))
     ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs)), [cancel], 580, 560);
   } else if (state.toolDraft !== null && state.snapshot !== null) {
@@ -1199,10 +1242,10 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
       const policy = live.current.toolDraft;
       if (policy !== null) update({ toolDraft: { ...policy, [key]: checked ? [...policy[key], option.name] : policy[key].filter((name) => name !== option.name) } });
     }));
-    panel = shell("\u914D\u7F6E\u5141\u8BB8\u4F7F\u7528\u7684\u5DE5\u5177", OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:66674",[{ fillMaxSize: true },[
+    panel = shell("\u914D\u7F6E\u5141\u8BB8\u4F7F\u7528\u7684\u5DE5\u5177", OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:68320",[{ fillMaxSize: true },[
       tabs("entity-tool-tabs", names, state.toolTab, (toolTab) => update({ toolTab })),
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:66807",[{ fillMaxWidth: true, paddingHorizontal: 18, paddingTop: 10 },field("tool-query", "\u641C\u7D22", state.toolQuery, (toolQuery) => update({ toolQuery }))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)),
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:66980",[{ weight: 1, fillMaxWidth: true },body("entity-tool-list", children)],(...__operitArgs)=>ctx.UI.Box(...__operitArgs))
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:68453",[{ fillMaxWidth: true, paddingHorizontal: 18, paddingTop: 10 },field("tool-query", "\u641C\u7D22", state.toolQuery, (toolQuery) => update({ toolQuery }))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)),
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:68626",[{ weight: 1, fillMaxWidth: true },body("entity-tool-list", children)],(...__operitArgs)=>ctx.UI.Box(...__operitArgs))
     ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs)), [cancel, standardButton("entity-primary", "\u786E\u5B9A", () => {
       assertOwner();
       if (live.current.toolDraft !== null) changeCard({ toolAccessConfig: copy(live.current.toolDraft) });
@@ -1226,7 +1269,7 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
         update({ exporting: false, exportContent: "", exportPath: "" });
       }));
     });
-    panel = shell("\u5BFC\u51FA", state.exportContent === "" ? OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:68370",[{ fillMaxWidth: true, spacing: 8 },[standardButton("entity-export-json", "\u5BFC\u51FA JSON", () => exportFile("operit")), ...input.entity === "card" ? [standardButton("entity-export-tavern", "\u5BFC\u51FA\u9152\u9986 JSON", () => exportFile("tavern"))] : []]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs)) : body("entity-export-body", [field("export-path", "\u5BFC\u51FA\u6587\u4EF6 VFS \u8DEF\u5F84", state.exportPath, (exportPath) => update({ exportPath })), section("JSON", state.exportContent)]), [cancel, ...state.exportContent === "" ? [] : [standardButton("entity-export-save", "\u4FDD\u5B58\u6587\u4EF6", writeExport, true)]], state.exportContent === "" ? 420 : 760, state.exportContent === "" ? 240 : 620);
+    panel = shell("\u5BFC\u51FA", state.exportContent === "" ? OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:70016",[{ fillMaxWidth: true, spacing: 8 },[standardButton("entity-export-json", "\u5BFC\u51FA JSON", () => exportFile("operit")), ...input.entity === "card" ? [standardButton("entity-export-tavern", "\u5BFC\u51FA\u9152\u9986 JSON", () => exportFile("tavern"))] : []]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs)) : body("entity-export-body", [field("export-path", "\u5BFC\u51FA\u6587\u4EF6 VFS \u8DEF\u5F84", state.exportPath, (exportPath) => update({ exportPath })), section("JSON", state.exportContent)]), [cancel, ...state.exportContent === "" ? [] : [standardButton("entity-export-save", "\u4FDD\u5B58\u6587\u4EF6", writeExport, true)]], state.exportContent === "" ? 420 : 760, state.exportContent === "" ? 240 : 620);
   } else if (state.tagDraft !== null) {
     const draft = state.tagDraft;
     const children = state.tagDeleting ? [text3(`\u786E\u5B9A\u5220\u9664\u6807\u7B7E\u201C${draft.name}\u201D\uFF1F`)] : [["name", "\u6807\u7B7E\u540D\u79F0", 1], ["description", "\u63CF\u8FF0", 1], ["promptContent", "\u63D0\u793A\u8BCD\u5185\u5BB9", 6]].map(([key, label, lines]) => field("tag-" + key, label, draft[key], (value) => {
@@ -1242,8 +1285,8 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
       standardButton("entity-primary", state.tagDeleting ? "\u5220\u9664" : "\u4FDD\u5B58", stageTag, true)
     ], 620, state.tagDeleting ? 240 : 520);
   } else if (state.tagManaging) {
-    panel = shell("\u7BA1\u7406\u6807\u7B7E", body("entity-tag-manager", state.tags.map((tag) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:70344",[{ key: "entity-tag-row-" + tag.id, fillMaxWidth: true, verticalAlignment: "center" },[
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:70449",[{ weight: 1 },check("entity-tag-" + tag.id, tag.name, state.card?.attachedTagIds.includes(tag.id) ?? false, (checked) => changeCard({ attachedTagIds: checked ? [...card().attachedTagIds, tag.id] : card().attachedTagIds.filter((id2) => id2 !== tag.id) }))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)),
+    panel = shell("\u7BA1\u7406\u6807\u7B7E", body("entity-tag-manager", state.tags.map((tag) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:71990",[{ key: "entity-tag-row-" + tag.id, fillMaxWidth: true, verticalAlignment: "center" },[
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:72095",[{ weight: 1 },check("entity-tag-" + tag.id, tag.name, state.card?.attachedTagIds.includes(tag.id) ?? false, (checked) => changeCard({ attachedTagIds: checked ? [...card().attachedTagIds, tag.id] : card().attachedTagIds.filter((id2) => id2 !== tag.id) }))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)),
       standardButton("entity-tag-edit-" + tag.id, "\u7F16\u8F91", () => {
         assertOwner();
         update({ tagDraft: copy(tag) });
@@ -1260,7 +1303,7 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
     panel = shell("\u786E\u8BA4\u5220\u9664", text3(`\u786E\u5B9A\u5220\u9664\u201C${state.card?.name ?? state.group?.name}\u201D\uFF1F\u6B64\u64CD\u4F5C\u4E0D\u53EF\u64A4\u9500\u3002`), [cancel, standardButton("entity-primary", "\u5220\u9664", remove, true)], 560, 240);
   } else {
     const pages = [[], [], []];
-    if (state.loading) pages[0].push(OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:71771",[{ fillMaxSize: true, contentAlignment: "center" },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:71833",[],()=>[{ size: 32 }],(...__operitArgs)=>ctx.UI.LoadingIndicator(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)));
+    if (state.loading) pages[0].push(OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:73417",[{ fillMaxSize: true, contentAlignment: "center" },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:73479",[],()=>[{ size: 32 }],(...__operitArgs)=>ctx.UI.LoadingIndicator(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)));
     else if (state.snapshot === null) pages[0].push(standardButton("entity-retry", "\u91CD\u65B0\u52A0\u8F7D", load));
     else if (state.card !== null) {
       const draft = state.card, snapshot2 = state.snapshot;
@@ -1280,29 +1323,29 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
         pages[0].push(
           field("name", "\u89D2\u8272\u540D\u79F0", draft.name, (name) => changeCard({ name })),
           field("description", "\u63CF\u8FF0", draft.description, (description) => changeCard({ description })),
-          OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:72778",[{ fillMaxWidth: true, paddingBottom: 12 },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:72832",[{ label: "\u89D2\u8272\u5934\u50CF", enabled },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:72902",[{ fillMaxWidth: true, verticalAlignment: "center" },[
-            OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:72980",[{ key: "entity-edit-avatar", ...draft.avatarUri === null ? { path: state.avatar ?? void 0 } : { uri: draft.avatarUri }, width: 44, height: 44, contentScale: "crop", contentDescription: "\u89D2\u8272\u5934\u50CF", modifier: ctx.Modifier.clip({ type: "circle" }) }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs)),
-            OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:73270",[],()=>[{ width: 12 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
-            OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:73312",[{ text: draft.avatarUri ?? "\u672A\u8BBE\u7F6E", style: "bodyMedium", weight: 1, maxLines: 1, overflow: "ellipsis" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
-            OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:73455",[],()=>[{ width: 8 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
+          OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:74424",[{ fillMaxWidth: true, paddingBottom: 12 },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:74478",[{ label: "\u89D2\u8272\u5934\u50CF", enabled },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:74548",[{ fillMaxWidth: true, verticalAlignment: "center" },[
+            OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:74626",[{ key: "entity-edit-avatar", ...draft.avatarUri === null ? { path: state.avatar ?? void 0 } : { uri: draft.avatarUri }, width: 44, height: 44, contentScale: "crop", contentDescription: "\u89D2\u8272\u5934\u50CF", modifier: ctx.Modifier.clip({ type: "circle" }) }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs)),
+            OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:74916",[],()=>[{ width: 12 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
+            OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:74958",[{ text: draft.avatarUri ?? "\u672A\u8BBE\u7F6E", style: "bodyMedium", weight: 1, maxLines: 1, overflow: "ellipsis" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+            OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:75101",[],()=>[{ width: 8 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
             standardButton("entity-choose-avatar", "\u9009\u62E9", chooseAvatar),
             ...draft.avatarUri === null ? [] : [standardButton("entity-clear-avatar", "\u6E05\u9664", () => __async(null, null, function* () {
               yield act(() => __async(null, null, function* () {
-                const avatar = live.current.avatar ?? (yield ToolPkg.readResource("character_default_avatar", "operit-avatar.png"));
                 assertOwner();
-                update({ card: { ...card(), avatarUri: null }, avatar });
+                update({ card: { ...card(), avatarUri: null } });
+                if (live.current.avatar === null) void loadDefaultAvatar();
               }));
             }))]
           ]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs))],(...__operitArgs)=>ctx.UI.InputDecorator(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)),
           field("characterSetting", "\u89D2\u8272\u8BBE\u5B9A", draft.characterSetting, (characterSetting) => changeCard({ characterSetting }), 6),
           field("openingStatement", "\u5F00\u573A\u767D", draft.openingStatement, (openingStatement) => changeCard({ openingStatement }), 3),
-          OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:74364",[{ fillMaxWidth: true, paddingBottom: 12 },[
-            OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:74435",[{ fillMaxWidth: true, verticalAlignment: "center" },[OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:74500",[],()=>[{ text: "\u6807\u7B7E", weight: 1, fontWeight: "700" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)), OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:74569",[{ key: "entity-tags-manage", enabled, onClick: () => {
+          OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:75945",[{ fillMaxWidth: true, paddingBottom: 12 },[
+            OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:76016",[{ fillMaxWidth: true, verticalAlignment: "center" },[OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:76081",[],()=>[{ text: "\u6807\u7B7E", weight: 1, fontWeight: "700" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)), OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:76150",[{ key: "entity-tags-manage", enabled, onClick: () => {
               assertOwner();
               update({ tagManaging: true });
-            } },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:74733",[{ spacing: 8, verticalAlignment: "center" },[OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:74790",[],()=>[{ name: "Tune", size: 18 }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs)), OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:74831",[],()=>[{ text: "\u7BA1\u7406\u6807\u7B7E" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs))],(...__operitArgs)=>ctx.UI.TextButton(...__operitArgs))]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs)),
-            OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:74899",[],()=>[{ height: 6 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
-            state.tags.length === 0 ? caption("\u6682\u65E0\u63D0\u793A\u8BCD\u6807\u7B7E") : OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:75023",[{ spacing: 8, runSpacing: 8 },state.tags.map((tag) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:75093",[{ key: "entity-tag-" + tag.id, selected: draft.attachedTagIds.includes(tag.id), enabled, label: OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:75207",[{ text: tag.name, maxLines: 1, overflow: "ellipsis", modifier: ctx.Modifier.widthIn({ maxWidth: 160 }) }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)), onClick: () => {
+            } },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:76314",[{ spacing: 8, verticalAlignment: "center" },[OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:76371",[],()=>[{ name: "Tune", size: 18 }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs)), OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:76412",[],()=>[{ text: "\u7BA1\u7406\u6807\u7B7E" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs))],(...__operitArgs)=>ctx.UI.TextButton(...__operitArgs))]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs)),
+            OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:76480",[],()=>[{ height: 6 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
+            state.tags.length === 0 ? caption("\u6682\u65E0\u63D0\u793A\u8BCD\u6807\u7B7E") : OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:76604",[{ spacing: 8, runSpacing: 8 },state.tags.map((tag) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:76674",[{ key: "entity-tag-" + tag.id, selected: draft.attachedTagIds.includes(tag.id), enabled, label: OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:76788",[{ text: tag.name, maxLines: 1, overflow: "ellipsis", modifier: ctx.Modifier.widthIn({ maxWidth: 160 }) }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)), onClick: () => {
               assertOwner();
               changeCard({ attachedTagIds: card().attachedTagIds.includes(tag.id) ? card().attachedTagIds.filter((id2) => id2 !== tag.id) : [...card().attachedTagIds, tag.id] });
             } }],(...__operitArgs)=>ctx.UI.FilterChip(...__operitArgs)))],(...__operitArgs)=>ctx.UI.FlowRow(...__operitArgs))
@@ -1328,7 +1371,7 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
           })])
         );
         if (draft.sharedMemoryMounts.length !== 0) pages[2].push(section("\u5171\u4EAB\u8BB0\u5FC6\u6302\u8F7D", JSON.stringify(draft.sharedMemoryMounts, null, 2)));
-        if (state.themeError !== "") pages[2].push(OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:80024",[{ text: state.themeError, color: colors.error }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)), standardButton("entity-theme-retry", "\u91CD\u65B0\u52A0\u8F7D\u4E3B\u9898", () => __async(null, null, function* () {
+        if (state.themeError !== "") pages[2].push(OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81605",[{ text: state.themeError, color: colors.error }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)), standardButton("entity-theme-retry", "\u91CD\u65B0\u52A0\u8F7D\u4E3B\u9898", () => __async(null, null, function* () {
           yield act(loadThemes);
         })));
       }
@@ -1346,10 +1389,10 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
         onToggleConfiguration: togglePreviewConfiguration
       }));
       else {
-        pages[0].push(field("name", "\u7FA4\u7EC4\u540D\u79F0", draft.name, (name) => changeGroup({ name })), field("description", "\u63CF\u8FF0", draft.description, (description) => changeGroup({ description })), select("entity-theme-picker", "\u4E3B\u9898\u914D\u7F6E", draft.themeConfigId, state.themes ?? [], (themeConfigId) => changeGroup({ themeConfigId })), OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81165",[],()=>[{ text: "\u7EC4\u5185\u89D2\u8272", style: "titleSmall", fontWeight: "700", paddingTop: 8, paddingBottom: 8 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)));
+        pages[0].push(field("name", "\u7FA4\u7EC4\u540D\u79F0", draft.name, (name) => changeGroup({ name })), field("description", "\u63CF\u8FF0", draft.description, (description) => changeGroup({ description })), select("entity-theme-picker", "\u4E3B\u9898\u914D\u7F6E", draft.themeConfigId, state.themes ?? [], (themeConfigId) => changeGroup({ themeConfigId })), OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82746",[],()=>[{ text: "\u7EC4\u5185\u89D2\u8272", style: "titleSmall", fontWeight: "700", paddingTop: 8, paddingBottom: 8 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)));
         for (const option of snapshot2.cards) {
           const selected = draft.members.some((member2) => member2.characterCardId === option.id);
-          pages[0].push(OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81461",[{ fillMaxWidth: true, paddingBottom: 6 },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81514",[{
+          pages[0].push(OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:83042",[{ fillMaxWidth: true, paddingBottom: 6 },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:83095",[{
             key: "entity-member-" + option.id,
             fillMaxWidth: true,
             color: selected ? colors.primaryContainer.copy({ alpha: 0.16 }) : colors.surfaceContainerHighest.copy({ alpha: 0.28 }),
@@ -1360,13 +1403,13 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
               const members = selected ? group().members.filter((member2) => member2.characterCardId !== option.id) : [...group().members, { characterCardId: option.id, orderIndex: group().members.length }];
               changeGroup({ members: members.map((member2, orderIndex) => ({ ...member2, orderIndex })) });
             }
-          },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82347",[{ fillMaxWidth: true, paddingHorizontal: 12, paddingVertical: 8, spacing: 10, verticalAlignment: "center" },[OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82468",[{ name: selected ? "CheckCircle" : "CircleOutlined", size: 18, tint: selected ? colors.primary : colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs)), OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82605",[{ width: 28, height: 28, ...option.avatarUri === null ? { path: state.avatar ?? void 0 } : { uri: option.avatarUri }, modifier: ctx.Modifier.clip({ type: "circle" }), contentScale: "crop", contentDescription: option.name }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs)), OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82843",[{ weight: 1 },[OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82873",[{ text: option.name, style: "bodyMedium", fontWeight: "700", maxLines: 1, overflow: "ellipsis" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)), ...option.description.trim() === "" ? [] : [caption(option.description)]]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs))]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs))],(...__operitArgs)=>ctx.UI.Surface(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)));
+          },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:83928",[{ fillMaxWidth: true, paddingHorizontal: 12, paddingVertical: 8, spacing: 10, verticalAlignment: "center" },[OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84049",[{ name: selected ? "CheckCircle" : "CircleOutlined", size: 18, tint: selected ? colors.primary : colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs)), OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84186",[{ width: 28, height: 28, ...option.avatarUri === null ? { path: state.avatar ?? void 0 } : { uri: option.avatarUri }, modifier: ctx.Modifier.clip({ type: "circle" }), contentScale: "crop", contentDescription: option.name }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs)), OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84424",[{ weight: 1 },[OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84454",[{ text: option.name, style: "bodyMedium", fontWeight: "700", maxLines: 1, overflow: "ellipsis" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)), ...option.description.trim() === "" ? [] : [caption(option.description)]]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs))]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs))],(...__operitArgs)=>ctx.UI.Surface(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)));
         }
       }
     }
     const isCard = state.card !== null;
     const reading = !state.editing;
-    const page = reading ? body("entity-preview-body", pages[0], { paddingStart: 24, paddingTop: 8, paddingEnd: 24, paddingBottom: 24 }) : isCard ? OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:83313",[{ fillMaxSize: true },[tabs("entity-tab", ["\u57FA\u7840", "\u5185\u5BB9", "\u7ED1\u5B9A"], state.tab, (tab) => update({ tab })), OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:83458",[{ key: "entity-pager", weight: 1, fillMaxWidth: true, currentPage: state.tab, onPageChanged: (tab) => {
+    const page = reading ? body("entity-preview-body", pages[0], { paddingStart: 24, paddingTop: 8, paddingEnd: 24, paddingBottom: 24 }) : isCard ? OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84894",[{ fillMaxSize: true },[tabs("entity-tab", ["\u57FA\u7840", "\u5185\u5BB9", "\u7ED1\u5B9A"], state.tab, (tab) => update({ tab })), OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:85039",[{ key: "entity-pager", weight: 1, fillMaxWidth: true, currentPage: state.tab, onPageChanged: (tab) => {
       assertOwner();
       if (tab >= 0 && tab < 3) update({ tab });
     } },pages.map((children, index) => body("entity-body-" + index, children))],(...__operitArgs)=>ctx.UI.HorizontalPager(...__operitArgs))]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs)) : body("entity-body", pages[0], { paddingStart: 0, paddingTop: 0, paddingEnd: 0, paddingBottom: 0 });
@@ -1386,7 +1429,7 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
       ...state.snapshot === null || state.finished ? [] : [standardButton("entity-primary", state.editing ? "\u4FDD\u5B58" : "\u7F16\u8F91", state.editing ? save : edit, true)]
     ], reading ? isCard ? 680 : 620 : isCard ? 760 : 620, reading ? 760 : 820, reading || isCard, reading);
   }
-  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84962",[{
+  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:86543",[{
     key: "character-presentation",
     onLoad: load,
     closeOnDismissRequest: false,
@@ -1423,6 +1466,7 @@ function renderScreen(ctx, definition2, requiredMode = null, managementView = "c
   }
   if (requiredMode !== null && screenSession.currentScreen().input.mode !== requiredMode) throw new Error("The attachment route requires an explicit attachment presentation");
   const origin = "https://characters.operit.local/";
+  const avatars = ctx.useRef("character-memory-avatar-resources", createAvatarResources(origin)).current;
   function applyTheme(theme) {
     return __async(this, null, function* () {
       if (ready.current) yield controller.evaluateJavascript(`window.applyCharacterMemoryTheme(${JSON.stringify(theme)});`);
@@ -1432,23 +1476,21 @@ function renderScreen(ctx, definition2, requiredMode = null, managementView = "c
     return __async(this, null, function* () {
       try {
         controller.addJavascriptInterface("CharacterMemoryHost", {
-          /** Marks the document ready and returns the actual host palette. */
-          currentTheme: () => {
+          /** Loads the initial route, palette and domain aggregate in one existing bridge invocation. */
+          loadScreen: (...args) => __async(null, null, function* () {
+            webArguments(args, 0);
+            const current = screenSession.currentScreen();
+            const screen = current.input.mode === "manage" && managementView === "memory" ? { ...current, input: { mode: "manage", view: "memory" } } : current;
+            const snapshot2 = yield ToolPkg.ipc.call("character-memory.request", { action: "snapshot" }, { targetRuntime: "main" });
             ready.current = true;
-            return ctx.Theme.getCurrent();
-          },
+            return { theme: ctx.Theme.getCurrent(), screen, snapshot: snapshot2 };
+          }),
           /** Routes all editing operations through this package's main runtime. */
           request: (...args) => __async(null, null, function* () {
             const [request2] = webArguments(args, 1);
             const decoded = record(request2, "character-memory.request");
             return ToolPkg.ipc.call("character-memory.request", decoded, { targetRuntime: "main" });
           }),
-          /** Returns the readonly plugin screen input and its real host presentation request id. */
-          currentScreen: (...args) => {
-            webArguments(args, 0);
-            const current = screenSession.currentScreen();
-            return current.input.mode === "manage" && managementView === "memory" ? { ...current, input: { mode: "manage", view: "memory" } } : current;
-          },
           /** Returns an explicit completion action result for this exact presented screen. */
           completeScreen: (...args) => {
             const [result] = webArguments(args, 1);
@@ -1461,11 +1503,11 @@ function renderScreen(ctx, definition2, requiredMode = null, managementView = "c
             webArguments(args, 0);
             return screenSession.cancelScreen();
           },
-          /** Reads an image through Files instead of exposing VFS paths to Image.file. */
+          /** Returns a document resource reference without transporting image bytes through JS. */
           avatarImage: (...args) => __async(null, null, function* () {
             const [uri] = webArguments(args, 1);
             if (uri !== null && typeof uri !== "string") throw new Error("\u5934\u50CF\u8DEF\u5F84\u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u6216 null");
-            return imageSource(uri === null ? yield ToolPkg.readResource("character_default_avatar", "operit-avatar.png") : uri);
+            return avatars.source(uri);
           }),
           /** Opens the same native entity renderer used by chat avatars and the sidebar. */
           openEntity: (...args) => {
@@ -1501,7 +1543,7 @@ function renderScreen(ctx, definition2, requiredMode = null, managementView = "c
       unsubscribe.current = null;
     }
   }
-  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:91572",[{ fillMaxSize: true, onLoad: initialize },[path === "" ? OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:91641",[{ text: error === "" ? `\u6B63\u5728\u52A0\u8F7D${managementView === "memory" ? "\u8BB0\u5FC6" : definition2.title}\u2026` : error }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)) : OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:91789",[{
+  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:93271",[{ fillMaxSize: true, onLoad: initialize },[path === "" ? OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:93340",[{ text: error === "" ? `\u6B63\u5728\u52A0\u8F7D${managementView === "memory" ? "\u8BB0\u5FC6" : definition2.title}\u2026` : error }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)) : OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:93488",[{
     key: "character-memory-web",
     controller,
     fillMaxSize: true,
@@ -1512,8 +1554,8 @@ function renderScreen(ctx, definition2, requiredMode = null, managementView = "c
     useWideViewPort: true,
     /** Restricts top-level navigation to the package document. */
     onShouldOverrideUrlLoading: (request2) => request2.url === origin ? { action: "allow" } : { action: "cancel" },
-    /** Serves the single offline asset through the existing cross-platform resource host. */
-    onInterceptRequest: (request2) => request2.url === origin ? { action: "respond", response: { mimeType: "text/html", encoding: "utf-8", statusCode: 200, reasonPhrase: "OK", filePath: path } } : { action: "block" },
+    /** Serves the offline document and its registered images through the resource host. */
+    onInterceptRequest: (request2) => avatars.intercept(request2) ?? (request2.url === origin ? { action: "respond", response: { mimeType: "text/html", encoding: "utf-8", statusCode: 200, reasonPhrase: "OK", filePath: path } } : { action: "block" }),
     /** Handles disposal without retaining the screen in the host theme service. */
     onLifecycleEvent: (event) => {
       if (event.type === "Disposed") dispose();

@@ -5,6 +5,7 @@ import 'ComposeDslImageSource.dart';
 import '../../../../core/application/PluginHotReload.dart';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show listEquals, debugPrintSynchronously;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -97,23 +98,44 @@ class ToolPkgUiLauncherScreen extends StatefulWidget {
 /// First-load stages are logged by default; profiling also includes later updates.
 /// Frame completion is a Flutter tree measurement, not a GPU presentation timestamp.
 class _ToolPkgUiLoadTiming {
-  _ToolPkgUiLoadTiming(this.label, {bool firstLoad = false})
-    : _watch =
-          firstLoad || const bool.fromEnvironment('OPERIT_PROFILE_PLUGIN_UI')
-          ? (Stopwatch()..start())
-          : null;
+  _ToolPkgUiLoadTiming(
+    this.label, {
+    bool firstLoad = false,
+    int? queueWaitMicros,
+    int? startedAfterMicros,
+  }) : _watch =
+           firstLoad || const bool.fromEnvironment('OPERIT_PROFILE_PLUGIN_UI')
+           ? (Stopwatch()..start())
+           : null {
+    if (_watch != null && queueWaitMicros != null) {
+      ClientLogger.i(
+        'event=compose_load_begin $label firstLoad=$firstLoad '
+        'queueMs=${(queueWaitMicros / 1000).toStringAsFixed(3)} '
+        'startedAfterMs=${(startedAfterMicros! / 1000).toStringAsFixed(3)}',
+        tag: 'ToolPkgUiLauncher',
+      );
+    }
+  }
 
   final String label;
   final Stopwatch? _watch;
   int _previousMicros = 0;
 
-  void mark(String stage) {
+  /// Measures each operation independently when loading stages overlap.
+  Future<T> measure<T>(String stage, Future<T> Function() operation) async {
+    final startedMicros = _watch?.elapsedMicroseconds;
+    final result = await operation();
+    mark(stage, startedMicros: startedMicros);
+    return result;
+  }
+
+  void mark(String stage, {int? startedMicros}) {
     final watch = _watch;
     if (watch == null) return;
     final elapsed = watch.elapsedMicroseconds;
     ClientLogger.i(
       'event=compose_load_stage $label stage=$stage '
-      'stepMs=${((elapsed - _previousMicros) / 1000).toStringAsFixed(1)} '
+      'stepMs=${((elapsed - (startedMicros ?? _previousMicros)) / 1000).toStringAsFixed(1)} '
       'totalMs=${(elapsed / 1000).toStringAsFixed(1)}',
       tag: 'ToolPkgUiLauncher',
     );
@@ -128,6 +150,13 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
   late final String _selectedRouteId = _initialRouteId();
   _ComposeDslRenderResult? _renderResult;
   String? _scriptScreenPath;
+  ({
+    String uiModuleId,
+    String? embeddedScreenPath,
+    String script,
+    String? screenPath,
+  })?
+  _composeScript;
   ({String contextKey, String containerPackageName})? _activeExecutionContext;
   bool _loading = true;
   bool _loadedInitialRoute = false;
@@ -137,7 +166,7 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
   ColorScheme? _themeScheme;
   String? _error;
   final _actionScheduler = ComposeDslActionScheduler();
-  Future<void> _renderTail = Future<void>.value();
+  Future<void>? _renderTail;
   Future<void> _reloadTail = Future<void>.value();
   int _reloadGeneration = 0;
   bool _reloading = false;
@@ -242,11 +271,9 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
     _currentLanguageTag = languageTag;
     if (shouldLoadRoute) {
       _loadedInitialRoute = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && !_reloading) {
-          _loadRoute();
-        }
-      });
+      // Start the first resource requests while this page is being mounted.
+      // Only renders already in flight need to wait on the render tail.
+      if (!_reloading) unawaited(_loadRoute());
     } else if (themeChanged) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && !_loading) unawaited(_notifyThemeChanged());
@@ -320,17 +347,33 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
   Future<void> _loadRoute({bool updateInputs = false}) async {
     if (!updateInputs) _actionOwnerGeneration++;
     final generation = ++_routeLoadGeneration;
-    final pending = _renderTail.then((_) async {
-      await _loadRouteCore(generation, updateInputs: updateInputs);
-    });
+    final queued = Stopwatch()..start();
+    Future<void> render() async {
+      queued.stop();
+      await _loadRouteCore(
+        generation,
+        updateInputs: updateInputs,
+        queueWaitMicros: queued.elapsedMicroseconds,
+      );
+    }
+
+    final previous = _renderTail;
+    final pending = previous == null
+        ? render()
+        : previous.then((_) => render());
     _renderTail = pending;
-    await pending;
+    try {
+      await pending;
+    } finally {
+      if (identical(_renderTail, pending)) _renderTail = null;
+    }
   }
 
   /// Renders the latest input while preserving an already visible DSL tree.
   Future<void> _loadRouteCore(
     int routeLoadGeneration, {
     required bool updateInputs,
+    required int queueWaitMicros,
   }) async {
     if (!_isCurrentRouteLoad(routeLoadGeneration)) {
       return;
@@ -346,14 +389,21 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
       containerPackageName: widget.plugin.packageName,
     );
     final timing = _ToolPkgUiLoadTiming(
-      'package=${widget.plugin.packageName} route=$uiModuleId updateInputs=$updateInputs',
+      'package=${widget.plugin.packageName} route=$uiModuleId '
+      'context=$executionContextKey load=$routeLoadGeneration updateInputs=$updateInputs',
       firstLoad: !_composeHasRendered,
+      queueWaitMicros: queueWaitMicros,
+      startedAfterMicros: _firstTreeWatch.elapsedMicroseconds,
     );
-    setState(() {
-      // Streaming input is an update, not a new page initialization.
-      _loading = !updateInputs || _renderResult == null;
-      _error = null;
-    });
+    // Initial mounting already has loading=true; avoid dirtying an element
+    // during dependency resolution just to assign the same values.
+    final loading = !updateInputs || _renderResult == null;
+    if (_loading != loading || _error != null) {
+      setState(() {
+        _loading = loading;
+        _error = null;
+      });
+    }
     try {
       final previousExecutionContext = _activeExecutionContext;
       if (previousExecutionContext != null &&
@@ -364,61 +414,31 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
           return;
         }
       }
-      if (_activeExecutionContext != executionContext) {
-        _activeExecutionContext = executionContext;
-        await _acquireExecutionContext(executionContext, timing);
-        if (!_isCurrentRouteLoad(routeLoadGeneration)) {
-          if (_activeExecutionContext != executionContext) {
-            await _releaseExecutionContext(executionContext);
-          }
-          return;
-        }
-      }
-      final embeddedScreenPath = _embeddedScreenPath();
-      final String? script;
-      final String? screenPath;
-      if (embeddedScreenPath != null) {
-        script = await _packageManager.readToolPkgTextResource(
-          packageNameOrSubpackageId: widget.plugin.packageName,
-          resourcePath: embeddedScreenPath,
-          preferEnabledContainer: true,
-        );
-        screenPath = embeddedScreenPath;
-      } else {
-        final entry = await Future.wait<String?>([
-          _packageManager.getToolPkgComposeDslScript(
-            containerPackageName: widget.plugin.packageName,
-            uiModuleId: uiModuleId,
-          ),
-          _packageManager.getToolPkgComposeDslScreenPath(
-            containerPackageName: widget.plugin.packageName,
-            uiModuleId: uiModuleId,
-          ),
-        ]);
-        script = entry[0];
-        screenPath = entry[1];
-      }
+      final acquireContext = _activeExecutionContext != executionContext;
+      if (acquireContext) _activeExecutionContext = executionContext;
+      final scriptFuture = timing.measure(
+        'read-script',
+        () => _readComposeScript(uiModuleId),
+      );
+      // Script resources do not depend on the page engine or session. Await
+      // both tasks together so either failure is handled by this route load.
+      await Future.wait<void>([
+        if (acquireContext) _acquireExecutionContext(executionContext, timing),
+        scriptFuture.then<void>((_) {}),
+      ]);
       if (!_isCurrentRouteLoad(routeLoadGeneration)) {
+        if (acquireContext && _activeExecutionContext != executionContext) {
+          await _releaseExecutionContext(executionContext);
+        }
         return;
       }
-      if (script == null || script.trim().isEmpty) {
-        if (embeddedScreenPath != null) {
-          throw StateError(
-            'compose_dsl screen not found: '
-            'package=${widget.plugin.packageName}, screen=$embeddedScreenPath',
-          );
-        }
-        throw StateError(
-          'compose_dsl script not found: '
-          'package=${widget.plugin.packageName}, module=$uiModuleId',
-        );
-      }
-      timing.mark('read-script');
-      _scriptScreenPath = screenPath;
+      final entry = await scriptFuture;
+      _composeScript = entry;
+      _scriptScreenPath = entry.screenPath;
       final renderedTheme = _themeScheme;
       final command = await _submitComposeCommand(
         operation: 'render',
-        script: script,
+        script: entry.script,
         runtimeOptions: _runtimeOptions(
           uiModuleId: uiModuleId,
           routeInstanceId: routeInstanceId,
@@ -453,11 +473,72 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
     }
   }
 
+  /// Reuses immutable script text within one page session; release clears it.
+  Future<
+    ({
+      String uiModuleId,
+      String? embeddedScreenPath,
+      String script,
+      String? screenPath,
+    })
+  >
+  _readComposeScript(String uiModuleId) async {
+    final embeddedScreenPath = _embeddedScreenPath();
+    final cached = _composeScript;
+    if (cached != null &&
+        cached.uiModuleId == uiModuleId &&
+        cached.embeddedScreenPath == embeddedScreenPath) {
+      return cached;
+    }
+    final String? script;
+    final String? screenPath;
+    if (embeddedScreenPath != null) {
+      script = await _packageManager.readToolPkgTextResource(
+        packageNameOrSubpackageId: widget.plugin.packageName,
+        resourcePath: embeddedScreenPath,
+        preferEnabledContainer: true,
+      );
+      screenPath = embeddedScreenPath;
+    } else {
+      final entry = await Future.wait<String?>([
+        _packageManager.getToolPkgComposeDslScript(
+          containerPackageName: widget.plugin.packageName,
+          uiModuleId: uiModuleId,
+        ),
+        _packageManager.getToolPkgComposeDslScreenPath(
+          containerPackageName: widget.plugin.packageName,
+          uiModuleId: uiModuleId,
+        ),
+      ]);
+      script = entry[0];
+      screenPath = entry[1];
+    }
+    if (script == null || script.trim().isEmpty) {
+      if (embeddedScreenPath != null) {
+        throw StateError(
+          'compose_dsl screen not found: '
+          'package=${widget.plugin.packageName}, screen=$embeddedScreenPath',
+        );
+      }
+      throw StateError(
+        'compose_dsl script not found: '
+        'package=${widget.plugin.packageName}, module=$uiModuleId',
+      );
+    }
+    return (
+      uiModuleId: uiModuleId,
+      embeddedScreenPath: embeddedScreenPath,
+      script: script,
+      screenPath: screenPath,
+    );
+  }
+
   /// Measures first committed DSL-tree frame, including any initial render queue.
   /// A prewarmed sidebar can complete this while its presentation is hidden.
   void _reportFirstTreeFrame() {
     if (_firstTreeFrameReported || _firstTreeFrameScheduled) return;
     _firstTreeFrameScheduled = true;
+    final treeReadyMicros = _firstTreeWatch.elapsedMicroseconds;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _firstTreeFrameScheduled = false;
       if (!mounted ||
@@ -470,7 +551,10 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
       _firstTreeWatch.stop();
       ClientLogger.i(
         'event=compose_first_tree_frame package=${widget.plugin.packageName} '
-        'route=$_selectedRouteId elapsedMs=${_firstTreeWatch.elapsedMilliseconds} '
+        'route=$_selectedRouteId context=${_activeExecutionContext?.contextKey} '
+        'load=$_routeLoadGeneration elapsedMs=${_firstTreeWatch.elapsedMilliseconds} '
+        'wallMicros=${DateTime.now().microsecondsSinceEpoch} '
+        'frameWaitMs=${((_firstTreeWatch.elapsedMicroseconds - treeReadyMicros) / 1000).toStringAsFixed(3)} '
         'prepared=${widget.initialState['chatSidebarPrepared'] != null} '
         'tickerEnabled=${TickerMode.valuesOf(context).enabled}',
         tag: _logTag,
@@ -496,16 +580,20 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
     ({String contextKey, String containerPackageName}) executionContext,
     _ToolPkgUiLoadTiming timing,
   ) async {
-    await _packageManager.acquireToolPkgExecutionEngine(
-      contextKey: executionContext.contextKey,
-      containerPackageName: executionContext.containerPackageName,
+    await timing.measure(
+      'acquire-engine',
+      () => _packageManager.acquireToolPkgExecutionEngine(
+        contextKey: executionContext.contextKey,
+        containerPackageName: executionContext.containerPackageName,
+      ),
     );
-    timing.mark('acquire-engine');
-    final sessionId = await _packageManager.openComposeDslSession(
-      contextKey: executionContext.contextKey,
-      containerPackageName: executionContext.containerPackageName,
+    final sessionId = await timing.measure(
+      'open-session',
+      () => _packageManager.openComposeDslSession(
+        contextKey: executionContext.contextKey,
+        containerPackageName: executionContext.containerPackageName,
+      ),
     );
-    timing.mark('open-session');
     ClientLogger.i(
       'event=compose_session_open package=${executionContext.containerPackageName} '
       'context=${executionContext.contextKey} session=$sessionId',
@@ -515,6 +603,7 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
     _composeSessionError = null;
     _composeSessionErrorStack = null;
     _composeHasRendered = false;
+    _composeScript = null;
     final session = widget.clients.servicesComposeDslSessionService;
     _composeUpdates = session
         .updates(sessionId: sessionId)
@@ -565,6 +654,8 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
     _composeUpdates = null;
     _composeSubmission = null;
     _composeSessionId = null;
+    _composeScript = null;
+    _scriptScreenPath = null;
     _failComposeCommands(StateError('Compose execution context released'));
     _composePending.clear();
     if (commands != null) await commands.close();
@@ -580,7 +671,16 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
   void _applyComposeEventUpdate(core_proxy.ToolPkgComposeDslEvent event) {
     final oldRoot = _renderResult?.tree;
     final update = event.update;
-    if (update != null) _nodeStore.apply(update);
+    if (update != null) {
+      final watch = const bool.fromEnvironment('OPERIT_PROFILE_COMPOSE_STAGES') ? (Stopwatch()..start()) : null;
+      _nodeStore.apply(update);
+      if (watch != null) {
+        debugPrintSynchronously('event=compose_pipeline_stage stage=dart-node-apply '
+            'durationMs=${(watch.elapsedMicroseconds / 1000).toStringAsFixed(3)} '
+            'wallMicros=${DateTime.now().microsecondsSinceEpoch} request=${event.requestId} '
+            'revision=${update.revision} nodes=${update.upserts.length}');
+      }
+    }
     if (oldRoot == null && update == null) return;
     final root = _nodeStore.root;
     _renderResult = _ComposeDslRenderResult(
@@ -866,6 +966,7 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
     return <String, Object?>{
       if (updateInputs) '__operit_update_inputs': true,
       if (updateInputs) '__operit_input_state': widget.initialState,
+      if (const bool.fromEnvironment('OPERIT_PROFILE_COMPOSE_STAGES')) '__operit_profile_compose_stages': true,
       'packageName': widget.plugin.packageName,
       'theme': pluginThemeSnapshot(_themeScheme!),
       'containerPackageName': widget.plugin.packageName,

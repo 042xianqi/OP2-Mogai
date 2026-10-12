@@ -102,22 +102,16 @@ void main() {
             return png;
           },
         );
+        expect(
+          reads,
+          isEmpty,
+          reason: 'Reads begin only when an image is displayed',
+        );
+        expect(provider, isA<ComposeDslVfsImage>());
+        expect((provider as ComposeDslVfsImage).path, entry.value);
+        expect(await provider.readBytes(provider.path), same(png));
         expect(reads, [entry.value]);
-        expect(provider, isA<MemoryImage>());
-        expect((provider as MemoryImage).bytes, same(png));
       }
-    },
-  );
-  test(
-    'VFS read failure propagates without fallback to native filesystem',
-    () async {
-      await expectLater(
-        resolveComposeDslImage(
-          '/app/data/missing.png',
-          readVfsBytes: (_) async => throw StateError('original VFS failure'),
-        ),
-        throwsStateError,
-      );
     },
   );
   test('ordinary data network native file sources do not call VFS', () async {
@@ -152,6 +146,48 @@ void main() {
       isA<FileImage>(),
     );
   });
+  test(
+    'identical data avatars share bytes and Flutter image-cache identity',
+    () async {
+      final source = 'data:image/png;base64,${base64Encode(png)}';
+      final providers = await Future.wait(
+        List.generate(
+          20,
+          (_) => resolveComposeDslImage(
+            source,
+            readVfsBytes: (_) async => throw StateError('Unexpected VFS'),
+          ),
+        ),
+      );
+      expect(providers.toSet(), hasLength(1));
+      final provider = providers.first as MemoryImage;
+      expect(provider.bytes, orderedEquals(png));
+      for (final item in providers) {
+        expect(await item.obtainKey(ImageConfiguration.empty), same(provider));
+      }
+    },
+  );
+  test(
+    'data-avatar cache is LRU bounded and oversized entries are not retained',
+    () {
+      final first = 'data:image/png;base64,${base64Encode(png)}';
+      final second = 'data:image/png;base64,${base64Encode([...png, 1])}';
+      final third = 'data:image/png;base64,${base64Encode([...png, 2])}';
+      final cache = ComposeDslDataImageCache(maximumEntries: 2);
+      final a = cache.resolve(first), b = cache.resolve(second);
+      expect(cache.resolve(first), same(a)); // Make A recent, so C evicts B.
+      cache.resolve(third);
+      expect(cache.resolve(first), same(a));
+      expect(cache.resolve(second), isNot(same(b)));
+      final tiny = ComposeDslDataImageCache(maximumBytes: 1);
+      expect(tiny.resolve(first), isNot(same(tiny.resolve(first))));
+      final budget = first.length * 2 + png.length;
+      final one = ComposeDslDataImageCache(maximumBytes: budget);
+      final retained = one.resolve(first);
+      one.resolve(second); // Larger than budget, so does not evict retained A.
+      expect(one.resolve(first), same(retained));
+    },
+  );
   testWidgets(
     'actual DSL VFS image survives repaint without another read or image provider',
     (tester) async {
@@ -185,7 +221,7 @@ void main() {
       expect(reads, ['/app/data/cache/avatar.png']);
       expect(tester.takeException(), isNull);
       final first = tester.widget<Image>(find.byType(Image)).image;
-      expect(first, isA<MemoryImage>());
+      expect(first, isA<ComposeDslVfsImage>());
       await tester.pumpWidget(render('/app/data/cache/avatar.png'));
       await tester.pumpAndSettle();
       expect(reads, hasLength(1));
@@ -200,6 +236,113 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+  testWidgets('same-path images refresh when the owning session changes', (
+    tester,
+  ) async {
+    final reads = <String>[];
+    Widget render(String session) => MaterialApp(
+      home: buildComposeDslLayoutForTest(
+        node: {
+          'type': 'Image',
+          'props': {'path': '/app/avatar.image'},
+          'children': [],
+          'slots': {},
+        },
+        hostContext: ComposeDslWebViewHostContext(
+          packageName: 'test.images',
+          routeInstanceId: 'route',
+          executionContextKey: session,
+          dispatchAction: (_, [payload]) async => null,
+          runtimeOptionsProvider: () => {},
+          readFileBytes: (_) async {
+            reads.add(session);
+            return png;
+          },
+        ),
+        splitMarkdownContent: (_) async => [],
+        onTextInput: (_, text) async => null,
+      ),
+    );
+    await tester.pumpWidget(render('first'));
+    await tester.pumpAndSettle();
+    final first = tester.widget<Image>(find.byType(Image)).image;
+    await tester.pumpWidget(render('second'));
+    await tester.pumpAndSettle();
+    expect(reads, ['first', 'second']);
+    expect(
+      tester.widget<Image>(find.byType(Image)).image,
+      isNot(equals(first)),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'twenty VFS images share one in-flight read and retry failed reads',
+    (tester) async {
+      var reads = 0;
+      var fail = true;
+      final pending = Completer<Uint8List>();
+      Future<Uint8List> read(String path) {
+        reads++;
+        if (fail) return Future.error(StateError('VFS denied'));
+        return pending.future;
+      }
+
+      const path = '/app/data/shared-avatar.png';
+      final providers = await Future.wait(
+        List.generate(
+          20,
+          (_) => resolveComposeDslImage(
+            path,
+            readVfsBytes: read,
+            vfsOwner: 'shared-test',
+          ),
+        ),
+      );
+      expect(providers.toSet(), hasLength(1));
+      Widget images() => MaterialApp(
+        home: Row(
+          children: providers
+              .map(
+                (provider) => Image(
+                  image: provider,
+                  width: 1,
+                  height: 1,
+                  errorBuilder: (_, error, stack) => const SizedBox(),
+                ),
+              )
+              .toList(),
+        ),
+      );
+      await tester.pumpWidget(images());
+      await tester.pumpAndSettle();
+      expect(reads, 1);
+      await tester.pumpWidget(const SizedBox());
+      fail = false;
+      await tester.pumpWidget(images());
+      await tester.pump();
+      expect(reads, 2);
+      pending.complete(png);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      final otherOwner = await resolveComposeDslImage(
+        path,
+        readVfsBytes: read,
+        vfsOwner: 'other-session',
+      );
+      expect(otherOwner, isNot(equals(providers.first)));
+      expect(await providers.first.evict(), isTrue);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpWidget(images());
+      await tester.pumpAndSettle();
+      expect(
+        reads,
+        3,
+        reason: 'An explicitly evicted path must read fresh content',
+      );
+    },
+  );
+
   testWidgets(
     'failed native VFS image displays an error affordance without framework file exception',
     (tester) async {

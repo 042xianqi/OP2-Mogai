@@ -1,8 +1,8 @@
 import type { ComposeDslContext, ComposeNode, ComposeThemeSnapshot } from "../../../../types/compose-dsl";
-import type { Definition, Request, RequestOutput } from "./model";
-import { imageSource } from "./image-source";
+import type { Definition, Request, RequestOutput, Snapshot } from "./model";
+import { createAvatarResources } from "./avatar-resources";
 import { renderManagedEntityScreen, type ManagedEntityRequest } from "./ui-entity-native";
-import { parseScreenResult } from "./presentation";
+import { parseScreenResult, type ScreenBootstrap } from "./presentation";
 import { record } from "./domain";
 import { createUiScreenSession } from "./ui-contributions";
 import type { UiScreenSession, UiPresentation } from "./ui-contributions";
@@ -34,6 +34,7 @@ export function renderScreen(ctx: ComposeDslContext, definition: Definition, req
   }
   if (requiredMode !== null && screenSession.currentScreen().input.mode !== requiredMode) throw new Error("The attachment route requires an explicit attachment presentation");
   const origin = "https://characters.operit.local/";
+  const avatars = ctx.useRef("character-memory-avatar-resources", createAvatarResources(origin)).current;
   /** Sends host theme changes through the plugin-owned document contract. */
   async function applyTheme(theme: ComposeThemeSnapshot): Promise<void> {
     if (ready.current) await controller.evaluateJavascript(`window.applyCharacterMemoryTheme(${JSON.stringify(theme)});`);
@@ -42,20 +43,21 @@ export function renderScreen(ctx: ComposeDslContext, definition: Definition, req
   async function initialize(): Promise<void> {
     try {
       controller.addJavascriptInterface("CharacterMemoryHost", {
-        /** Marks the document ready and returns the actual host palette. */
-        currentTheme: () => { ready.current = true; return ctx.Theme.getCurrent(); },
+        /** Loads the initial route, palette and domain aggregate in one existing bridge invocation. */
+        loadScreen: async (...args: unknown[]): Promise<ScreenBootstrap> => {
+          webArguments(args, 0);
+          const current = screenSession.currentScreen();
+          const screen = current.input.mode === "manage" && managementView === "memory"
+            ? { ...current, input: { mode: "manage" as const, view: "memory" as const } } : current;
+          const snapshot = await ToolPkg.ipc.call<{ action: "snapshot" }, Snapshot>("character-memory.request", { action: "snapshot" }, { targetRuntime: "main" });
+          ready.current = true;
+          return { theme: ctx.Theme.getCurrent(), screen, snapshot };
+        },
         /** Routes all editing operations through this package's main runtime. */
         request: async (...args: unknown[]) => {
           const [request] = webArguments(args, 1);
           const decoded = record(request, "character-memory.request") as Request;
           return ToolPkg.ipc.call<Request, RequestOutput>("character-memory.request", decoded, { targetRuntime: "main" });
-        },
-        /** Returns the readonly plugin screen input and its real host presentation request id. */
-        currentScreen: (...args: unknown[]) => {
-          webArguments(args, 0);
-          const current = screenSession.currentScreen();
-          return current.input.mode === "manage" && managementView === "memory"
-            ? { ...current, input: { mode: "manage", view: "memory" } } : current;
         },
         /** Returns an explicit completion action result for this exact presented screen. */
         completeScreen: (...args: unknown[]) => {
@@ -69,11 +71,11 @@ export function renderScreen(ctx: ComposeDslContext, definition: Definition, req
           webArguments(args, 0);
           return screenSession.cancelScreen();
         },
-        /** Reads an image through Files instead of exposing VFS paths to Image.file. */
+        /** Returns a document resource reference without transporting image bytes through JS. */
         avatarImage: async (...args: unknown[]) => {
           const [uri] = webArguments(args, 1);
           if (uri !== null && typeof uri !== "string") throw new Error("头像路径必须是字符串或 null");
-          return imageSource(uri === null ? await ToolPkg.readResource("character_default_avatar", "operit-avatar.png") : uri);
+          return avatars.source(uri);
         },
         /** Opens the same native entity renderer used by chat avatars and the sidebar. */
         openEntity: (...args: unknown[]) => {
@@ -108,8 +110,8 @@ export function renderScreen(ctx: ComposeDslContext, definition: Definition, req
     javaScriptEnabled: true, domStorageEnabled: true, supportZoom: false, useWideViewPort: true,
     /** Restricts top-level navigation to the package document. */
     onShouldOverrideUrlLoading: request => request.url === origin ? { action: "allow" } : { action: "cancel" },
-    /** Serves the single offline asset through the existing cross-platform resource host. */
-    onInterceptRequest: request => request.url === origin ? { action: "respond", response: { mimeType: "text/html", encoding: "utf-8", statusCode: 200, reasonPhrase: "OK", filePath: path } } : { action: "block" },
+    /** Serves the offline document and its registered images through the resource host. */
+    onInterceptRequest: request => avatars.intercept(request) ?? (request.url === origin ? { action: "respond", response: { mimeType: "text/html", encoding: "utf-8", statusCode: 200, reasonPhrase: "OK", filePath: path } } : { action: "block" }),
     /** Handles disposal without retaining the screen in the host theme service. */
     onLifecycleEvent: event => { if (event.type === "Disposed") dispose(); },
   }), ...(managed === null ? [] : [renderManagedEntityScreen(ctx, managed, finishEntity)])]);

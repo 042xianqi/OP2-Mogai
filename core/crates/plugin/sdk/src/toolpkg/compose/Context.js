@@ -3,6 +3,7 @@ var OperitComposeDslRuntime = function () {
   function createContext(runtimeOptions) {
     var options = runtimeOptions && typeof runtimeOptions === 'object' ? runtimeOptions : {};
     var runtime = {
+      profileStages: options.__operit_profile_compose_stages === true,
       stateStore: OperitComposeHost.copy(options.state),
       memoStore: OperitComposeHost.copy(options.memo),
       moduleSpec: options.moduleSpec && typeof options.moduleSpec === 'object' ? options.moduleSpec : {},

@@ -402,19 +402,11 @@ function readSelectorData(input) {
     }
     if (selected !== null) requireChatSelection(selected, cards, groups);
     const options = [];
-    let defaultAvatar = null;
     if (input.kind === "card" || input.kind === "all") {
-      if (cards.some(
-        /** Requests the declared static avatar only for genuinely avatar-free cards, not after a failed image read. */
-        (card) => card.avatarUri === null
-      )) defaultAvatar = yield ToolPkg.readResource("character_default_avatar", "operit-avatar.png");
       for (const card of cards) {
         let avatar;
         if (card.avatarUri !== null) avatar = { type: "uri", uri: card.avatarUri };
-        else {
-          if (defaultAvatar === null || defaultAvatar.trim() === "") throw new Error("Declared character default-avatar resource did not resolve");
-          avatar = { type: "resource", path: defaultAvatar };
-        }
+        else avatar = { type: "resource", path: null };
         options.push({
           key: "card:" + card.id,
           token: "card:" + card.id,
@@ -445,6 +437,14 @@ function readSelectorData(input) {
     return { options, selected };
   });
 }
+function loadSelectorAvatars(data) {
+  return __async(this, null, function* () {
+    if (!data.options.some((option) => option.avatar.type === "resource" && option.avatar.path === null)) return data;
+    const path = yield ToolPkg.readResource("character_default_avatar", "operit-avatar.png");
+    if (path.trim() === "") throw new Error("Declared character default-avatar resource did not resolve");
+    return { ...data, options: data.options.map((option) => option.avatar.type === "resource" && option.avatar.path === null ? { ...option, avatar: { type: "resource", path } } : option) };
+  });
+}
 
 // src/ui-input-menu.ts
 function selectedOption(data) {
@@ -459,16 +459,16 @@ function selectedOption(data) {
 function menuAvatar(ctx, option, unboundAvatar) {
   const props = { width: 32, height: 32, contentScale: "crop", modifier: ctx.Modifier.clip({ type: "circle" }) };
   if (option === null) {
-    if (unboundAvatar === null) throw new Error("Unbound character avatar resource is not loaded");
-    return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:22428",[{ ...props, path: unboundAvatar, contentDescription: "\u672A\u7ED1\u5B9A" }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs));
+    if (unboundAvatar === null) return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:22460",[{ width: 32, height: 32, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:22526",[{ name: "Person", size: 24, tint: ctx.MaterialTheme.colorScheme.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
+    return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:22635",[{ ...props, path: unboundAvatar, contentDescription: "\u672A\u7ED1\u5B9A" }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs));
   }
   switch (option.avatar.type) {
     case "uri":
-      return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:22584",[{ ...props, uri: option.avatar.uri, contentDescription: option.title }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs));
+      return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:22791",[{ ...props, uri: option.avatar.uri, contentDescription: option.title }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs));
     case "resource":
-      return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:22704",[{ ...props, path: option.avatar.path, contentDescription: option.title }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs));
+      return option.avatar.path === null ? OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:22941",[{ width: 32, height: 32, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:23007",[{ name: "Person", size: 24, tint: ctx.MaterialTheme.colorScheme.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)) : OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:23106",[{ ...props, path: option.avatar.path, contentDescription: option.title }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs));
     case "group":
-      return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:22823",[{ width: 32, height: 32, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:22889",[{ name: "Groups", size: 24, tint: ctx.MaterialTheme.colorScheme.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
+      return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:23225",[{ width: 32, height: 32, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:23291",[{ name: "Groups", size: 24, tint: ctx.MaterialTheme.colorScheme.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
   }
 }
 function renderChatInputMenu(ctx) {
@@ -487,10 +487,17 @@ function renderChatInputMenu(ctx) {
       try {
         const data = yield readSelectorData({ mode: "select", chatId, kind: "all", selected: null });
         const option2 = selectedOption(data);
-        const unboundAvatar = option2 === null ? yield ToolPkg.readResource("character_default_avatar", "operit-avatar.png") : null;
-        if (option2 === null && (typeof unboundAvatar !== "string" || unboundAvatar.trim() === "")) throw new Error("Declared unbound avatar resource did not resolve");
         assertOwner();
-        setState({ data, unboundAvatar, error: "" });
+        setState({ data, unboundAvatar: null, error: "" });
+        void (() => __async(null, null, function* () {
+          const resolved = yield loadSelectorAvatars(data);
+          const defaultOption = resolved.options.find((candidate) => candidate.avatar.type === "resource");
+          const unboundAvatar = option2 === null ? defaultOption?.avatar.type === "resource" && defaultOption.avatar.path !== null ? defaultOption.avatar.path : yield ToolPkg.readResource("character_default_avatar", "operit-avatar.png") : null;
+          if (unboundAvatar !== null && unboundAvatar.trim() === "") return;
+          assertOwner();
+          setState({ data: resolved, unboundAvatar, error: "" });
+        }))().catch(() => {
+        });
       } catch (error) {
         assertOwner();
         setState({ data: null, unboundAvatar: null, error: String(error) });
@@ -498,10 +505,10 @@ function renderChatInputMenu(ctx) {
     });
   }
   const colors = ctx.MaterialTheme.colorScheme;
-  if (state.error !== "") return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:24359",[{ text: state.error, color: colors.error, paddingHorizontal: 12, paddingVertical: 6 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs));
-  if (state.data === null) return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:24493",[{ key: "current-character-loading", onLoad: load, modifier: ctx.Modifier.heightIn({ minHeight: 48 }), fillMaxWidth: true, contentAlignment: "center" },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:24656",[],()=>[{ width: 18, height: 18 }],(...__operitArgs)=>ctx.UI.CircularProgressIndicator(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
+  if (state.error !== "") return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:25141",[{ text: state.error, color: colors.error, paddingHorizontal: 12, paddingVertical: 6 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs));
+  if (state.data === null) return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:25275",[{ key: "current-character-loading", onLoad: load, modifier: ctx.Modifier.heightIn({ minHeight: 48 }), fillMaxWidth: true, contentAlignment: "center" },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:25438",[],()=>[{ width: 18, height: 18 }],(...__operitArgs)=>ctx.UI.CircularProgressIndicator(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
   const option = selectedOption(state.data);
-  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:24772",[{
+  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:25554",[{
     key: "current-character",
     fillMaxWidth: true,
     paddingHorizontal: 12,
@@ -519,12 +526,12 @@ function renderChatInputMenu(ctx) {
     }
   },[
     menuAvatar(ctx, option, state.unboundAvatar),
-    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:25422",[],()=>[{ width: 10 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
-    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:25456",[{ weight: 1 },[
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:25493",[{ text: "\u5F53\u524D\u89D2\u8272\u5361", style: "labelSmall", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:25609",[{ text: option === null ? "\u672A\u7ED1\u5B9A" : option.title, style: "bodySmall", color: colors.onSurface, fontWeight: "600", maxLines: 1, overflow: "ellipsis" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))
+    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:26204",[],()=>[{ width: 10 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:26238",[{ weight: 1 },[
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:26275",[{ text: "\u5F53\u524D\u89D2\u8272\u5361", style: "labelSmall", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:26391",[{ text: option === null ? "\u672A\u7ED1\u5B9A" : option.title, style: "bodySmall", color: colors.onSurface, fontWeight: "600", maxLines: 1, overflow: "ellipsis" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))
     ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs)),
-    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:25797",[{ name: "ChevronRight", size: 20, tint: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:26579",[{ name: "ChevronRight", size: 20, tint: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))
   ]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs));
 }
 

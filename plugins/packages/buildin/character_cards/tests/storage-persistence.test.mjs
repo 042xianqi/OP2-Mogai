@@ -114,3 +114,61 @@ test("embedding cache stores long multiline text with bounded independent keys",
   assert.equal(retained.embeddings[0].text, text);
   assert.equal(commits(disk).at(-1).args[0].find(row => row.collection === "embeddings").key, "character:default/00000000000000000000");
 });
+
+/** Gates production collection reads without replacing the repository or stored records. */
+async function gatedCollections(t, failure = null) {
+  const disk = await createDiskHarness(t), originalOpen = disk.storage.objects.open;
+  let armed = false, release, entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const allEntered = new Promise(resolve => { entered = resolve; });
+  const started = new Set();
+  disk.storage.objects.open = async options => {
+    const database = await originalOpen(options), collection = database.collection;
+    database.collection = name => {
+      const records = collection(name), list = records.list;
+      records.list = async (...args) => {
+        if (armed) {
+          started.add(name);
+          if (started.size === 11) entered();
+          if (name === "cards" && failure !== null) throw failure;
+          await gate;
+        }
+        return list(...args);
+      };
+      return records;
+    };
+    return database;
+  };
+  const owner = await open(disk);
+  return { owner, started, allEntered, release, arm() { armed = true; }, disarm() { armed = false; } };
+}
+
+test("repository starts all collection reads before waiting on any collection", { timeout: 5000 }, async t => {
+  const gate = await gatedCollections(t);
+  gate.arm();
+  const pending = gate.owner.run(session => session.listCharacters());
+  try {
+    await gate.allEntered;
+    assert.equal(gate.started.size, 11);
+  } finally { gate.release(); }
+  assert.equal((await pending)[0].id, "default");
+});
+
+test("failed concurrent read settles all collections before another repository operation starts", { timeout: 5000 }, async t => {
+  const failure = new Error("Diagnostic collection failure"), gate = await gatedCollections(t, failure);
+  gate.arm();
+  const failed = gate.owner.run(session => session.listCharacters()).then(
+    () => { throw new Error("Expected the original read failure"); },
+    error => error,
+  );
+  await gate.allEntered;
+  gate.disarm();
+  let executed = false;
+  const next = gate.owner.run(async session => { executed = true; return session.listCharacters(); });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(executed, false, "The repository must retain ownership until every read settles");
+  gate.release();
+  assert.equal(await failed, failure);
+  assert.equal((await next)[0].id, "default");
+  assert.equal(executed, true);
+});

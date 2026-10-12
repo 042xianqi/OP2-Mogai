@@ -54,7 +54,8 @@ function installManagementPresentation() {
   const bridge = window.CharacterMemoryHost;
   if (bridge === undefined) throw new Error("Management test requires its explicitly installed browser fixture");
   /** Supplies the exact legal management input rather than inferring a missing screen. */
-  bridge.currentScreen = async () => ({ requestId: null, input: window.location.pathname === "/memory" ? { mode: "manage", view: "memory" } : { mode: "manage" } });
+  const loadScreen = bridge.loadScreen;
+  bridge.loadScreen = async () => ({ ...await loadScreen.call(bridge), screen: { requestId: null, input: window.location.pathname === "/memory" ? { mode: "manage", view: "memory" } : { mode: "manage" } } });
   /** Rejects completion because a management page has no presentation request. */
   bridge.completeScreen = async () => { throw new Error("Management has no presentation completion channel"); };
   /** Rejects cancellation because a management page has no presentation request. */
@@ -420,13 +421,13 @@ async function fileBackedPlugin(t, bundle, uiScripts = undefined, settings = nul
   const apis = new Map(), channels = new Map(), commands = new Map(), routes = [], navigation = [], appHooks = [], messageHooks = [], hostHooks = [], chatLifecycleHooks = [], toolLifecycleHooks = [], toolPromptHooks = [];
   const tools = { Files: disk.files, Storage: disk.storage, Models: {
     /** Supplies only the explicitly labelled readonly model directory required by the actual service. */
-    async listSummaries() { return plain(readonly.snapshot.models); }
+    async listSummaries() { return { models: plain(readonly.snapshot.models) }; }
   }, Theme: {
     /** Declares this isolated host's empty saved-theme catalog without fabricating a role binding or successful apply. */
-    async listConfigs() { return []; }
+    async listConfigs() { return { configs: [] }; }
   }, Tts: {
     /** Supplies only the explicitly labelled readonly TTS directory, not business records or persistence. */
-    async listConfigs() { return plain(readonly.snapshot.ttsConfigs); }
+    async listConfigs() { return { configs: plain(readonly.snapshot.ttsConfigs) }; }
   }, Catalog: {
     /** Supplies the complete labelled readonly tool catalog without faking a store or CRUD response. */
     async readToolSources() { return plain(readonly.snapshot.toolCatalog); }
@@ -605,10 +606,8 @@ async function registeredPage(t, plugin, routeId, presentation, documentUrl) {
   await context.addInitScript(
     /** Installs only transport delegates to the actual registered bridge, never successful CRUD implementations. */
     () => { window.CharacterMemoryHost = {
-      /** Delegates the palette request to the renderer. */
-      currentTheme: () => window.invokeActualCharacterBridge("currentTheme", []),
-      /** Delegates the exact presented input to its real session. */
-      currentScreen: () => window.invokeActualCharacterBridge("currentScreen", []),
+      /** Delegates the initial palette, route and snapshot to the actual renderer. */
+      loadScreen: () => window.invokeActualCharacterBridge("loadScreen", []),
       /** Delegates CRUD to the actual main IPC handler and native disk repository. */
       request: value => window.invokeActualCharacterBridge("request", [value]),
       /** Delegates completion to the actual plugin result adapter. */
@@ -636,7 +635,7 @@ test("management fixture explicitly declares its screen and rejects completion a
   const ui = await page();
   assert.deepEqual(await ui.page.evaluate(
     /** Reads the legal management presentation through its complete explicit test bridge. */
-    () => window.CharacterMemoryHost.currentScreen(),
+    async () => (await window.CharacterMemoryHost.loadScreen()).screen,
   ), { requestId: null, input: { mode: "manage" } });
   await assert.rejects(ui.page.evaluate(
     /** Verifies that an ordinary management view cannot invent a completion recipient. */
@@ -707,7 +706,7 @@ test("current plugin routes connect selector and memory attachment to the actual
     assert.notEqual(entry, undefined); assert.equal(entry.route, "toolpkg:com.operit.character_cards:ui:memory-attachment");
     assert.deepEqual(plain(entry.params), { mode: "memory-attachment", ownerKey: null, folderPath: null });
     const ui = await registeredPage(s, plugin, "memory-attachment", { requestId: "attachment-native", input: plain(entry.params) }, origin);
-    assert.deepEqual(plain(ui.bridge.currentScreen([])), { requestId: "attachment-native", input: plain(entry.params) });
+    assert.deepEqual(plain((await ui.bridge.loadScreen([])).screen), { requestId: "attachment-native", input: plain(entry.params) });
     await ui.page.getByRole("button", { name: "真实选择角色", exact: true }).click();
     await ui.page.getByRole("button", { name: "附件根", exact: true }).click();
     const content = await ui.page.getByLabel("记忆附件正文", { exact: true }).textContent();
@@ -784,7 +783,7 @@ test("installed plugin artifacts launch management and the independent V1 text a
   /** Opens management from the actual installed resource and rejects unowned terminal results. */
   await t.test("installed management explicitly exposes its true CurrentScreen and full typed editor", async s => {
     const ui = await registeredPage(s, plugin, "main", null, origin + "/installed");
-    assert.deepEqual(plain(ui.bridge.currentScreen([])), { requestId: null, input: { mode: "manage" } });
+    assert.deepEqual(plain((await ui.bridge.loadScreen([])).screen), { requestId: null, input: { mode: "manage" } });
     await ui.page.getByRole("button", { name: "编辑 产物角色", exact: true }).click();
     await ui.page.waitForFunction(() => window.__entityRequestSent === true);
     assert.equal(await ui.page.getByRole("dialog", { name: "编辑角色卡", exact: true }).count(), 0, "Management must not recreate the removed browser editor");

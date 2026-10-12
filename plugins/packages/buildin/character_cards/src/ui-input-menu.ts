@@ -1,6 +1,6 @@
 import type { ComposeDslContext, ComposeNode } from "../../../../types/compose-dsl";
 import type { JsonValue } from "./model";
-import { readSelectorData, type SelectorData, type SelectorOption } from "./ui-selector";
+import { readSelectorData, loadSelectorAvatars, type SelectorData, type SelectorOption } from "./ui-selector";
 import { chatIdentity } from "./ui-contributions";
 import { chatUiRoutes } from "./definition";
 
@@ -22,12 +22,14 @@ function selectedOption(data: SelectorData): SelectorOption | null {
 function menuAvatar(ctx: ComposeDslContext, option: SelectorOption | null, unboundAvatar: string | null): ComposeNode {
   const props = { width: 32, height: 32, contentScale: "crop" as const, modifier: ctx.Modifier.clip({ type: "circle" }) };
   if (option === null) {
-    if (unboundAvatar === null) throw new Error("Unbound character avatar resource is not loaded");
+    if (unboundAvatar === null) return ctx.UI.Box({ width: 32, height: 32, contentAlignment: "center" }, ctx.UI.Icon({ name: "Person", size: 24, tint: ctx.MaterialTheme.colorScheme.onSurfaceVariant }));
     return ctx.UI.Image({ ...props, path: unboundAvatar, contentDescription: "未绑定" });
   }
   switch (option.avatar.type) {
     case "uri": return ctx.UI.Image({ ...props, uri: option.avatar.uri, contentDescription: option.title });
-    case "resource": return ctx.UI.Image({ ...props, path: option.avatar.path, contentDescription: option.title });
+    case "resource": return option.avatar.path === null
+      ? ctx.UI.Box({ width: 32, height: 32, contentAlignment: "center" }, ctx.UI.Icon({ name: "Person", size: 24, tint: ctx.MaterialTheme.colorScheme.onSurfaceVariant }))
+      : ctx.UI.Image({ ...props, path: option.avatar.path, contentDescription: option.title });
     case "group": return ctx.UI.Box({ width: 32, height: 32, contentAlignment: "center" }, ctx.UI.Icon({ name: "Groups", size: 24, tint: ctx.MaterialTheme.colorScheme.onSurfaceVariant }));
   }
 }
@@ -50,9 +52,18 @@ export function renderChatInputMenu(ctx: ComposeDslContext): ComposeNode {
     try {
       const data = await readSelectorData({ mode: "select", chatId, kind: "all", selected: null });
       const option = selectedOption(data);
-      const unboundAvatar = option === null ? await ToolPkg.readResource("character_default_avatar", "operit-avatar.png") : null;
-      if (option === null && (typeof unboundAvatar !== "string" || unboundAvatar.trim() === "")) throw new Error("Declared unbound avatar resource did not resolve");
-      assertOwner(); setState({ data, unboundAvatar, error: "" });
+      assertOwner(); setState({ data, unboundAvatar: null, error: "" });
+      // The menu label and action are available before any default image lookup.
+      void (async () => {
+        const resolved = await loadSelectorAvatars(data);
+        const defaultOption = resolved.options.find(candidate => candidate.avatar.type === "resource");
+        const unboundAvatar = option === null
+          ? defaultOption?.avatar.type === "resource" && defaultOption.avatar.path !== null
+            ? defaultOption.avatar.path : await ToolPkg.readResource("character_default_avatar", "operit-avatar.png")
+          : null;
+        if (unboundAvatar !== null && unboundAvatar.trim() === "") return;
+        assertOwner(); setState({ data: resolved, unboundAvatar, error: "" });
+      })().catch(() => {});
     } catch (error) {
       assertOwner(); setState({ data: null, unboundAvatar: null, error: String(error) });
     }

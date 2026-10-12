@@ -1,7 +1,6 @@
 import type { SnapshotRecord } from "./api";
 import { record } from "./domain";
 import { decodeSelection, encodeSelection, requireUiCaller } from "./ui-contributions";
-import { imageSource } from "./image-source";
 import { decodeChatMarker } from "./chat-markers";
 import { requireChatSelection } from "./chat-bindings";
 import { getService } from "./service-runtime";
@@ -70,13 +69,8 @@ export async function chatSidebarPrepareApi(event: ToolPkg.PublicApiEvent<{ chat
   const sections = data.view === "characters" ? data.sections : data.scopes;
   let defaultAvatar: string | null = null;
   if (sections.some(section => section.kind === "card" && section.avatarUri === null)) {
-    defaultAvatar = await imageSource(await ToolPkg.readResource("character_default_avatar", "operit-avatar.png"));
+    defaultAvatar = await ToolPkg.readResource("character_default_avatar", "operit-avatar.png");
     if (defaultAvatar.trim() === "") throw new Error("Declared default avatar resource is missing");
-  }
-  for (let offset = 0; offset < sections.length; offset += 8) {
-    await Promise.all(sections.slice(offset, offset + 8).map(async section => {
-      if (section.avatarUri !== null && section.avatarUri !== undefined) section.avatarUri = await imageSource(section.avatarUri);
-    }));
   }
   return { entries: [{ entryId: "sidebar-characters", data: { context: sidebarCatalogKey(current), data, defaultAvatar } }] };
 }

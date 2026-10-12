@@ -606,7 +606,17 @@ fn assembleRuntimeBootstrapScript() -> String {
                 var value = currentParams ? currentParams[key] : undefined;
                 return value == null || value === '' ? defaultValue : __operitText(value);
             }}
+            var profileComposeStages = structuredResult === true && params && params.__operit_profile_compose_stages === true;
+            var profileStageStarted = profileComposeStages ? Date.now() : 0;
+            var profileStageName = 'prepare-module';
             function markStage(stage) {{
+                if (profileComposeStages) {{
+                    var now = Date.now();
+                    console.log('event=compose_pipeline_stage stage=js-stage-' + profileStageName +
+                        ' durationMs=' + (now - profileStageStarted) + ' wallMicros=' + (now * 1000) + ' call=' + callId);
+                    profileStageStarted = now;
+                    profileStageName = stage;
+                }}
                 callState.lastExecStage = __operitText(stage);
                 __operitNativeLogJsExecutionTrace(
                     callId,

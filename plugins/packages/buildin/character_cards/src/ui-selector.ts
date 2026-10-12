@@ -11,7 +11,7 @@ export interface SelectorInput extends SelectScreen { readonly chatId: string | 
 /** Projects a persisted record into one native row without changing its identity, description or avatar. */
 export interface SelectorOption {
   key: string; kind: "card" | "group"; id: string; title: string; description: string;
-  selection: ActivePrompt; token: string; avatar: { type: "uri"; uri: string } | { type: "resource"; path: string } | { type: "group" };
+  selection: ActivePrompt; token: string; avatar: { type: "uri"; uri: string } | { type: "resource"; path: string | null } | { type: "group" };
 }
 /** Returns real list records and the freshly read authoritative target selection, not the caller's stale check mark. */
 export interface SelectorData { options: SelectorOption[]; selected: string | null }
@@ -50,19 +50,11 @@ export async function readSelectorData(input: SelectorInput): Promise<SelectorDa
   }
   if (selected !== null) requireChatSelection(selected, cards, groups);
   const options: SelectorOption[] = [];
-  let defaultAvatar: string | null = null;
   if (input.kind === "card" || input.kind === "all") {
-    if (cards.some(
-      /** Requests the declared static avatar only for genuinely avatar-free cards, not after a failed image read. */
-      card => card.avatarUri === null,
-    )) defaultAvatar = await ToolPkg.readResource("character_default_avatar", "operit-avatar.png");
     for (const card of cards) {
       let avatar: SelectorOption["avatar"];
       if (card.avatarUri !== null) avatar = { type: "uri", uri: card.avatarUri };
-      else {
-        if (defaultAvatar === null || defaultAvatar.trim() === "") throw new Error("Declared character default-avatar resource did not resolve");
-        avatar = { type: "resource", path: defaultAvatar };
-      }
+      else avatar = { type: "resource", path: null };
       options.push({ key: "card:" + card.id, token: "card:" + card.id, kind: "card", id: card.id, title: card.name, description: card.description,
         selection: { CharacterCard: { id: card.id } }, avatar });
     }
@@ -74,6 +66,15 @@ export async function readSelectorData(input: SelectorInput): Promise<SelectorDa
   const keys = new Set<string>();
   for (const option of options) { if (keys.has(option.key)) throw new Error("Duplicate selector row identity: " + option.key); keys.add(option.key); }
   return { options, selected };
+}
+
+/** Resolves image references separately from the authoritative selector records. */
+export async function loadSelectorAvatars(data: SelectorData): Promise<SelectorData> {
+  if (!data.options.some(option => option.avatar.type === "resource" && option.avatar.path === null)) return data;
+  const path = await ToolPkg.readResource("character_default_avatar", "operit-avatar.png");
+  if (path.trim() === "") throw new Error("Declared character default-avatar resource did not resolve");
+  return { ...data, options: data.options.map(option => option.avatar.type === "resource" && option.avatar.path === null
+    ? { ...option, avatar: { type: "resource", path } } : option) };
 }
 
 /** Owns one pure-DSL modal request and uses the existing single-write presentation session for every real switch. */
@@ -95,7 +96,15 @@ export function createSelectorController(input: SelectorInput, session: UiScreen
       assertOwner();
       if (loading === null) loading = readSelectorData(input).then(
         /** Installs genuine persisted records only while this request remains open. */
-        data => { assertOwner(); if (!state.finished) update({ data, loading: false, error: "" }); },
+        data => {
+          assertOwner();
+          if (state.finished) return;
+          update({ data, loading: false, error: "" });
+          void loadSelectorAvatars(data).then(resolved => {
+            assertOwner();
+            if (!state.finished && state.data === data) update({ data: resolved });
+          }).catch(() => {});
+        },
         /** Keeps a real source failure visible and propagates the same original error to the host. */
         failure => { update({ loading: false, error: String(failure) }); throw failure; },
       );
@@ -135,7 +144,9 @@ export function selectorAvatar(ctx: ComposeDslContext, option: SelectorOption): 
   const props = { width: 28, height: 28, contentScale: "crop" as const, contentDescription: option.title, modifier: ctx.Modifier.clip({ type: "circle" }) };
   switch (option.avatar.type) {
     case "uri": return ctx.UI.Image({ ...props, uri: option.avatar.uri });
-    case "resource": return ctx.UI.Image({ ...props, path: option.avatar.path });
+    case "resource": return option.avatar.path === null
+      ? ctx.UI.Box({ width: 28, height: 28, contentAlignment: "center" }, ctx.UI.Icon({ name: "Person", size: 22, tint: "onSurfaceVariant", contentDescription: option.title }))
+      : ctx.UI.Image({ ...props, path: option.avatar.path });
     case "group": return ctx.UI.Box({ width: 28, height: 28, contentAlignment: "center" }, ctx.UI.Icon({ name: "Groups", size: 22, tint: "onSurfaceVariant", contentDescription: option.title }));
   }
 }

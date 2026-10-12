@@ -105,7 +105,7 @@ export async function createHtmlDocument() {
   const sections = [];
   for (const style of styles) sections.push(await readFile(path.join(root, style), "utf8"));
   const css = sections.join("\n");
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; font-src 'none'"><title>角色卡</title><style>${css}</style></head><body><main id="app" aria-label="角色卡"><div class="loading" role="status">正在加载角色卡…</div></main><div id="dialogs"></div><div id="snackbar" role="status" aria-live="polite"></div><script>${script.replaceAll("</script", "<\\/script")}</script></body></html>`;
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'none'; font-src 'none'"><title>角色卡</title><style>${css}</style></head><body><main id="app" aria-label="角色卡"><div class="loading" role="status">正在加载角色卡…</div></main><div id="dialogs"></div><div id="snackbar" role="status" aria-live="polite"></div><script>${script.replaceAll("</script", "<\\/script")}</script></body></html>`;
 }
 
 /** Enumerates every regular source file so new modules cannot silently disappear from archives. */

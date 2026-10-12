@@ -579,6 +579,7 @@
 					"-loperit_flutter_bridge",
 				);
 				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_OBJC_BRIDGING_HEADER = Runner/OperitFlutterBridge.h;
 				SWIFT_VERSION = 5.0;
 			};
 			name = Profile;

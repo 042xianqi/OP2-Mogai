@@ -156,10 +156,19 @@ impl HostJavaScriptRuntime for NativeHostJavaScriptRuntime {
                     *intrinsics.borrow_mut() = Some(JsonIntrinsics::new(&ctx)?);
                 }
                 let function: Function = ctx.globals().get(name)?;
+                let profile = name == "__operitExecuteScriptFunction" && arguments.get(6) == Some(&JsonValue::Bool(true)) && std::env::var_os("OPERIT_PROFILE_COMPOSE_STAGES").is_some();
+                let started = profile.then(std::time::Instant::now);
                 let values = arguments
                     .iter()
                     .map(|arg| javascript_values::to_js(&ctx, arg))
                     .collect::<rquickjs::Result<Vec<_>>>()?;
+                if let Some(started) = started {
+                    let line = format!("event=compose_pipeline_stage stage=rust-to-js-input durationMs={:.3} wallMicros={} call={}\n",
+                        started.elapsed().as_secs_f64() * 1000.0,
+                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_micros(),
+                        arguments.first().and_then(JsonValue::as_str).unwrap_or(""));
+                    let _ = std::io::Write::write_all(&mut std::io::stderr().lock(), line.as_bytes());
+                }
                 let result: Value = function.call((Rest(values),))?;
                 if result.is_undefined() {
                     return Ok(JsonValue::Null);
@@ -265,7 +274,9 @@ impl HostJavaScriptRuntime for NativeHostJavaScriptRuntime {
                     *intrinsics.borrow_mut() = Some(JsonIntrinsics::new(&ctx)?);
                 }
                 let intrinsics = Rc::downgrade(&intrinsics);
-                let function = synchronousFunction(ctx.clone(), intrinsics, callback)?;
+                let profile = name == "__operitNativeSendStructuredIntermediate"
+                    && std::env::var_os("OPERIT_PROFILE_COMPOSE_STAGES").is_some();
+                let function = synchronousFunction(ctx.clone(), intrinsics, callback, profile)?;
                 ctx.globals().set(name, function)?;
                 Ok::<_, QuickJsError>(())
             })
@@ -516,6 +527,7 @@ fn synchronousFunction<'js>(
     ctx: rquickjs::Ctx<'js>,
     intrinsics: Weak<RefCell<Option<JsonIntrinsics>>>,
     callback: HostJavaScriptJsonCallback,
+    profile: bool,
 ) -> rquickjs::Result<Function<'js>> {
     Function::new(
         ctx.clone(),
@@ -523,7 +535,16 @@ fn synchronousFunction<'js>(
             let intrinsics = intrinsics.upgrade().ok_or(QuickJsError::Unknown)?;
             let guard = intrinsics.borrow();
             let converter = guard.as_ref().ok_or(QuickJsError::Unknown)?;
+            let started = profile.then(std::time::Instant::now);
             let values = converter.arguments_from_js(&ctx, args.0)?;
+            if let Some(started) = started {
+                let duration = started.elapsed().as_secs_f64() * 1000.0;
+                let call = values.first().and_then(JsonValue::as_str).unwrap_or("");
+                let revision = values.get(1).and_then(|value| value.pointer("/response/update/revision")).and_then(JsonValue::as_u64).unwrap_or(0);
+                let line = format!("event=compose_pipeline_stage stage=js-to-rust durationMs={duration:.3} wallMicros={} call={call} revision={revision}\n",
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_micros());
+                let _ = std::io::Write::write_all(&mut std::io::stderr().lock(), line.as_bytes());
+            }
             drop(guard);
             let result = callback(values)
                 .map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;

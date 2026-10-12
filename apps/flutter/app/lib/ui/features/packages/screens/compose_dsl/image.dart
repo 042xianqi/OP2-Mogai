@@ -29,14 +29,25 @@ class _ComposeStableImageState extends State<_ComposeStableImage> {
   @override
   void didUpdateWidget(covariant _ComposeStableImage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.source != widget.source) _resolveSource();
+    if (oldWidget.source != widget.source ||
+        oldWidget.hostContext.packageName != widget.hostContext.packageName ||
+        oldWidget.hostContext.executionContextKey !=
+            widget.hostContext.executionContextKey ||
+        oldWidget.hostContext.readFileBytes !=
+            widget.hostContext.readFileBytes) {
+      _resolveSource();
+    }
   }
 
-  /// Resolves only a changed source; MemoryImage equality depends on byte identity.
+  /// Resolves only a changed source; VFS providers share the owning session key.
   void _resolveSource() {
     _provider = resolveComposeDslImage(
       widget.source,
       readVfsBytes: widget.hostContext.readResourceBytes,
+      vfsOwner: (
+        widget.hostContext.packageName,
+        widget.hostContext.executionContextKey,
+      ),
     );
   }
 

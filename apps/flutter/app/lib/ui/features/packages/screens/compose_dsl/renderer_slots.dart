@@ -57,6 +57,7 @@ extension _ComposeRendererSlots on _ComposeDslRendererState {
         onTextInput: onTextInput,
         webViewHostContext: webViewHostContext,
         splitMarkdownContent: splitMarkdownContent,
+        dispatchOnLoad: widget.dispatchOnLoad,
         nodePath: '$nodePath:$name/0',
       );
     }
@@ -118,6 +119,7 @@ extension _ComposeRendererSlots on _ComposeDslRendererState {
             onTextInput: onTextInput,
             webViewHostContext: webViewHostContext,
             splitMarkdownContent: splitMarkdownContent,
+            dispatchOnLoad: widget.dispatchOnLoad,
             nodePath: '$pathPrefix/${entry.key}',
             modifierScope: modifierScope,
           ),
@@ -259,6 +261,7 @@ extension _ComposeRendererSlots on _ComposeDslRendererState {
       onTextInput: onTextInput,
       webViewHostContext: webViewHostContext,
       splitMarkdownContent: splitMarkdownContent,
+      dispatchOnLoad: widget.dispatchOnLoad,
       nodePath: '$nodePath:$name/0',
     );
   }

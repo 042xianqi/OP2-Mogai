@@ -28,6 +28,131 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(ClientLogger.initialize);
 
+  testWidgets('DSL resource requests start before the mounting frame ends', (
+    tester,
+  ) async {
+    final acquired = Completer<void>();
+    final script = Completer<String>();
+    final bridge = _ToolPkgDslTestBridge()
+      ..acquireCompletion = acquired
+      ..scriptCompletion = script;
+    late List<String> callsAtFrameEnd;
+    tester.binding.addPostFrameCallback((_) {
+      callsAtFrameEnd = bridge.calls.map((call) => call.methodName).toList();
+    });
+    await tester.pumpWidget(_screen(bridge));
+    expect(callsAtFrameEnd, contains('acquireToolPkgExecutionEngine'));
+    expect(callsAtFrameEnd, contains('getToolPkgComposeDslScript'));
+    expect(bridge._sessions, isEmpty);
+    acquired.complete();
+    script.complete('export default function render() {}');
+    await tester.pumpAndSettle();
+    expect(find.text('Counter: 0'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('DSL loading overlaps script reads with engine acquisition', (
+    tester,
+  ) async {
+    final acquired = Completer<void>();
+    final script = Completer<String>();
+    final bridge = _ToolPkgDslTestBridge()
+      ..acquireCompletion = acquired
+      ..scriptCompletion = script;
+    await tester.pumpWidget(_screen(bridge));
+    await tester.pump();
+    expect(
+      bridge.calls.where(
+        (call) => call.methodName == 'acquireToolPkgExecutionEngine',
+      ),
+      hasLength(1),
+    );
+    expect(
+      bridge.calls.where(
+        (call) => call.methodName == 'getToolPkgComposeDslScript',
+      ),
+      hasLength(1),
+    );
+    expect(bridge._sessions, isEmpty);
+    script.complete('export default function render() {}');
+    await tester.pump();
+    expect(bridge._sessions, isEmpty);
+    acquired.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('Counter: 0'), findsOneWidget);
+    expect(
+      bridge.calls.where((call) => call.methodName == 'render'),
+      hasLength(1),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('DSL input updates reuse script and hot reload invalidates it', (
+    tester,
+  ) async {
+    final bridge = _ToolPkgDslTestBridge();
+    await tester.pumpWidget(_screen(bridge));
+    await tester.pumpAndSettle();
+    for (var index = 0; index < 6; index++) {
+      await tester.pumpWidget(
+        _screen(bridge, initialState: {'inputVersion': index}),
+      );
+      await tester.pumpAndSettle();
+    }
+    expect(
+      bridge.calls.where((call) => call.methodName == 'render'),
+      hasLength(7),
+    );
+    expect(
+      bridge.calls.where(
+        (call) => call.methodName == 'getToolPkgComposeDslScript',
+      ),
+      hasLength(1),
+    );
+    expect(
+      bridge.calls.where(
+        (call) => call.methodName == 'getToolPkgComposeDslScreenPath',
+      ),
+      hasLength(1),
+    );
+    expect(bridge._sessions, hasLength(1));
+    PluginHotReload.revision.value++;
+    await _pumpComposeReload(tester);
+    expect(
+      bridge.calls.where(
+        (call) => call.methodName == 'getToolPkgComposeDslScript',
+      ),
+      hasLength(2),
+    );
+    expect(bridge._sessions, hasLength(2));
+    expect(bridge._sessions.values.first.updates.isClosed, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'DSL parallel load waits for both operations before reporting failure',
+    (tester) async {
+      final acquired = Completer<void>();
+      final script = Completer<String>();
+      final bridge = _ToolPkgDslTestBridge()
+        ..acquireCompletion = acquired
+        ..scriptCompletion = script;
+      await tester.pumpWidget(_screen(bridge));
+      await tester.pump();
+      acquired.completeError(StateError('Diagnostic engine failure'));
+      await tester.pump();
+      expect(find.textContaining('Diagnostic engine failure'), findsNothing);
+      script.complete('export default function render() {}');
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Diagnostic engine failure'), findsOneWidget);
+      expect(
+        bridge.calls.where((call) => call.methodName == 'render'),
+        isEmpty,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('bubble rebuild retains the XML plugin engine and action state', (
     tester,
   ) async {
@@ -2331,6 +2456,7 @@ Widget _screen(
   ValueChanged<Object?>? onActionResult,
   String? dialogTitle,
   bool showLauncherChrome = true,
+  Map<String, Object?> initialState = const {},
 }) {
   return MaterialApp(
     home: ToolPkgUiLauncherScreen(
@@ -2339,6 +2465,7 @@ Widget _screen(
       initialRouteId: initialRouteId,
       embeddedScreenPath: embeddedScreenPath,
       initialModuleSpec: initialModuleSpec,
+      initialState: initialState,
       onActionResult: onActionResult,
       dialogTitle: dialogTitle,
       showLauncherChrome: showLauncherChrome,
@@ -2554,6 +2681,7 @@ class _ToolPkgDslTestBridge extends OperitRuntimeBridge {
   final void Function(Map<String, Object?>)? onAction;
   Completer<void>? actionCompletion;
   String? attachmentError;
+  Completer<void>? acquireCompletion;
   Completer<String>? scriptCompletion;
   Completer<String>? renderCompletion;
   Completer<void>? releaseCompletion;
@@ -2619,6 +2747,8 @@ class _ToolPkgDslTestBridge extends OperitRuntimeBridge {
         await _sessions[id]!.updates.close();
         return null;
       case 'acquireToolPkgExecutionEngine':
+        final pending = acquireCompletion;
+        if (pending != null) await pending.future;
         return null;
       case 'releaseToolPkgExecutionEngine':
         final pending = releaseCompletion;

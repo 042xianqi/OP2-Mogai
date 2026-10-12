@@ -615,19 +615,11 @@ function readSelectorData(input) {
     }
     if (selected !== null) requireChatSelection(selected, cards, groups);
     const options = [];
-    let defaultAvatar = null;
     if (input.kind === "card" || input.kind === "all") {
-      if (cards.some(
-        /** Requests the declared static avatar only for genuinely avatar-free cards, not after a failed image read. */
-        (card) => card.avatarUri === null
-      )) defaultAvatar = yield ToolPkg.readResource("character_default_avatar", "operit-avatar.png");
       for (const card of cards) {
         let avatar;
         if (card.avatarUri !== null) avatar = { type: "uri", uri: card.avatarUri };
-        else {
-          if (defaultAvatar === null || defaultAvatar.trim() === "") throw new Error("Declared character default-avatar resource did not resolve");
-          avatar = { type: "resource", path: defaultAvatar };
-        }
+        else avatar = { type: "resource", path: null };
         options.push({
           key: "card:" + card.id,
           token: "card:" + card.id,
@@ -658,6 +650,14 @@ function readSelectorData(input) {
     return { options, selected };
   });
 }
+function loadSelectorAvatars(data) {
+  return __async(this, null, function* () {
+    if (!data.options.some((option) => option.avatar.type === "resource" && option.avatar.path === null)) return data;
+    const path = yield ToolPkg.readResource("character_default_avatar", "operit-avatar.png");
+    if (path.trim() === "") throw new Error("Declared character default-avatar resource did not resolve");
+    return { ...data, options: data.options.map((option) => option.avatar.type === "resource" && option.avatar.path === null ? { ...option, avatar: { type: "resource", path } } : option) };
+  });
+}
 function createSelectorController(input, session, publish, assertOwner) {
   let state = { data: null, loading: true, switchingKey: null, error: "", finished: false }, loading = null;
   function update(changes) {
@@ -681,7 +681,13 @@ function createSelectorController(input, session, publish, assertOwner) {
         /** Installs genuine persisted records only while this request remains open. */
         (data) => {
           assertOwner();
-          if (!state.finished) update({ data, loading: false, error: "" });
+          if (state.finished) return;
+          update({ data, loading: false, error: "" });
+          void loadSelectorAvatars(data).then((resolved) => {
+            assertOwner();
+            if (!state.finished && state.data === data) update({ data: resolved });
+          }).catch(() => {
+          });
         },
         /** Keeps a real source failure visible and propagates the same original error to the host. */
         (failure) => {
@@ -736,11 +742,11 @@ function selectorAvatar(ctx, option) {
   const props = { width: 28, height: 28, contentScale: "crop", contentDescription: option.title, modifier: ctx.Modifier.clip({ type: "circle" }) };
   switch (option.avatar.type) {
     case "uri":
-      return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:36532",[{ ...props, uri: option.avatar.uri }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs));
+      return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:36867",[{ ...props, uri: option.avatar.uri }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs));
     case "resource":
-      return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:36618",[{ ...props, path: option.avatar.path }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs));
+      return option.avatar.path === null ? OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:36983",[{ width: 28, height: 28, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:37049",[{ name: "Person", size: 22, tint: "onSurfaceVariant", contentDescription: option.title }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)) : OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:37154",[{ ...props, path: option.avatar.path }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs));
     case "group":
-      return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:36703",[{ width: 28, height: 28, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:36769",[{ name: "Groups", size: 22, tint: "onSurfaceVariant", contentDescription: option.title }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
+      return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:37239",[{ width: 28, height: 28, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:37305",[{ name: "Groups", size: 22, tint: "onSurfaceVariant", contentDescription: option.title }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
   }
 }
 function selectorRow(ctx, option, state, controller) {
@@ -752,14 +758,14 @@ function selectorRow(ctx, option, state, controller) {
   const props = { key: option.key, fillMaxWidth: true, paddingStart: 10, paddingTop: 7, paddingEnd: 8, paddingBottom: 7, verticalAlignment: "center", spacing: 8 };
   const contents = [
     selectorAvatar(ctx, option),
-    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:37693",[{ weight: 1, horizontalAlignment: "start" },[
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:37760",[{ text: option.title, style: "bodySmall", maxLines: 1, overflow: "ellipsis", color: titleColor, fontWeight: active ? "700" : "600" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
-      ...option.description === "" ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:37950",[{ text: option.description, style: "labelSmall", maxLines: 1, overflow: "ellipsis", color: descriptionColor }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))]
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:38229",[{ weight: 1, horizontalAlignment: "start" },[
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:38296",[{ text: option.title, style: "bodySmall", maxLines: 1, overflow: "ellipsis", color: titleColor, fontWeight: active ? "700" : "600" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+      ...option.description === "" ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:38486",[{ text: option.description, style: "labelSmall", maxLines: 1, overflow: "ellipsis", color: descriptionColor }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))]
     ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs)),
-    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:38086",[{ width: 20, height: 20, contentAlignment: "center" },switching ? OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:38164",[],()=>[{ width: 16, height: 16, strokeWidth: 2 }],(...__operitArgs)=>ctx.UI.CircularProgressIndicator(...__operitArgs)) : OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:38242",[{ name: active ? "Check" : "CircleOutlined", size: active ? 18 : 16, tint: active ? colors.primary : colors.onSurfaceVariant.copy({ alpha: 0.45 }), contentDescription: active ? "\u5F53\u524D\u9009\u4E2D" : "\u672A\u9009\u4E2D" }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs))
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:38622",[{ width: 20, height: 20, contentAlignment: "center" },switching ? OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:38700",[],()=>[{ width: 16, height: 16, strokeWidth: 2 }],(...__operitArgs)=>ctx.UI.CircularProgressIndicator(...__operitArgs)) : OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:38778",[{ name: active ? "Check" : "CircleOutlined", size: active ? 18 : 16, tint: active ? colors.primary : colors.onSurfaceVariant.copy({ alpha: 0.45 }), contentDescription: active ? "\u5F53\u524D\u9009\u4E2D" : "\u672A\u9009\u4E2D" }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs))
   ];
-  if (!enabled) return OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:38513",[props,contents],()=>[props,contents],(...__operitArgs)=>ctx.UI.Row(...__operitArgs));
-  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:38551",[{
+  if (!enabled) return OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:39049",[props,contents],()=>[props,contents],(...__operitArgs)=>ctx.UI.Row(...__operitArgs));
+  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:39087",[{
     ...props,
     /** Returns the real commit result to the existing generic Compose action channel without a synthetic receiver. */
     onClick: () => __async(null, null, function* () {
@@ -770,35 +776,35 @@ function selectorRow(ctx, option, state, controller) {
 function selectorView(ctx, input, state, controller) {
   const title = input.kind === "card" ? "\u5207\u6362\u89D2\u8272\u5361" : input.kind === "group" ? "\u5207\u6362\u7FA4\u7EC4" : "\u5207\u6362\u89D2\u8272\u5361\u6216\u7FA4\u7EC4";
   const colors = ctx.MaterialTheme.colorScheme;
-  const header = OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:39147",[{ fillMaxWidth: true, paddingStart: 16, paddingTop: 8, paddingEnd: 8, paddingBottom: 4, verticalAlignment: "center" },[
-    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:39283",[title],()=>[{ text: title, style: "titleSmall", fontWeight: "700", weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
-    ...state.data === null ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:39399",[{ text: state.data.options.length + " \u4E2A", style: "labelSmall", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)), OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:39514",[],()=>[{ width: 2 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs))],
-    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:39548",[{
+  const header = OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:39683",[{ fillMaxWidth: true, paddingStart: 16, paddingTop: 8, paddingEnd: 8, paddingBottom: 4, verticalAlignment: "center" },[
+    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:39819",[title],()=>[{ text: title, style: "titleSmall", fontWeight: "700", weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+    ...state.data === null ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:39935",[{ text: state.data.options.length + " \u4E2A", style: "labelSmall", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)), OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:40050",[],()=>[{ width: 2 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs))],
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:40084",[{
       key: "selector-close",
       enabled: state.switchingKey === null && !state.finished,
       width: 32,
       height: 32,
       /** Emits the explicit cancellation discriminator, not a route pop that bypasses the plugin session. */
       onClick: () => selectorResultJson(controller.cancel())
-    },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:39873",[],()=>[{ name: "Close", size: 18, contentDescription: "\u5173\u95ED" }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.IconButton(...__operitArgs))
+    },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:40409",[],()=>[{ name: "Close", size: 18, contentDescription: "\u5173\u95ED" }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.IconButton(...__operitArgs))
   ]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs));
   let body;
-  if (state.loading) body = OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:39997",[{ weight: 1, fillMaxWidth: true, contentAlignment: "center" },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:40071",[],()=>[{ width: 20, height: 20, strokeWidth: 2 }],(...__operitArgs)=>ctx.UI.CircularProgressIndicator(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
-  else if (state.data === null) body = OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:40188",[{ key: "selector-load-error", text: state.error, color: colors.error, paddingHorizontal: 16, paddingVertical: 18, weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs));
-  else if (state.data.options.length === 0) body = OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:40379",[{ text: input.kind === "group" ? "\u6682\u65E0\u7FA4\u7EC4" : "\u6682\u65E0\u89D2\u8272\u5361", style: "bodySmall", color: colors.onSurfaceVariant, paddingStart: 16, paddingTop: 18, paddingEnd: 16, paddingBottom: 20, weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs));
+  if (state.loading) body = OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:40533",[{ weight: 1, fillMaxWidth: true, contentAlignment: "center" },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:40607",[],()=>[{ width: 20, height: 20, strokeWidth: 2 }],(...__operitArgs)=>ctx.UI.CircularProgressIndicator(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
+  else if (state.data === null) body = OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:40724",[{ key: "selector-load-error", text: state.error, color: colors.error, paddingHorizontal: 16, paddingVertical: 18, weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs));
+  else if (state.data.options.length === 0) body = OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:40915",[{ text: input.kind === "group" ? "\u6682\u65E0\u7FA4\u7EC4" : "\u6682\u65E0\u89D2\u8272\u5361", style: "bodySmall", color: colors.onSurfaceVariant, paddingStart: 16, paddingTop: 18, paddingEnd: 16, paddingBottom: 20, weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs));
   else {
     const options = state.data.options;
     const items = ctx.lazyItems(
       { key: "selector-records", itemCount: options.length, itemExtent: 56, initialItemCount: 12 },
       /** Builds one keyed row only when it enters the materialized viewport window. */
-      (index) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:40909",[{ key: "selector-item:" + options[index].key, fillMaxWidth: true },[
+      (index) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:41445",[{ key: "selector-item:" + options[index].key, fillMaxWidth: true },[
         selectorRow(ctx, options[index], state, controller),
-        ...index + 1 === options.length ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:41102",[{ thickness: 1, color: colors.outlineVariant.copy({ alpha: 0.45 }) }],(...__operitArgs)=>ctx.UI.HorizontalDivider(...__operitArgs))]
+        ...index + 1 === options.length ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:41638",[{ thickness: 1, color: colors.outlineVariant.copy({ alpha: 0.45 }) }],(...__operitArgs)=>ctx.UI.HorizontalDivider(...__operitArgs))]
       ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs))
     );
-    body = OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:41225",[{ key: "selector-records", weight: 1, fillMaxWidth: true, paddingStart: 8, paddingTop: 4, paddingEnd: 8, paddingBottom: 8, ...items }],(...__operitArgs)=>ctx.UI.LazyColumn(...__operitArgs));
+    body = OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:41761",[{ key: "selector-records", weight: 1, fillMaxWidth: true, paddingStart: 8, paddingTop: 4, paddingEnd: 8, paddingBottom: 8, ...items }],(...__operitArgs)=>ctx.UI.LazyColumn(...__operitArgs));
   }
-  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:41392",[{
+  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:41928",[{
     key: "character-selection",
     containerColor: "surfaceContainerHigh",
     shape: { cornerRadius: 28 },
@@ -808,11 +814,11 @@ function selectorView(ctx, input, state, controller) {
     onLoad: () => controller.load(),
     /** Returns explicit V1 cancellation for host dismissal rather than changing a global active selection. */
     onDismissRequest: () => selectorResultJson(controller.cancel())
-  },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:42043",[{ fillMaxWidth: true, height: 420, modifier: ctx.Modifier.widthIn({ maxWidth: 360 }).heightIn({ minHeight: 420, maxHeight: 420 }) },[
+  },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:42579",[{ fillMaxWidth: true, height: 420, modifier: ctx.Modifier.widthIn({ maxWidth: 360 }).heightIn({ minHeight: 420, maxHeight: 420 }) },[
     header,
-    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:42208",[],()=>[{ thickness: 1 }],(...__operitArgs)=>ctx.UI.HorizontalDivider(...__operitArgs)),
+    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:42744",[],()=>[{ thickness: 1 }],(...__operitArgs)=>ctx.UI.HorizontalDivider(...__operitArgs)),
     body,
-    ...state.error === "" || state.data === null ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:42319",[{ key: "selector-commit-error", text: state.error, color: colors.error, style: "bodySmall", paddingHorizontal: 16, paddingVertical: 8 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))]
+    ...state.error === "" || state.data === null ? [] : [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:42855",[{ key: "selector-commit-error", text: state.error, color: colors.error, style: "bodySmall", paddingHorizontal: 16, paddingVertical: 8 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))]
   ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs))],(...__operitArgs)=>ctx.UI.Dialog(...__operitArgs));
 }
 function renderSelectionScreen(ctx) {

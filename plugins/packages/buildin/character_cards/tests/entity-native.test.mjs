@@ -20,7 +20,7 @@ function oneSurface(tree) {
 async function click(ui, key, prop = "onClick", payload) { return ui.dispatch(keyedNode(ui.render().tree, key).props[prop], payload); }
 /** Supplies only explicitly controlled independent catalogues/native chat summaries, never entity CRUD. */
 async function environment(t, themes = []) {
-  const plugin = await selectorEnvironment(t, {Theme: { async listConfigs() { return themes; }
+  const plugin = await selectorEnvironment(t, {Theme: { async listConfigs() { return { configs: themes }; }
   }}, {}, composeModules);
   plugin.tools.Chat.listAll = async () => ({ totalCount: plugin.records.size, chats: [...plugin.records.keys()].map(id => ({ id, title: "Controlled native conversation", messageCount: 0, createdAt: "2026-10-08T12:00:00Z", updatedAt: "2026-10-08T12:00:00Z", isCurrent: true, inputTokens: 0, outputTokens: 0 })) });
   return plugin;
@@ -378,4 +378,25 @@ test("the sole native editor retains model TTS shared-memory and four-category t
   assert.equal(saved.chatModelBindingMode, "FIXED_MODEL"); assert.equal(saved.chatModelId, "qwen-plus"); assert.equal(saved.ttsConfigId, "tts-one");
   assert.equal(saved.memoryBindingMode, "SHARED"); assert.equal(saved.sharedMemoryId, store.id); assert.equal(saved.toolAccessConfig.enabled, true);
   for (let tab = 0; tab < 4; tab++) assert.deepEqual(saved.toolAccessConfig[keys[tab]], tab === 0 ? [names[tab], "use_package"] : [names[tab]]);
+});
+
+test("native entity content and cancellation are available while its default avatar is pending", async t => {
+  const plugin = await environment(t);
+  const card = await plugin.api("character.create", { values: { name: "Content before image", characterSetting: "Visible without waiting for the avatar" } });
+  const open = plugin.openComposeRoute;
+  let complete;
+  const gate = new Promise(resolve => { complete = resolve; });
+  plugin.openComposeRoute = route => {
+    const page = open(route);
+    const original = page.context.ToolPkg.readResource;
+    page.context.ToolPkg.readResource = async (...args) => { await gate; return original(...args); };
+    return page;
+  };
+  const ui = mount(plugin, "preview", "card", card.id);
+  const loaded = await ui.load();
+  assert.ok(composeNodes(loaded.tree, node => node.props.text === "Visible without waiting for the avatar").length > 0);
+  assert.equal(composeNodes(loaded.tree, node => node.type === "LoadingIndicator").length, 0);
+  const result = await click(ui, "entity-close");
+  assert.equal(result.actionResult.type, "toolpkg.presentation.complete");
+  complete();
 });

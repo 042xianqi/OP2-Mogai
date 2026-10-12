@@ -952,13 +952,9 @@ impl JsEngineState {
         toolPkgContext: Option<ToolPkgExecutionContext>,
         backgroundWake: Arc<Mutex<Option<JsBackgroundWake>>>,
     ) -> Result<Self, String> {
-        let executionHost = match (&executionHost, &toolPkgContext) {
-            (Some(host), Some(context)) => Some(host.for_toolpkg_execution_context(context)?),
-            (None, Some(_)) => {
-                return Err("ToolPkg execution context requires a real host".to_string())
-            }
-            (_, None) => executionHost,
-        };
+        // JsEngineWorker::new already validates and binds this host before
+        // creating the runtime state. Keep that same owner for worker requests
+        // and callbacks instead of authenticating the package a second time.
         let (asyncCallbackSender, asyncCallbackReceiver) = mpsc::channel();
         let mut state = Self {
             runtime,

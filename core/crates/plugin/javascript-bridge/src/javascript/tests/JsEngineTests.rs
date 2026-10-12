@@ -209,6 +209,7 @@ struct TestPluginConfigExecutionHost {
     gatedToolStarted: Arc<tokio::sync::Notify>,
     toolPkgTextResourceReads: Arc<AtomicUsize>,
     registrationConfigReads: Arc<AtomicUsize>,
+    toolPkgContextBindings: Arc<AtomicUsize>,
     packageManagerLock: Arc<Mutex<()>>,
     environment: Arc<Mutex<BTreeMap<String, String>>>,
     toolCatalogError: Arc<Mutex<Option<String>>>,
@@ -246,6 +247,7 @@ impl JsExecutionHost for TestPluginConfigExecutionHost {
         &self,
         context: &ToolPkgExecutionContext,
     ) -> Result<Arc<dyn JsExecutionHost>, String> {
+        self.toolPkgContextBindings.fetch_add(1, Ordering::SeqCst);
         if let Some(error) = self.toolCatalogError.lock().unwrap().clone() { return Err(error); }
         if context.container_package_name.trim().is_empty() || context.context_key.trim().is_empty()
         {
@@ -4027,6 +4029,15 @@ async fn compose_dsl_reload_drains_intermediate_revisions_before_final() {
     let revisions = delivered.lock().unwrap().clone();
     assert!(revisions.len() >= 4, "both action intermediates and final updates must be exercised: {revisions:?}");
     assert_eq!(revisions, (1..=revisions.len() as u64).collect::<Vec<_>>());
+    engine.destroy();
+}
+
+/// Package authentication runs once and remains shared by the worker and runtime state.
+#[test]
+fn toolpkg_engine_binds_its_execution_host_once() {
+    let host = Arc::new(TestPluginConfigExecutionHost::default());
+    let engine = newTestIpcEngine(host.clone());
+    assert_eq!(host.toolPkgContextBindings.load(Ordering::SeqCst), 1);
     engine.destroy();
 }
 

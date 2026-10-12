@@ -57,6 +57,8 @@ class _ComposeDslRenderer extends StatefulWidget {
     this.nodePath = 'root',
     this.modifierScope = _ComposeDslModifierScope.normal,
     this.embedDialog = false,
+    this.dispatchOnLoad = true,
+    this.onLoadHandledByHost = false,
   });
 
   final _ComposeDslNode node;
@@ -71,6 +73,8 @@ class _ComposeDslRenderer extends StatefulWidget {
   final String nodePath;
   final _ComposeDslModifierScope modifierScope;
   final bool embedDialog;
+  final bool dispatchOnLoad;
+  final bool onLoadHandledByHost;
 
   /// Creates the state that subscribes to nodes observed by this renderer.
   @override
@@ -79,6 +83,8 @@ class _ComposeDslRenderer extends StatefulWidget {
 
 class _ComposeDslRendererState extends State<_ComposeDslRenderer> {
   final Set<_ComposeDslNode> _dependencies = {};
+  bool _hasDispatchedOnLoad = false;
+  bool _onLoadScheduled = false;
 
   /// Reads the current node handle owned by this widget.
   _ComposeDslNode get node => widget.node;
@@ -149,16 +155,44 @@ class _ComposeDslRendererState extends State<_ComposeDslRenderer> {
   @override
   Widget build(BuildContext context) {
     _clearDependencies();
-    return _guardNodeBuild(
-      () => _withModifier(
+    return _guardNodeBuild(() {
+      final content = _withModifier(
         context,
         _buildNode(context),
         node.props,
         onAction,
         nodeType: node.type,
         modifierScope: modifierScope,
-      ),
-    );
+      );
+      _dispatchOnLoad();
+      return content;
+    });
+  }
+
+  /// Loads each mounted child once; the screen host owns the root's load and timing.
+  void _dispatchOnLoad() {
+    if (!widget.dispatchOnLoad ||
+        widget.onLoadHandledByHost ||
+        _hasDispatchedOnLoad ||
+        _onLoadScheduled ||
+        _actionId(node.props['onLoad']) == null) {
+      return;
+    }
+    _onLoadScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _onLoadScheduled = false;
+      if (!mounted ||
+          node.isDisposed ||
+          !widget.dispatchOnLoad ||
+          widget.onLoadHandledByHost ||
+          _hasDispatchedOnLoad) {
+        return;
+      }
+      final actionId = _actionId(node.props['onLoad']);
+      if (actionId == null) return;
+      _hasDispatchedOnLoad = true;
+      unawaited(onAction(actionId));
+    });
   }
 
   /// Contains invalid plugin nodes without installing a global Flutter error handler.

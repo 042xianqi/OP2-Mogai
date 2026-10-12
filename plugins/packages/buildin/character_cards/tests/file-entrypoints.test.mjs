@@ -344,13 +344,14 @@ test("fresh exported chat UI APIs retain package routes without replaying regist
 });
 
 
-test("sidebar preparation reads real plugin data and avatars without opening a UI", async t => {
+test("sidebar preparation supplies avatar paths without binary reads or opening a UI", async t => {
   const disk = await createDiskHarness(t), settings = createHostDirectoriesFixture(disk, directoryInput);
   const avatar = path.join(disk.directory, "prepared-avatar.png");
   await writeFile(avatar, Buffer.from("iVBORw0KGgo=", "base64"));
   const extensionReads = [];
+  let binaryReads = 0;
   const harness = { ...settings.harness, globals: { ...settings.harness.globals,
-    Tools: { ...settings.harness.globals.Tools, Chat: { readExtension: async request => { extensionReads.push(request); return { extension: null }; } } },
+    Tools: { ...settings.harness.globals.Tools, Files: { ...settings.harness.globals.Tools.Files, readBinary: async () => { binaryReads++; throw new Error("Preparation must not read avatar bytes"); } }, Chat: { readExtension: async request => { extensionReads.push(request); return { extension: null }; } } },
     ToolPkg: { ...settings.harness.globals.ToolPkg, readResource: async (key, file) => {
       assert.equal(key, "character_default_avatar"); assert.equal(file, "operit-avatar.png"); return avatar;
     } },
@@ -367,7 +368,8 @@ test("sidebar preparation reads real plugin data and avatars without opening a U
   assert.equal(prepared.context, JSON.stringify({ input: { view: "characters" }, chats }));
   assert.equal(prepared.data.view, "characters");
   assert.ok(prepared.data.sections.some(section => section.kind === "card"));
-  assert.equal(prepared.defaultAvatar, "data:image/png;base64,iVBORw0KGgo=");
+  assert.equal(prepared.defaultAvatar, avatar);
+  assert.equal(binaryReads, 0);
   assert.equal(extensionReads.length, 1);
   assert.equal(prepared.data.sections.find(section => section.kind === "unbound").chats[0].id, "prepared-chat");
 });

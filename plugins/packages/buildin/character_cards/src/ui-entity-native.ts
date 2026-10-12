@@ -5,7 +5,7 @@ import type { ThemeChoice } from "./selection-application";
 import type { UiPresentation, UiScreenSession } from "./ui-contributions";
 import { createUiScreenSession } from "./ui-contributions";
 import { createCharacterDraft, createGroupDraft } from "./drafts";
-import { imageSource, pickedImagePath } from "./image-source";
+import { readAvatarImport, pickedImagePath } from "./image-source";
 import { renderEntityPreview } from "./ui-entity-preview";
 
 interface ExpandedField { key: string; label: string; value: string; apply: (value: string) => void }
@@ -105,6 +105,14 @@ function renderNativeEntity(ctx: ComposeDslContext, input: NativeEntityInput, li
       update({ themeError: String(error) });
     }
   }
+  /** Updates the avatar after entity content is usable; failures retain its placeholder. */
+  async function loadDefaultAvatar(): Promise<void> {
+    try {
+      const avatar = await ToolPkg.readResource("character_default_avatar", "operit-avatar.png");
+      if (avatar.trim() === "" || live.current.finished) return;
+      assertOwner(); update({ avatar });
+    } catch { /* Image lookup must not prevent entity editing or cancellation. */ }
+  }
   /** Resolves exactly the requested saved entity; never substitutes the active/default role. */
   async function load(): Promise<void> {
     await act(async () => {
@@ -113,8 +121,8 @@ function renderNativeEntity(ctx: ComposeDslContext, input: NativeEntityInput, li
         ? input.entity === "card" ? createCharacterDraft() : createGroupDraft()
         : input.entity === "card" ? snapshot.cards.find(value => value.id === input.id) : snapshot.groups.find(value => value.id === input.id);
       if (record === undefined) throw new Error("预览实体不存在：" + input.id);
-      const avatar = (input.entity === "group" || (record as Card).avatarUri === null) ? await ToolPkg.readResource("character_default_avatar", "operit-avatar.png") : null;
-      assertOwner(); update({ snapshot, tags: copy(snapshot.tags), card: input.entity === "card" ? copy(record as Card) : null, group: input.entity === "group" ? copy(record as Group) : null, avatar, loading: false });
+      assertOwner(); update({ snapshot, tags: copy(snapshot.tags), card: input.entity === "card" ? copy(record as Card) : null, group: input.entity === "group" ? copy(record as Group) : null, loading: false });
+      if (input.entity === "group" || (record as Card).avatarUri === null) void loadDefaultAvatar();
       if (live.current.editing) void loadThemes();
     });
     if (live.current.loading) update({ loading: false });
@@ -213,11 +221,11 @@ function renderNativeEntity(ctx: ComposeDslContext, input: NativeEntityInput, li
       const selected = await ctx.openFilePicker({ picker: "image", allowMultiple: false, mimeTypes: ["image/*"] }); assertOwner();
       if (selected.cancelled) return;
       if (selected.files.length !== 1) throw new Error("请选择一个头像文件");
-      const platform = (await Tools.System.terminal.info()).platform, source = await imageSource(pickedImagePath(selected.files[0].path, platform)); assertOwner();
+      const platform = (await Tools.System.terminal.info()).platform, contentBase64 = await readAvatarImport(pickedImagePath(selected.files[0].path, platform)); assertOwner();
       const directory = ToolPkg.getConfigDir().replace(/\/$/, "") + "/avatars";
       const created = await Tools.Files.mkdir(directory, true); if (!created.successful) throw new Error(created.details);
       const uri = directory + "/" + Date.now() + "-" + Math.random().toString(36).slice(2) + ".image";
-      const written = await Tools.Files.writeBinary(uri, source.slice(source.indexOf(",") + 1));
+      const written = await Tools.Files.writeBinary(uri, contentBase64);
       if (!written.successful) throw new Error(written.details); assertOwner(); update({ card: { ...card(), avatarUri: uri } });
     });
   }
@@ -351,7 +359,7 @@ function renderNativeEntity(ctx: ComposeDslContext, input: NativeEntityInput, li
         pages[0].push(field("name", "角色名称", draft.name, name => changeCard({ name })), field("description", "描述", draft.description, description => changeCard({ description })),
           ctx.UI.Box({ fillMaxWidth: true, paddingBottom: 12 }, ctx.UI.InputDecorator({ label: "角色头像", enabled }, ctx.UI.Row({ fillMaxWidth: true, verticalAlignment: "center" }, [
             ctx.UI.Image({ key: "entity-edit-avatar", ...(draft.avatarUri === null ? { path: state.avatar ?? undefined } : { uri: draft.avatarUri }), width: 44, height: 44, contentScale: "crop", contentDescription: "角色头像", modifier: ctx.Modifier.clip({ type: "circle" }) }), ctx.UI.Spacer({ width: 12 }), ctx.UI.Text({ text: draft.avatarUri ?? "未设置", style: "bodyMedium", weight: 1, maxLines: 1, overflow: "ellipsis" }), ctx.UI.Spacer({ width: 8 }), standardButton("entity-choose-avatar", "选择", chooseAvatar),
-            ...(draft.avatarUri === null ? [] : [standardButton("entity-clear-avatar", "清除", async () => { await act(async () => { const avatar = live.current.avatar ?? await ToolPkg.readResource("character_default_avatar", "operit-avatar.png"); assertOwner(); update({ card: { ...card(), avatarUri: null }, avatar }); }); })]),
+            ...(draft.avatarUri === null ? [] : [standardButton("entity-clear-avatar", "清除", async () => { await act(async () => { assertOwner(); update({ card: { ...card(), avatarUri: null } }); if (live.current.avatar === null) void loadDefaultAvatar(); }); })]),
           ]))),
           field("characterSetting", "角色设定", draft.characterSetting, characterSetting => changeCard({ characterSetting }), 6), field("openingStatement", "开场白", draft.openingStatement, openingStatement => changeCard({ openingStatement }), 3),
           ctx.UI.Column({ fillMaxWidth: true, paddingBottom: 12 }, [ctx.UI.Row({ fillMaxWidth: true, verticalAlignment: "center" }, [ctx.UI.Text({ text: "标签", weight: 1, fontWeight: "700" }), ctx.UI.TextButton({ key: "entity-tags-manage", enabled, onClick: () => { assertOwner(); update({ tagManaging: true }); } }, ctx.UI.Row({ spacing: 8, verticalAlignment: "center" }, [ctx.UI.Icon({ name: "Tune", size: 18 }), ctx.UI.Text({ text: "管理标签" })]))]), ctx.UI.Spacer({ height: 6 }),

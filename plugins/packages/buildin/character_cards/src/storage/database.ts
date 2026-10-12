@@ -39,10 +39,10 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
     return repository;
   }
 
-  /** Loads bounded collection pages through the host without reading a serialized collection file. */
+  /** Overlaps the fixed collection reads while preserving each collection's ordered pagination. */
   private async readRecords(): Promise<StoredRecord[]> {
-    const rows: StoredRecord[] = [];
-    for (const collection of collections) {
+    const results = await Promise.allSettled(collections.map(async collection => {
+      const rows: StoredRecord[] = [];
       let after: string | null = null;
       for (;;) {
         const page = await this.database.collection(collection).list(after, 1000);
@@ -50,6 +50,14 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
         if (page.length < 1000) break;
         after = page[page.length - 1].key;
       }
+      return rows;
+    }));
+    const rows: StoredRecord[] = [];
+    // Settle every read before releasing the repository queue, including on
+    // failure, so a subsequent mutation cannot race an unfinished read.
+    for (const result of results) {
+      if (result.status === "rejected") throw result.reason;
+      for (const row of result.value) rows.push(row);
     }
     return rows;
   }

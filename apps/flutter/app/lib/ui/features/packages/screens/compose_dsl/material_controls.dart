@@ -372,6 +372,7 @@ extension _ComposeMaterialControls on _ComposeDslRendererState {
       onTextInput: onTextInput,
       webViewHostContext: webViewHostContext,
       splitMarkdownContent: splitMarkdownContent,
+      dispatchOnLoad: widget.dispatchOnLoad,
       nodePath: childPath,
     );
   }

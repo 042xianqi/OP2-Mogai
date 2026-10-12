@@ -203,11 +203,15 @@ var controller = {
   cancel: function() { throw Error('No presentation'); }
 };
 globalThis.__dslProbeStages = {rootRenderMs:0, retainedCommitMs:0, parseCalls:0, compileCalls:0};
-var probeParser = __operitAcorn.parse, probeCompiler = OperitComposeCompiler.compile;
-/** Rejects runtime parsing of a precompiled artifact. */
-__operitAcorn.parse = function() { throw Error('Artifact invoked runtime parser'); };
-/** Rejects runtime lowering of a precompiled artifact. */
-OperitComposeCompiler.compile = function() { throw Error('Artifact invoked runtime compiler'); };
+if (typeof __operitAcorn !== 'undefined' || typeof OperitComposeCompiler !== 'undefined') {
+  throw Error('Native page must not own the shared compiler');
+}
+var probePrepare = __operitNativePrepareComposeModule;
+/** Validates every module crossing the native shared preparation boundary. */
+__operitNativePrepareComposeModule = function(source, identity) {
+  if (source.indexOf('// @operit-compose-artifact 1') !== 0) throw Error('Probe module must be precompiled');
+  return probePrepare(source, identity);
+};
 var probeRender = OperitComposeReactive.render;
 /** Measures production node construction with the native engine clock. */
 OperitComposeReactive.render = function() {
@@ -222,8 +226,8 @@ OperitComposeDslRuntime.createContext = function() {
   bundle.composition.commit = function() {
     var start = Date.now(); var result = commit.apply(this, arguments);
     __dslProbeStages.retainedCommitMs += Date.now() - start;
-    // The assertion covers the measured artifact load; inspection uses the normal action helper.
-    __operitAcorn.parse = probeParser; OperitComposeCompiler.compile = probeCompiler;
+    // Inspection uses the ordinary action helper after the measured first commit.
+    __operitNativePrepareComposeModule = probePrepare;
     return result;
   };
   return bundle;

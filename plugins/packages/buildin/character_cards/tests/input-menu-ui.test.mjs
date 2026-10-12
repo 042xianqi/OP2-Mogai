@@ -94,3 +94,23 @@ test("retained TS menu action rejects a changed host chat without modifying bind
   );
   assert.equal(runtime.records.get("selector-chat").extension, null);
 });
+
+test("input menu labels and selector action do not wait for any avatar resource", async t => {
+  const { buildUiScreenScripts } = await import("../scripts/build.mjs");
+  const runtime = await selectorEnvironment(t, {}, {}, await buildUiScreenScripts());
+  const open = runtime.openComposeRoute;
+  let complete;
+  const gate = new Promise(resolve => { complete = resolve; });
+  runtime.openComposeRoute = route => {
+    const page = open(route);
+    const original = page.context.ToolPkg.readResource;
+    page.context.ToolPkg.readResource = async (...args) => { await gate; return original(...args); };
+    return page;
+  };
+  const ui = menu(runtime, "selector-chat");
+  const loaded = await ui.load();
+  assert.deepEqual(texts(loaded.tree), ["当前角色卡", "未绑定"]);
+  const response = await ui.dispatch(keyedNode(loaded.tree, "current-character").props.onClick);
+  assert.equal(response.actionResult.type, "toolpkg.ui.present");
+  complete();
+});

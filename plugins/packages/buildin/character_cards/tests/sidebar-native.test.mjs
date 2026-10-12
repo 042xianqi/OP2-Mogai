@@ -25,7 +25,7 @@ function mount(current, data, adapters = {}) {
       assert.equal(name, 'character-memory.domain');
       if (adapters.domain) return adapters.domain(request);
       throw new Error('No labelled domain adapter supplied'); } },
-    readResource: async (key, path) => { calls.push({ resource: key, path }); return '/test/operit-avatar.png'; },
+    readResource: async (key, path) => { calls.push({ resource: key, path }); return adapters.readResource ? adapters.readResource(key, path) : '/app/data/cache/toolpkg_resource_exports/operit-avatar.png'; },
   } };
   globals.Tools = { Files: { readBinary: adapters.readBinary ?? (async path => ({ path, size: 12, contentBase64: 'iVBORw0KGgo=' })) }, ...(adapters.chat ? { Chat: adapters.chat } : {}) };
   const compiledModules = { ...modules };
@@ -73,7 +73,7 @@ test('native role sidebar restores rounded nested legacy layout without timestam
   assert.equal(keyedNode(tree, 'sidebar-create-bar').props.height, 34);
   assert.equal(keyedNode(tree, 'sidebar-create-bar').props.shape.type, 'pill');
   assert.equal(keyedNode(tree, 'sidebar-avatar-card:travel').props.width, 22);
-  assert.equal(keyedNode(tree, 'sidebar-avatar-card:travel').props.uri, 'data:image/png;base64,iVBORw0KGgo=');
+  assert.equal(keyedNode(tree, 'sidebar-avatar-card:travel').props.uri, '/app/data/cache/toolpkg_resource_exports/operit-avatar.png');
   assert.equal(keyedNode(tree, 'sidebar-section-card:travel').props.paddingStart, 20);
   assert.equal(composeNodes(tree, node => node.props.key === 'sidebar-section-card:empty').length, 0);
   const group = keyedNode(tree, 'sidebar-group-1');
@@ -401,28 +401,27 @@ test('selection and streaming input changes rerender native rows without reloadi
     'Actual metadata changes must still reload authoritative classifications');
 });
 
-test('custom avatars overlap file reads with bounded concurrency', async () => {
+test('native custom avatars carry paths without reading their contents', async () => {
   const chats = Array.from({ length: 17 }, (_, i) => summary('c' + (i + 1), { group: null })), data = catalog(chats);
   data.sections = Array.from({ length: 17 }, (_, i) => ({ ...data.sections[0], id: 'card:avatar-' + i,
     selection: 'card:avatar-' + i, avatarUri: '/test/avatar-' + i + '.png',
     chats: [chats[i]], conversationGroups: [], ungroupedChats: [chats[i]] }));
-  let active = 0, maximum = 0, reads = 0;
+  let reads = 0;
   const screen = mount(context(chats), data, { readBinary: async () => {
-    reads++; active++; maximum = Math.max(maximum, active);
-    try { await new Promise(resolve => setImmediate(resolve)); return { size: 12, contentBase64: 'iVBORw0KGgo=' }; }
-    finally { active--; }
+    reads++; throw new Error('Native DSL must leave image reads to the host');
   } });
   const { tree } = await screen.load();
-  assert.equal(reads, 17);
-  assert.equal(maximum, 8);
-  assert.equal(keyedNode(tree, 'sidebar-avatar-card:avatar-16').props.uri, 'data:image/png;base64,iVBORw0KGgo=');
+  assert.equal(reads, 0);
+  for (let i = 0; i < 17; i++) {
+    assert.equal(keyedNode(tree, 'sidebar-avatar-card:avatar-' + i).props.uri, '/test/avatar-' + i + '.png');
+  }
 });
 
 
 test('prepared role data and avatars appear in the first DSL tree before IPC completes', async () => {
   const chats = [summary('c1')], current = context(chats), data = catalog(chats);
   const chatSidebarPrepared = { context: JSON.stringify({ input: current.input, chats }), data,
-    defaultAvatar: 'data:image/png;base64,iVBORw0KGgo=' };
+    defaultAvatar: '/app/data/cache/toolpkg_resource_exports/operit-avatar.png' };
   let finish;
   const pending = new Promise(resolve => { finish = resolve; });
   const session = mount({ ...current, chatSidebarPrepared }, data, { catalog: () => pending });
@@ -443,4 +442,40 @@ test('prepared sidebar for different history is ignored instead of displaying st
     data: catalog([summary('c2')]), defaultAvatar: null };
   const session = mount({ ...current, chatSidebarPrepared }, catalog(chats));
   assert.equal(composeNodes(session.first.tree, node => node.props?.key === 'sidebar-section-card:travel').length, 0);
+});
+
+
+test('twenty default avatars serialize resource paths without any binary reads', async () => {
+  const chats = Array.from({ length: 20 }, (_, i) => summary('c' + i, { group: null }));
+  const data = catalog(chats);
+  data.sections = Array.from({ length: 20 }, (_, i) => ({ ...data.sections[0],
+    id: 'card:default-' + i, selection: 'card:default-' + i, chats: [chats[i]],
+    conversationGroups: [], ungroupedChats: [chats[i]],
+  }));
+  let reads = 0;
+  const screen = mount(context(chats), data, { readBinary: async () => {
+    reads++; throw new Error('Unexpected binary read');
+  } });
+  const { tree } = await screen.load();
+  const avatars = composeNodes(tree, node => node.type === 'Image');
+  assert.equal(avatars.length, 20);
+  assert.equal(reads, 0);
+  assert.equal(screen.calls.filter(call => call.resource).length, 1);
+  for (const avatar of avatars) assert.equal(avatar.props.uri, '/app/data/cache/toolpkg_resource_exports/operit-avatar.png');
+});
+
+
+test('sidebar content and onLoad complete while default avatar lookup remains pending', async () => {
+  let complete;
+  const pending = new Promise(resolve => { complete = resolve; });
+  const chats = [summary('c1')];
+  const screen = mount(context(chats), catalog(chats), { readResource: () => pending });
+  const loaded = await screen.load();
+  assert.ok(composeNodes(loaded.tree, node => node.type === 'Text' && node.props.text === '旅行角色').length > 0);
+  assert.ok(composeNodes(loaded.tree, node => node.type === 'Text' && node.props.text === '对话 c1').length > 0);
+  assert.equal(composeNodes(loaded.tree, node => node.type === 'Image' && node.props.uri === '/app/default.png').length, 0);
+  complete('/app/default.png');
+  await new Promise(resolve => setImmediate(resolve));
+  const rendered = screen.render();
+  assert.ok(composeNodes(rendered.tree, node => node.type === 'Image' && node.props.uri === '/app/default.png').length > 0);
 });
