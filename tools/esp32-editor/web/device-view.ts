@@ -36,6 +36,11 @@ export class DeviceView {
     runtime.ccall('operit_ui_set_space_state', null, ['string'], [state.spaceState ?? '等待连接 Operit']);
     runtime.ccall('operit_ui_set_space_join_prompt', null, ['string', 'number'],
       [state.spaceJoinPrompt ?? '', state.spaceJoinBusy ? 1 : 0]);
+    const deviceSpace = state.deviceSpace ?? {};
+    runtime.ccall('operit_ui_set_device_space_state', null,
+      ['number', 'string', 'string', 'string', 'string', 'number'],
+      [deviceSpace.phase ?? 0, deviceSpace.status ?? '', deviceSpace.candidates?.[0] ?? '',
+        deviceSpace.candidates?.[1] ?? '', deviceSpace.candidates?.[2] ?? '', deviceSpace.pendingJoin ? 1 : 0]);
     const chat = state.chat ?? {};
     runtime.ccall('operit_ui_set_chat_history', null, ['number', 'number'], [chat.hasOlder ? 1 : 0, chat.hasNewer ? 1 : 0]);
     const character = chat.conversations?.find(item => item.id === chat.chatId)?.characterCardName || 'Operit';

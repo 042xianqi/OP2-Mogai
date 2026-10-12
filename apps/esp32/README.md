@@ -270,3 +270,21 @@ lists omit the tools section and tool-test button. The white top-right lightning
 sequentially tests connectivity for all enabled plugins in the selected category.
 Individual tests continue to run the existing fixed Core diagnostic exports;
 no scripts, arguments or result payloads are copied to the device.
+
+## Device-space settings
+
+All pairing controls live under Settings → Device Space. The Edge can discover
+nearby nodes, initiate pairing, enter the receiver's six-digit code, display its
+own incoming pairing code, and review assigned Space join requests. Management
+provides outgoing join/cancel, local Space exit and one-sided local unpair.
+Incoming prompts remain available in settings without taking over chat or a
+plugin scene. Wrong codes can be edited and retried within the service's attempt
+and expiration limits; network work runs on the existing Host scheduler.
+
+The firmware and desktop simulator compile the same `device_space_ui.rs`
+controller and the same fixed C renderer. Pending outgoing consent survives
+restart through the node service's existing records, and approved membership is
+refreshed automatically. Pairing, approval and membership remain separate.
+A retained remote pairing is replaced only after a fresh code succeeds; unpair
+itself remains local-only. No new Link wire encoding, transport or Host API is
+introduced.

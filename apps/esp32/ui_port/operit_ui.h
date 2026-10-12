@@ -58,6 +58,7 @@ void operit_ui_finish_plugins(unsigned count, unsigned offset, unsigned total, b
 const char *operit_ui_chat_draft(void);
 void operit_ui_set_chat_draft(const char *text);
 void operit_ui_set_speech_state(unsigned phase);
+void operit_ui_set_device_space_state(unsigned phase, const char *status, const char *first, const char *second, const char *third, bool pending);
 void operit_ui_submit_chat(void);
 void operit_ui_chat_send_result(bool ok, const char *error);
 

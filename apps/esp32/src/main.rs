@@ -2,6 +2,7 @@
 
 mod config;
 mod edge_chat;
+mod device_space_ui;
 #[cfg(target_os = "espidf")]
 mod edge_plugin;
 #[cfg(target_os = "espidf")]
@@ -297,7 +298,7 @@ fn runFirmware(
     )
     .map_err(HostError::new)?;
     let mut spaceJoinUi = crate::space_join_ui::SpaceJoinUi::new(
-        spaceService,
+        spaceService.clone(),
         edgeRouter.clone(),
         operit_store::CoreSpaceStore::CoreSpaceDeviceProfile {
             nodeId: identity.nodeId.clone(),
@@ -311,6 +312,9 @@ fn runFirmware(
     },
         scheduler.clone(),
     )?;
+    let mut deviceSpaceUi = crate::device_space_ui::DeviceSpaceUi::new(
+        NodeServices::new(peerService.clone()), spaceService, scheduler.clone(),
+    );
     let mut edgeNode = operit_node_edge::EdgeNode::fromHostManager(hostManager.clone())
         .withPlugin(Arc::new(edge_plugin::DeviceStatusPlugin::new(Arc::clone(
             &status,
@@ -410,10 +414,16 @@ fn runFirmware(
         // The shared UI runtime receives the sampled touch directly.
         ui.setTouch(point.map(|sample| (sample.x, sample.y)));
         ui.pump(20);
+        deviceSpaceUi.poll();
+        ui.setDeviceSpaceState(&deviceSpaceUi.snapshot());
         spaceJoinUi.pump(&mut ui);
         crate::edge_plugin::pumpUi(&mut ui);
         for action in ui.drainActions() {
             if spaceJoinUi.action(&action, &mut ui) {
+                if action == "edge_space_leave" { deviceSpaceUi.reset(); }
+                continue;
+            }
+            if deviceSpaceUi.action(&action) {
                 continue;
             }
             if action == "edge_scene_exit" {
@@ -501,6 +511,7 @@ fn runFirmware(
                     })();
                     match result {
                         Ok(()) => {
+                            deviceSpaceUi.reset();
                             chatRoute.reset();
                             status.setPairingCode("");
                             setExpression("neutral")?;

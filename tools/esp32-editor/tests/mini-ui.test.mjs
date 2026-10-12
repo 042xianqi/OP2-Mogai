@@ -18,6 +18,12 @@ async function fixture() {
   pump();return {ui,actions,call,inspect,tap,pump,frame};
 }
 
+function openSpace({call,tap}) {
+  call('navigate_home'); tap('sidebar_toggle'); tap('sidebar_settings'); tap('settings_space');
+}
+function openReview(f) { openSpace(f); assert.equal(f.tap('space_review'),1); }
+function openCode(f) { openSpace(f); assert.equal(f.tap('space_pair_code'),1); }
+
 test('mini UI uses under 10 KiB static RAM, a 1280-byte strip, and no UI heap',options,async()=>{
   const {ui,inspect}=await fixture();const state=inspect();
   assert.equal(state.renderer,'mini');assert(state.staticBytes<10*1024);
@@ -25,27 +31,28 @@ test('mini UI uses under 10 KiB static RAM, a 1280-byte strip, and no UI heap',o
   for(const name of ['used','total','free','largest','peak'])assert.equal(ui['_simulator_heap_'+name](),0);
   assert.equal(ui._simulator_stack_size(),12*1024);
 });
-test('pairing digits are validated and take priority over approvals and old errors',options,async()=>{
-  const {call,inspect}=await fixture();
-  call('set_paired',['number'],[1]);call('action_error',['string'],['旧错误']);
+test('pairing digits remain in device space and show only validated six-digit codes',options,async()=>{
+  const f=await fixture(),{call,inspect}=f;
   call('set_space_join_prompt',['string','number'],['申请加入空间\n测试空间',0]);
   call('set_pairing_code',['string'],['001234']);
-  let state=inspect();assert.equal(state.page,'Pairing');assert.equal(state.pairingCode,'001234');
-  assert(state.nodes.some(n=>n.id==='pairing_code'&&n.text==='001234'));
-  assert(!state.nodes.some(n=>n.id==='edge_space_approve'||n.id==='error'));
+  assert.equal(inspect().page,'Chat'); openCode(f);
+  call('action_error',['string'],['旧错误']);
+  assert.equal(inspect().page,'Pairing');
+  assert(inspect().nodes.some(n=>n.id==='pairing_code'&&n.text==='001234'));
+  assert(!inspect().nodes.some(n=>n.id==='edge_space_approve'||n.id==='error'));
   call('set_pairing_code',['string'],['board: 123456']);
-  state=inspect();assert.equal(state.pairingCode,'');assert.equal(state.page,'Space');
+  assert.equal(inspect().pairingCode,'');assert.equal(inspect().page,'SpaceSettings');
 });
 test('approval buttons emit service actions, do not locally approve, and reject repeat taps while busy',options,async()=>{
-  const {call,inspect,tap,actions}=await fixture();
-  call('set_space_join_prompt',['string','number'],['申请加入空间\n胖鱼\n测试空间',0]);
+  const f=await fixture(),{call,inspect,tap,actions}=f;
+  call('set_space_join_prompt',['string','number'],['申请加入空间\n胖鱼\n测试空间',0]); openReview(f);
   assert.equal(tap('edge_space_approve'),1);assert.deepEqual(actions,['edge_space_approve']);
   assert.equal(inspect().page,'Space');
   call('set_space_join_prompt',['string','number'],['',1]);
   assert.equal(inspect().page,'Space');assert.equal(tap('edge_space_approve'),0);assert.equal(tap('edge_space_reject'),0);
   call('set_space_join_prompt',['string','number'],['申请加入空间',0]);
   assert.equal(tap('edge_space_reject'),1);assert.deepEqual(actions,['edge_space_approve','edge_space_reject']);
-  call('set_space_join_prompt',['string','number'],['',0]);assert.equal(inspect().page,'Chat');
+  call('set_space_join_prompt',['string','number'],['',0]);assert.equal(inspect().page,'SpaceSettings');
 });
 function tapSettings(inspect, ui) {
   for(const id of ['sidebar_toggle','sidebar_settings']) {
@@ -56,8 +63,8 @@ function tapSettings(inspect, ui) {
 test('touch requires press/release on the same target and cancels across state changes',options,async()=>{
   const {ui,call,inspect,actions}=await fixture();
   assert.equal(tapSettings(inspect, ui), true);
-  assert.equal(ui.ccall('operit_ui_debug_tap','number',['string'],['settings_connection']),1);
-  const n=inspect().nodes.find(n=>n.id==='pair_listen'),x=n.rect.x+10,y=n.rect.y+10;
+  assert.equal(ui.ccall('operit_ui_debug_tap','number',['string'],['settings_space']),1);
+  const n=inspect().nodes.find(n=>n.id==='space_pair_code'),x=n.rect.x+10,y=n.rect.y+10;
   ui._simulator_touch(x,y,1);assert.deepEqual(actions,[]);
   ui._simulator_touch(x+180,y,0);assert.deepEqual(actions,[]);
   ui._simulator_touch(x,y,1);call('set_connection',['number','number'],[1,0]);
@@ -65,20 +72,20 @@ test('touch requires press/release on the same target and cancels across state c
   ui._simulator_touch(x,y,1);ui._simulator_touch(x,y,0);assert.deepEqual(actions,['edge_pair']);
 });
 test('Chinese and six-digit codes are painted as distinct real glyphs',options,async()=>{
-  const {call,frame}=await fixture();
+  const f=await fixture(),{call,frame}=f;
   call('set_paired',['number'],[1]);
   const chars=['中','文','申','请','加','入','空','间','批','准','拒','绝'];const images=[];
   for(const c of chars){call('set_chat_screen',['string'],[c]);images.push(frame().toString('hex'));}
   assert.equal(new Set(images).size,chars.length);
-  call('set_pairing_code',['string'],['000000']);const first=frame();
+  openCode(f);call('set_pairing_code',['string'],['000000']);const first=frame();
   call('set_pairing_code',['string'],['123456']);assert.notDeepEqual(frame(),first);
 });
 test('text is bounded on whole UTF-8 characters and diagnostic JSON escapes control characters',options,async()=>{
-  const {call,inspect,frame}=await fixture();call('set_paired',['number'],[1]);
+  const f=await fixture(),{call,inspect,frame}=f;call('set_paired',['number'],[1]);
   call('set_chat_screen',['string'],['中'.repeat(1000)+'"\\\n']);
   assert(!inspect().nodes.find(n=>n.id==='chat_text').text.includes('\ufffd'));assert.equal(frame().length,320*240*2);
   call('set_space_join_prompt',['string','number'],['"\\\n\t'+String.fromCharCode(1)+'文',0]);
-  assert.equal(inspect().nodes.find(n=>n.id==='space_join_body').text,'"\\\n\t'+String.fromCharCode(1)+'文');
+  openReview(f);assert.equal(inspect().nodes.find(n=>n.id==='space_join_body').text,'"\\\n\t'+String.fromCharCode(1)+'文');
 });
 test('unchanged state does not continuously redraw or allocate',options,async()=>{
   const {ui,call,pump}=await fixture();call('set_pairing_code',['string'],['123456']);pump();
@@ -92,7 +99,7 @@ test('unchanged state does not continuously redraw or allocate',options,async()=
 });
 test('unpair requires a confirmation before forwarding the existing service action',options,async()=>{
   const {call,tap,inspect,actions}=await fixture();call('set_paired',['number'],[1]);
-  assert.equal(tap('sidebar_toggle'),1);assert.equal(tap('sidebar_settings'),1);assert.equal(tap('settings_device'),1);assert.equal(tap('edge_unpair'),1);
+  assert.equal(tap('sidebar_toggle'),1);assert.equal(tap('sidebar_settings'),1);assert.equal(tap('settings_space'),1);assert.equal(tap('space_manage'),1);assert.equal(tap('edge_unpair'),1);
   assert.equal(inspect().page,'Unpair');assert.deepEqual(actions,[]);
   assert.equal(tap('unpair_cancel'),1);assert.deepEqual(actions,[]);
   tap('edge_unpair');tap('unpair_confirm');assert.deepEqual(actions,['edge_unpair']);
@@ -111,11 +118,11 @@ test('host keyboard submission retains draft on failure, prevents double send, c
   assert.equal(inspect().nodes.find(n=>n.id==='edge_send').enabled,false);
 });
 test('repeated pairing and approval redraws stay within the checked C stack and fixed state',options,async()=>{
-  const {ui,call,tap,pump,inspect}=await fixture();const before=inspect().staticBytes;
+  const f=await fixture(),{ui,call,tap,pump,inspect}=f;const before=inspect().staticBytes;
   for(let i=0;i<300;i++){
-    call('set_pairing_code',['string'],[String(i).padStart(6,'0')]);pump();
+    call('set_pairing_code',['string'],[String(i).padStart(6,'0')]);openCode(f);pump();
     call('set_pairing_code',['string'],['']);
-    call('set_space_join_prompt',['string','number'],['申请加入空间\n测试设备',0]);tap('edge_space_approve');pump();
+    call('set_space_join_prompt',['string','number'],['申请加入空间\n测试设备',0]);openReview(f);tap('edge_space_approve');pump();
     call('set_space_join_prompt',['string','number'],['',0]);pump();
   }
   assert.equal(inspect().staticBytes,before);assert.equal(ui._simulator_heap_used(),0);
@@ -138,8 +145,8 @@ test('mini native UI source cannot reference malloc, LVGL, or an entire-frame bu
 });
 
 test('failed space approval remains reviewable and displays the backend error',options,async()=>{
-  const {call,inspect,tap,actions}=await fixture();
-  call('set_space_join_prompt',['string','number'],['申请加入空间',0]);
+  const f=await fixture(),{call,inspect,tap,actions}=f;
+  call('set_space_join_prompt',['string','number'],['申请加入空间',0]);openReview(f);
   call('action_error',['string'],['审批失败，请重试']);
   assert.equal(inspect().page,'Space');
   assert.equal(inspect().nodes.find(n=>n.id==='space_join_error').text,'审批失败，请重试');
@@ -176,12 +183,12 @@ test('station Wi-Fi status is independent of an authenticated serial Space conne
 
 test('leaving a Space requires local confirmation and does not revoke pairing',options,async()=>{
   const {call,tap,inspect,actions}=await fixture();call('set_paired',['number'],[1]);
-  tap('sidebar_toggle');tap('sidebar_settings');assert.equal(tap('settings_space'),1);assert.equal(tap('space_leave'),1);
+  tap('sidebar_toggle');tap('sidebar_settings');assert.equal(tap('settings_space'),1);assert.equal(tap('space_manage'),1);assert.equal(tap('space_leave'),1);
   assert.equal(inspect().page,'LeaveSpace');assert.deepEqual(actions,[]);
-  assert.equal(tap('space_leave_cancel'),1);assert.equal(inspect().page,'SpaceSettings');
+  assert.equal(tap('space_leave_cancel'),1);assert.equal(inspect().page,'SpaceManage');
   assert.deepEqual(actions,[]);
   tap('space_leave');assert.equal(tap('space_leave_confirm'),1);
-  assert.deepEqual(actions,['edge_space_leave']);assert.equal(inspect().page,'Settings');
+  assert.deepEqual(actions,['edge_space_leave']);assert.equal(inspect().page,'SpaceSettings');
   assert.equal(inspect().nodes.find(n=>n.id==='link_status').text,'已配对 / 离线');
   assert(inspect().staticBytes<10*1024);assert.equal(inspect().heapBytes,0);
 });
@@ -246,12 +253,15 @@ test('SVG expression paints in sidebar and dedicated screen without heap allocat
   assert(inspect().staticBytes<10*1024);
 });
 
-test('incoming approval or pairing code preempts the sidebar and cannot be hidden by navigation',options,async()=>{
-  const {call,inspect,tap}=await fixture();tap('sidebar_toggle');
+test('incoming approval and pairing remain accessible through settings without stealing navigation',options,async()=>{
+  const f=await fixture(),{call,inspect,tap}=f;tap('sidebar_toggle');
   call('set_space_join_prompt',['string','number'],['申请加入空间',0]);
-  assert.equal(inspect().page,'Space');assert.equal(tap('sidebar_toggle'),0);
-  call('set_pairing_code',['string'],['123456']);assert.equal(inspect().page,'Pairing');
-  assert.equal(tap('sidebar_toggle'),0);
+  call('set_pairing_code',['string'],['123456']);assert.equal(inspect().page,'Sidebar');
+  tap('sidebar_settings');tap('settings_space');
+  assert.equal(tap('space_review'),1);assert.equal(inspect().page,'Space');
+  tap('page_back');assert.equal(inspect().page,'SpaceSettings');
+  tap('space_pair_code');assert.equal(inspect().page,'Pairing');
+  tap('page_back');assert.equal(inspect().page,'SpaceSettings');
   call('set_pairing_code',['string'],['']);call('set_space_join_prompt',['string','number'],['',0]);
   assert.equal(inspect().sidebarOpen,false);
 });
@@ -285,17 +295,18 @@ test('settings groups navigate back without emitting service operations',options
   const {call,inspect,tap,actions}=await fixture();call('set_paired',['number'],[1]);
   tap('sidebar_toggle');tap('sidebar_settings');
   for(const [route,page,buttons] of [
-    ['settings_connection','Connection',['pairing_open','pair_listen']],
-    ['settings_space','SpaceSettings',['space_leave']],
-    ['settings_device','DeviceSettings',['edge_new','edge_unpair']],
+    ['settings_connection','Connection',['connection_space']],
+    ['settings_space','SpaceSettings',['space_pair','space_pair_code','space_review','space_manage']],
+    ['settings_device','DeviceSettings',['edge_new','operations_space']],
   ]) {
     assert.equal(tap(route),1);assert.equal(inspect().page,page);
     for(const id of buttons)assert(inspect().nodes.some(n=>n.id===id));
     assert.equal(tap('page_back'),1);assert.equal(inspect().page,'Settings');
   }
   assert.deepEqual(actions,[]);
-  tap('settings_connection');tap('pairing_open');assert.equal(inspect().page,'Pairing');
-  assert.equal(tap('page_back'),1);assert.equal(inspect().page,'Settings');
+  tap('settings_space');tap('space_pair_code');assert.equal(inspect().page,'Pairing');
+  assert.equal(tap('page_back'),1);assert.equal(inspect().page,'SpaceSettings');
+  assert.deepEqual(actions,['edge_pair']);
 });
 
 test('drawer scrim cannot trigger the underlying send, and closing preserves the draft',options,async()=>{
@@ -497,13 +508,41 @@ test('list handles deletion, invalid IDs, offline, approvals, and send scratch w
   assert.deepEqual(f.inspect().nodes.filter(n=>/^conversation_/.test(n.id)).map(n=>n.action),['edge_select:chat-0','edge_select:chat-1']);
   f.call('set_conversation',['number','string','string','string','number'],[0,'x'.repeat(97),'无效标识','',0]);assert.equal(f.tap('conversation_0'),0);
   f.call('set_connection',['number','number'],[1,0]);assert.equal(f.tap('conversation_1'),0);assert.equal(f.tap('edge_new'),0);
-  f.call('set_connection',['number','number'],[1,1]);f.call('set_pairing_code',['string'],['123456']);assert.equal(f.inspect().page,'Pairing');assert.equal(f.tap('conversation_1'),0);
-  f.call('set_pairing_code',['string'],['']);f.call('set_space_join_prompt',['string','number'],['加入空间',0]);assert.equal(f.inspect().page,'Space');
-  f.call('set_space_join_prompt',['string','number'],['',0]);f.tap('page_back');assert.equal(f.inspect().page,'Chat');
+  f.call('set_connection',['number','number'],[1,1]);f.call('set_pairing_code',['string'],['123456']);assert.equal(f.inspect().page,'Conversations');openCode(f);assert.equal(f.inspect().page,'Pairing');assert.equal(f.tap('conversation_1'),0);
+  f.call('set_pairing_code',['string'],['']);f.call('set_space_join_prompt',['string','number'],['加入空间',0]);openReview(f);assert.equal(f.inspect().page,'Space');
+  f.call('set_space_join_prompt',['string','number'],['',0]);f.call('navigate_home');assert.equal(f.inspect().page,'Chat');
   assert.equal(f.inspect().nodes.find(n=>n.id==='chat_draft').text,'原对话的草稿');
   f.call('submit_chat');const submitted=f.ui.ccall('operit_ui_chat_draft','string',[],[]);assert.equal(submitted,'原对话的草稿');
   f.tap('sidebar_toggle');assert.equal(f.tap('sidebar_chat'),0,'browsing may not overwrite an in-flight send');
   f.call('navigate_home');assert.equal(f.ui.ccall('operit_ui_chat_draft','string',[],[]),submitted);
   f.call('chat_send_result',['number','string'],[1,'']);f.tap('sidebar_toggle');f.tap('sidebar_chat');f.fill();
   f.call('chat_send_result',['number','string'],[1,'']);assert.equal(f.tap('conversation_0'),1,'a late send receipt may not corrupt a list ID');
+});
+
+test('device space discovery and numeric keypad forward exact bounded pairing actions',options,async()=>{
+  const f=await fixture(),{call,tap,inspect,actions}=f;openSpace(f);
+  assert.equal(tap('space_pair'),1);assert.equal(inspect().page,'PairDiscovery');
+  assert.deepEqual(actions,['edge_pair_discover']);
+  const update=(phase,status,peers=[],pending=0)=>call('set_device_space_state',
+    ['number','string','string','string','string','number'],[phase,status,peers[0]??'',peers[1]??'',peers[2]??'',pending]);
+  update(1,'正在发现');assert.equal(tap('pair_scan_again'),0);
+  update(2,'发现三个节点',['第一台 Core','第二台 Core','第三台 Core']);
+  assert.deepEqual(inspect().nodes.filter(n=>n.id.startsWith('space_peer_')).map(n=>n.action),
+    ['edge_pair_candidate:0','edge_pair_candidate:1','edge_pair_candidate:2']);
+  assert.equal(tap('space_peer_2'),1);assert.equal(actions.at(-1),'edge_pair_candidate:2');
+  update(4,'正在请求配对');assert.equal(tap('pair_input_back'),0);
+  update(3,'输入配对码');
+  assert.equal(inspect().nodes.length,14);assert.equal(tap('pair_digit_submit'),0);
+  for(const digit of '001234')assert.equal(tap('pair_digit_'+digit),1);
+  assert.equal(inspect().nodes.find(n=>n.id==='pair_input').text,'001234');
+  tap('pair_digit_9');assert.equal(inspect().nodes.find(n=>n.id==='pair_input').text,'001234');
+  tap('pair_digit_delete');tap('pair_digit_5');tap('pair_digit_submit');
+  assert.equal(actions.at(-1),'edge_pair_submit:001235');
+  update(4,'正在验证');assert.equal(tap('pair_digit_submit'),0);
+  update(3,'配对码错误，请重试');assert.equal(tap('pair_digit_submit'),1);
+  update(0,'等待 Core 审批',[],1);assert.equal(inspect().page,'SpaceManage');
+  assert.equal(tap('edge_unpair'),0);assert.equal(tap('space_leave'),0);
+  tap('space_join');assert.equal(actions.at(-1),'edge_pair_cancel');
+  update(0,'申请已取消');tap('space_manage');assert.equal(tap('space_join'),1);assert.equal(actions.at(-1),'edge_space_join');
+  assert(inspect().staticBytes<10*1024);
 });

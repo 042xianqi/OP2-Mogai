@@ -229,6 +229,8 @@ impl NodeSpaceService {
         space_join::incoming(self).await
     }
     pub async fn decideDeviceSpaceJoin(&self, id: String, version: u64, approve: bool) -> Result<SpaceJoinRequest, String> { space_join::decide(self, id, version, approve).await }
+    /// Local outgoing approvals, shared by the Core facade and bounded Edge UI.
+    pub fn outgoingDeviceSpaceJoins(&self) -> Result<Vec<SpaceJoinRequest>, String> { space_join::outgoing(self) }
     pub async fn refreshDeviceSpaceJoin(&self, id: String) -> Result<SpaceJoinRequest, String> { space_join::refresh(self, id).await }
     pub async fn cancelDeviceSpaceJoin(&self, id: String) -> Result<SpaceJoinRequest, String> { space_join::cancel(self, id).await }
     pub fn spaceChannelScope(&self, peer: &str) -> Result<Option<String>, CoreLinkError> {

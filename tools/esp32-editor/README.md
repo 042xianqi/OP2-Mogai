@@ -11,6 +11,7 @@ Rust 适配器为 `apps/esp32/src/ui.rs`，C ABI 为 `operit_ui_*`。
 npm run build --prefix tools/esp32-editor             # 同源 Wasm 预览
 npm run check --prefix tools/esp32-editor             # TypeScript 检查
 npm test --prefix tools/esp32-editor                  # 自绘 UI、协议、工具与存储测试
+npm run test:device-space --prefix tools/esp32-editor # 真实 mDNS、Core/Edge、键盘、取消和审批恢复
 npm run build:firmware --prefix tools/esp32-editor    # 构建固件/预览；不烧录
 npm run dev --prefix tools/esp32-editor -- --port COMxx --no-monitor
 npm start --prefix tools/esp32-editor                # 预览仍在 8766
@@ -20,7 +21,9 @@ npm start --prefix tools/esp32-editor                # 预览仍在 8766
 
 - 固定 320×240 页面：首页左侧表情、右侧对话并排显示；另有配对、设置、空间审批、Core 插件列表与详情页、独立表情屏及退出/解除配对确认。
 - 左上角点击展开/收起侧栏；右侧空白也可收起。侧栏左下角进入插件，右下角进入设置，点击表情进入独立表情屏。
-- 设置分为连接、设备空间、设备三个分组，分别放置监听/配对码、退出空间、新对话/解除配对；聊天页只保留发送按钮。配对码与待审批申请优先显示，不会被侧栏遮挡。
+- 设置分为网络连接、设备空间、设备操作三个分组。所有配对入口集中在「设置 → 设备空间」：发现节点并发起配对、查看本机配对码、查看并审批加入申请；「空间与配对管理」提供申请/取消加入、退出空间和单向解除本机配对。收到配对/审批请求时设置入口显示提示，聊天和插件场景不被自动切换。
+- 发起配对时在对端查看六位配对码，用屏幕数字键盘输入；错误码可修改后重试。验证成功后向对端空间申请加入，仍需管理员审批。固件和模拟器共用 `apps/esp32/src/device_space_ui.rs`；审批状态定时刷新，并从现有持久化申请恢复待审批状态，不复制 Core 业务数据。
+- 解除配对只清除本机凭据，所以对端仍可显示已配对。本机重新发起配对时，对端允许新的配对码流程；只有验证成功才替换旧凭据并关闭旧会话，单纯发起或输入错误码不会覆盖旧记录。
 - 表情源文件为 `apps/esp32/ui_port/face.svg`。`npm run build` 在构建时生成 flash 常量 `mini_face.h`，真机和 Wasm 用同一套整数绘制指令，不引入运行时 SVG 解码或图片缓冲；支持由设备状态驱动的普通、难过、困倦三个静态表情，编辑器不提供手动切换。SVG 仅支持实色 ellipse 和 M/L 路径，其他语法会被构建拒绝。
 - 无动态 UI 分配池；两行 RGB565 缓冲为 1280 字节。
 - 编译断言约束渲染器静态 RAM（含调试 JSON）≤10 KiB，不包括调用栈、

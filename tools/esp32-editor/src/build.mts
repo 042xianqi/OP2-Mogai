@@ -69,6 +69,7 @@ const exports = [
   '_operit_ui_finish_conversations',
   '_operit_ui_set_conversations_state',
   '_operit_ui_set_speech_state',
+  '_operit_ui_set_device_space_state',
   '_operit_ui_set_plugin',
   '_operit_ui_set_plugin_test',
   '_operit_ui_set_plugin_testing',

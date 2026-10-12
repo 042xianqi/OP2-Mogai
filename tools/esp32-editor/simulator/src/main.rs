@@ -6,6 +6,8 @@ mod memory;
 mod audio;
 mod core_access;
 mod send_receipt;
+#[path = "../../../../apps/esp32/src/device_space_ui.rs"]
+mod device_space_ui;
 use operit_link::protocol::LinkDeviceInfo;
 use operit_node_edge::PeerRouter::EdgePeerRouter;
 use operit_node_runtime::{
@@ -192,6 +194,7 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
     routePoll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut chatRoute = edge_chat::SpaceChatRoute::default();
     let mut coreAccess = core_access::CoreAccess::default();
+    let mut deviceSpaceUi = device_space_ui::DeviceSpaceUi::new(services.clone(), spaceService.clone(), scheduler.clone());
     let sessionId = uuid::Uuid::new_v4().to_string();
     let mut sendReceipt = send_receipt::SendReceipt::default();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
@@ -199,6 +202,7 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
         let line = tokio::select! {
             _ = routePoll.tick() => {
                 chatRoute.poll(services.clone());
+                deviceSpaceUi.poll();
                 continue;
             }
             line = lines.next_line() => match line? {
@@ -236,6 +240,7 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
                 "scene": scenePlugin.summary(),
                 "audio": microphone.snapshot(),
                 "coreAccess": coreAccess.snapshot(),
+                "deviceSpace": deviceSpaceUi.snapshot(),
                 "memory": memory::snapshot(),
                 "deviceId": nodeId, "paired": paired,
                 "peerServiceAvailable": services.is_ok(),
@@ -261,31 +266,18 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
             // particular a stale approval tap after cancellation must not
             // terminate the device or drop its authenticated TCP listener.
             Some("action") => async {
-                let pairing_code = services
-                    .as_ref()
-                    .ok()
-                    .and_then(|s| s.peers().pairingPrompts().ok())
-                    .unwrap_or_default()
-                    .into_iter()
-                    // Match firmware: one digits-only code, never a device-name prefix.
-                    .map(|p| p.confirmationCode)
-                    .find(|code| code.len() == 6 && code.bytes().all(|b| b.is_ascii_digit()))
-                    .unwrap_or_default();
                 let action = request["action"].as_str().unwrap_or("");
                 *lastAction.lock().unwrap() = action.to_string();
-                if action == "edge_scene_exit" {
+                if deviceSpaceUi.action(action) {
+                    // The same bounded controller is used on actual firmware.
+                } else if action == "edge_scene_exit" {
                     scenePlugin.system_exit();
                 } else if let Some(point) = action.strip_prefix("edge_scene_touch:") {
                     let (x, y) = point.split_once(':').ok_or("Invalid scene point")?;
-                    if pairing_code.is_empty()
-                        && spaceService.incomingDeviceSpaceJoins().await
-                            .map_err(|error| error.to_string())?.is_empty()
-                    {
-                        scenePlugin.touch(
-                            x.parse().map_err(|_| "Invalid scene x")?,
-                            y.parse().map_err(|_| "Invalid scene y")?,
-                        );
-                    }
+                    scenePlugin.touch(
+                        x.parse().map_err(|_| "Invalid scene x")?,
+                        y.parse().map_err(|_| "Invalid scene y")?,
+                    );
                 } else if action == "edge_space_approve" || action == "edge_space_reject" {
                     // Match firmware's captured pending request/version. A stale
                     // screen must never approve a different, newer submission.
@@ -324,6 +316,7 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
                                         .map_err(|e| e.to_string())?;
                                 }
                             }
+                            deviceSpaceUi.reset();
                             chatRoute.reset();
                         }
                         Ok::<_, String>(())
@@ -332,6 +325,7 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
                     result?;
                 } else if action == "edge_space_leave" {
                     spaceService.leaveDeviceSpace()?;
+                    deviceSpaceUi.reset();
                     coreAccess = core_access::CoreAccess::default();
                     chatRoute.reset();
                 } else if action == "edge_history_older" || action == "edge_history_newer" {

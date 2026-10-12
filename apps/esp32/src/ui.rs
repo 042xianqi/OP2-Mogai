@@ -67,6 +67,7 @@ unsafe extern "C" {
     fn operit_ui_chat_send_result(ok: bool, error: *const c_char);
     fn operit_ui_set_chat_draft(value: *const c_char);
     fn operit_ui_set_speech_state(phase: u32);
+    fn operit_ui_set_device_space_state(phase: u32, status: *const c_char, first: *const c_char, second: *const c_char, third: *const c_char, pending: bool);
     fn operit_ui_chat_draft() -> *const c_char;
     fn operit_ui_debug_tree() -> *const c_char;
     fn operit_ui_debug_snapshot() -> *const c_char;
@@ -184,6 +185,16 @@ impl Esp32Ui {
     pub fn setSpaceJoinPrompt(&mut self, text: &str, busy: bool) {
         let text = CString::new(text.replace('\0', "")).unwrap();
         unsafe { operit_ui_set_space_join_prompt(text.as_ptr(), busy); }
+    }
+    pub fn setDeviceSpaceState(&mut self, state: &serde_json::Value) {
+        let string = |value: &str| CString::new(value.replace('\0', "")).unwrap();
+        let status = string(state["status"].as_str().unwrap_or(""));
+        let candidates = state["candidates"].as_array();
+        let first = string(candidates.and_then(|v| v.get(0)).and_then(|v| v.as_str()).unwrap_or(""));
+        let second = string(candidates.and_then(|v| v.get(1)).and_then(|v| v.as_str()).unwrap_or(""));
+        let third = string(candidates.and_then(|v| v.get(2)).and_then(|v| v.as_str()).unwrap_or(""));
+        unsafe { operit_ui_set_device_space_state(state["phase"].as_u64().unwrap_or(0) as u32,
+            status.as_ptr(), first.as_ptr(), second.as_ptr(), third.as_ptr(), state["pendingJoin"].as_bool().unwrap_or(false)); }
     }
     pub fn setSpaceState(&mut self, state: &str) {
         setText(state, operit_ui_set_space_state);

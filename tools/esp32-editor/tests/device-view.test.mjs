@@ -39,7 +39,7 @@ test('stopped device clears C pairing, approval, chat and plugin state without o
     plugins: {items: [{id: 'old', name: '旧插件'}]},
     chat: {connected: true, messages: [{sender: 'user', text: 'OLD_MESSAGE'}]}}}));
   ui.ccall('operit_ui_set_chat_draft', null, ['string'], ['保留草稿']);
-  assert.equal(inspect().page, 'Pairing');
+  assert.equal(inspect().page, 'Chat');
   view.update(simulatorViewState({ready: false, device: null}));
   const stopped = inspect();
   assert.equal(stopped.pairingCode, '');
@@ -138,4 +138,18 @@ test('speech result fills draft once, survives polling, and resets for another c
   assert.equal(inspect().nodes.find(n=>n.id==='edge_send').enabled,false);
   view.update({sessionId:'speech',chat:{connected:true,chatId:'second',speech:{phase:3}}});
   assert.equal(inspect().nodes.find(n=>n.id==='edge_voice').enabled,false);
+});
+
+test('browser projects the device-space controller and clears stale candidates on stop', async () => {
+  const {ui,view,inspect,actions}=await fixture();
+  const tap=id=>ui.ccall('operit_ui_debug_tap','number',['string'],[id]);
+  tap('sidebar_toggle');tap('sidebar_settings');tap('settings_space');tap('space_pair');
+  view.update(simulatorViewState({ready:true,device:{deviceSpace:{phase:2,status:'选择 Core',candidates:['真实 Core']}}}));
+  assert.equal(inspect().nodes.find(n=>n.id==='space_peer_0').text,'真实 Core');
+  tap('space_peer_0');assert.equal(actions.at(-1),'edge_pair_candidate:0');
+  view.update(simulatorViewState({ready:true,device:{deviceSpace:{phase:3,status:'输入六位码'}}}));
+  assert.equal(inspect().page,'PairCodeEntry');assert.equal(tap('pair_digit_0'),1);
+  view.update(simulatorViewState({ready:false}));
+  assert(!JSON.stringify(inspect()).includes('真实 Core'));
+  assert.equal(inspect().page,'SpaceManage');
 });

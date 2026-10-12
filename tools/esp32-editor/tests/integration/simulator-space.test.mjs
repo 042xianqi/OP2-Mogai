@@ -32,7 +32,7 @@ async function buildCli() {
 class CoreSession {
   constructor(executable, config, bindAddress) {
     this.queue = []; this.waiter = null; this.output = ''; this.closed = false;
-    this.child = spawn(executable, ['cli', '--json', 'link', 'session', 'tcp', '--bind', bindAddress, '--no-discovery'],
+    this.child = spawn(executable, ['cli', '--json', 'link', 'session', 'tcp', '--bind', bindAddress, ...(process.env.OPERIT_SIM_TEST_DEVICE_SPACE_ONLY==='1'?[]:['--no-discovery'])],
       {cwd: root, windowsHide: true, env: {...process.env, OPERIT_CLI_CONFIG_DIR: config}});
     this.child.stderr.on('data', chunk => { this.output = (this.output + chunk).slice(-12000); });
     createInterface({input: this.child.stdout}).on('line', line => {
@@ -90,7 +90,9 @@ async function files(directory, prefix = '') {
 // This opt-in integration test uses a real independent Core CLI, the editor's
 // real TCP Edge child, and the same C renderer compiled to WASM. No fake approval
 // replies, manually written membership, or developer's real profile are used.
-test(process.env.OPERIT_SIM_AUDIO_ONLY === '1'
+test(process.env.OPERIT_SIM_TEST_DEVICE_SPACE_ONLY === '1'
+  ? 'Edge device-space UI pairs, replaces retained credentials, reviews consent and syncs approval after restart'
+  : process.env.OPERIT_SIM_AUDIO_ONLY === '1'
   ? 'Core JS consumes streaming audio through rendered simulator consent and admitted TCP'
   : process.env.OPERIT_SIM_TEST_ACCESS_ONLY === '1'
   ? 'Simulated microphone initiates TCP pairing and Core consent before streaming PCM'
@@ -107,8 +109,8 @@ test(process.env.OPERIT_SIM_AUDIO_ONLY === '1'
       activeIdentityId: identity, identities: [{id: identity, name: 'Simulator workflow test', createdAt: Date.now()}],
     }));
     process.env.OPERIT_SIM_STATE_DIR = edgeDirectory;
-    process.env.OPERIT_SIM_BIND = '127.0.0.1:0';
-    process.env.OPERIT_SIM_DISCOVERY = 'false';
+    process.env.OPERIT_SIM_BIND = process.env.OPERIT_SIM_TEST_DEVICE_SPACE_ONLY==='1'?'0.0.0.0:0':'127.0.0.1:0';
+    process.env.OPERIT_SIM_DISCOVERY = process.env.OPERIT_SIM_TEST_DEVICE_SPACE_ONLY==='1'?'true':'false';
     const {simulatorRoute, stopSimulator} = await import('../../src/api/simulator-api.mts');
     // Only the model provider boundary is deterministic. Pairing, admission,
     // chat creation, sends, persistence, watches and renderer remain real.
@@ -188,7 +190,7 @@ test(process.env.OPERIT_SIM_AUDIO_ONLY === '1'
       await rm(cleanup, {recursive: true, force: true, maxRetries: 20, retryDelay: 100});
     });
     const executable = await buildCli();
-    let coreAddress = '127.0.0.1:0';
+    let coreAddress = process.env.OPERIT_SIM_TEST_DEVICE_SPACE_ONLY==='1'?'0.0.0.0:0':'127.0.0.1:0';
     const startCore = async () => {
       core = new CoreSession(executable, config, coreAddress);
       const ready = await core.next();
@@ -263,8 +265,16 @@ test(process.env.OPERIT_SIM_AUDIO_ONLY === '1'
       for (let i = 0; i < 20; i++) ui._operit_ui_pump(20);
       return current;
     };
+    const openSpace = async () => {
+      call('navigate_home'); await tap('sidebar_toggle'); await tap('sidebar_settings'); await tap('settings_space');
+    };
+    const openReview = async () => {
+      if(screen().page === 'Space') return;
+      // Error diagnostics can be dismissed without losing the captured request.
+      call('action_error',['string'],['']); await openSpace(); await tap('space_review');
+    };
     const approve = async () => {
-      await update(); assert.equal(screen().page, 'Space');
+      await update(); await openReview(); assert.equal(screen().page, 'Space');
       actionError = ''; await tap('edge_space_approve');
       assert.equal(actionError, '', `approval UI action failed: ${actionError}`);
       await update(); assert.equal(screen().nodes.some(node => node.id === 'edge_space_approve'), false);
@@ -272,7 +282,7 @@ test(process.env.OPERIT_SIM_AUDIO_ONLY === '1'
     };
     const leave = async () => {
       await update(); call('navigate_home');
-      await tap('sidebar_toggle'); await tap('sidebar_settings'); await tap('settings_space'); await tap('space_leave');
+      await tap('sidebar_toggle'); await tap('sidebar_settings'); await tap('settings_space'); await tap('space_manage'); await tap('space_leave');
       assert.equal(screen().page, 'LeaveSpace');
       actionError = ''; await tap('space_leave_confirm'); assert.equal(actionError, '');
       assert.equal((await update()).device.paired, true, 'leaving must not unpair');
@@ -280,6 +290,76 @@ test(process.env.OPERIT_SIM_AUDIO_ONLY === '1'
     await startCore();
     const first = await startEdge();
     const node = first.device.deviceId;
+    if (process.env.OPERIT_SIM_TEST_DEVICE_SPACE_ONLY === '1') {
+      const coreNode=(await core.command(['space','show'])).members[0];
+      await update(); await openSpace(); await tap('space_pair');
+      assert.equal(screen().page,'PairDiscovery');
+      let found=await waitDevice('real mDNS discovery',d=>d.deviceSpace.phase===2);
+      let index=found.deviceSpace.candidateIds.indexOf(coreNode);
+      for(let attempt=0;index<0&&attempt<3;attempt++) {
+        await update();await tap('pair_scan_again');
+        found=await waitDevice('repeat discovery',d=>d.deviceSpace.phase===2);
+        index=found.deviceSpace.candidateIds.indexOf(coreNode);
+      }
+      assert(index>=0,`isolated Core must be discovered: ${JSON.stringify(found.deviceSpace)}`);
+      await update(); await tap('space_peer_'+index);
+      await waitDevice('code-entry state',d=>d.deviceSpace.phase===3);
+      await update();assert.equal(screen().page,'PairCodeEntry');
+      const prompt=(await core.command(['prompts'])).find(p=>p.peerNodeId===node);
+      assert(prompt,'Core receives the screen-initiated request');
+      const digits=async code=>{for(const digit of code)await tap('pair_digit_'+digit);await tap('pair_digit_submit');};
+      const wrong=prompt.confirmationCode==='000000'?'111111':'000000';
+      await digits(wrong);
+      await waitDevice('code failure remains retryable',d=>d.deviceSpace.phase===3&&d.deviceSpace.status!=='请输入对端显示的六位配对码');
+      assert.deepEqual(await core.command(['peers']),[],'bad code never pairs');
+      await update();for(let i=0;i<6;i++)await tap('pair_digit_delete');
+      await digits(prompt.confirmationCode);
+      await waitDevice('outgoing consent',d=>d.deviceSpace.pendingJoin);
+      let incoming=(await core.command(['space','requests','incoming'])).find(r=>r.applicantDeviceId===node);
+      assert(incoming?.canApprove);assert.equal(incoming.status,'pending');
+      await update();assert.equal(screen().page,'SpaceManage');
+      assert.equal(ui.ccall('operit_ui_debug_tap','number',['string'],['edge_unpair']),0);
+      await tap('space_join'); // This row cancels a pending request.
+      await waitDevice('cancelled consent',d=>!d.deviceSpace.pendingJoin&&d.deviceSpace.phase===0);
+      assert.equal((await core.command(['space','requests','incoming'])).some(r=>r.requestId===incoming.requestId),false);
+      await update();await tap('space_manage');await tap('space_join');
+      await waitDevice('new consent',d=>d.deviceSpace.pendingJoin);
+      incoming=(await core.command(['space','requests','incoming'])).find(r=>r.applicantDeviceId===node);
+      assert(incoming?.canApprove);
+      await post('/api/simulator/stop');await startEdge();
+      await waitDevice('pending consent recovered after restart',d=>d.deviceSpace.pendingJoin);
+      await core.command(['space','approve',incoming.requestId,String(incoming.assignmentVersion)]);
+      const joined=await waitDevice('silent approval refresh',d=>d.deviceSpace.status==='已加入设备空间'&&!d.deviceSpace.pendingJoin);
+      assert(joined.paired);assert((await core.command(['space','show'])).members.includes(node),'Core membership confirms the Edge joined');
+      // Exercise the reverse path too: Core forgets locally, Edge retains its
+      // old outbound record, then a new rendered Edge code replaces it.
+      await leave();
+      await core.command(['unpair',node]);
+      assert((await update()).device.paired,'Core unpair remains one-sided');
+      const renewed=await core.command(['pair-start',node,(await state()).device.address,'tcp']);
+      await update();assert.notEqual(screen().page,'Pairing','incoming code does not steal the current page');
+      await openSpace();await tap('space_pair_code');
+      const freshCode=screen().nodes.find(n=>n.id==='pairing_code').text;
+      assert.match(freshCode,/^\d{6}$/);
+      await core.command(['pair-finish',renewed.pairingId,freshCode]);
+      const reviewRequest=await core.command(['space','join',node]);
+      await waitDevice('Edge assigned approval',d=>d.spaceJoinRequestId===reviewRequest.requestId);
+      await approve();
+      assert.equal((await core.command(['space','refresh',reviewRequest.requestId])).status,'joined');
+      await leave();
+      const rejected=await core.command(['space','join',node]);
+      await waitDevice('Edge rejection prompt',d=>d.spaceJoinRequestId===rejected.requestId);
+      await update();await openReview();await tap('edge_space_reject');
+      assert.equal((await core.command(['space','refresh',rejected.requestId])).status,'rejected');
+      const restored=await core.command(['space','join',node]);
+      await waitDevice('incoming approval before restart',d=>d.spaceJoinRequestId===restored.requestId);
+      await post('/api/simulator/stop');await startEdge();
+      await waitDevice('incoming approval after restart',d=>d.spaceJoinRequestId===restored.requestId);
+      await approve();
+      assert.equal((await core.command(['space','refresh',restored.requestId])).status,'joined');
+      t.diagnostic('Real C UI covers mDNS, code retry, outgoing cancel, both approval directions, restart recovery and one-sided Core unpair with retained Edge pairing replacement');
+      return;
+    }
     if (process.env.OPERIT_SIM_TEST_ACCESS_ONLY === '1') {
       await probeMicrophoneAccess();
       return;
@@ -288,7 +368,7 @@ test(process.env.OPERIT_SIM_AUDIO_ONLY === '1'
     await assert.rejects(()=>core.command(['core','tool','exec','edge_execute',JSON.stringify(edgePortArgs)]),
       'plugin port API must not pair, route to a guessed address, or grant access to an unadmitted node');
     const pairing = await core.command(['pair-start', node, first.device.address, 'tcp']);
-    await update();
+    await update(); await openSpace(); await tap('space_pair_code');
     assert.equal(screen().page, 'Pairing');
     const code = screen().nodes.find(node => node.id === 'pairing_code')?.text;
     assert.match(code, /^\d{6}$/, 'read the pairing code from the actual rendered screen');
@@ -752,7 +832,7 @@ ${adapterJs}
     await leave();
     assert.deepEqual(await core.command(['space', 'show']), former, 'the same Core retains the previous Space');
     const cancelled = await core.command(['space', 'join', node]);
-    await update(); assert.equal(screen().page, 'Space');
+    await update(); await openReview(); assert.equal(screen().page, 'Space');
     assert.equal((await core.command(['space', 'cancel', cancelled.requestId])).status, 'cancelled');
     // Cancel won just before a tap on a still-visible approval prompt. A normal
     // decision error must NOT terminate the simulated device or its listener.
@@ -768,7 +848,7 @@ ${adapterJs}
     assert(actionError, 'a stale approval must not be retargeted to the next pending request');
     assert.equal((await core.command(['space', 'refresh', second.requestId])).status, 'pending');
     t.diagnostic('a stale approval for cancelled A did not approve the newly submitted B');
-    await update();
+    await update(); await openReview();
     await assert.rejects(post('/api/simulator/action', {action: 'edge_space_approve',
       requestId: review.requestId, assignmentVersion: review.assignmentVersion + 1}));
     assert.equal((await core.command(['space', 'refresh', second.requestId])).status, 'pending', 'stale assignment cannot approve');
@@ -780,11 +860,11 @@ ${adapterJs}
     t.diagnostic('same Core successfully rejoined after leaving and cancelling');
     await leave();
     const pending = await core.command(['space', 'join', node]);
-    await update(); assert.equal(screen().page, 'Space');
+    await update(); await openReview(); assert.equal(screen().page, 'Space');
     await core.stop(); await post('/api/simulator/stop');
     await startCore();
     const restarted = await startEdge(); assert.equal(Object.hasOwn(restarted, 'token'), false);
-    await update(); assert.equal(screen().page, 'Space', 'approval prompt survives process restart');
+    await update(); await openReview(); assert.equal(screen().page, 'Space', 'approval prompt survives process restart');
     assert.equal((await core.command(['space', 'cancel', pending.requestId])).status, 'cancelled');
     await update(); assert.equal(screen().nodes.some(node => node.id === 'edge_space_approve'), false);
     const third = await core.command(['space', 'join', node]);

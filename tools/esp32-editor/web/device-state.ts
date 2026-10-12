@@ -46,6 +46,7 @@ export interface DeviceState {
     paired?: boolean;
     pairingCode?: string;
     spaceState?: string;
+    deviceSpace?: {phase?: number; status?: string; candidates?: string[]; pendingJoin?: boolean};
     spaceJoinPrompt?: string;
     spaceJoinBusy?: boolean;
     spaceJoinRequestId?: string;
@@ -93,6 +94,7 @@ export function simulatorViewState(state: {
         spaceJoinPrompt: device?.spaceJoinPrompt ?? '', spaceJoinBusy: device?.spaceJoinBusy ?? false,
         spaceJoinRequestId: device?.spaceJoinRequestId,
         spaceJoinAssignmentVersion: device?.spaceJoinAssignmentVersion,
+        deviceSpace: device?.deviceSpace,
         chatPreview: device?.chatPreview ?? '尚未连接对话',
         audio: device?.audio,
         scene: device?.scene,
