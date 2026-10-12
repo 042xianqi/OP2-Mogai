@@ -95,6 +95,19 @@ Edge 从共享 `NodeServices` 取得捕获了准入代次的 `CoreLinkSpacePushC
 当前实现包含 Edge 音频源接口和模拟麦克风测试，尚未实现具体 ESP I2S/ADC 麦克风驱动。
 音频接口不依赖显示系统。
 
+### 模块与显示边界
+
+App 负责交互，Core 负责业务，Edge 负责设备能力。采集源直接注册到 Edge，
+Core 提供插件消费接口并复用 Link Push。Proxy 暴露本地调用，Link 定义通信消息，
+Router 决定执行节点并保留原有 Binding、Space 准入、鉴权和撤销检查。
+本次音频功能不扩展 Host API，也不修改既有串口实现。
+
+ESP 系统界面由 `apps/esp32/ui_port/operit_mini_ui.c` 自绘 RGB565 条带，
+Rust 经 FFI 更新状态、接收动作，再通过板级 SPI 驱动刷屏；网页预览复用同一份 C
+代码的 Wasm 版本。可选插件场景由 `ScenePlugin` 渲染，系统栏和退出机制仍由设备
+保留。旧 LVGL、软键盘和动态布局说明不代表当前实现；遗留构建缓存的清理方式见
+[ESP32 UI backend](../apps/esp32/README.md#ui-backend)。
+
 ## 串口带宽
 
 16 kHz、16 位单声道 PCM 每秒 32000 字节。115200 baud 的 8N1 串口理论上只有

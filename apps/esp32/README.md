@@ -145,6 +145,30 @@ The only renderer is `ui_port/operit_mini_ui.c`. Rust uses `src/ui.rs` and the
 pool, backend marker or fallback build. Native firmware and Wasm compile the
 same C sources.
 
+LVGL is no longer a firmware or preview dependency. The Cargo component list,
+`components_esp32.lock`, SDK defaults and `ui_port/CMakeLists.txt` select only
+the self-drawn UI. Optional plugin scenes use `operit-edge-scene`; the device
+retains the system bar and exit action. Scene rendering does not make Host
+responsible for plugin business logic.
+
+An existing ESP-IDF build cache can still contain `managed_components/lvgl__lvgl`
+and `build/esp-idf/lvgl__lvgl` or `lvgl_port` archives from earlier firmware.
+Those generated files are not dependencies in the current build graph. To
+remove the old component downloads and archives, clean the generated firmware
+target directory, then rebuild. This also removes the cached firmware ELF and
+other build artifacts; it does not erase or flash the device:
+
+```powershell
+cargo clean --manifest-path apps/esp32/Cargo.toml --target-dir D:/esp32
+npm run build:firmware --prefix tools/esp32-editor
+```
+
+The editor uses an `esp32` target directory at the root of the repository's
+drive; adjust `D:/esp32` to that location, or to your direct Cargo build's
+custom target directory. A package-only clean may miss outputs from retired
+build fingerprints. ESP-IDF's bundled examples may still mention LVGL;
+those SDK examples are not linked into this firmware.
+
 The 320×240 renderer uses two-row RGB565 strips (1280 bytes). A compile-time
 assertion limits its static state, strip and inspection buffer to 10 KiB.
 This is not a whole-board RAM measurement. The browser framebuffer and the
