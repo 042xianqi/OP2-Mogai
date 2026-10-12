@@ -366,9 +366,197 @@ async fn device_tools_multihop_never_resubmits_after_an_uncertain_reply() {
         "Both source and relay must preserve the original uncertain outcome"
     );
     assert_eq!(service.origins.lock().unwrap().len(), 1);
-    assert!(!canRetryRouteTarget("edge.plugins"));
-    assert!(!canRetryRouteTarget("edge.deviceIo"));
-    assert!(canRetryRouteTarget("chat"));
+    assert!(!super::route_forwarding::canRetryRouteTarget(
+        "edge.plugins"
+    ));
+    assert!(!super::route_forwarding::canRetryRouteTarget(
+        "edge.deviceIo"
+    ));
+    assert!(super::route_forwarding::canRetryRouteTarget("chat"));
+    ab.close();
+    bc.close();
+}
+
+#[derive(Default)]
+struct LostForwardingReply(std::sync::atomic::AtomicUsize);
+impl LostForwardingReply {
+    fn fail(&self) -> CoreLinkError {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        CoreLinkError::new(
+            "PEER_RESPONSE_CLOSED",
+            "Operation ran but its reply was lost",
+        )
+    }
+}
+#[async_trait]
+impl TestRouteTarget for LostForwardingReply {
+    async fn routedCall(
+        &self,
+        _: String,
+        request: RoutedCoreRequest<CoreCallRequest>,
+    ) -> CoreCallResponse {
+        CoreCallResponse::err(request.payload.requestId, self.fail())
+    }
+    async fn routedWatchSnapshot(
+        &self,
+        _: String,
+        _: RoutedCoreRequest<CoreWatchRequest>,
+    ) -> Result<CoreEvent, CoreLinkError> {
+        Err(self.fail())
+    }
+    async fn routedWatch(
+        &self,
+        _: String,
+        _: RoutedCoreRequest<CoreWatchRequest>,
+    ) -> Result<CoreEventStream, CoreLinkError> {
+        Err(self.fail())
+    }
+    async fn routedOpenPush(
+        &self,
+        _: String,
+        _: RoutedCoreRequest<CorePushRequest>,
+    ) -> Result<Box<dyn CoreLinkPushSession>, CoreLinkError> {
+        Err(self.fail())
+    }
+}
+
+#[tokio::test]
+async fn forwarding_uses_one_replay_policy_for_calls_snapshots_watches_and_pushes() {
+    let _guard = routeTestGlobalLock().lock().await;
+    installTestRuntimeScheduler();
+    let (source, _relay, _target, ab, bc) = deviceToolsRelayRoute();
+    let failed = Arc::new(LostForwardingReply::default());
+    bc.attach(failed.clone());
+    for target in [DEVICE_TOOL_TARGET, "edge.plugins", "edge.deviceIo", "chat"] {
+        let expected = if target == "chat" {
+            "CORE_NODE_UNREACHABLE"
+        } else {
+            "PEER_RESPONSE_CLOSED"
+        };
+        let before = failed.0.load(Ordering::SeqCst);
+        let call = CoreCallRequest::new("lost-call", target, "execute", CoreValue::emptyMap());
+        assert_eq!(
+            source
+                .callNode("tools-c".into(), call)
+                .await
+                .result
+                .unwrap_err()
+                .code,
+            expected
+        );
+        let watch = CoreWatchRequest::new("lost-watch", target, "execute", CoreValue::emptyMap());
+        assert_eq!(
+            source
+                .watchNodeSnapshot("tools-c".into(), watch.clone())
+                .await
+                .err()
+                .unwrap()
+                .code,
+            expected
+        );
+        assert_eq!(
+            source
+                .watchNode("tools-c".into(), watch.clone())
+                .await
+                .err()
+                .unwrap()
+                .code,
+            expected
+        );
+        let push = CorePushRequest::new("lost-push", target, "execute");
+        assert_eq!(
+            source
+                .openPushNode("tools-c".into(), push.clone())
+                .await
+                .err()
+                .unwrap()
+                .code,
+            expected
+        );
+        // Space adapters use the same rule as explicit device adapters, at the source and relay.
+        assert_eq!(
+            source
+                .watchNodeSnapshotSpaceWithOrigin("tools-c".into(), watch.clone(), "tools-a".into())
+                .await
+                .err()
+                .unwrap()
+                .code,
+            expected
+        );
+        assert_eq!(
+            source
+                .watchNodeSpaceWithOrigin("tools-c".into(), watch, "tools-a".into())
+                .await
+                .err()
+                .unwrap()
+                .code,
+            expected
+        );
+        assert_eq!(
+            source
+                .openPushNodeSpaceWithOrigin("tools-c".into(), push, "tools-a".into())
+                .await
+                .err()
+                .unwrap()
+                .code,
+            expected
+        );
+        assert_eq!(
+            failed.0.load(Ordering::SeqCst) - before,
+            7,
+            "each request reaches the target once"
+        );
+    }
+    ab.close();
+    bc.close();
+}
+
+#[tokio::test]
+async fn route_status_and_forwarding_share_transit_and_revocation_policy() {
+    let _guard = routeTestGlobalLock().lock().await;
+    installTestRuntimeScheduler();
+    let (source, _relay, _target, ab, bc) = deviceToolsRelayRoute();
+    let next = || {
+        source.nextActiveHopAvoiding(
+            "tools-c".into(),
+            None,
+            &BTreeSet::new(),
+            &RoutingPolicy::load(&source.networkControlStore).unwrap(),
+        )
+    };
+    assert_eq!(
+        source.nodeRoutePlan("tools-c").unwrap().unwrap().firstHop(),
+        "tools-b"
+    );
+    assert_eq!(next().unwrap(), "tools-b");
+    source
+        .networkControlStore
+        .setIdentity(
+            operit_store::NetworkControlStore::NetworkControlIdentityAssignment {
+                nodeId: "tools-b".into(),
+                roleId: "runner".into(),
+            },
+        )
+        .unwrap();
+    assert!(source.nodeRoutePlan("tools-c").unwrap().is_none());
+    assert_eq!(next().unwrap_err().code, "CORE_NODE_UNREACHABLE");
+    // Removing transit permission must retain direct reachability.
+    assert!(source.nodeIsReachable("tools-b").unwrap());
+    source
+        .networkControlStore
+        .disconnectNode("tools-b".into())
+        .unwrap();
+    assert!(!source.nodeIsReachable("tools-b").unwrap());
+    assert_eq!(
+        source
+            .watchNode("tools-b".into(), deviceToolWatch("revoked"))
+            .await
+            .err()
+            .unwrap()
+            .code,
+        "CORE_NODE_REVOKED"
+    );
+    assert!(source.spaceChannelScope("tools-b").unwrap().is_none());
     ab.close();
     bc.close();
 }
