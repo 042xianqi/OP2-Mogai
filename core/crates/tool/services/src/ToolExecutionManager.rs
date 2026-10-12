@@ -259,6 +259,8 @@ pub enum ToolExecutionPolicy {
     Ai { exposure: ToolExposureMode },
     /// Executes an ordinary JavaScript or application request without AI lifecycle hooks or permission preflight.
     Direct,
+    /// Applies receiver-owned permission preflight and lifecycle to an authenticated device request.
+    Device,
 }
 
 impl ToolExecutionManager {
