@@ -330,6 +330,21 @@ impl CoreNodeRouter {
         self.localCore.targetForSchema(schema)
     }
 
+    /// Test support: installs a minimal application call client so contract
+    /// fixtures can exercise persistence synchronization without the full
+    /// application runtime. Must run before the router is wired into endpoints.
+    #[cfg(test)]
+    pub(crate) fn installTestApplicationClient(
+        &mut self,
+        client: Arc<dyn operit_link::CoreLinkSharedClient + Send + Sync>,
+    ) {
+        let runtime = Arc::make_mut(&mut self.localCore);
+        runtime.targetForSchema = Arc::new(|schema: &str| {
+            if schema == "application" { Some("core/server.application") } else { None }
+        });
+        runtime.applicationClient = client;
+    }
+
     /// Opens a push stream whose CoreNode route remains fixed for its lifetime.
     #[allow(non_snake_case)]
     pub async fn openPush(
