@@ -43,7 +43,7 @@ fn validateEdgeEventOrigin(
     origin: &str,
     kind: RoutedCoreRequestKind,
 ) -> Result<(), CoreLinkError> {
-    if request.target != CORE_INTERNAL_TARGET || request.methodName != "chatEdgeEvent" {
+    if request.target != CORE_INTERNAL_TARGET || !matches!(request.methodName.as_str(), "chatEdgeEvent" | "beginEdgeSpeech" | "finishEdgeSpeech" | "pollEdgeSpeech" | "cancelEdgeSpeech") {
         return Ok(());
     }
     let node = match &request.args {
@@ -57,7 +57,7 @@ fn validateEdgeEventOrigin(
     {
         return Err(CoreLinkError::new(
             "EDGE_EVENT_ORIGIN_DENIED",
-            "Edge event requires its authenticated Space origin",
+            "Edge action requires its authenticated Space origin",
         ));
     }
     Ok(())
@@ -5588,6 +5588,18 @@ mod tests {
 #[cfg(test)]
 mod edge_event_origin_tests {
     use super::*;
+    #[test]
+    fn speech_requests_require_the_authenticated_device_and_space_route() {
+        for method in ["beginEdgeSpeech", "finishEdgeSpeech", "pollEdgeSpeech", "cancelEdgeSpeech"] {
+            let request = CoreCallRequest::new("speech", CORE_INTERNAL_TARGET, method,
+                operit_link::toCoreValue(serde_json::json!({"chatId":"chat", "nodeId":"edge"})).unwrap());
+            assert!(validateEdgeEventOrigin(&request, "edge", RoutedCoreRequestKind::SpaceBinding).is_ok());
+            assert!(validateEdgeEventOrigin(&request, "other", RoutedCoreRequestKind::SpaceBinding).is_err());
+            assert!(validateEdgeEventOrigin(&request, "edge", RoutedCoreRequestKind::Target).is_err());
+            let missing = CoreCallRequest::new("speech", CORE_INTERNAL_TARGET, method, CoreValue::Null);
+            assert!(validateEdgeEventOrigin(&missing, "edge", RoutedCoreRequestKind::SpaceBinding).is_err());
+        }
+    }
     #[test]
     fn edge_event_sender_is_authenticated_not_a_self_reported_node_or_target_bypass() {
         let args =

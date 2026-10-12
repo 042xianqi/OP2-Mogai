@@ -529,9 +529,9 @@ fn runFirmware(
                     }
                 }
                 "edge_voice" => {
-                    // This board has no registered audio source yet. Do not
-                    // pretend to record or start capture outside Core plugins.
-                    ui.actionError("当前设备未接入麦克风\n请先配置音频采集源");
+                    if let Err(error) = crate::edge_chat::voiceAction(identity.nodeId.clone(), None) {
+                        ui.actionError(&error);
+                    }
                 }
                 "edge_send" => {
                     let draft = ui.chatDraft();
@@ -542,6 +542,9 @@ fn runFirmware(
                 }
                 _ => log::debug!("operit-esp32 UI action: {action}"),
             }
+        }
+        if let Some(result) = crate::edge_chat::takeSpeechResult() {
+            match result { Ok(text) => ui.setChatDraft(&text), Err(error) => ui.actionError(&error) }
         }
         if let Some(result) = crate::edge_chat::takeSendResult() {
             ui.chatSendResult(result);

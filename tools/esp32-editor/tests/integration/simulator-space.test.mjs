@@ -113,7 +113,17 @@ test(process.env.OPERIT_SIM_AUDIO_ONLY === '1'
     // Only the model provider boundary is deterministic. Pairing, admission,
     // chat creation, sends, persistence, watches and renderer remain real.
     const providerRequests = [];
+    const speechRequests = [];
+    let speechText = '这是 Edge 语音输入';
     const server = http.createServer((req, res) => {
+      if (req.url === '/v1/audio/transcriptions') {
+        void (async () => {
+          const chunks=[]; for await (const chunk of req) chunks.push(chunk);
+          speechRequests.push(Buffer.concat(chunks));
+          res.writeHead(200, {'Content-Type':'application/json'}); res.end(JSON.stringify({text:speechText}));
+        })().catch(error => {res.writeHead(500); res.end(String(error));});
+        return;
+      }
       if (req.url === '/v1/chat/completions') {
         void (async () => {
           let body = '';
@@ -198,11 +208,11 @@ test(process.env.OPERIT_SIM_AUDIO_ONLY === '1'
       let current;
       while (Date.now() < deadline) {
         current = await state();
-        assert.equal(current.running, true, `simulator exited: ${current.output}`);
+        assert.equal(current.running, true, `simulator exited: ${JSON.stringify(current)}; Core: ${core?.output}`);
         if (predicate(current.device)) return current.device;
         await sleep(100);
       }
-      assert.fail(`${description} timed out: ${JSON.stringify(current.device)}`);
+      assert.fail(`${description} timed out: ${JSON.stringify(current.device)}; Core: ${core.output}; Simulator: ${current.output}`);
     };
     const startEdge = async () => {
       await post('/api/simulator/start');
@@ -243,7 +253,7 @@ test(process.env.OPERIT_SIM_AUDIO_ONLY === '1'
       call('chat_send_result', ['number', 'string'], [ok ? 1 : 0, error ?? '']));
     const update = async () => {
       const current = await state();
-      assert.equal(current.running, true, `simulator exited: ${current.output}`);
+      assert.equal(current.running, true, `simulator exited: ${JSON.stringify(current)}; Core: ${core?.output}`);
       assert.equal(current.ready, true);
       const device = current.device;
       review = {requestId: device.spaceJoinRequestId, assignmentVersion: device.spaceJoinAssignmentVersion};
@@ -351,12 +361,13 @@ ${JSON.stringify(fixtureMetadata)}
     const adapterJs = ts.transpileModule(adapterSource, {compilerOptions: {
       target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS,
     }}).outputText;
-    const audioFixture = path.join(directory, 'edge_audio_fixture.js');
-    const audioMetadata = {name:'edge_audio_fixture', description:'Isolated streaming audio SDK integration test',
-      enabledByDefault:true, tools:[{name:'capture', description:'Consume streamed PCM via the public SDK',
-        parameters:[{name:'node_id',description:'Admitted Edge',type:'string',required:true},
-          {name:'stop_early',description:'Close after the first block',type:'boolean',required:false}]}]};
-    await writeFile(audioFixture, `/* METADATA
+    if (process.env.OPERIT_SIM_SPEECH_ONLY !== '1') {
+      const audioFixture = path.join(directory, 'edge_audio_fixture.js');
+      const audioMetadata = {name:'edge_audio_fixture', description:'Isolated streaming audio SDK integration test',
+        enabledByDefault:true, tools:[{name:'capture', description:'Consume streamed PCM via the public SDK',
+          parameters:[{name:'node_id',description:'Admitted Edge',type:'string',required:true},
+            {name:'stop_early',description:'Close after the first block',type:'boolean',required:false}]}]};
+      await writeFile(audioFixture, `/* METADATA
 ${JSON.stringify(audioMetadata)}
 */
 ${adapterJs}
@@ -385,40 +396,103 @@ ${adapterJs}
           });
         } catch(error) { return {error:String(error.message||error),aborted,blocks,byteLength}; }
       };`);
-    await core.command(['core','package','import',audioFixture]);
-    const capture = async stopEarly => {
-      const reply = await core.command(['core','package','exec','edge_audio_fixture:capture',JSON.stringify({node_id:node,stop_early:stopEarly})]);
-      assert.equal(reply.success,true,JSON.stringify(reply));
-      const value=reply.result?.value ?? reply.result;
-      return typeof value==='string' ? JSON.parse(value) : value;
-    };
-    try {
-      await post('/api/simulator/audio/configure',{durationMs:1000,fail:false});
-      const audio = await capture(false);
-      assert.equal(audio.blocks,50); assert.equal(audio.byteLength,32000);
-      let checksum=0;
-      for(let sample=0;sample<16000;sample++) {
-        const value=Math.trunc(Math.sin(sample*440*Math.PI*2/16000)*8000);
-        checksum+=(value&255)+((value>>8)&255);
-      }
-      assert.equal(audio.checksum,checksum,'Every PCM byte must arrive intact');
-      assert(audio.firstMs<audio.elapsedMs-300,'Consume while the device is still recording');
-      await waitDevice('normal audio releases simulated microphone',device=>!device.audio.active);
-      await post('/api/simulator/audio/configure',{durationMs:100,fail:true});
-      const overrun = await capture(false);
-      assert.match(overrun.error,/overrun/i); assert.equal(overrun.aborted,true);
-      assert.equal(overrun.blocks,5); assert.equal(overrun.byteLength,3200);
-      await waitDevice('overrun releases simulated microphone',device=>!device.audio.active);
-      await post('/api/simulator/audio/configure',{durationMs:10000,fail:false});
-      const early = await capture(true);
-      assert.equal(early.early,true); assert.equal(early.byteLength,640);
-      await waitDevice('early close releases simulated microphone',device=>!device.audio.active);
-      // Recording can be reopened on the same authenticated connection after failure/cancel.
-      await post('/api/simulator/audio/configure',{durationMs:100,fail:false});
-      assert.equal((await capture(false)).byteLength,3200);
-      await post('/api/simulator/audio/configure',{durationMs:1000,fail:false});
-    } finally { await core.command(['core','package','delete','edge_audio_fixture']); }
-    t.diagnostic('Core JS streaming adapter -> admitted TCP PCM: live reads, exact bytes, overrun/abort, early close and reopen passed without STT configuration');
+      await core.command(['core','package','import',audioFixture]);
+      const capture = async stopEarly => {
+        const reply = await core.command(['core','package','exec','edge_audio_fixture:capture',JSON.stringify({node_id:node,stop_early:stopEarly})]);
+        assert.equal(reply.success,true,JSON.stringify(reply));
+        const value=reply.result?.value ?? reply.result;
+        return typeof value==='string' ? JSON.parse(value) : value;
+      };
+      try {
+        await post('/api/simulator/audio/configure',{durationMs:1000,fail:false});
+        const audio = await capture(false);
+        assert.equal(audio.blocks,50); assert.equal(audio.byteLength,32000);
+        let checksum=0;
+        for(let sample=0;sample<16000;sample++) {
+          const value=Math.trunc(Math.sin(sample*440*Math.PI*2/16000)*8000);
+          checksum+=(value&255)+((value>>8)&255);
+        }
+        assert.equal(audio.checksum,checksum,'Every PCM byte must arrive intact');
+        assert(audio.firstMs<audio.elapsedMs-300,'Consume while the device is still recording');
+        await waitDevice('normal audio releases simulated microphone',device=>!device.audio.active);
+        await post('/api/simulator/audio/configure',{durationMs:100,fail:true});
+        const overrun = await capture(false);
+        assert.match(overrun.error,/overrun/i); assert.equal(overrun.aborted,true);
+        assert.equal(overrun.blocks,5); assert.equal(overrun.byteLength,3200);
+        await waitDevice('overrun releases simulated microphone',device=>!device.audio.active);
+        await post('/api/simulator/audio/configure',{durationMs:10000,fail:false});
+        const early = await capture(true);
+        assert.equal(early.early,true); assert.equal(early.byteLength,640);
+        await waitDevice('early close releases simulated microphone',device=>!device.audio.active);
+        // Recording can be reopened on the same authenticated connection after failure/cancel.
+        await post('/api/simulator/audio/configure',{durationMs:100,fail:false});
+        assert.equal((await capture(false)).byteLength,3200);
+        await post('/api/simulator/audio/configure',{durationMs:1000,fail:false});
+      } finally { await core.command(['core','package','delete','edge_audio_fixture']); }
+      t.diagnostic('Core JS streaming adapter -> admitted TCP PCM: live reads, exact bytes, overrun/abort, early close and reopen passed without STT configuration');
+    }
+    const chatRequestsBeforeSpeech = providerRequests.length;
+    await update(); call('navigate_home');
+    await post('/api/simulator/action',{action:'edge_voice'});
+    await waitDevice('missing STT configuration is visible',device=>device.chat?.speech?.phase===0 && device.chat?.speech?.error, 10000);
+    assert.equal((await state()).device.audio.active,false);
+    const speechConfig = await core.command(['core','stt','config','create-remote','Edge speech fixture','OPENAI_COMPATIBLE',
+      base+'/v1/audio/transcriptions','test-key','speech-fixture']);
+    await core.command(['core','stt','config','use',speechConfig.id]);
+    await post('/api/simulator/audio/configure',{durationMs:10000,fail:false});
+    await tap('edge_voice');
+    await waitDevice('speech starts on Edge source',device=>device.chat?.speech?.phase===1 && device.audio.active);
+    await sleep(250); await update();
+    await tap('edge_voice');
+    await waitDevice('selected Core STT fills speech result',device=>device.chat?.speech?.phase===0 && device.chat?.speech?.text===speechText);
+    await update();
+    assert.equal(screen().nodes.find(n=>n.id==='chat_draft').text,speechText);
+    assert.equal(providerRequests.length,chatRequestsBeforeSpeech,'recognition must not send a chat message');
+    const wavAt=speechRequests[0].indexOf(Buffer.from('RIFF'));
+    assert(wavAt>=0); const wav=speechRequests[0].subarray(wavAt);
+    assert.equal(wav.toString('ascii',8,12),'WAVE'); assert.equal(wav.readUInt32LE(24),16000);
+    assert.equal(wav.readUInt16LE(22),1); assert.equal(wav.readUInt16LE(34),16);
+    assert(wav.readUInt32LE(40)>0 && wav.readUInt32LE(40)<320000,'manual finish creates clean partial recording');
+    const requestCount=speechRequests.length;
+    await post('/api/simulator/audio/configure',{durationMs:100,fail:true});
+    await tap('edge_voice');
+    await waitDevice('capture errors reach speech UI',device=>device.chat?.speech?.phase===0 && /overrun/.test(device.chat?.speech?.error??''));
+    await update();
+    assert.equal(speechRequests.length,requestCount,'failed capture must not call STT');
+    call('action_error',['string'],['']);
+    assert.equal(screen().nodes.find(n=>n.id==='chat_draft').text,speechText,'capture failure preserves draft');
+    call('action_error',['string'],['']);
+    await post('/api/simulator/audio/configure',{durationMs:100,fail:false});
+    speechText=''; await tap('edge_voice');
+    await waitDevice('empty recognition remains an error',device=>device.chat?.speech?.phase===0 && /没有识别到文字/.test(device.chat?.speech?.error??''));
+    await update(); call('action_error',['string'],['']); assert.equal(screen().nodes.find(n=>n.id==='chat_draft').text,'这是 Edge 语音输入');
+    call('action_error',['string'],['']);
+    speechText='再次识别成功'; await tap('edge_voice');
+    await waitDevice('recording reopens after failures',device=>device.chat?.speech?.phase===0 && device.chat?.speech?.text===speechText);
+    await update(); assert.equal(screen().nodes.find(n=>n.id==='chat_draft').text,speechText);
+    call('action_error',['string'],['']);
+    await post('/api/simulator/audio/configure',{durationMs:10000,fail:false});
+    await post('/api/simulator/action',{action:'edge_voice',inputId:'browser-mic'});
+    const browserCapture=await waitDevice('browser PCM source is opened by the same speech button',device=>device.chat?.speech?.phase===1 && device.audio.captureId);
+    const captureId=browserCapture.audio.captureId;
+    const pcm=Buffer.alloc(640); for(let i=0;i<320;i++)pcm.writeInt16LE(Math.trunc(Math.sin(i*440*Math.PI*2/16000)*8000),i*2);
+    const beforeBrowser=speechRequests.length;
+    for(let i=0;i<10;i++){
+      const response=await fetch(base+'/api/simulator/audio/pcm',{method:'POST',headers:{'X-Operit-Capture-Id':captureId,'Content-Type':'application/octet-stream'},body:pcm});
+      assert.equal(response.status,200,await response.text());
+    }
+    await post('/api/simulator/action',{action:'edge_voice',inputId:'browser-mic'});
+    await waitDevice('browser PCM is recognized by the selected Core service',device=>device.chat?.speech?.phase===0 && device.chat?.speech?.text===speechText);
+    assert.equal(speechRequests.length,beforeBrowser+1);
+    const browserWav=speechRequests.at(-1).subarray(speechRequests.at(-1).indexOf(Buffer.from('RIFF')));
+    assert.equal(browserWav.readUInt32LE(40),6400);
+    assert.deepEqual(browserWav.subarray(44,6444),Buffer.concat(Array(10).fill(pcm)));
+    const late=await fetch(base+'/api/simulator/audio/pcm',{method:'POST',headers:{'X-Operit-Capture-Id':captureId,'Content-Type':'application/octet-stream'},body:pcm});
+    assert.equal(late.status,400,'late browser samples must not enter a later recording');
+    await post('/api/simulator/audio/configure',{durationMs:1000,fail:false});
+    call('set_chat_draft',['string'],['']);
+    t.diagnostic('Edge speech -> clean PCM EOF -> Core selected STT -> draft; missing config, capture error, empty text and retry passed');
+
     // Dedicated audio runs reuse the real consent/JS fixture, with identical cleanup.
     // The default Space regression continues to include all restart/cancellation cases.
     if (process.env.OPERIT_SIM_AUDIO_ONLY === '1') return;

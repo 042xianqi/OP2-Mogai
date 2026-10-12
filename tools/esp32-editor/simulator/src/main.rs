@@ -256,6 +256,7 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
             },
             Some("sceneView") => Ok(scenePlugin.visual_snapshot()),
             Some("memory") => Ok(memory::snapshot()),
+            Some("audioPcm") => microphone.pushBrowser(&request),
             // Decision/cleanup failures belong to this RPC, not to run(). In
             // particular a stale approval tap after cancellation must not
             // terminate the device or drop its authenticated TCP listener.
@@ -336,9 +337,7 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
                 } else if action == "edge_history_older" || action == "edge_history_newer" {
                     edge_chat::moveHistory(action == "edge_history_older")?;
                 } else if action == "edge_voice" {
-                    // The test microphone is consumed through Core plugins;
-                    // a chat UI gesture must not bypass that authenticated path.
-                    return Err("语音输入未接入聊天\n请通过 Core 插件启动音频采集".to_string());
+                    edge_chat::voiceAction(nodeId.clone(), request["inputId"].as_str().map(str::to_string))?;
                 } else if action == "edge_conversations_refresh" {
                     edge_chat::conversationsAction()?;
                 } else if action == "edge_new" {

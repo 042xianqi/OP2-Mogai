@@ -66,6 +66,7 @@ unsafe extern "C" {
     fn operit_ui_finish_plugins(count: u32, offset: u32, total: u32, loading: bool, error: *const c_char);
     fn operit_ui_chat_send_result(ok: bool, error: *const c_char);
     fn operit_ui_set_chat_draft(value: *const c_char);
+    fn operit_ui_set_speech_state(phase: u32);
     fn operit_ui_chat_draft() -> *const c_char;
     fn operit_ui_debug_tree() -> *const c_char;
     fn operit_ui_debug_snapshot() -> *const c_char;
@@ -225,7 +226,10 @@ impl Esp32Ui {
             string(state["error"].as_str().unwrap_or("")).as_ptr()); }
     }
 
+    pub fn setChatDraft(&mut self, text: &str) { setText(text, operit_ui_set_chat_draft); }
+
     pub fn setChatState(&mut self, state: &serde_json::Value) {
+        unsafe { operit_ui_set_speech_state(state["speech"]["phase"].as_u64().unwrap_or(0) as u32); }
         unsafe { operit_ui_set_chat_history(state["hasOlder"].as_bool().unwrap_or(false), state["hasNewer"].as_bool().unwrap_or(false)); }
         let string = |value: &str| CString::new(value.replace('\0', "")).unwrap();
         let id = state["chatId"].as_str().unwrap_or("");

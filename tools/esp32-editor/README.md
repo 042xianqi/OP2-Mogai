@@ -302,3 +302,22 @@ Core 插件通过 `Tools.Edge.listAudioInputs/openAudioInput/readAudioInput/clos
 独立音频回归命令：`npm run test:audio --prefix tools/esp32-editor`。它复用真实 Core、
 C/Wasm 审批及 JS 包的测试夹具，验证上传、逐块消费、过载和关闭后重开；
 完整空间审批/重启回归仍运行 `npm run test:space --prefix tools/esp32-editor`。
+
+### Edge 聊天语音输入
+
+聊天页点击麦克风开始录音，再点一次结束。Core 将设备 PCM 转成 16 kHz、单声道、
+16 位 WAV，复用 `SttRecognitionService.transcribeCurrent()` 和 Core 当前选择的 STT 配置；
+选择 `LOCAL_MODEL` 时使用已安装的本地模型，配置和模型均留在 Core。
+识别文字回填当前 Edge 草稿，用户点击发送后才提交聊天，失败保留原草稿。
+录音/识别期间禁止发送及切换对话，最长录音 60 秒，结果最多 511 个 UTF-8 字节。
+断开连接、会话更换、失去权限或采集过载会取消输入；设备不能冒用其他节点的录音。
+
+网页聊天按钮使用浏览器麦克风（需要授权，在 localhost/HTTPS 下使用）。浏览器将声音
+重采样为 PCM，交给模拟设备注册的 `browser-mic`；后续通过原有 Space 鉴权和 Link Push
+上传 Core。面板的 `sim-pcm` 仍是测试音，不代表真人语音识别。
+ESP 固件已接同一交互流程，但本板尚未注册实际麦克风采集源，点击会明确报告不可用。
+
+语音集成回归复用独立 Core、真实 TCP 配对与 C/Wasm 界面：
+`OPERIT_SIM_SPEECH_ONLY=1 OPERIT_SIM_AUDIO_ONLY=1 npm run test:space`。
+测试只替换 STT 的供应商响应，检查实际上传的 WAV、手动结束、错误保留草稿、空结果、
+重试、浏览器 PCM 完整性及过期采样拒绝，不读取用户配置或伪造本地模型推理成功。

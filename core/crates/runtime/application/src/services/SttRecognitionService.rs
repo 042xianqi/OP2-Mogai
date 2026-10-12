@@ -52,6 +52,11 @@ impl SttRecognitionService {
         }
     }
 
+    /// Checks the same selected configuration used by App speech input before capture.
+    pub(crate) fn validateCurrentConfiguration(&self) -> Result<(), String> {
+        self.configManager.getCurrentSttConfig().map(|_| ())
+    }
+
     /// Transcribes one in-memory audio payload with the selected STT configuration.
     pub fn transcribeCurrent(
         &self,

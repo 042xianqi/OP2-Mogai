@@ -187,6 +187,24 @@ export async function simulatorRoute(req: IncomingMessage, res: ServerResponse, 
       }
       reply(200, await rpc('coreAccess', {step: input.step, nodeId: input.nodeId, address: input.address,
         token: input.token, pairingId: input.pairingId, confirmationCode: input.confirmationCode, requestId: input.requestId}, 30000));
+    } else if (url.pathname === '/api/simulator/audio/pcm' && req.method === 'POST') {
+      const captureId = req.headers['x-operit-capture-id'];
+      if (typeof captureId !== 'string' || !/^[a-f0-9-]{36}$/.test(captureId)) throw new Error('无效的录音编号');
+      const chunks: Buffer[] = []; let total = 0;
+      for await (const part of req) {
+        const chunk = Buffer.from(part); total += chunk.length;
+        if (total > 4096) throw new Error('PCM 块超过 4096 字节');
+        chunks.push(chunk);
+      }
+      const bytes = Buffer.concat(chunks);
+      if (!bytes.length || bytes.length % 2) throw new Error('PCM 必须包含完整的 16 位采样');
+      reply(200, await rpc('audioPcm', {captureId, pcm: bytes.toString('base64')}));
+    } else if (url.pathname === '/api/simulator/audio/error' && req.method === 'POST') {
+      let body = '';
+      for await (const chunk of req) { body += String(chunk); if (Buffer.byteLength(body) > 1024) throw new Error('请求过长'); }
+      const input = JSON.parse(body) as {captureId?: unknown; error?: unknown};
+      if (typeof input.captureId !== 'string' || typeof input.error !== 'string') throw new Error('缺少录音编号或采集错误');
+      reply(200, await rpc('audioPcm', {captureId: input.captureId, error: input.error}));
     } else if (url.pathname === '/api/simulator/audio/configure' && req.method === 'POST') {
       let body = '';
       for await (const chunk of req) {
@@ -251,7 +269,7 @@ export async function simulatorRoute(req: IncomingMessage, res: ServerResponse, 
         body += String(chunk);
         if (Buffer.byteLength(body) > 8192) throw new Error('消息过长');
       }
-      const input = JSON.parse(body) as {action?: unknown; text?: unknown; sendId?: unknown; requestId?: unknown; assignmentVersion?: unknown};
+      const input = JSON.parse(body) as {action?: unknown; text?: unknown; sendId?: unknown; requestId?: unknown; assignmentVersion?: unknown; inputId?: unknown};
       if (url.pathname.endsWith('/send')) {
         if (typeof input.text !== 'string') throw new Error('缺少消息内容');
         if (input.sendId !== undefined && (typeof input.sendId !== 'string' || input.sendId.length > 64)) throw new Error('无效的发送编号');
@@ -267,6 +285,10 @@ export async function simulatorRoute(req: IncomingMessage, res: ServerResponse, 
         }
         action.requestId = input.requestId;
         action.assignmentVersion = input.assignmentVersion;
+      }
+      if (input.action === 'edge_voice' && input.inputId !== undefined) {
+        if (typeof input.inputId !== 'string' || input.inputId.length > 128) throw new Error('无效的麦克风输入');
+        action.inputId = input.inputId;
       }
       reply(200, await rpc('action', action));
     } else reply(404, {error: 'Unknown simulator endpoint'});

@@ -7,14 +7,14 @@ panel.className = 'simulator-panel';
 panel.innerHTML = `<details>
   <summary><span>ESP32 模拟设备</span><small id="sim-summary">已停止</small></summary>
   <div class="simulator-content">
-    <p class="note">页面打开后自动启动 ESP32 模拟设备。可以在下方向 Core 主动申请接入，也可以由 Core 使用设备 TCP 地址和 Token 发起配对。插件 JS 和业务数据保存在 Core；此模拟器验证本板型的呈现与交互。</p>
+    <p class="note">页面打开后自动启动 ESP32 模拟设备。可以在下方向 Core 主动申请接入，也可以由 Core 使用设备 TCP 地址发起配对并输入设备码。插件 JS 和业务数据保存在 Core；此模拟器验证本板型的呈现与交互。</p>
     <div class="dialog-actions"><button id="sim-start">启动模拟设备</button><button id="sim-stop">停止模拟设备</button></div>
     <dl class="simulator-details">
       <div><dt>状态</dt><dd id="sim-status" role="status">模拟设备已停止</dd></div>
       <div><dt>TCP</dt><dd id="sim-address">-</dd></div>
     </dl>
     <fieldset><legend>模拟麦克风</legend>
-      <p class="note">16 kHz 单声道 PCM，440 Hz 测试音。Core 插件通过 Tools.Edge 打开 sim-pcm，沿已批准的设备空间 TCP 连接接收。此处只配置输入源。</p>
+      <p class="note">聊天页麦克风按钮使用浏览器真实麦克风，停止后由 Core 当前 STT 配置识别并回填草稿。下方设置只控制 sim-pcm 的 440 Hz 测试音。</p>
       <label>时长（毫秒）<input id="sim-audio-duration" type="number" min="20" max="10000" step="20" value="1000"></label>
       <label><input id="sim-audio-fail" type="checkbox">结束时模拟采集过载</label>
       <button id="sim-audio-apply" disabled>应用音频设置</button>

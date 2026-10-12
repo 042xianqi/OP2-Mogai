@@ -29,11 +29,14 @@ pub trait EdgeAudioSource: Send + Sync {
 pub trait EdgeAudioSession: Send {
     /// Bounded PCM block, clean EOF, or an error for capture failure/overrun.
     async fn read(&mut self) -> Result<Option<Vec<u8>>, String>;
+    /// Stop accepting new samples and drain already captured PCM without waiting.
+    /// Sources without a capture queue have nothing buffered to return.
+    fn readBuffered(&mut self) -> Result<Option<Vec<u8>>, String> { Ok(None) }
 }
 
 struct Capture {
     receiver: String,
-    cancel: watch::Sender<bool>,
+    cancel: watch::Sender<u8>,
 }
 pub struct EdgeAudioService {
     source: Arc<dyn EdgeAudioSource>,
@@ -90,7 +93,7 @@ impl EdgeAudioService {
             .spacePushClient()
             .ok_or_else(|| error("No admitted Space return route"))?;
         requireAudioCapacity(&request.format, client.nominalBytesPerSecond())?;
-        let (cancel, mut cancelled) = watch::channel(false);
+        let (cancel, mut cancelled) = watch::channel(0);
         {
             let mut captures = self.captures.lock().unwrap();
             if !captures.is_empty() {
@@ -150,11 +153,16 @@ impl EdgeAudioService {
             let timeout = tokio::time::sleep(Duration::from_millis(duration as u64));
             tokio::pin!(timeout);
             let terminal = loop {
-                if *cancelled.borrow() { break Some("Audio capture was stopped".into()); }
-                let block = tokio::select! {
-                    _ = cancelled.changed() => break Some("Audio capture was stopped".into()),
-                    _ = &mut timeout => break None,
-                    block = source.read() => block,
+                let disposition = *cancelled.borrow();
+                if disposition == 1 { break Some("Audio capture was stopped".into()); }
+                let block = if disposition == 2 {
+                    source.readBuffered()
+                } else {
+                    tokio::select! {
+                        _ = cancelled.changed() => continue,
+                        _ = &mut timeout => break None,
+                        block = source.read() => block,
+                    }
                 };
                 match block {
                     Ok(Some(bytes)) => {
@@ -182,6 +190,12 @@ impl EdgeAudioService {
             .map_err(|e| error(e.to_string()))
     }
     pub fn stop(&self, args: CoreValue, origin: &str) -> Result<CoreValue, CoreLinkError> {
+        self.endInput(args, origin, false)
+    }
+    pub fn finish(&self, args: CoreValue, origin: &str) -> Result<CoreValue, CoreLinkError> {
+        self.endInput(args, origin, true)
+    }
+    fn endInput(&self, args: CoreValue, origin: &str, clean: bool) -> Result<CoreValue, CoreLinkError> {
         let request: StopAudioInput =
             operit_link::fromCoreValue(args).map_err(|e| error(e.to_string()))?;
         let captures = self.captures.lock().unwrap();
@@ -189,7 +203,7 @@ impl EdgeAudioService {
             if capture.receiver != origin {
                 return Err(error("Only the requesting Core can stop this input"));
             }
-            capture.cancel.send_replace(true);
+            capture.cancel.send_replace(if clean { 2 } else { 1 });
         }
         Ok(CoreValue::Bool(true))
     }
@@ -197,7 +211,7 @@ impl EdgeAudioService {
 impl Drop for EdgeAudioService {
     fn drop(&mut self) {
         for capture in self.captures.lock().unwrap().values() {
-            capture.cancel.send_replace(true);
+            capture.cancel.send_replace(1);
         }
     }
 }

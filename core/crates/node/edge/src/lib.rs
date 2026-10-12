@@ -394,6 +394,7 @@ impl EdgeNode {
                 "listInputs" => audio.listInputs(),
                 "startInput" => audio.start(request.args, origin, self.nodeServices().map_err(serviceError)?).await,
                 "stopInput" => audio.stop(request.args, origin),
+                "finishInput" => audio.finish(request.args, origin),
                 _ => Err(CoreLinkError::methodNotFound(&request.registryKey())),
             }
         }.await;

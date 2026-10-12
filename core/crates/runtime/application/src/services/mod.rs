@@ -72,3 +72,6 @@ pub use AttachmentTransferManager::*;
 
 #[path = "ComposeDslSessionService.rs"]
 pub mod ComposeDslSessionService;
+
+#[path = "EdgeSpeechInput.rs"]
+pub(crate) mod EdgeSpeechInput;

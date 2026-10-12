@@ -157,6 +157,13 @@ impl UiValue {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PageCursor { timestamp: i64, offset: u32 }
 
+#[derive(Default)]
+struct SpeechUi {
+    phase: u8, // 0 idle, 1 recording, 2 starting, 3 transcribing
+    resultId: u32,
+    result: Option<Result<String, String>>,
+}
+
 struct ChatSession {
     spaceIdentity: Option<operit_node_runtime::NodeServices::SpaceClientIdentity>,
     client: Arc<dyn CoreLinkSharedClient + Send + Sync>,
@@ -180,6 +187,8 @@ struct ChatSession {
     generating: AtomicBool,
     sending: AtomicBool,
     sendResult: Mutex<Option<Result<(), String>>>,
+    speech: Mutex<SpeechUi>,
+    speechFinish: AtomicBool,
     subscriptionsClosed: AtomicBool,
     streams: Mutex<BTreeMap<String, StreamText>>,
     streamTasks: Mutex<BTreeMap<String, NodeUiTask>>,
@@ -742,6 +751,8 @@ fn installSession(
         generating: AtomicBool::new(false),
         sending: AtomicBool::new(false),
         sendResult: Mutex::new(None),
+        speech: Mutex::new(SpeechUi::default()),
+        speechFinish: AtomicBool::new(false),
         subscriptionsClosed: AtomicBool::new(false),
         streams: Mutex::new(BTreeMap::new()),
         streamTasks: Mutex::new(BTreeMap::new()),
@@ -1257,6 +1268,12 @@ pub fn snapshot() -> serde_json::Value {
             let messages = renderMessages(session.messages.lock().unwrap().display.clone(), &streams);
             let error = session.error.lock().unwrap().clone()
                 .or_else(|| session.executionError.lock().unwrap().clone());
+            let speech = {
+                let speech = session.speech.lock().unwrap();
+                serde_json::json!({"phase": speech.phase, "resultId": speech.resultId,
+                    "text": speech.result.as_ref().and_then(|r| r.as_ref().ok()),
+                    "error": speech.result.as_ref().and_then(|r| r.as_ref().err())})
+            };
             serde_json::json!({
                 "connected": session.services.peers().spaceConnection().is_some(), "chatId": session.chatId,
                 "initializing": !session.ready.load(Ordering::Acquire),
@@ -1265,6 +1282,7 @@ pub fn snapshot() -> serde_json::Value {
                 "conversationsError": session.conversationsError.lock().unwrap().clone(),
                 "hasOlder": session.older.lock().unwrap().is_some(),
                 "hasNewer": !session.windowHistory.lock().unwrap().is_empty(),
+                "speech": speech,
                 "sending": session.sending.load(Ordering::Acquire),
                 "generating": session.generating.load(Ordering::Acquire),
                 "messages": messages, "error": error,
@@ -1304,6 +1322,7 @@ pub fn conversationsAction() -> Result<(), String> {
     if session.services.peers().spaceConnection().is_none() { return Err("设备已离线".into()); }
     if !session.ready.load(Ordering::Acquire) { return Err("远端对话正在初始化，请稍后重试".into()); }
     if session.sending.load(Ordering::Acquire) { return Err("请等待消息发送完成".into()); }
+    if session.speech.lock().unwrap().phase != 0 { return Err("请先结束语音输入".into()); }
     if session.conversationsRequested.swap(true, Ordering::AcqRel) { return Ok(()); }
     session.conversationsLoading.store(true, Ordering::Release);
     *session.conversationsError.lock().unwrap() = None;
@@ -1381,6 +1400,7 @@ pub fn selectChat(id: &str) -> Result<(), String> {
     }
     if !session.ready.load(Ordering::Acquire) { return Err("远端对话正在初始化，请稍后重试".into()); }
     if session.sending.load(Ordering::Acquire) { return Err("请等待消息发送完成".into()); }
+    if session.speech.lock().unwrap().phase != 0 { return Err("请先结束语音输入".into()); }
     if id == session.chatId { return Ok(()); }
     let exists = session.histories.lock().unwrap().display.as_array()
         .is_some_and(|items| items.iter().any(|item| item["id"] == id));
@@ -1427,6 +1447,7 @@ pub fn newChat() -> Result<(), String> {
         return Err("设备已离线".into());
     }
     if !session.ready.load(Ordering::Acquire) { return Err("远端对话正在初始化，请稍后重试".into()); }
+    if session.speech.lock().unwrap().phase != 0 { return Err("请先结束语音输入".into()); }
     if session.sending.swap(true, Ordering::AcqRel) {
         return Err("请等待当前操作完成".into());
     }
@@ -1493,6 +1514,12 @@ pub fn taskStatus() -> String {
     }
     if session.sending.load(Ordering::Acquire) {
         return "发送中".into();
+    }
+    match session.speech.lock().unwrap().phase {
+        1 => return "录音中，再点麦克风结束".into(),
+        2 => return "准备录音".into(),
+        3 => return "语音识别中".into(),
+        _ => {}
     }
     if session.generating.load(Ordering::Acquire) { return "生成中".into(); }
     if session
@@ -1687,6 +1714,89 @@ pub fn sendImage(bytes: Vec<u8>, mime: String) -> Result<(), String> {
         UI_REVISION.fetch_add(1, Ordering::Relaxed);
     });
     Ok(())
+}
+
+/// Toggle recording through the same authenticated chat route used by this UI.
+pub fn voiceAction(nodeId: String, inputId: Option<String>) -> Result<(), String> {
+    let session = SESSION.get_or_init(|| Mutex::new(None)).lock().unwrap().clone().ok_or("设备尚未连接 Space")?;
+    if session.retired.load(Ordering::Acquire) || !session.ready.load(Ordering::Acquire)
+        || session.services.peers().spaceConnection().is_none() { return Err("设备尚未连接 Core".into()); }
+    if session.sending.load(Ordering::Acquire) { return Err("请等待消息发送完成".into()); }
+    {
+        let mut speech = session.speech.lock().unwrap();
+        match speech.phase {
+            1 => {
+                speech.phase = 3;
+                session.speechFinish.store(true, Ordering::Release);
+                UI_REVISION.fetch_add(1, Ordering::Relaxed);
+                return Ok(());
+            }
+            0 => { speech.phase = 2; speech.result = None; }
+            _ => return Err("语音输入正在处理".into()),
+        }
+    }
+    session.speechFinish.store(false, Ordering::Release);
+    *session.error.lock().unwrap() = None;
+    UI_REVISION.fetch_add(1, Ordering::Relaxed);
+    // Keep this task alive through in-flight Link ACKs. Retiring the UI session
+    // requests remote cancellation after its current call finishes.
+    spawnNodeUiTask(move || async move {
+        let mut streamId = None;
+        let result = async {
+            let value = speechCall(&session, "beginEdgeSpeech", serde_json::json!({
+                "chatId": session.chatId, "nodeId": nodeId, "inputId": inputId
+            })).await?;
+            let id = value["streamId"].as_str().ok_or("Invalid speech stream ID")?.to_string();
+            streamId = Some(id.clone());
+            session.speech.lock().unwrap().phase = 2;
+            UI_REVISION.fetch_add(1, Ordering::Relaxed);
+            let args = serde_json::json!({"chatId": session.chatId, "nodeId": nodeId, "streamId": id});
+            loop {
+                if session.retired.load(Ordering::Acquire) || session.services.peers().spaceConnection().is_none() {
+                    return Err("设备已断开，语音输入已取消".to_string());
+                }
+                if session.speechFinish.swap(false, Ordering::AcqRel) {
+                    speechCall(&session, "finishEdgeSpeech", args.clone()).await?;
+                }
+                let result = speechCall(&session, "pollEdgeSpeech", args.clone()).await?;
+                if result["phase"] == "done" {
+                    if let Some(error) = result["error"].as_str() { return Err(error.to_string()); }
+                    return result["text"].as_str().map(str::to_string).ok_or_else(|| "没有识别到文字".into());
+                }
+                let phase = if result["phase"] == "starting" { 2 } else if result["phase"] == "transcribing" { 3 } else if session.speech.lock().unwrap().phase == 3 { 3 } else { 1 };
+                session.speech.lock().unwrap().phase = phase;
+                UI_REVISION.fetch_add(1, Ordering::Relaxed);
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        }.await;
+        if let Some(id) = streamId {
+            // Releases the Core result too. Cleanup errors must not discard a
+            // recognized transcript; stale leases also clean up offline input.
+            let _ = speechCall(&session, "cancelEdgeSpeech", serde_json::json!({
+                "chatId": session.chatId, "nodeId": nodeId, "streamId": id
+            })).await;
+        }
+        let mut speech = session.speech.lock().unwrap();
+        speech.phase = 0;
+        speech.resultId = speech.resultId.wrapping_add(1);
+        speech.result = Some(result);
+        UI_REVISION.fetch_add(1, Ordering::Relaxed);
+    });
+    Ok(())
+}
+async fn speechCall(session: &ChatSession, method: &str, args: serde_json::Value) -> Result<serde_json::Value, String> {
+    let response = session.client.call(CoreCallRequest::new(
+        operit_link::nextCoreRouteRequestId(method), CORE_INTERNAL_TARGET, method,
+        operit_link::toCoreValue(args).map_err(|e| e.to_string())?
+    )).await;
+    let value: serde_json::Value = operit_link::fromCoreValue(response.result.map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    if let Some(error) = value["error"].as_str() { return Err(error.to_string()); }
+    Ok(value)
+}
+pub fn takeSpeechResult() -> Option<Result<String, String>> {
+    let session = SESSION.get_or_init(|| Mutex::new(None)).lock().unwrap().clone()?;
+    let result = session.speech.lock().unwrap().result.take();
+    result
 }
 
 /// Bridges a synchronous firmware callback to its existing Link runtime.

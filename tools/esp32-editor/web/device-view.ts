@@ -10,6 +10,8 @@ interface SceneAdapter {
 export class DeviceView {
   private sessionId?: string;
   private lastSendResult?: number;
+  private lastSpeechResult?: number;
+  private speechChatId?: string;
   private runtime: RuntimeModule;
   private scene: SceneAdapter;
   private onSendResult: (ok: boolean, error?: string, sendId?: string | null) => void;
@@ -26,6 +28,7 @@ export class DeviceView {
       this.scene.update(runtime);
       this.sessionId = state.sessionId;
       this.lastSendResult = undefined;
+      this.lastSpeechResult = undefined;
     }
     this.scene.update(runtime, state.scene);
     if (state.paired !== undefined) runtime._operit_ui_set_paired(state.paired);
@@ -37,6 +40,16 @@ export class DeviceView {
     runtime.ccall('operit_ui_set_chat_history', null, ['number', 'number'], [chat.hasOlder ? 1 : 0, chat.hasNewer ? 1 : 0]);
     const character = chat.conversations?.find(item => item.id === chat.chatId)?.characterCardName || 'Operit';
     runtime.ccall('operit_ui_set_chat_identity', null, ['string', 'string'], [chat.chatId ?? '', character]);
+    if (chat.chatId !== this.speechChatId) {
+      this.speechChatId = chat.chatId; this.lastSpeechResult = undefined;
+    }
+    runtime.ccall('operit_ui_set_speech_state', null, ['number'], [chat.speech?.phase ?? 0]);
+    if (chat.speech?.resultId && chat.speech.resultId !== this.lastSpeechResult) {
+      this.lastSpeechResult = chat.speech.resultId;
+      if (chat.speech.text) runtime.ccall('operit_ui_set_chat_draft', null, ['string'], [chat.speech.text]);
+      if (chat.speech.error) runtime.ccall('operit_ui_action_error', null, ['string'], [chat.speech.error]);
+    }
+
     const messages = (chat.messages ?? []).filter(message => message.text?.trim()).slice(-12);
     messages.forEach((message, index) => {
       runtime.ccall('operit_ui_set_message', null,

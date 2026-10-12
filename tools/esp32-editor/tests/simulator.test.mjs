@@ -41,7 +41,7 @@ test('editor starts real TCP device without a token, serves firmware UI and stop
   const voice = await fetch(base + '/api/simulator/action', {method:'POST',
     headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'edge_voice'})});
   assert.equal(voice.status,400);
-  assert.match((await voice.json()).error,/语音输入未接入聊天/);
+  assert.match((await voice.json()).error,/设备尚未连接 Space/);
   assert.equal((await state()).device.audio.active,false);
   assert.match(first.device.sessionId, /^[0-9a-f-]{36}$/);
   assert.equal((await state()).device.sessionId, first.device.sessionId);

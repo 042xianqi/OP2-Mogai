@@ -40,6 +40,7 @@ export interface DeviceState {
         testing?: boolean;
         error?: string | null;
     };
+    audio?: {active?: boolean; captureId?: string | null};
     running?: boolean;
     connected?: boolean;
     paired?: boolean;
@@ -57,6 +58,7 @@ export interface DeviceState {
         hasOlder?: boolean;
         hasNewer?: boolean;
         chatId?: string;
+        speech?: {phase?: number; resultId?: number; text?: string | null; error?: string | null};
         messages?: {
             sender: string;
             text: string;
@@ -92,6 +94,7 @@ export function simulatorViewState(state: {
         spaceJoinRequestId: device?.spaceJoinRequestId,
         spaceJoinAssignmentVersion: device?.spaceJoinAssignmentVersion,
         chatPreview: device?.chatPreview ?? '尚未连接对话',
+        audio: device?.audio,
         scene: device?.scene,
         plugins: device?.plugins, chat: device?.chat, chatScreen: device?.chatScreen, chatTask: device?.chatTask,
         chatSendResult: device?.chatSendResult,

@@ -27,6 +27,8 @@ const files = new Map<string, string>([
   ['/device-actions.js', 'web/device-actions.ts'],
   ['/device-state.js', 'web/device-state.ts'],
   ['/device-view.js', 'web/device-view.ts'],
+  ['/browser-microphone.js', 'web/browser-microphone.ts'],
+  ['/speech-pcm.ts', 'web/speech-pcm.ts'],
   ['/scene-renderer.js', 'web/scene-renderer.ts'],
   ['/simulator.js', 'web/simulator.ts'],
   ['/core-access.js', 'web/core-access.ts'],
@@ -54,6 +56,7 @@ const files = new Map<string, string>([
 const mime: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.ts': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
   '.wasm': 'application/wasm',
   '.json': 'application/json',

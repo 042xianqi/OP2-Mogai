@@ -251,6 +251,7 @@ pub struct ChatServiceCore {
     pub additionalOnTurnComplete: Option<fn(Option<String>, i32, i32, i32)>,
     pub uiBridge: EmptyChatServiceUiBridge,
     pub attachments: Vec<AttachmentInfo>,
+    edgeSpeech: crate::services::EdgeSpeechInput::EdgeSpeechInput,
     pendingQueueStore: Arc<PendingChatQueueStore>,
     chatEnhancedAiServicesByChatId: Arc<Mutex<HashMap<String, EnhancedAIService>>>,
 }
@@ -291,11 +292,39 @@ impl ChatServiceCore {
             additionalOnTurnComplete: None,
             uiBridge: EmptyChatServiceUiBridge,
             attachments: Vec::new(),
+            edgeSpeech: Default::default(),
             pendingQueueStore,
             chatEnhancedAiServicesByChatId: Arc::new(Mutex::new(HashMap::new())),
         };
         core.initializeDelegates();
         core
+    }
+
+    /// Starts device audio in this chat's Core, using its selected STT configuration.
+    #[operit_route_macros::operit_core_route(binding = chatId, permission = "caller:chat.write")]
+    pub async fn beginEdgeSpeech(&self, chatId: String, nodeId: String, inputId: Option<String>) -> serde_json::Value {
+        let handler = self.runtimeToolHandler();
+        crate::services::EdgeSpeechInput::reply(
+            self.edgeSpeech.begin(chatId, nodeId, inputId, handler.runtimeSupport(), handler.getContext()).await
+                .map(|id| serde_json::json!({"streamId": id})))
+    }
+
+    /// Ends capture cleanly; recognition runs outside the chat dispatch lock.
+    #[operit_route_macros::operit_core_route(binding = chatId, permission = "caller:chat.write")]
+    pub async fn finishEdgeSpeech(&self, chatId: String, nodeId: String, streamId: String) -> serde_json::Value {
+        crate::services::EdgeSpeechInput::reply(self.edgeSpeech.finish(&chatId, &nodeId, &streamId, self.runtimeToolHandler().runtimeSupport()).await.map(|_| serde_json::json!({"ok":true})))
+    }
+
+    /// Reads one bounded speech result belonging to this device and chat.
+    #[operit_route_macros::operit_core_route(binding = chatId, permission = "caller:chat.write")]
+    pub fn pollEdgeSpeech(&self, chatId: String, nodeId: String, streamId: String) -> serde_json::Value {
+        crate::services::EdgeSpeechInput::reply(self.edgeSpeech.poll(&chatId, &nodeId, &streamId))
+    }
+
+    /// Cancels capture without changing the chat draft or sending a message.
+    #[operit_route_macros::operit_core_route(binding = chatId, permission = "caller:chat.write")]
+    pub async fn cancelEdgeSpeech(&self, chatId: String, nodeId: String, streamId: String) -> serde_json::Value {
+        crate::services::EdgeSpeechInput::reply(self.edgeSpeech.cancel(&chatId, &nodeId, &streamId, self.runtimeToolHandler().runtimeSupport()).await.map(|_| serde_json::json!({"ok":true})))
     }
 
     /// Returns the tool handler bound to this chat runtime core.

@@ -3,6 +3,9 @@ import {ScenePreview} from './scene-renderer.js';
 import {DeviceView} from './device-view.js';
 import {request} from './transport.js';
 import {performDeviceAction} from './device-actions.js';
+import {BrowserMicrophone} from './browser-microphone.js';
+const browserMicrophone = new BrowserMicrophone();
+window.addEventListener('pagehide', () => browserMicrophone.release());
 import {point, pixel} from './model.js';
 import {errorMessage, query} from './types.js';
 import type {BoardInfo, BuildManifest, BuildStatus, RuntimeFactory, RuntimeModule} from './types.js';
@@ -87,6 +90,7 @@ composer.addEventListener('submit', event => {
 window.addEventListener('operit-simulator-state', event => {
   const state = (event as CustomEvent<DeviceState>).detail;
   latestDeviceState = state;
+  browserMicrophone.update(state);
   wifiInput.disabled = !!state.running;
   edgeInput.disabled = !!state.running;
   wifiInput.checked = !!state.running;
@@ -248,6 +252,19 @@ function handleRuntimeAction(value: string): void {
       window.dispatchEvent(new Event('operit-simulator-refresh'));
       // The state poll acknowledges completion of the remote call.
     }).catch(error => finishSend(false, errorMessage(error)));
+    return;
+  }
+  if (value === 'edge_voice') {
+    void performDeviceAction(runtime, value, async () => {
+      await browserMicrophone.toggle(latestDeviceState ?? {}, async inputId => {
+        const response = await fetch('/api/simulator/action', {method: 'POST',
+          headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: value, inputId})});
+        const result = await response.json() as {error?: string};
+        if (!response.ok) throw new Error(result.error ?? '语音输入失败');
+        return result;
+      });
+    }).catch(error => log('语音输入错误: ' + errorMessage(error)))
+      .finally(() => window.dispatchEvent(new Event('operit-simulator-refresh')));
     return;
   }
   if (value.startsWith('edge_')) {

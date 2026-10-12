@@ -120,3 +120,22 @@ test('browser adapter forwards real conversation metadata, loading, error and se
   tap('conversations_refresh');assert.equal(actions.at(-1),'edge_conversations_refresh');
   state.chat.conversationsError=null;state.chat.chatId='b';view.update(state);assert.equal(inspect().page,'Chat');
 });
+
+test('speech result fills draft once, survives polling, and resets for another chat', async () => {
+  const {ui, view, inspect} = await fixture();
+  const state = chatId => ({sessionId:'speech', chat:{connected:true, chatId,
+    speech:{phase:0,resultId:1,text:'识别结果'}}});
+  view.update(state('first'));
+  ui._operit_ui_set_connection(1,1);
+  assert.equal(inspect().nodes.find(n=>n.id==='chat_draft').text,'识别结果');
+  ui.ccall('operit_ui_set_chat_draft',null,['string'],['修改草稿']);
+  view.update(state('first'));
+  assert.equal(inspect().nodes.find(n=>n.id==='chat_draft').text,'修改草稿');
+  view.update(state('second'));
+  assert.equal(inspect().nodes.find(n=>n.id==='chat_draft').text,'识别结果');
+  view.update({sessionId:'speech',chat:{connected:true,chatId:'second',speech:{phase:1}}});
+  assert.equal(inspect().nodes.find(n=>n.id==='edge_voice').enabled,true);
+  assert.equal(inspect().nodes.find(n=>n.id==='edge_send').enabled,false);
+  view.update({sessionId:'speech',chat:{connected:true,chatId:'second',speech:{phase:3}}});
+  assert.equal(inspect().nodes.find(n=>n.id==='edge_voice').enabled,false);
+});

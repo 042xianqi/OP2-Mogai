@@ -43,6 +43,7 @@ impl EdgeAudioSource for TestMic {
 }
 #[async_trait]
 impl EdgeAudioSession for TestRecording {
+    fn readBuffered(&mut self) -> Result<Option<Vec<u8>>, String> { Ok(self.blocks.pop_front()) }
     async fn read(&mut self) -> Result<Option<Vec<u8>>, String> {
         tokio::task::yield_now().await;
         if self.repeat {
@@ -441,6 +442,43 @@ async fn audio_pairing_revocation_ends_stream_with_error_and_releases_capture() 
         core.audio.close(&id);
     })
     .await;
+    edge.peers.stop().await.unwrap();
+    core.peers.stop().await.unwrap();
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn audio_finish_is_clean_eof_and_keeps_shared_tcp_usable() {
+    let _guard = TEST_LOCK.lock().await;
+    let core = core_node();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let buffered = vec![vec![7;640]; 8];
+    let edge = simulated_edge(buffered.clone(), false, true, drops.clone());
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        admit(&core, &edge).await;
+        let (id, request) = microphone(&core, &edge);
+        assert!(core.router.callNode(edge.service.localNodeId(), request).await.result.is_ok());
+        let first = core.audio.read(&id).await.unwrap();
+        assert!(!first.done && first.byteLength > 0);
+        let mut retained = Vec::new();
+        let finish = CoreCallRequest::new("finish", EDGE_AUDIO_TARGET, "finishInput",
+            toCoreValue(StopAudioInput { streamId: id.clone() }).unwrap());
+        assert!(core.router.callNode(edge.service.localNodeId(), finish).await.result.is_ok());
+        loop {
+            let block = core.audio.read(&id).await.unwrap();
+            if block.done { assert!(block.error.is_none(), "manual finish must preserve captured audio"); break; }
+            if !block.pending { retained.extend(STANDARD.decode(block.dataBase64).unwrap().into_iter().filter(|byte| *byte == 7)); }
+        }
+        assert_eq!(retained, buffered.concat(), "finish must drain all queued PCM before EOF");
+        core.audio.close(&id);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        let (next, request) = microphone(&core, &edge);
+        assert!(core.router.callNode(edge.service.localNodeId(), request).await.result.is_ok());
+        core.audio.close(&next);
+        let stop = CoreCallRequest::new("stop-next", EDGE_AUDIO_TARGET, "stopInput",
+            toCoreValue(StopAudioInput { streamId: next }).unwrap());
+        assert!(core.router.callNode(edge.service.localNodeId(), stop).await.result.is_ok());
+    }).await;
     edge.peers.stop().await.unwrap();
     core.peers.stop().await.unwrap();
     result.unwrap();
