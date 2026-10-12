@@ -642,15 +642,19 @@ class _RemotePairDialogState extends State<_RemotePairDialog> {
     super.dispose();
   }
 
-  /// Starts manual pairing from an explicit address and token.
+  /// Starts manual pairing from an explicit address.
+  ///
+  /// The token stays optional: the receiving core decides by the actual
+  /// source address whether one is required, so same-LAN addresses pair
+  /// without it and remote addresses fail with the core's token-required
+  /// error until the user fills the field in.
   Future<void> _start() async {
     final l10n = AppLocalizations.of(context)!;
     final baseUrl = _baseUrlController.text.trim();
     final token = _tokenController.text.trim();
-    if (baseUrl.isEmpty || token.isEmpty) {
+    if (baseUrl.isEmpty) {
       setState(() {
-        _error =
-            '${l10n.settingsRuntimeBaseUrl} / ${l10n.settingsRuntimePairToken}: ${l10n.required}';
+        _error = '${l10n.settingsRuntimeBaseUrl}: ${l10n.required}';
       });
       return;
     }
@@ -663,7 +667,7 @@ class _RemotePairDialogState extends State<_RemotePairDialog> {
           .startPairing(
             address: baseUrl,
             nodeId: '',
-            token: token,
+            token: token.isEmpty ? null : token,
             transport: _transport,
           );
       if (mounted) {
@@ -735,6 +739,9 @@ class _RemotePairDialogState extends State<_RemotePairDialog> {
               enabled: pairing == null,
               decoration: InputDecoration(
                 labelText: l10n.settingsRuntimeBaseUrl,
+                helperText: _transport == generated.PeerTransport.tcp
+                    ? l10n.settingsRuntimeTcpAddressHint
+                    : null,
                 border: const OutlineInputBorder(),
                 isDense: true,
               ),
@@ -746,6 +753,7 @@ class _RemotePairDialogState extends State<_RemotePairDialog> {
               obscureText: true,
               decoration: InputDecoration(
                 labelText: l10n.settingsRuntimePairToken,
+                helperText: l10n.settingsRuntimePairTokenHint,
                 border: const OutlineInputBorder(),
                 isDense: true,
               ),
@@ -957,6 +965,10 @@ class _LinkTransportSelector extends StatelessWidget {
         DropdownMenuItem(
           value: generated.PeerTransport.webSocket,
           child: Text('WebSocket'),
+        ),
+        DropdownMenuItem(
+          value: generated.PeerTransport.tcp,
+          child: Text('TCP'),
         ),
       ],
       onChanged: (selected) {

@@ -79,7 +79,7 @@ Map<String, Object?> _topology({
 }
 
 /// Builds one synchronized control state with the two built-in identities.
-Map<String, Object?> _control() {
+Map<String, Object?> _control({List<String> disconnectedNodeIds = const []}) {
   return <String, Object?>{
     'spaceId': 'space',
     'initialized': true,
@@ -101,7 +101,7 @@ Map<String, Object?> _control() {
       'tablet': 'relay',
       'relay': 'user',
     },
-    'disconnectedNodeIds': <Object?>[],
+    'disconnectedNodeIds': <Object?>[...disconnectedNodeIds],
     'policies': <String, String>{},
   };
 }
@@ -314,7 +314,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.widgetWithText(MenuItemButton, '建立直连'), findsOneWidget);
       expect(find.widgetWithText(MenuItemButton, '移除设备'), findsNothing);
-      expect(find.widgetWithText(MenuItemButton, '断开设备'), findsNothing);
+      expect(find.widgetWithText(MenuItemButton, '隔离设备'), findsNothing);
       expect(tester.takeException(), isNull);
       await unmount(tester, bridge);
     },
@@ -357,10 +357,12 @@ void main() {
     await tester.tap(menus.first);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
-    expect(find.widgetWithText(MenuItemButton, '重新接纳设备'), findsOneWidget);
+    // Isolation is one slot: an unrestricted device offers the isolate
+    // command only, never the lift action alongside it.
+    expect(find.widgetWithText(MenuItemButton, '隔离设备'), findsOneWidget);
     expect(find.widgetWithText(MenuItemButton, '重置为默认身份'), findsOneWidget);
     expect(find.widgetWithText(MenuItemButton, '设置设备身份'), findsOneWidget);
-    expect(find.widgetWithText(MenuItemButton, '断开设备'), findsOneWidget);
+    expect(find.widgetWithText(MenuItemButton, '解除隔离设备'), findsNothing);
     expect(find.widgetWithText(MenuItemButton, '移除设备'), findsOneWidget);
     expect(find.widgetWithText(MenuItemButton, '建立直连'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -423,7 +425,7 @@ void main() {
     await tester.tap(menus.first);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
-    expect(find.widgetWithText(MenuItemButton, '断开设备'), findsOneWidget);
+    expect(find.widgetWithText(MenuItemButton, '隔离设备'), findsOneWidget);
     expect(find.widgetWithText(MenuItemButton, '移除设备'), findsOneWidget);
     expect(find.widgetWithText(MenuItemButton, '重置为默认身份'), findsOneWidget);
     expect(find.widgetWithText(MenuItemButton, '解除配对'), findsOneWidget);

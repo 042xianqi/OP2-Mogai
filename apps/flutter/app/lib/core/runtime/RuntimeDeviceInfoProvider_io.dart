@@ -11,6 +11,9 @@ class RuntimeDeviceInfoProvider {
     return generated.LinkDeviceInfo(
       platform: Platform.operatingSystem,
       model: Platform.localHostname,
+      // The core mints and stamps the local pairing generation itself; hosts
+      // never supply it.
+      pairingIncarnation: null,
     );
   }
 }

@@ -53,6 +53,12 @@ pub enum NetworkControlCommand {
     DefineRole {
         role: NetworkControlRole,
     },
+    UpdateRole {
+        role: NetworkControlRole,
+    },
+    RemoveRole {
+        roleId: String,
+    },
     GrantRole {
         grant: NetworkControlIdentityAssignment,
     },
@@ -68,6 +74,13 @@ pub enum NetworkControlCommand {
     },
     RemoveMember {
         nodeId: String,
+        /// The pairing generation the removed device announced while admitted.
+        /// Mutual forgetting drops only pairings stamped with this generation:
+        /// a pairing the device made after leaving and resetting (its next
+        /// generation, for re-admission) survives every replay of this removal.
+        /// Older cores omit it and keep the previous forget-only semantics.
+        #[serde(default)]
+        revokedIncarnation: Option<String>,
     },
     DisconnectNode {
         nodeId: String,
@@ -275,6 +288,21 @@ impl NetworkControlStore {
         self.submitLocalCommand(NetworkControlCommand::DefineRole { role })
     }
 
+    /// Updates one existing custom role after checking that the issuer can define every requested ability.
+    #[allow(non_snake_case)]
+    pub fn updateRole(&self, role: NetworkControlRole) -> Result<SyncOperation, String> {
+        self.submitLocalCommand(NetworkControlCommand::UpdateRole { role })
+    }
+
+    /// Removes one custom role. Devices still holding the role fall back to
+    /// the default user identity, mirroring the RevokeRole guard that keeps
+    /// every member holding an identity at all times.
+    #[allow(non_snake_case)]
+    pub fn removeRole(&self, roleId: String) -> Result<SyncOperation, String> {
+        validateIdentifier("role id", &roleId, 120)?;
+        self.submitLocalCommand(NetworkControlCommand::RemoveRole { roleId })
+    }
+
     /// Sets one existing identity on a device after checking capability limits.
     #[allow(non_snake_case)]
     pub fn setIdentity(
@@ -302,7 +330,11 @@ impl NetworkControlStore {
     #[allow(non_snake_case)]
     pub fn removeMember(&self, nodeId: String) -> Result<SyncOperation, String> {
         validateNodeId(&nodeId)?;
-        self.submitLocalCommand(NetworkControlCommand::RemoveMember { nodeId })
+        // The removal revokes the generation this device announced while it
+        // was admitted; a stale local profile simply carries an older value.
+        let revokedIncarnation = self.spaceStore.deviceProfiles()?
+            .get(&nodeId).and_then(|profile| profile.pairingIncarnation.clone());
+        self.submitLocalCommand(NetworkControlCommand::RemoveMember { nodeId, revokedIncarnation })
     }
 
     /// Admits one authenticated device as a member of the current Space.
@@ -382,6 +414,21 @@ impl NetworkControlStore {
     pub fn currentSpaceOperations(&self) -> Result<Vec<SyncOperation>, String> {
         let space = self.spaceStore.initialize()?;
         self.orderedCommands(&space.spaceId)
+    }
+
+    /// Counts the peer control operations this store currently projects.
+    ///
+    /// Projected operations never advance the replication journal, so this
+    /// count is the cheap local signal that this device learned authority
+    /// changes through relaying and owes its peers a projection exchange.
+    #[allow(non_snake_case)]
+    pub fn projectionEntryCount(&self) -> Result<usize, String> {
+        Ok(self
+            .controlProjection
+            .data()
+            .map_err(|error| error.to_string())?
+            .entries()
+            .len())
     }
 
     /// Reads an archived local policy without transmitting unrelated Spaces.
@@ -810,6 +857,11 @@ fn controlAuditSummary(
             controlDeviceLabel(profiles, initialAdminNodeId)?
         ),
         NetworkControlCommand::DefineRole { role } => format!("Define role {}", role.displayName),
+        NetworkControlCommand::UpdateRole { role } => format!("Update role {}", role.displayName),
+        NetworkControlCommand::RemoveRole { roleId } => format!(
+            "Remove role {}",
+            controlRoleLabel(state, roleId).unwrap_or_else(|_| roleId.clone())
+        ),
         NetworkControlCommand::GrantRole { grant: assignment } => format!(
             "Set identity {} on {}",
             controlRoleLabel(state, &assignment.roleId)?,
@@ -829,7 +881,7 @@ fn controlAuditSummary(
                 .collect::<Result<Vec<_>, _>>()?;
             format!("Merge Space {sourceSpaceId}; admit {}", labels.join(", "))
         }
-        NetworkControlCommand::RemoveMember { nodeId } => {
+        NetworkControlCommand::RemoveMember { nodeId, .. } => {
             format!("Remove device {}", controlDeviceLabel(profiles, nodeId)?)
         }
         NetworkControlCommand::DisconnectNode { nodeId } => format!(
@@ -913,6 +965,10 @@ fn validateCommandRecord(record: &NetworkControlCommandRecord) -> Result<(), Str
             validateNodeId(initialAdminNodeId)
         }
         NetworkControlCommand::DefineRole { role } => validateRole(role),
+        NetworkControlCommand::UpdateRole { role } => validateRole(role),
+        NetworkControlCommand::RemoveRole { roleId } => {
+            validateIdentifier("role id", roleId, 120)
+        }
         NetworkControlCommand::GrantRole { grant: assignment } => {
             validateIdentityAssignment(assignment)
         }
@@ -926,7 +982,7 @@ fn validateCommandRecord(record: &NetworkControlCommandRecord) -> Result<(), Str
             Ok(())
         }
         NetworkControlCommand::AdmitMember { nodeId }
-        | NetworkControlCommand::RemoveMember { nodeId }
+        | NetworkControlCommand::RemoveMember { nodeId, .. }
         | NetworkControlCommand::DisconnectNode { nodeId } => validateNodeId(nodeId),
         NetworkControlCommand::PolicyUpdate { policyId, value } => {
             validateIdentifier("policy id", policyId, 160)?;
@@ -998,6 +1054,54 @@ fn authorizeAndApplyCommand(
                 requireGlobalCapability(state, &record.issuerNodeId, capability)?;
             }
             state.roles.insert(role.roleId.clone(), role.clone());
+            Ok(())
+        }
+        NetworkControlCommand::UpdateRole { role } => {
+            requireGlobalCapability(
+                state,
+                &record.issuerNodeId,
+                NETWORK_IDENTITY_MANAGE_CAPABILITY,
+            )?;
+            if builtinRoles().contains_key(&role.roleId) {
+                return Err("built-in roles cannot be redefined".to_string());
+            }
+            if !state.roles.contains_key(&role.roleId) {
+                return Err(format!(
+                    "network control role does not exist: {}",
+                    role.roleId
+                ));
+            }
+            for capability in &role.capabilities {
+                requireGlobalCapability(state, &record.issuerNodeId, capability)?;
+            }
+            state.roles.insert(role.roleId.clone(), role.clone());
+            Ok(())
+        }
+        NetworkControlCommand::RemoveRole { roleId } => {
+            requireGlobalCapability(
+                state,
+                &record.issuerNodeId,
+                NETWORK_IDENTITY_MANAGE_CAPABILITY,
+            )?;
+            if builtinRoles().contains_key(roleId) {
+                return Err("built-in roles cannot be removed".to_string());
+            }
+            if !state.roles.contains_key(roleId) {
+                return Err(format!("network control role does not exist: {roleId}"));
+            }
+            // Members keep an identity at all times: devices still assigned
+            // to the removed role fall back to the default user identity,
+            // mirroring the RevokeRole guard.
+            let reassignedNodeIds: Vec<String> = state
+                .deviceIdentityIds
+                .iter()
+                .filter(|(_, identityId)| *identityId == roleId)
+                .map(|(nodeId, _)| nodeId.clone())
+                .collect();
+            for nodeId in reassignedNodeIds {
+                state.deviceIdentityIds.insert(nodeId, "user".to_string());
+            }
+            state.roles.remove(roleId);
             Ok(())
         }
         NetworkControlCommand::GrantRole { grant: assignment } => {
@@ -1082,7 +1186,7 @@ fn authorizeAndApplyCommand(
             }
             Ok(())
         }
-        NetworkControlCommand::RemoveMember { nodeId } => {
+        NetworkControlCommand::RemoveMember { nodeId, .. } => {
             requireCapability(
                 state,
                 &record.issuerNodeId,

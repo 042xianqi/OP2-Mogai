@@ -6,8 +6,8 @@
  */
 
 // Import types that will be used in global declarations
-import { Edge as EdgeType, Io as IoType } from './edge';
-import { ToolReturnType, ToolCatalogEntry } from './core';
+import { DeviceEdge, DeviceIo } from './edge';
+import { ToolReturnType, ToolCatalogEntry, ToolCatalog, DeviceToolOptions } from './core';
 import {
     JavaBridgeApi as JavaBridgeApiType,
     JavaBridgeClass as JavaBridgeClassType,
@@ -286,8 +286,29 @@ declare global {
         formatDate(date?: Date | string): string;
     };
 
+    /** Explicit-device tool view, with the same namespace overloads and result types. */
+    interface DeviceTools {
+        Files: typeof FilesType;
+        Net: typeof NetType;
+        System: typeof SystemType;
+        SoftwareSettings: typeof SoftwareSettingsType;
+        Chat: typeof ChatType;
+        Models: typeof ModelsType;
+        Tts: typeof TtsType;
+        Theme: typeof ThemeType;
+        Catalog: typeof CatalogType;
+        Storage: typeof StorageType;
+        Edge: DeviceEdge;
+        Io: DeviceIo;
+        call<T extends string>(name: T, params?: Record<string, unknown>): Promise<ToolReturnType<T>>;
+        catalog(): Promise<ToolCatalog>;
+        /** Cancels this view's pending calls; subsequent calls remain available. */
+        cancel(): void;
+    }
+
     // Tools namespace available globally
     const Tools: {
+        device(nodeId: string, options?: DeviceToolOptions): DeviceTools;
         Files: typeof FilesType;
         Net: typeof NetType;
         System: typeof SystemType;
@@ -298,8 +319,6 @@ declare global {
         Catalog: typeof CatalogType;
         UI: typeof UIType;
         Chat: typeof ChatType;
-        Edge: typeof EdgeType;
-        Io: typeof IoType;
         Storage: typeof StorageType;
     };
 

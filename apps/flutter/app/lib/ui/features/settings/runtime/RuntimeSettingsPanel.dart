@@ -437,20 +437,25 @@ class _RuntimeSettingsPanelState extends State<RuntimeSettingsPanel>
   /// link-layer entry a relayed member can always run: pairing it adds this
   /// device's own edge and needs no Space capability, which is why it stays
   /// outside the capability gates below.
+  ///
+  /// Isolation is a single slot derived from `disconnectedNodeIds`, matching
+  /// the TUI device manager: a quarantined device only offers the lift action,
+  /// an unrestricted one only the isolate action - never both at once.
   List<Widget> _managedDeviceActions(
     AppLocalizations l10n,
     generated.RuntimeDeviceSpaceDevice device, {
     bool offerDirectLink = false,
   }) {
+    final isolated = _disconnectedDeviceIds.contains(device.deviceId);
     return <Widget>[
-      if (offerDirectLink && !_disconnectedDeviceIds.contains(device.deviceId))
+      if (offerDirectLink && !isolated)
         MenuItemButton(
           onPressed: _busy
               ? null
               : () => unawaited(_connectDirectly(device, l10n)),
           child: Text(l10n.deviceSpaceConnectDirect),
         ),
-      if (_localHasCapability('network.members.join'))
+      if (isolated && _localHasCapability('network.members.join'))
         MenuItemButton(
           onPressed: () => _runDeviceCommand(
             () => _clients.server.runtimeRemoteLinkService
@@ -475,7 +480,7 @@ class _RuntimeSettingsPanelState extends State<RuntimeSettingsPanel>
           onPressed: () => unawaited(_assignMemberIdentity(device, l10n)),
           child: Text(l10n.settingsRuntimeControlAssignIdentity),
         ),
-      if (_localHasCapability('network.connections.disconnect'))
+      if (!isolated && _localHasCapability('network.connections.disconnect'))
         MenuItemButton(
           onPressed: () => _runDeviceCommand(
             () => _clients.server.runtimeRemoteLinkService

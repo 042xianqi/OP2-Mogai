@@ -31,7 +31,8 @@ pub async fn run() -> Result<(), String> {
         LinkDeviceInfo {
             platform: "pb_sbc01_h3".to_string(),
             model: PB_SBC01_H3_BOARD_ID.to_string(),
-        },
+        pairingIncarnation: None,
+    },
     ))
     .await?;
 

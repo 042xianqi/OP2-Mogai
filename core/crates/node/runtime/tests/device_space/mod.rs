@@ -67,6 +67,12 @@ mod policy_contracts {
         "/tests/device_space/policy_contracts.rs"
     ));
 }
+mod revocation_notice {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/device_space/revocation_notice.rs"
+    ));
+}
 mod approving_exit {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -83,6 +89,12 @@ mod reconcile_protocol {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/device_space/reconcile_protocol.rs"
+    ));
+}
+mod sync_idle_gate {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/device_space/sync_idle_gate.rs"
     ));
 }
 mod convergence_properties {

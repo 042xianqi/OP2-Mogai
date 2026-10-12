@@ -68,7 +68,8 @@ pub(crate) fn startup_device_info(
             .getDeviceInfo()
             .map_err(|error| error.to_string())?
             .model,
-    })
+    pairingIncarnation: None,
+})
 }
 
 /// Resolves Windows storage roots from the native storage host.

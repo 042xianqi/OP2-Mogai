@@ -2126,10 +2126,12 @@ fn dispatchStructuredToolCall(
             reject: false,
         })
     };
+    let mut arguments = arguments;
+    let device = if arguments.len() == 5 { arguments.pop() } else { None };
     let [toolType, toolName, params, callId]: [Value; 4] = match arguments.try_into() {
         Ok(arguments) => arguments,
         Err(_) => {
-            fail("Structured tool call requires type, name, params and owning call ID".to_string());
+            fail("Structured tool call requires type, name, params, owning call ID and optional device metadata".to_string());
             return;
         }
     };
@@ -2153,16 +2155,32 @@ fn dispatchStructuredToolCall(
         Ok(timing) => timing,
         Err(error) => { fail(error.to_string()); return; }
     };
-    let request = match JsHostOperations::parseToolCallValue(toolType, toolName, params) {
+    let mut request = match JsHostOperations::parseToolCallValue(toolType, toolName, params) {
         Ok(request) => request,
         Err(error) => {
             fail(error);
             return;
         }
     };
+    if let Some(device) = device {
+        let metadata = serde_json::from_value::<operit_plugin_sdk::javascript::JsDeviceToolCall>(device)
+            .map_err(|error| format!("Invalid device metadata: {error}"))
+            .and_then(|metadata| { metadata.validate()?; Ok(metadata) });
+        match metadata {
+            Ok(metadata) => request.device = Some(metadata),
+            Err(error) => { fail(error); return; }
+        }
+    }
     let Some(executionHost) = executionHost else {
         fail("JavaScript execution host is unavailable".to_string());
         return;
+    };
+    // Reserve device invocations before scheduling so an immediate cancel cannot overtake
+    // the original call. Execution itself remains asynchronous on the host scheduler.
+    let completion = if request.device.is_some() {
+        executionHost.execute_tool_call(request)
+    } else {
+        Box::pin(async move { executionHost.execute_tool_call(request).await })
     };
     let sink = callbackSink.clone();
     let scheduled = defaultHostRuntimeTaskSchedulerHost().scheduleHostRuntimeAsyncTask(
@@ -2171,7 +2189,7 @@ fn dispatchStructuredToolCall(
             Box::pin(async move {
                 let result = async {
                     if let Some(timing) = &timing { timing.mark("schedulerWaitMs")?; }
-                    let result = executionHost.execute_tool_call(request).await;
+                    let result = completion.await;
                     let successful = result.success;
                     if let Some(timing) = &timing { timing.mark("hostExecuteMs")?; }
                     let value = JsHostOperations::toolExecutionResultValue(result);

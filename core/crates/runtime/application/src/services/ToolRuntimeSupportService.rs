@@ -15,7 +15,7 @@ use operit_providers::chat::llmprovider::AIService::SendMessageRequest;
 use operit_providers::chat::EnhancedAIService::EnhancedAIService;
 use operit_providers::runtime_support::ProviderRuntimeContext;
 use operit_tools::runtime_support::{
-    CachedMcpToolInfo, EdgeToolRuntime, CoreNodeToolRuntime, CoreRouteChangeHandler, CoreRouteResumeContext,
+    CachedMcpToolInfo, CoreNodeToolRuntime, CoreRouteChangeHandler, CoreRouteResumeContext,
     RuntimeBundledExternalSkillAsset, RuntimeChatCallRequest, RuntimeChatSendRequest,
     RuntimeChatSlot, RuntimeCoreNodeRouteState, RuntimePluginAsset, RuntimeSkillCatalogEntry,
     RuntimeStructuredEditAction, RuntimeStructuredEditOperation, ToolRuntimeSupport,
@@ -54,7 +54,7 @@ impl ToolRuntimeSupportService {
             runtimeBindings: OnceLock::new(),
             chatHistoryManager: OnceLock::new(),
             coreNodeToolRuntime: RwLock::new(None),
-            edgeToolRuntime: OnceLock::new(),
+            deviceToolRuntime: OnceLock::new(),
             coreRouteChangeHandler: RwLock::new(None),
         })
     }
@@ -74,7 +74,7 @@ pub struct RuntimeToolSupport {
     runtimeBindings: OnceLock<RuntimeToolBindings>,
     chatHistoryManager: OnceLock<operit_store::repository::ChatHistoryManager::ChatHistoryManager>,
     coreNodeToolRuntime: RwLock<Option<Arc<dyn CoreNodeToolRuntime>>>,
-    edgeToolRuntime: OnceLock<Arc<dyn EdgeToolRuntime>>,
+    deviceToolRuntime: OnceLock<Arc<dyn operit_tools::tools::DeviceTools::DeviceToolRuntime>>,
     coreRouteChangeHandler: RwLock<Option<CoreRouteChangeHandler>>,
 }
 
@@ -128,14 +128,15 @@ impl RuntimeToolSupport {
 }
 
 impl ToolRuntimeSupport for RuntimeToolSupport {
-    fn bindEdgeToolRuntime(&self, runtime: Arc<dyn EdgeToolRuntime>) -> Result<(), String> {
-        self.edgeToolRuntime.set(runtime).map_err(|_| "Edge tool routing is already initialized".into())
+    fn bindDeviceToolRuntime(&self, runtime: Arc<dyn operit_tools::tools::DeviceTools::DeviceToolRuntime>) -> Result<(), String> {
+        self.deviceToolRuntime.set(runtime).map_err(|_| "Device tool routing is already initialized".into())
     }
-    fn executeEdgeTool(&self, nodeId: String, request: operit_link::CoreCallRequest)
-        -> operit_plugin_sdk::javascript::JsExecutionCompletion<Result<serde_json::Value, String>> {
-        match self.edgeToolRuntime.get() {
-            Some(runtime) => runtime.execute(nodeId, request),
-            None => Box::pin(async {Err("Edge tool routing is not initialized".into())}),
+    fn executeDeviceTool(&self, request: operit_plugin_sdk::javascript::JsToolCallRequest,
+        preflight: Option<operit_tools::tools::DeviceTools::DeviceToolPreflight>)
+        -> operit_plugin_sdk::javascript::JsExecutionCompletion<operit_plugin_sdk::javascript::JsToolCallResult> {
+        match self.deviceToolRuntime.get() {
+            Some(runtime) => runtime.dispatch_with_preflight(request, preflight),
+            None => Box::pin(async { operit_tools::tools::DeviceTools::failure("Device tool routing is not initialized") }),
         }
     }
 

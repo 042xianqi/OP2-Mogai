@@ -1,13 +1,16 @@
 //! Core plugin-to-Edge port execution; no second plugin runtime or transport client.
+use crate::runtime_support::ToolRuntimeSupport;
 use crate::ConversationMarkupManager::ToolResult;
 use crate::ToolExecutionManager::{
     AITool, AsyncToolExecutor, ToolAccessSpec, ToolBoundary, ToolEffect, ToolInvocationFuture,
     ToolValidationResult,
 };
-use crate::runtime_support::ToolRuntimeSupport;
-use operit_link::{CoreCallRequest, toCoreValue};
+use operit_link::{toCoreValue, CoreCallRequest};
+use operit_plugin_sdk::javascript::{
+    JsDeviceToolAction, JsDeviceToolCall, JsToolCallRequest, JsToolCallResultData,
+};
 use operit_plugin_sdk::js_sdk::edge::{EdgeInterfaceInfo, IoInterfaceInfo};
-use operit_plugin_sdk::js_sdk::results::{EdgePortResultData, ToolResultData, stringResultData};
+use operit_plugin_sdk::js_sdk::results::{stringResultData, EdgePortResultData, ToolResultData};
 use std::sync::Arc;
 
 pub const MAX_ARGS_BYTES: usize = 1024;
@@ -112,6 +115,43 @@ fn prepare(tool: &AITool, io: bool) -> Result<(String, CoreCallRequest, ToolEffe
     );
     Ok((node.to_owned(), request, effect))
 }
+/// Maps a device-selected hardware call to the validated AI/CLI firmware surface.
+/// Device selection replaces node_id rather than permitting a second destination.
+pub fn prepare_device_port(
+    node: &str,
+    request: &JsToolCallRequest,
+) -> Result<(CoreCallRequest, ToolEffect), String> {
+    let io = match request.qualified_tool_name().as_str() {
+        "edge_execute" => false,
+        "io_execute" => true,
+        _ => return Err("Only Edge.execute and Io.execute select hardware ports".into()),
+    };
+    if request.parameters.contains_key("node_id") {
+        return Err("A device-selected hardware call cannot override node_id".into());
+    }
+    let mut tool = crate::tools::DeviceTools::tool_from_request(request);
+    tool.parameters
+        .push(crate::ToolExecutionManager::ToolParameter {
+            name: "node_id".into(),
+            value: node.into(),
+        });
+    let (_, call, effect) = prepare(&tool, io)?;
+    Ok((call, effect))
+}
+
+/// Enforces the same result limits for AI/CLI and device-selected firmware calls.
+pub fn port_result(node: String, data: serde_json::Value) -> Result<EdgePortResultData, String> {
+    if serde_json::to_vec(&data)
+        .map(|v| v.len() > MAX_REPLY_BYTES)
+        .unwrap_or(true)
+    {
+        return Err(
+            "Edge result exceeds 4096 bytes; chunked/streaming I/O is not implemented yet".into(),
+        );
+    }
+    Ok(EdgePortResultData { nodeId: node, data })
+}
+
 fn failure(tool: &AITool, error: String) -> ToolResult {
     ToolResult {
         toolName: tool.name.clone(),
@@ -143,32 +183,85 @@ impl AsyncToolExecutor for EdgePortToolExecutor {
     fn invokeAndStreamAsync<'a>(&'a mut self, tool: &'a AITool, context: &'a crate::ToolExecutionManager::ToolInvocationContext) -> ToolInvocationFuture<'a> {
         Box::pin(async move {
             let result = match prepare(tool, self.io) {
-                Ok((node, request, _)) => {
-                    match self.runtime.executeEdgeTool(node.clone(), request).await {
-                        Ok(data) => {
-                            if serde_json::to_vec(&data)
-                                .map(|v| v.len() > MAX_REPLY_BYTES)
-                                .unwrap_or(true)
-                            {
-                                failure(tool,"Edge result exceeds 4096 bytes; chunked/streaming I/O is not implemented yet".into())
-                            } else {
-                                ToolResult {
-                                    toolName: tool.name.clone(),
-                                    success: true,
-                                    result: ToolResultData::EdgePortResultData(
-                                        EdgePortResultData { nodeId: node, data },
-                                    ),
-                                    error: None,
-                                }
+                Ok((node, _, _)) => {
+                    let routeState = self.runtime.coreNodeRouteState().ok();
+                    let node = match canonicalEdgeNodeReference(routeState.as_ref(), &node) {
+                        Ok(canonicalNode) => canonicalNode,
+                        Err(error) => return vec![failure(tool, error)],
+                    };
+                    let request = JsToolCallRequest {
+                        tool_type: "default".into(),
+                        tool_name: tool.name.clone(),
+                        parameters: tool
+                            .parameters
+                            .iter()
+                            .filter(|p| p.name != "node_id")
+                            .map(|p| {
+                                (
+                                    p.name.clone(),
+                                    serde_json::from_str(&p.value)
+                                        .unwrap_or_else(|_| p.value.clone().into()),
+                                )
+                            })
+                            .collect(),
+                        device: Some(JsDeviceToolCall {
+                            node_id: node,
+                            invocation_id: operit_link::nextCoreRouteRequestId("devicePort"),
+                            action: JsDeviceToolAction::Port,
+                            timeout_ms: 120_000,
+                        }),
+                    };
+                    let result = self.runtime.executeDeviceTool(request, None).await;
+                    if !result.success {
+                        failure(
+                            tool,
+                            result.error.unwrap_or_else(|| "Device port failed".into()),
+                        )
+                    } else if let JsToolCallResultData::Value(value) = result.data {
+                        match serde_json::from_value(value) {
+                            Ok(port) => ToolResult {
+                                toolName: tool.name.clone(),
+                                success: true,
+                                result: ToolResultData::EdgePortResultData(port),
+                                error: None,
+                            },
+                            Err(error) => {
+                                failure(tool, format!("Invalid device port result: {error}"))
                             }
                         }
-                        Err(error) => failure(tool, error),
+                    } else {
+                        failure(tool, "Invalid binary hardware result".into())
                     }
                 }
                 Err(error) => failure(tool, error),
             };
             vec![result]
         })
+    }
+}
+
+/// Canonicalizes one Edge node reference through the live route snapshot.
+///
+/// A unique name or id prefix becomes the canonical node id. An ambiguous
+/// reference fails instead of guessing. Without a snapshot, or for a reference
+/// the snapshot cannot see, the raw value keeps the previous pass-through: the
+/// router still owns membership, policy, and reachability errors for it.
+#[allow(non_snake_case)]
+fn canonicalEdgeNodeReference(
+    routeState: Option<&crate::runtime_support::RuntimeCoreNodeRouteState>,
+    node: &str,
+) -> Result<String, String> {
+    use crate::runtime_support::{formatCoreNodeReferenceCandidates, CoreNodeReferenceMatch};
+    let Some(state) = routeState else {
+        return Ok(node.to_string());
+    };
+    match state.resolveNodeReference(node) {
+        CoreNodeReferenceMatch::Resolved(resolved) => Ok(resolved.nodeId.clone()),
+        CoreNodeReferenceMatch::Unknown => Ok(node.to_string()),
+        CoreNodeReferenceMatch::Ambiguous(candidates) => Err(format!(
+            "Edge node reference is ambiguous: {node}; candidates: {}",
+            formatCoreNodeReferenceCandidates(&candidates)
+        )),
     }
 }
 
@@ -195,6 +288,38 @@ mod tests {
             ],
         }
     }
+    #[test]
+    fn device_ports_validate_the_selected_destination_and_result_bound() {
+        let mut request = JsToolCallRequest {
+            tool_type: "default".into(),
+            tool_name: "edge_execute".into(),
+            parameters: std::collections::BTreeMap::from([
+                (
+                    "interface_info".into(),
+                    serde_json::json!({"pluginId":"device.status","action":"read"}),
+                ),
+                ("args".into(), serde_json::json!({})),
+            ]),
+            device: None,
+        };
+        assert!(prepare_device_port("edge-node", &request).is_ok());
+        request
+            .parameters
+            .insert("node_id".into(), "another-node".into());
+        assert!(prepare_device_port("edge-node", &request)
+            .unwrap_err()
+            .contains("override"));
+        request.parameters.remove("node_id");
+        request.tool_name = "other_package:edge_execute".into();
+        assert!(prepare_device_port("edge-node", &request).is_err());
+        assert!(port_result("edge-node".into(), serde_json::json!({"ok":true})).is_ok());
+        assert!(port_result(
+            "edge-node".into(),
+            serde_json::json!({"data":"x".repeat(MAX_REPLY_BYTES)})
+        )
+        .is_err());
+    }
+
     #[test]
     fn explicit_node_ports_only_and_correct_effect() {
         let t = tool(
@@ -291,5 +416,67 @@ mod tests {
         t.parameters[2].value = "{}".into();
         t.parameters[0].value = "".into();
         assert!(prepare(&t, false).is_err());
+    }
+
+    fn routeState(nodes: Vec<(&str, &str)>) -> crate::runtime_support::RuntimeCoreNodeRouteState {
+        crate::runtime_support::RuntimeCoreNodeRouteState {
+            currentNodeId: "local".to_string(),
+            nodes: nodes
+                .into_iter()
+                .map(
+                    |(nodeId, displayName)| crate::runtime_support::RuntimeCoreNodeStatus {
+                        nodeId: nodeId.to_string(),
+                        displayName: displayName.to_string(),
+                        userName: String::new(),
+                        platform: "esp32".to_string(),
+                        model: String::new(),
+                        reachable: true,
+                        relayHops: None,
+                        relayPath: None,
+                    },
+                )
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn edge_node_names_and_prefixes_resolve_to_canonical_ids() {
+        let state = routeState(vec![
+            ("core-1791589326795-13765763d4b74d4ab76648f26ee874be", "cas"),
+            (
+                "core-1791589400000-58f0d4ee0efc47f59a1f1b4d514b7af0",
+                "edge-board",
+            ),
+        ]);
+        assert_eq!(
+            canonicalEdgeNodeReference(Some(&state), "edge-board").unwrap(),
+            "core-1791589400000-58f0d4ee0efc47f59a1f1b4d514b7af0"
+        );
+        assert_eq!(
+            canonicalEdgeNodeReference(Some(&state), "core-17915894").unwrap(),
+            "core-1791589400000-58f0d4ee0efc47f59a1f1b4d514b7af0"
+        );
+    }
+
+    #[test]
+    fn unseen_edge_references_keep_the_router_pass_through() {
+        let state = routeState(vec![("core-1", "cas")]);
+        assert_eq!(
+            canonicalEdgeNodeReference(Some(&state), "core-remote-edge").unwrap(),
+            "core-remote-edge"
+        );
+        assert_eq!(
+            canonicalEdgeNodeReference(None, "edge-two").unwrap(),
+            "edge-two"
+        );
+    }
+
+    #[test]
+    fn ambiguous_edge_names_fail_with_candidates() {
+        let state = routeState(vec![("core-1", "board"), ("core-2", "board")]);
+        let error = canonicalEdgeNodeReference(Some(&state), "board").unwrap_err();
+        assert!(error.contains("ambiguous"), "{error}");
+        assert!(error.contains("board (core-1)"), "{error}");
+        assert!(error.contains("board (core-2)"), "{error}");
     }
 }

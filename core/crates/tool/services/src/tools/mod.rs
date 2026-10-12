@@ -56,3 +56,6 @@ pub mod skill_runtime;
 
 #[path = "EdgePortTool.rs"]
 pub mod EdgePortTool;
+
+#[path = "DeviceTools.rs"]
+pub mod DeviceTools;

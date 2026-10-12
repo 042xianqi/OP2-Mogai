@@ -16,8 +16,9 @@ import 'SpaceIdentityLabels.dart';
 
 /// Shows the local identity and the administrator controls it unlocks.
 ///
-/// The panel owns identities, assignment, and audit only: devices and their
-/// commands live in the device section, so no device list is duplicated here.
+/// The panel owns identity definitions and audit only: devices and their
+/// commands - identity assignment included - live in the device section, so
+/// no device list is duplicated here.
 class NetworkControlPanel extends StatefulWidget {
   /// Creates the identity and permission panel over the generated runtime clients.
   const NetworkControlPanel({
@@ -138,10 +139,6 @@ class _NetworkControlPanelState extends State<NetworkControlPanel> {
     final canManageIdentities = _hasCapability(
       topology,
       'network.identity.manage',
-    );
-    final canAssignIdentities = _hasCapability(
-      topology,
-      'network.identity.assign',
     );
     final canReadAudit = _hasCapability(topology, 'network.audit.read');
     final refresh = IconButton(
@@ -268,6 +265,28 @@ class _NetworkControlPanelState extends State<NetworkControlPanel> {
     generated.NetworkControlRole role,
     AppLocalizations l10n,
   ) {
+    final topology = _topology;
+    final editable =
+        topology != null &&
+        _hasCapability(topology, 'network.identity.manage') &&
+        !_builtinRoleIds.contains(role.roleId);
+    final actions = editable
+        ? Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              IconButton(
+                tooltip: l10n.settingsRuntimeControlEditRole,
+                icon: const Icon(Icons.edit_outlined, size: 20),
+                onPressed: () => _editIdentity(role, l10n),
+              ),
+              IconButton(
+                tooltip: l10n.settingsRuntimeControlDeleteRole,
+                icon: const Icon(Icons.delete_outline, size: 20),
+                onPressed: () => _deleteIdentity(role, l10n),
+              ),
+            ],
+          )
+        : null;
     return Padding(
       key: ValueKey('space-role-${role.roleId}'),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -284,7 +303,8 @@ class _NetworkControlPanelState extends State<NetworkControlPanel> {
           );
           final grantCount = spaceCapabilityValues(role.capabilities).length;
           final textScale = MediaQuery.textScalerOf(context).scale(12) / 12;
-          final minimumWidth = (grantCount <= 1 ? 240 : 320) * textScale;
+          final minimumWidth =
+              (grantCount <= 1 ? 240 : 320) * textScale + (editable ? 96 : 0);
           if (constraints.maxWidth >= minimumWidth) {
             return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -292,15 +312,100 @@ class _NetworkControlPanelState extends State<NetworkControlPanel> {
                 SizedBox(width: 96 * textScale, child: name),
                 const SizedBox(width: 12),
                 Expanded(child: capabilities),
+                if (actions != null) actions,
               ],
             );
           }
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[name, const SizedBox(height: 6), capabilities],
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Expanded(child: name),
+                  if (actions != null) actions,
+                ],
+              ),
+              const SizedBox(height: 6),
+              capabilities,
+            ],
           );
         },
       ),
+    );
+  }
+
+  /// Opens the identity editor pre-filled for updating one existing role.
+  Future<void> _editIdentity(
+    generated.NetworkControlRole role,
+    AppLocalizations l10n,
+  ) async {
+    final topology = _topology;
+    if (topology == null) {
+      return;
+    }
+    final result = await _IdentityEditor.show(
+      context,
+      title: l10n.settingsRuntimeControlEditRole,
+      choices: spaceCapabilityChoices(l10n)
+          .where((choice) => _hasCapability(topology, choice.value))
+          .toList(growable: false),
+      initialName: role.displayName,
+      initialCapabilities: spaceCapabilityValues(role.capabilities),
+    );
+    if (result == null) {
+      return;
+    }
+    await _runCommand(
+      () =>
+          widget.clients.server.runtimeRemoteLinkService.updateDeviceSpaceRole(
+            role: generated.NetworkControlRole(
+              roleId: role.roleId,
+              displayName: result.name,
+              capabilities: result.capabilities,
+            ),
+          ),
+      feedback: l10n.settingsRuntimeControlEditRole,
+    );
+  }
+
+  /// Confirms and removes one custom role.
+  Future<void> _deleteIdentity(
+    generated.NetworkControlRole role,
+    AppLocalizations l10n,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(
+          l10n.settingsRuntimeControlDeleteRoleTitle(
+            spaceIdentityDisplayName(role.displayName, l10n),
+          ),
+        ),
+        content: Text(l10n.settingsRuntimeControlDeleteRoleMessage),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(
+              MaterialLocalizations.of(dialogContext).cancelButtonLabel,
+            ),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(dialogContext).colorScheme.error,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(MaterialLocalizations.of(dialogContext).okButtonLabel),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      return;
+    }
+    await _runCommand(
+      () => widget.clients.server.runtimeRemoteLinkService
+          .removeDeviceSpaceRole(roleId: role.roleId),
+      feedback: l10n.settingsRuntimeControlDeleteRole,
     );
   }
 
@@ -798,32 +903,37 @@ class _IdentityDefinition {
   final List<String> capabilities;
 }
 
-/// Represents the submitted device identity assignment.
-class _IdentityAssignment {
-  /// Creates one identity assignment result.
-  const _IdentityAssignment({required this.deviceId, required this.identityId});
-
-  final String deviceId;
-  final String identityId;
-}
-
 /// Edits an identity name and its human-readable capabilities.
 class _IdentityEditor extends StatefulWidget {
   /// Creates the identity editor.
-  const _IdentityEditor({required this.title, required this.choices});
+  const _IdentityEditor({
+    required this.title,
+    required this.choices,
+    this.initialName,
+    this.initialCapabilities,
+  });
 
   final String title;
   final List<SpaceCapabilityChoice> choices;
+  final String? initialName;
+  final List<String>? initialCapabilities;
 
   /// Opens the editor and returns a validated definition.
   static Future<_IdentityDefinition?> show(
     BuildContext context, {
     required String title,
     required List<SpaceCapabilityChoice> choices,
+    String? initialName,
+    List<String>? initialCapabilities,
   }) {
     return showDialog<_IdentityDefinition>(
       context: context,
-      builder: (_) => _IdentityEditor(title: title, choices: choices),
+      builder: (_) => _IdentityEditor(
+        title: title,
+        choices: choices,
+        initialName: initialName,
+        initialCapabilities: initialCapabilities,
+      ),
     );
   }
 
@@ -841,8 +951,11 @@ class _IdentityEditorState extends State<_IdentityEditor> {
   @override
   void initState() {
     super.initState();
-    _name = TextEditingController();
-    _selected = <String>{};
+    _name = TextEditingController(text: widget.initialName ?? '');
+    // Capabilities the current administrator cannot see stay selected so an
+    // edit never silently narrows a role the issuer holds no capability for;
+    // the replicated command still rejects unauthorized capability grants.
+    _selected = <String>{...?widget.initialCapabilities};
   }
 
   /// Releases the editor controls.
@@ -927,180 +1040,6 @@ class _IdentityEditorState extends State<_IdentityEditor> {
   }
 }
 
-/// Selects one device and one identity without exposing internal identifiers.
-class _IdentityAssignmentEditor extends StatefulWidget {
-  /// Creates the assignment editor.
-  const _IdentityAssignmentEditor({
-    required this.title,
-    required this.devices,
-    required this.identities,
-  });
-
-  final String title;
-  final List<_Choice> devices;
-  final List<_Choice> identities;
-
-  /// Opens the assignment editor.
-  static Future<_IdentityAssignment?> show(
-    BuildContext context, {
-    required String title,
-    required List<_Choice> devices,
-    required List<_Choice> identities,
-  }) {
-    return showDialog<_IdentityAssignment>(
-      context: context,
-      builder: (_) => _IdentityAssignmentEditor(
-        title: title,
-        devices: devices,
-        identities: identities,
-      ),
-    );
-  }
-
-  /// Creates the assignment editor state.
-  @override
-  State<_IdentityAssignmentEditor> createState() =>
-      _IdentityAssignmentEditorState();
-}
-
-/// Owns the assignment dropdown selections.
-class _IdentityAssignmentEditorState extends State<_IdentityAssignmentEditor> {
-  String? _deviceId;
-  String? _identityId;
-
-  /// Submits a complete device identity assignment.
-  void _submit() {
-    final deviceId = _deviceId;
-    final identityId = _identityId;
-    if (deviceId == null || identityId == null) {
-      return;
-    }
-    Navigator.of(
-      context,
-    ).pop(_IdentityAssignment(deviceId: deviceId, identityId: identityId));
-  }
-
-  /// Builds the assignment dialog.
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.title),
-      content: SizedBox(
-        width: 420,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            OperitFormStyles.dropdownButtonFormField<String>(
-              context,
-              initialValue: _deviceId,
-              isExpanded: true,
-              decoration: InputDecoration(
-                labelText: AppLocalizations.of(
-                  context,
-                )!.settingsRuntimeControlDevice,
-                border: OutlineInputBorder(),
-              ),
-              items: widget.devices
-                  .map(
-                    (choice) => DropdownMenuItem<String>(
-                      value: choice.value,
-                      child: Text(
-                        choice.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  )
-                  .toList(growable: false),
-              onChanged: (value) => setState(() => _deviceId = value),
-            ),
-            const SizedBox(height: 12),
-            OperitFormStyles.dropdownButtonFormField<String>(
-              context,
-              initialValue: _identityId,
-              isExpanded: true,
-              decoration: InputDecoration(
-                labelText: AppLocalizations.of(
-                  context,
-                )!.settingsRuntimeControlIdentities,
-                border: OutlineInputBorder(),
-              ),
-              items: widget.identities
-                  .map(
-                    (choice) => DropdownMenuItem<String>(
-                      value: choice.value,
-                      child: Text(
-                        choice.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  )
-                  .toList(growable: false),
-              onChanged: (value) => setState(() => _identityId = value),
-            ),
-          ],
-        ),
-      ),
-      actions: <Widget>[
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Text(MaterialLocalizations.of(context).cancelButtonLabel),
-        ),
-        FilledButton(
-          onPressed: _submit,
-          child: Text(MaterialLocalizations.of(context).okButtonLabel),
-        ),
-      ],
-    );
-  }
-}
-
-/// Maps device identifiers to readable labels while preserving duplicate names.
-class _DeviceDirectory {
-  /// Builds the directory from one device snapshot.
-  _DeviceDirectory(Iterable<generated.RuntimeDeviceSpaceDevice> devices) {
-    final counts = <String, int>{};
-    final occurrences = <String, int>{};
-    final values = devices.toList(growable: false);
-    for (final device in values) {
-      final base = _deviceBaseName(device);
-      counts[base] = (counts[base] ?? 0) + 1;
-    }
-    for (final device in values) {
-      final base = _deviceBaseName(device);
-      final occurrence = (occurrences[base] ?? 0) + 1;
-      occurrences[base] = occurrence;
-      _labels[device.deviceId] = counts[base] == 1
-          ? base
-          : '$base · 设备 $occurrence';
-      _ids[device.deviceId] = device.deviceId;
-    }
-  }
-
-  final Map<String, String> _labels = <String, String>{};
-  final Map<String, String> _ids = <String, String>{};
-
-  /// Returns the readable label for one device.
-  String label(String deviceId) => _labels[deviceId]!;
-
-  /// Returns the stable runtime identifier shown beside one device name.
-  String id(String deviceId) => _ids[deviceId]!;
-
-  /// Returns a selection label that disambiguates duplicate device names.
-  String optionLabel(String deviceId) => '${label(deviceId)} (${id(deviceId)})';
-}
-
-/// Builds a readable device label without protocol identifiers.
-String _deviceBaseName(generated.RuntimeDeviceSpaceDevice device) {
-  return <String>[
-    device.deviceName,
-    if (device.userName.trim().isNotEmpty) device.userName,
-    if (device.platform.trim().isNotEmpty) device.platform,
-    if (device.model.trim().isNotEmpty) device.model,
-  ].join(' · ');
-}
-
 /// Returns the identity of the current device, when the Space assigned one.
 generated.RuntimeDeviceSpaceIdentity? _localIdentityOf(
   generated.RuntimeDeviceSpaceTopology topology,
@@ -1123,6 +1062,16 @@ bool _hasCapability(
       (identity.capabilities.contains('*') ||
           identity.capabilities.contains(capability));
 }
+
+/// Role ids seeded by the Space bootstrap; built-in roles cannot be edited or removed.
+const _builtinRoleIds = <String>{
+  'admin',
+  'user',
+  'relay',
+  'storage',
+  'runner',
+  'auditor',
+};
 
 /// Generates an internal assignment identifier for the replicated command.
 String _generatedControlId(String prefix) {

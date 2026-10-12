@@ -36,6 +36,7 @@ fn reviewingRecord(reviewer: &str, targetSpaceId: &str, version: u64) -> join::R
             model: "test".into(),
             coreVersion: None,
             updatedAt: 1,
+            pairingIncarnation: None,
         },
         source: PeerSpaceSnapshot {
             space: CoreSpace {
@@ -52,6 +53,7 @@ fn reviewingRecord(reviewer: &str, targetSpaceId: &str, version: u64) -> join::R
                 model: "test".into(),
                 coreVersion: None,
                 updatedAt: 1,
+                pairingIncarnation: None,
             }],
             controlOperations: Vec::new(),
             topology: Vec::new(),

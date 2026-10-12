@@ -2,7 +2,7 @@
 //! PeerLink 只负责连接和传输；匿名准入、身份校验、配对状态和持久化由 runtime 负责。
 //! 配对使用标准 Link Call，不定义额外消息协议，不设置 HTTP 专用配对接口。
 
-use super::NodeServices::{PairedPeer, PairingPrompt, PendingPairing};
+use super::NodeServices::{PairedPeer, PairingDirection, PairingPrompt, PendingPairing};
 use async_trait::async_trait;
 use operit_link::{
     CoreCallRequest, CoreCallResponse, CoreEvent, CoreEventStream, CoreLinkError,
@@ -107,6 +107,13 @@ pub trait RuntimePeerService: Send + Sync {
     /// 列出本节点已配对的对端；同一对端的传输渠道不另算一个配对身份。
     fn pairedPeers(&self) -> Result<Vec<PairedPeer>, CoreLinkError>;
 
+    /// Uses the current pairing projection without inferring reverse authorization.
+    fn hasPairing(&self, node: &str, direction: PairingDirection) -> Result<bool, CoreLinkError> {
+        Ok(self.pairedPeers()?.iter().any(|peer| {
+            peer.nodeId == node && peer.authorizes(direction)
+        }))
+    }
+
     /// 返回允许本节点主动调用的已配对身份；按节点去重，不把入站授权推导成出站授权。
     /// 多个传输渠道属于同一个身份；调用方看不到端点、会话或密钥。
     fn outboundPeerNodeIds(&self) -> Result<std::collections::BTreeSet<String>, CoreLinkError>;
@@ -128,4 +135,9 @@ pub trait RuntimePeerService: Send + Sync {
     /// 按设备撤销全部入站/出站授权、所有传输渠道及关联凭证；不让用户选择方向。
     /// 这是需要本地管理权限的操作，不属于匿名配对入口。
     async fn removePairedPeer(&self, peerNodeId: &str) -> Result<(), CoreLinkError>;
+
+    /// 同步撤销这些设备的配对凭证（入站/出站授权与关联会话），不等待关闭在用渠道。
+    /// 遗忘必须发生在成员状态变化的那一刻：延迟执行无法区分旧配对与重新配对产生的
+    /// 新配对（记录里没有实例标识），会把重新入网时刚建立的边一起删掉。
+    fn forgetPairingRecords(&self, nodeIds: &[String]) -> Result<(), CoreLinkError>;
 }

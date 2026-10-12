@@ -255,6 +255,53 @@ void main() {
     expect(find.byType(OperitDialogScaffold), findsNothing);
     await dispose(tester, bridge);
   });
+  testWidgets('manual address pairing starts without a token on a LAN address', (
+    tester,
+  ) async {
+    final bridge = DeviceBridge();
+    await mount(tester, bridge);
+    await tester.tap(find.text('添加设备'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('通过地址连接'));
+    await tester.pumpAndSettle();
+    // The token field only hints; it no longer blocks an empty submission -
+    // the receiving core decides by the actual source address.
+    expect(find.text('跨网配对时必填；同网段设备可留空'), findsOneWidget);
+    await tester.enterText(
+      find.byType(TextField).first,
+      'http://192.168.1.2:37195',
+    );
+    await tester.tap(find.text('开始连接'));
+    await tester.pumpAndSettle();
+    expect(bridge.pairingArgs!['address'], 'http://192.168.1.2:37195');
+    expect(bridge.pairingArgs!['token'], isNull);
+    // The flow advanced to the confirmation code without demanding a token;
+    // the address/token fields stay visible but disabled.
+    expect(find.text('配对码'), findsOneWidget);
+    expect(tester.widget<TextField>(find.byType(TextField).at(1)).enabled,
+        isFalse);
+    await dispose(tester, bridge);
+  });
+  testWidgets('manual address pairing forwards a filled token unchanged', (
+    tester,
+  ) async {
+    final bridge = DeviceBridge();
+    await mount(tester, bridge);
+    await tester.tap(find.text('添加设备'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('通过地址连接'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byType(TextField).first,
+      'https://pair.example.com:37195',
+    );
+    await tester.enterText(find.byType(TextField).at(1), 'shared-token');
+    await tester.tap(find.text('开始连接'));
+    await tester.pumpAndSettle();
+    expect(bridge.pairingArgs!['address'], 'https://pair.example.com:37195');
+    expect(bridge.pairingArgs!['token'], 'shared-token');
+    await dispose(tester, bridge);
+  });
   testWidgets('device cards start pairing with the selected peer', (
     tester,
   ) async {

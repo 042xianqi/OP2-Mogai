@@ -2331,6 +2331,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsRuntimePairToken => 'Connection token';
 
   @override
+  String get settingsRuntimePairTokenHint =>
+      'Required off-LAN; leave empty for devices on the same network';
+
+  @override
   String get settingsRuntimePairCode => 'Pairing code';
 
   @override
@@ -2341,6 +2345,10 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsRuntimeBaseUrl => 'Device address';
+
+  @override
+  String get settingsRuntimeTcpAddressHint =>
+      'host:port, for example 192.168.1.10:37195';
 
   @override
   String settingsRuntimeConnectionFailed(String error) {
@@ -3535,9 +3543,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsRuntimeControlIdentityName => 'Identity name';
 
   @override
-  String get settingsRuntimeControlDevice => 'Device';
-
-  @override
   String get settingsRuntimeControlDeviceId => 'Device ID';
 
   @override
@@ -3562,16 +3567,16 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsRuntimeControlRemoveDevice => 'Remove device';
 
   @override
-  String get settingsRuntimeControlDisconnectDevice => 'Disconnect device';
+  String get settingsRuntimeControlDisconnectDevice => 'Isolate device';
 
   @override
   String get settingsRuntimeControlRemoved => 'Removed';
 
   @override
-  String get settingsRuntimeControlDisconnected => 'Disconnected';
+  String get settingsRuntimeControlDisconnected => 'Isolated';
 
   @override
-  String get settingsRuntimeControlAdmitDevice => 'Readmit device';
+  String get settingsRuntimeControlAdmitDevice => 'Lift isolation';
 
   @override
   String get settingsRuntimeControlAllDevices => 'All devices';
@@ -3599,7 +3604,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsRuntimeControlDeviceAdmitted =>
-      'Connection restriction lifted; waiting for the device to reconnect';
+      'Isolation lifted; waiting for the device to reconnect';
 
   @override
   String get settingsRuntimeControlIdentityResetDone =>
@@ -4166,4 +4171,19 @@ class AppLocalizationsEn extends AppLocalizations {
   String settingsAppearanceThemeConfigFailed(String detail) {
     return 'Theme operation failed: $detail';
   }
+
+  @override
+  String get settingsRuntimeControlEditRole => 'Edit role';
+
+  @override
+  String get settingsRuntimeControlDeleteRole => 'Delete role';
+
+  @override
+  String settingsRuntimeControlDeleteRoleTitle(String roleName) {
+    return 'Delete role $roleName?';
+  }
+
+  @override
+  String get settingsRuntimeControlDeleteRoleMessage =>
+      'Devices holding this role fall back to the default user identity.';
 }

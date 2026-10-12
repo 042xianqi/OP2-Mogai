@@ -1138,10 +1138,12 @@
   "settingsRuntimeNoPairedRemote": "No connected devices yet.",
   "settingsRuntimeConnectionInitiatedByOtherDevice": "Connection initiated by the other device",
   "settingsRuntimePairToken": "Connection token",
+  "settingsRuntimePairTokenHint": "Required off-LAN; leave empty for devices on the same network",
   "settingsRuntimePairCode": "Pairing code",
   "settingsRuntimeStartPairing": "Start connection",
   "settingsRuntimeFinishPairing": "Finish connection",
   "settingsRuntimeBaseUrl": "Device address",
+  "settingsRuntimeTcpAddressHint": "host:port, for example 192.168.1.10:37195",
   "settingsRuntimeConnectionFailed": "Device connection failed: {error}",
   "@settingsRuntimeConnectionFailed": {
     "placeholders": {
@@ -1754,7 +1756,6 @@
   "settingsRuntimeControlCapabilities": "Actions this identity can perform",
   "settingsRuntimeControlManagedDevices": "Devices this role can manage (empty = all)",
   "settingsRuntimeControlIdentityName": "Identity name",
-  "settingsRuntimeControlDevice": "Device",
   "settingsRuntimeControlDeviceId": "Device ID",
   "settingsRuntimeControlNoAudit": "No activity yet. Identity and device changes will appear here.",
   "settingsRuntimeControlAuditCount": "{count} records",
@@ -1763,10 +1764,10 @@
   "settingsRuntimeControlGranted": "Granted",
   "settingsRuntimeControlRevoked": "Revoked",
   "settingsRuntimeControlRemoveDevice": "Remove device",
-  "settingsRuntimeControlDisconnectDevice": "Disconnect device",
+  "settingsRuntimeControlDisconnectDevice": "Isolate device",
   "settingsRuntimeControlRemoved": "Removed",
-  "settingsRuntimeControlDisconnected": "Disconnected",
-  "settingsRuntimeControlAdmitDevice": "Readmit device",
+  "settingsRuntimeControlDisconnected": "Isolated",
+  "settingsRuntimeControlAdmitDevice": "Lift isolation",
   "settingsRuntimeControlAllDevices": "All devices",
   "settingsRuntimeControlManages": "Manages",
   "settingsRuntimeControlLocalIdentity": "This device",
@@ -1775,7 +1776,7 @@
   "settingsRuntimeControlManageIdentities": "Manage identities",
   "settingsRuntimeControlAssignIdentity": "Set device identity",
   "settingsRuntimeControlClearIdentity": "Reset to default identity",
-  "settingsRuntimeControlDeviceAdmitted": "Connection restriction lifted; waiting for the device to reconnect",
+  "settingsRuntimeControlDeviceAdmitted": "Isolation lifted; waiting for the device to reconnect",
   "settingsRuntimeControlIdentityResetDone": "Identity reset to the default user",
   "settingsRuntimeControlIdentityDefinitions": "Identity permissions",
   "settingsRuntimeControlIdentityCount": "{count} identities",
@@ -2150,6 +2151,10 @@
         "type": "String"
       }
     }
-  }
-
+  },
+  "settingsRuntimeControlEditRole": "Edit role",
+  "settingsRuntimeControlDeleteRole": "Delete role",
+  "settingsRuntimeControlDeleteRoleTitle": "Delete role {roleName}?",
+  "@settingsRuntimeControlDeleteRoleTitle": {"placeholders":{"roleName":{"type":"String"}}},
+  "settingsRuntimeControlDeleteRoleMessage": "Devices holding this role fall back to the default user identity."
 }

@@ -632,6 +632,13 @@ pub struct CoreCallResponse {
 pub struct LinkDeviceInfo {
     pub platform: String,
     pub model: String,
+    /// The local pairing generation, stamped by the runtime identity and sent
+    /// with each pairing handshake. A paired record keeps the generation the
+    /// peer was in when it paired, so a removal that revokes an older
+    /// generation never forgets a pairing made for re-admission. Absent on
+    /// older cores, whose records keep the previous forget-only semantics.
+    #[serde(default)]
+    pub pairingIncarnation: Option<String>,
 }
 
 impl LinkDeviceInfo {
@@ -647,6 +654,7 @@ impl LinkDeviceInfo {
         Self {
             platform: std::env::consts::OS.to_string(),
             model: std::env::consts::ARCH.to_string(),
+            pairingIncarnation: None,
         }
     }
 

@@ -6177,7 +6177,8 @@ mod tests {
             deviceInfo: operit_link::protocol::LinkDeviceInfo {
                 platform: String::new(),
                 model: "phone".to_string(),
-            },
+            pairingIncarnation: None,
+        },
             inbound: true,
             outbound: false,
         };
@@ -6232,7 +6233,8 @@ mod tests {
                     deviceInfo: operit_link::protocol::LinkDeviceInfo {
                         platform: String::new(),
                         model: model.to_string(),
-                    },
+                    pairingIncarnation: None,
+                },
                     inbound: true,
                     outbound,
                 },

@@ -2239,6 +2239,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimePairToken => '连接 Token';
 
   @override
+  String get settingsRuntimePairTokenHint => '跨网配对时必填；同网段设备可留空';
+
+  @override
   String get settingsRuntimePairCode => '配对码';
 
   @override
@@ -2249,6 +2252,9 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settingsRuntimeBaseUrl => '设备地址';
+
+  @override
+  String get settingsRuntimeTcpAddressHint => 'host:端口，例如 192.168.1.10:37195';
 
   @override
   String settingsRuntimeConnectionFailed(String error) {
@@ -3396,9 +3402,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeControlIdentityName => '身份名称';
 
   @override
-  String get settingsRuntimeControlDevice => '设备';
-
-  @override
   String get settingsRuntimeControlDeviceId => '设备 ID';
 
   @override
@@ -3422,16 +3425,16 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeControlRemoveDevice => '移除设备';
 
   @override
-  String get settingsRuntimeControlDisconnectDevice => '断开设备';
+  String get settingsRuntimeControlDisconnectDevice => '隔离设备';
 
   @override
   String get settingsRuntimeControlRemoved => '已移除';
 
   @override
-  String get settingsRuntimeControlDisconnected => '已断开';
+  String get settingsRuntimeControlDisconnected => '已隔离';
 
   @override
-  String get settingsRuntimeControlAdmitDevice => '重新接纳设备';
+  String get settingsRuntimeControlAdmitDevice => '解除隔离设备';
 
   @override
   String get settingsRuntimeControlAllDevices => '全部设备';
@@ -3458,7 +3461,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeControlClearIdentity => '重置为默认身份';
 
   @override
-  String get settingsRuntimeControlDeviceAdmitted => '已解除连接限制，等待设备重连';
+  String get settingsRuntimeControlDeviceAdmitted => '已解除隔离，等待设备重连';
 
   @override
   String get settingsRuntimeControlIdentityResetDone => '身份已重置为默认用户';
@@ -4001,4 +4004,19 @@ class AppLocalizationsZh extends AppLocalizations {
   String settingsAppearanceThemeConfigFailed(String detail) {
     return '主题操作失败：$detail';
   }
+
+  @override
+  String get settingsRuntimeControlEditRole => '编辑角色';
+
+  @override
+  String get settingsRuntimeControlDeleteRole => '删除角色';
+
+  @override
+  String settingsRuntimeControlDeleteRoleTitle(String roleName) {
+    return '删除角色 $roleName？';
+  }
+
+  @override
+  String get settingsRuntimeControlDeleteRoleMessage =>
+      '持有该角色的设备将回退为默认的普通用户身份。';
 }

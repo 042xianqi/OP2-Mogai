@@ -29,6 +29,7 @@ fn record(status: SpaceJoinStatus) -> Record {
             model: "test".into(),
             coreVersion: None,
             updatedAt: 1,
+            pairingIncarnation: None,
         },
         source: PeerSpaceSnapshot {
             space: CoreSpace {

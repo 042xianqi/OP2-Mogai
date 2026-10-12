@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use operit_host_api::HostEnvironmentDescriptor;
 use operit_host_api::HostManager::HostManager;
 use operit_plugin_sdk::javascript::{
-    JsExecutionHost, JsToolCallRequest, JsToolCallResult, JsToolCallResultData,
+    JsExecutionHost, JsToolCallRequest, JsToolCallResult,
     JsToolNameResolutionRequest, JsToolPkgIpcCompletion, JsToolPkgIpcRequest,
     JsToolPkgResourceRequest, JsToolPkgWasmRequest, JsToolPkgWasmResult, ToolPkgConfigScope,
 };
@@ -674,7 +674,7 @@ impl AIToolHandler {
 
     /// Ensures default or package tools are registered, then reports whether a tool exists.
     #[allow(non_snake_case)]
-    async fn getToolExecutorOrActivate(&mut self, toolName: &str) -> Result<bool, String> {
+    pub(super) async fn getToolExecutorOrActivate(&mut self, toolName: &str) -> Result<bool, String> {
         if let Some((packageName, _)) = toolName.split_once(':') {
             let manager = self.getOrCreatePackageManager();
             RuntimePackageManager::prepareMcpPackage(&manager, packageName.trim()).await?;
@@ -1001,7 +1001,7 @@ impl AIToolHandler {
         let request = &resolved;
         let tool = request.toLegacyTool();
         let tool = &tool;
-        let isAiInvocation = matches!(policy, ToolExecutionPolicy::Ai { .. });
+        let isAiInvocation = matches!(policy, ToolExecutionPolicy::Ai { .. } | ToolExecutionPolicy::Device);
         let logExecution = if isAiInvocation {
             ChainLogger::info
         } else {
@@ -1028,6 +1028,8 @@ impl AIToolHandler {
                 if let Some(denied) = ToolExecutionManager::buildToolExposureDeniedResult(&entryTool, exposure.clone()) {
                     return Ok(vec![denied]);
                 }
+            }
+            if isAiInvocation {
                 let interception = self.checkToolInterception(tool).await?;
                 if let AIToolHookDecision::Block(_) = interception {
                     return Ok(vec![Self::toolInterceptionResult(tool, interception)]);
@@ -1258,6 +1260,24 @@ impl JsExecutionHost for AIToolHandler {
         &self,
         request: JsToolCallRequest,
     ) -> operit_plugin_sdk::javascript::JsExecutionCompletion<JsToolCallResult> {
+        if let Some(device) = &request.device {
+            if !matches!(
+                device.action,
+                operit_plugin_sdk::javascript::JsDeviceToolAction::Execute
+                    | operit_plugin_sdk::javascript::JsDeviceToolAction::Port
+            ) {
+                return self.runtimeSupport().executeDeviceTool(request, None);
+            }
+            let host = self.clone();
+            let tool = crate::tools::DeviceTools::tool_from_request(&request);
+            let preflight = Box::pin(async move {
+                match host.checkToolInterception(&tool).await {
+                    AIToolHookDecision::Block(reason) => Err(reason),
+                    _ => Ok(()),
+                }
+            });
+            return self.runtimeSupport().executeDeviceTool(request, Some(preflight));
+        }
         let host = self.clone();
         Box::pin(async move {
             let call = ToolCall {
@@ -1892,7 +1912,7 @@ mod tests {
     /// Creates the exact structured request consumed by the production JS execution adapter.
     fn probeRequest(parameters: Value) -> JsToolCallRequest {
         JsToolCallRequest { tool_type: "default".into(), tool_name: "pipeline_probe".into(),
-            parameters: serde_json::from_value(parameters).unwrap() }
+            parameters: serde_json::from_value(parameters).unwrap(), device: None }
     }
 
     /// Proves AI and JS share lifecycle admission while only AI asks permission for the same executor.
@@ -2057,6 +2077,7 @@ mod tests {
         let result = fixture.handler.execute_tool_call(JsToolCallRequest {
             tool_type: "default".into(), tool_name: "tts_set_current_config_id".into(),
             parameters: BTreeMap::from([("id".into(), json!({"nested":[null,true]}))]),
+            device: None,
         }).await;
         assert!(!result.success);
         assert!(result.error.unwrap().contains("Invalid tool invocation"));

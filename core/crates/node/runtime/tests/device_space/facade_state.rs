@@ -93,7 +93,8 @@ fn test_paired_device(device_id: &str) -> RuntimePairedDevice {
         deviceInfo: LinkDeviceInfo {
             platform: "test".to_string(),
             model: "peer".to_string(),
-        },
+        pairingIncarnation: None,
+    },
         inbound: false,
         outbound: true,
     }

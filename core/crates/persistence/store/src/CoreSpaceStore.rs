@@ -38,6 +38,13 @@ pub struct CoreSpaceDeviceProfile {
     pub model: String,
     #[serde(default)]
     pub coreVersion: Option<String>,
+    /// The pairing generation this device announced while admitted. A removal
+    /// revokes exactly this generation: only pairings stamped with it are
+    /// forgotten, while a pairing the device made after leaving and resetting
+    /// (its next generation) survives. Absent on profiles from older cores,
+    /// whose removal semantics stay unchanged.
+    #[serde(default)]
+    pub pairingIncarnation: Option<String>,
     pub updatedAt: i64,
 }
 
@@ -494,6 +501,7 @@ impl CoreSpaceStore {
             platform,
             model,
             coreVersion: Some(coreVersion),
+            pairingIncarnation: None,
             updatedAt: currentTimeMillis(),
         };
         self.writeDeviceProfile(&profile)?;
@@ -524,6 +532,7 @@ impl CoreSpaceStore {
         platform: String,
         model: String,
         coreVersion: String,
+        pairingIncarnation: Option<String>,
     ) -> Result<CoreSpaceDeviceProfile, String> {
         validateDeviceProfileField("display name", &displayName)?;
         validateDeviceProfileField("platform", &platform)?;
@@ -544,7 +553,8 @@ impl CoreSpaceStore {
                 if profile.displayName == displayName
                     && profile.platform == platform
                     && profile.model == model
-                    && profile.coreVersion.as_deref() == Some(coreVersion.as_str()) =>
+                    && profile.coreVersion.as_deref() == Some(coreVersion.as_str())
+                    && profile.pairingIncarnation == pairingIncarnation =>
             {
                 return Ok(profile.clone());
             }
@@ -555,6 +565,7 @@ impl CoreSpaceStore {
                 platform,
                 model,
                 coreVersion: Some(coreVersion),
+                pairingIncarnation,
                 updatedAt: currentTimeMillis(),
             },
             None => CoreSpaceDeviceProfile {
@@ -564,6 +575,7 @@ impl CoreSpaceStore {
                 platform,
                 model,
                 coreVersion: Some(coreVersion),
+                pairingIncarnation,
                 updatedAt: currentTimeMillis(),
             },
         };
@@ -1757,6 +1769,7 @@ mod tests {
                 platform: "test".to_string(),
                 model: "test".to_string(),
                 coreVersion: Some("test".to_string()),
+                pairingIncarnation: None,
                 updatedAt: currentTimeMillis(),
             })
             .expect("test member device profile must write");
@@ -1770,6 +1783,7 @@ mod tests {
                 "test".to_string(),
                 "test".to_string(),
                 "test".to_string(),
+                None,
             )
             .expect("test device profile must initialize");
     }
