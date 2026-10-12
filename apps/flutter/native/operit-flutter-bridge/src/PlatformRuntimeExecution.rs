@@ -142,14 +142,22 @@ impl OperitFlutterBridge {
                 name,
                 Box::new(move || {
                     Box::pin(async move {
-                        let _ = sender.send(task().await);
+                        use futures_util::FutureExt as _;
+                        let outcome = std::panic::AssertUnwindSafe(task()).catch_unwind().await;
+                        let result = outcome.map_err(|payload| {
+                            format!(
+                                "FATAL_CORE_PANIC: {}",
+                                crate::BridgeExports::panic_payload_message(payload.as_ref())
+                            )
+                        });
+                        let _ = sender.send(result);
                     })
                 }),
             )
             .map_err(|error| error.to_string())?;
         receiver
             .recv()
-            .map_err(|error| format!("Runtime task result channel closed: {error}"))
+            .map_err(|error| format!("Runtime task result channel closed: {error}"))?
     }
 
     /// Executes owner event ingress on the runtime's scheduler for C/JNI callers.
