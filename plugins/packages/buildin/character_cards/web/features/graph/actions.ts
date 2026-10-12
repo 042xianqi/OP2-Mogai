@@ -1,7 +1,7 @@
 import type { EditorContext } from "../../bridge/context";
 import { dataValue } from "../../shared/dom";
 import { graphData, graphViewport, selectedMemory } from "../graph/data";
-import { fitMemoryGraph, memoryGraphBounds, zoomMemoryGraph } from "../graph/layout";
+import { fitMemoryGraph, graphEntry, memoryGraphBounds, zoomMemoryGraph } from "../graph/layout";
 /** Binds graph actions operations to one editor context. */
 export function createGraphActionsFeature(context: EditorContext) {
   const { topDialog, pushDialog, request, renderDialogs, updateGraphSurface } = context;
@@ -57,6 +57,9 @@ export function createGraphActionsFeature(context: EditorContext) {
             pushDialog({ type: "link", ownerKey: graph.ownerKey, items: graphData(graph).items, draft: { sourceTitle: source.title, targetTitle: target.title, linkType: "related", weight: 1, description: "" } }); return;
           }
         }
+        const position = graphEntry(graph.positions, graph.selected), viewport = graphViewport(graph);
+        const scale = Math.max(1, graph.camera.scale);
+        graph.camera = { scale, x: viewport.width / 2 - position.x * scale, y: viewport.height / 2 - position.y * scale };
         updateGraphSurface(graph); return;
       }
 

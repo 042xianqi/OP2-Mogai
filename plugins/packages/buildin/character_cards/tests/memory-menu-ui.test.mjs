@@ -6,11 +6,14 @@ import { mountRegisteredComposeRoute, composeNodes, keyedNode } from "./selector
 import { plain } from "./runtime.mjs";
 import { createMemoryJobsHarness, CONTROLLED_CHAT_ID, CONTROLLED_OWNER } from "./memory-jobs-runtime.mjs";
 
+/** Records timers so menu tests can reject background polling. */
 function timers() {
   const pending = [];
   return { pending, globals: { setTimeout(callback, delay) { pending.push({ callback, delay }); return pending.length; }, clearTimeout() {} } };
 }
+/** Mounts the registered memory menu for one supplied chat. */
 function menu(runtime, chatId) { return mountRegisteredComposeRoute(runtime, null, "chat-input-memory", { chatId, input: {} }); }
+/** Collects text from the real rendered Compose tree. */
 function texts(tree) { return composeNodes(tree, node => node.type === "Text").map(node => node.props.text); }
 
 // Compare the actual registered plugin tree with main's group geometry, labels and persisted preferences.
@@ -41,13 +44,14 @@ test("plugin memory section retains main's exact collapsed and expanded controls
   tree = ui.render().tree; assert.equal(texts(tree)[1], "记忆库更新");
   assert.deepEqual(plain(await runtime.web({ action: "readGlobalMemoryPreferences" })), { userDescriptionEnabled: false, autoUpdateEnabled: true });
   const next = menu(runtime, "selector-chat"); await next.load(); assert.equal(texts(next.render().tree)[1], "记忆库更新");
-  assert.deepEqual(clock.pending.map(timer => timer.delay), [3000, 1000, 3000, 1000]);
+  assert.deepEqual(clock.pending, []);
 });
 
-test("memory info uses main's exact queue text and one close button in the registered dialog", async t => {
+test("memory info reads fresh queue status on demand without background polling", async t => {
   const clock = timers(), harness = await createMemoryJobsHarness(t), runtime = harness.openRuntime(clock.globals);
-  await runtime.initialize(); await runtime.bind(); await runtime.enqueueReplies();
+  await runtime.initialize(); await runtime.bind();
   const ui = menu(runtime, CONTROLLED_CHAT_ID); await ui.load();
+  await runtime.enqueueReplies();
   const result = await ui.dispatch(keyedNode(ui.render().tree, "memory-info").props.onClick);
   const queue = await runtime.web({ action: "readMemoryAutoSaveStatus", ownerKey: CONTROLLED_OWNER });
   assert.equal(queue.pendingCandidates, 5); assert.equal(queue.pendingChats, 1);
@@ -63,7 +67,7 @@ test("memory info uses main's exact queue text and one close button in the regis
   }
   assert.equal(tree.props.confirmText, "关闭"); assert.equal(tree.props.dismissText, undefined);
   assert.deepEqual(plain((await dialog.dispatch(tree.props.onConfirm)).actionResult), { type: "toolpkg.presentation.cancel", requestId: "memory-status-test" });
-  await clock.pending.shift().callback(); assert.equal(clock.pending.at(-1).delay, 3000);
+  assert.deepEqual(clock.pending, []);
 });
 
 test("manual menu action runs real extraction while automatic updates are off and reports original snackbar text", async t => {
@@ -90,10 +94,12 @@ test("new-session memory menu keeps the original disabled manual action and no q
   assert.equal(info.actionResult.input.description, "暂无队列状态。自动提取会定期检查当前记忆库。");
 });
 
-test("memory section refuses retained actions and queue callbacks after host chat ownership changes", async t => {
+test("memory section refuses retained actions and status reads after host chat ownership changes", async t => {
   const clock = timers(), runtime = await selectorEnvironment(t, {}, clock.globals), ui = menu(runtime, "selector-chat"); await ui.load();
   const action = keyedNode(ui.render().tree, "memory-section-header").props.onClick;
+  const info = keyedNode(ui.render().tree, "memory-info").props.onClick;
   assert.throws(() => ui.updateHostState({ chatId: "another-chat" }), /Memory menu chat owner changed/);
   assert.throws(() => ui.dispatch(action), /Memory menu chat owner changed/);
-  await assert.rejects(clock.pending[0].callback(), /Memory menu chat owner changed/);
+  await assert.rejects(ui.dispatch(info), /Memory menu chat owner changed/);
+  assert.deepEqual(clock.pending, []);
 });

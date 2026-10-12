@@ -139,7 +139,8 @@ state, app, dialogsRoot, snapshot, topDialog, pushDialog, popDialog, request, re
     dialogsRoot.addEventListener("pointermove", gestures.onPointerMove);
     dialogsRoot.addEventListener("pointerup", gestures.onPointerUp);
     dialogsRoot.addEventListener("pointercancel", gestures.onPointerUp);
-    dialogsRoot.addEventListener("wheel", gestures.onWheel, { passive: false });
+    // Capture wheel input across the modal top layer before graph hit testing.
+    document.addEventListener("wheel", gestures.onWheel, { passive: false, capture: true });
     dialogsRoot.addEventListener("keydown", gestures.onKeyDown);
   }
   /** Loads the real package aggregate before exposing editable controls. */

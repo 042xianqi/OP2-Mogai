@@ -3742,8 +3742,8 @@ async fn storage_structured_promise_roundtrips_real_sqlite_and_record_proxies() 
             __operitStorageRequest=function(request){return withoutTextCodecs(()=>originalRequest(request));};
             const native=__operitNativeCallToolStructured;
             /** Requires a real host-owned Promise, rather than a JS callback identity. */
-            __operitNativeCallToolStructured=function(scope,type,name,parameters) {
-                const promise=withoutTextCodecs(()=>native(scope,type,name,parameters));
+            __operitNativeCallToolStructured=function(scope,type,name,parameters,callId) {
+                const promise=withoutTextCodecs(()=>native(scope,type,name,parameters,callId));
                 if (!promise || typeof promise.then !== 'function') throw new Error('Storage requires a host Promise');
                 return promise;
             };
@@ -4039,6 +4039,85 @@ fn toolpkg_engine_binds_its_execution_host_once() {
     let engine = newTestIpcEngine(host.clone());
     assert_eq!(host.toolPkgContextBindings.load(Ordering::SeqCst), 1);
     engine.destroy();
+}
+
+/// Prepared engines authenticate once and their preinstalled IPC callback uses the newly bound owner.
+#[tokio::test(flavor = "current_thread")]
+async fn prepared_engine_binds_once_and_uses_bound_ipc_host() {
+    testJavaScriptRuntimeHost();
+    register_test_runtime_storage("js-engine-tests");
+    let host = Arc::new(TestPluginConfigExecutionHost::default());
+    let prepared = super::PreparedJsEngine::new().unwrap();
+    assert_eq!(host.toolPkgContextBindings.load(Ordering::SeqCst), 0);
+    let engine = prepared.bind(host.clone(), ToolPkgExecutionContext {
+        context_key: "prepared-ipc-test".into(), container_package_name: "test.package".into(),
+        api_version: "2.0.0".into(),
+        text_resource_host: Arc::new(StaticToolPkgTextResourceHost { resources: BTreeMap::new() }),
+    }).await.unwrap();
+    assert_eq!(host.toolPkgContextBindings.load(Ordering::SeqCst), 1);
+    let mut params = testParams();
+    params.insert("__operit_ui_package_name".into(), Value::String("test.package".into()));
+    params.insert("__operit_execution_context_key".into(), Value::String("prepared-ipc-test".into()));
+    params.insert("__operit_toolpkg_runtime_kind".into(), Value::String("ui".into()));
+    let output = expect_js_output(engine.execute_script_function(
+        "exports.probe = async function() { return await ToolPkg.ipc.call('test.async', {value:41}, {targetRuntime:'main'}); };",
+        "probe", &params, &BTreeMap::new(), None, false, 60, None,
+    ).await, "prepared engine IPC");
+    assert_eq!(serde_json::from_str::<Value>(&output).unwrap()["value"], 42);
+    engine.destroy();
+}
+
+/// Consecutive acquisitions consume replenished pristine runtimes rather than a previous page's globals.
+#[tokio::test(flavor = "current_thread")]
+async fn prepared_provider_replenishes_without_reusing_page_state() {
+    use operit_plugin_sdk::javascript::JsExecutionProvider as _;
+    testJavaScriptRuntimeHost();
+    register_test_runtime_storage("js-engine-tests");
+    let host = Arc::new(TestPluginConfigExecutionHost::default());
+    let provider = crate::javascript::JsExecutionProvider::QuickJsExecutionProvider::new();
+    for index in 0..5 {
+        let engine = provider.acquire_toolpkg_execution_engine(host.clone(), ToolPkgExecutionContext {
+            context_key: format!("prepared-page-{index}"), container_package_name: "test.package".into(),
+            api_version: "2.0.0".into(),
+            text_resource_host: Arc::new(StaticToolPkgTextResourceHost { resources: BTreeMap::new() }),
+        }).await.unwrap();
+        let output = expect_js_output(engine.execute_script_function(
+            "exports.probe = function() { globalThis.pageCounter = (globalThis.pageCounter || 0) + 1; return {counter:globalThis.pageCounter}; };",
+            "probe", &testParams(), &BTreeMap::new(), None, false, 60,
+        ).await, "fresh prepared page");
+        assert_eq!(serde_json::from_str::<Value>(&output).unwrap()["counter"], 1);
+        engine.destroy();
+    }
+    assert_eq!(host.toolPkgContextBindings.load(Ordering::SeqCst), 5);
+}
+
+/// An invalid package identity destroys its claimed runtime without consuming a context binding.
+#[tokio::test(flavor = "current_thread")]
+async fn prepared_engine_rejects_invalid_owner_and_destroys_runtime() {
+    testJavaScriptRuntimeHost();
+    register_test_runtime_storage("js-engine-tests");
+    let host = Arc::new(TestPluginConfigExecutionHost::default());
+    let prepared = super::PreparedJsEngine::new().unwrap();
+    let alive = prepared.engine.as_ref().unwrap().worker.alive.clone();
+    let result = prepared.bind(host.clone(), ToolPkgExecutionContext {
+        context_key: String::new(), container_package_name: "test.package".into(),
+        api_version: "2.0.0".into(),
+        text_resource_host: Arc::new(StaticToolPkgTextResourceHost { resources: BTreeMap::new() }),
+    }).await;
+    assert!(result.is_err());
+    assert!(!alive.load(Ordering::Acquire));
+    assert_eq!(host.toolPkgContextBindings.load(Ordering::SeqCst), 0);
+}
+
+/// Dropping an unused prepared engine destroys its Host state instead of retaining an idle worker.
+#[test]
+fn unclaimed_prepared_engine_destroys_runtime() {
+    testJavaScriptRuntimeHost();
+    register_test_runtime_storage("js-engine-tests");
+    let prepared = super::PreparedJsEngine::new().unwrap();
+    let alive = prepared.engine.as_ref().unwrap().worker.alive.clone();
+    drop(prepared);
+    assert!(!alive.load(Ordering::Acquire));
 }
 
 /// Reproduces the duplicate-catalog startup failure and verifies the Host worker remains usable.

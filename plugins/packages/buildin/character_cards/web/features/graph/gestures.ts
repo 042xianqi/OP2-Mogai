@@ -73,13 +73,29 @@ export function createGraphGestures(context: EditorContext) {
     if (!state.pointers.has(event.pointerId)) return;
     const pointer = pointerById(event.pointerId); state.pointers.delete(event.pointerId);
     if (pointer.surface.hasPointerCapture(event.pointerId)) pointer.surface.releasePointerCapture(event.pointerId);
+    for (const active of state.pointers.values()) {
+      active.startX = active.x; active.startY = active.y;
+      if (active.node !== null) {
+        const position = graphEntry(topDialog("graph").positions, active.node.id);
+        active.node.start = { x: position.x, y: position.y };
+      }
+    }
   }
 
   /** Applies bounded graph zoom without intercepting ordinary editor scrolling. */
   function onWheel(event: WheelEvent): void {
     if (!(event.target instanceof Element) || event.target.closest<SVGSVGElement>("[data-graph-surface]") === null) return;
     event.preventDefault();
-    const dialog = topDialog("graph"), bounds = requireElement(event.target.closest<SVGSVGElement>("[data-graph-surface]"), SVGSVGElement).getBoundingClientRect(); dialog.camera = zoomMemoryGraph(dialog.camera, { x: event.clientX - bounds.left, y: event.clientY - bounds.top }, Math.exp(-event.deltaY * 0.0015));
+    const dialog = topDialog("graph"), bounds = requireElement(event.target.closest<SVGSVGElement>("[data-graph-surface]"), SVGSVGElement).getBoundingClientRect();
+    const deltaMode = event.deltaMode;
+    let delta = event.deltaY;
+    switch (deltaMode) {
+      case WheelEvent.DOM_DELTA_PIXEL: break;
+      case WheelEvent.DOM_DELTA_LINE: delta *= 16; break;
+      case WheelEvent.DOM_DELTA_PAGE: delta *= bounds.height; break;
+      default: throw new Error(`Unsupported wheel delta mode: ${deltaMode}`);
+    }
+    dialog.camera = zoomMemoryGraph(dialog.camera, { x: event.clientX - bounds.left, y: event.clientY - bounds.top }, Math.exp(-delta * 0.0015));
     updateGraphSurface(dialog);
   }
 

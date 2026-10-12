@@ -120,6 +120,15 @@ impl ToolPkgExecutionEngineFactory for ExampleExecutionEngineFactory {
     ) -> Result<Arc<dyn JsExecutionEngine>, String> {
         Ok(Arc::new(ExampleExecutionEngine))
     }
+
+    /// Completes the asynchronous factory contract with this consumer's explicit engine implementation.
+    #[allow(non_snake_case)]
+    fn acquireToolPkgExecutionEngine(
+        &self, context: ToolPkgExecutionContext,
+    ) -> operit_plugin_sdk::javascript::JsExecutionFuture<Result<Arc<dyn JsExecutionEngine>, String>> {
+        let result = self.createToolPkgExecutionEngine(context);
+        Box::pin(async move { result })
+    }
 }
 
 /// Supplies embedded ToolPkg archives owned by the application.

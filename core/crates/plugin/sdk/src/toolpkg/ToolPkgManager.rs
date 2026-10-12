@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use operit_host_api::FileSystemHost;
 use serde_json::Value;
 
-use crate::javascript::{JsExecutionEngine, ToolPkgExecutionContext, ToolPkgTextResourceHost};
+use crate::javascript::{JsExecutionFuture, JsExecutionEngine, ToolPkgExecutionContext, ToolPkgTextResourceHost};
 use crate::package::ToolPackage;
 use crate::toolpkg::ToolPkgHooks::{ToolPkgHookDispatcher, ToolPkgHookInvocation};
 use crate::toolpkg::ToolPkgParser::{
@@ -27,6 +27,13 @@ pub trait ToolPkgExecutionEngineFactory: Send + Sync {
         &self,
         context: ToolPkgExecutionContext,
     ) -> Result<Arc<dyn JsExecutionEngine>, String>;
+
+    /// Acquires an isolated prepared engine for a package through asynchronous scheduling.
+    #[allow(non_snake_case)]
+    fn acquireToolPkgExecutionEngine(
+        &self,
+        context: ToolPkgExecutionContext,
+    ) -> JsExecutionFuture<Result<Arc<dyn JsExecutionEngine>, String>>;
 }
 
 /// Resolves embedded ToolPkg archive bytes owned by the embedding application.
@@ -44,13 +51,23 @@ struct ToolPkgExecutionEngineEntry {
     activeLeases: usize,
 }
 
+/// Tracks live engines and revocation generations under the same registry lock.
+#[derive(Default)]
+struct ToolPkgExecutionEngineRegistry {
+    entries: BTreeMap<String, ToolPkgExecutionEngineEntry>,
+    packageGenerations: BTreeMap<String, u64>,
+    factoryGeneration: u64,
+}
+
+type ExecutionEngineGeneration = (u64, u64);
+
 /// Manages loaded ToolPkg runtimes, resources, listeners, and execution engines.
 #[derive(Clone)]
 pub struct ToolPkgManager {
     containers: Arc<RwLock<BTreeMap<String, ToolPkgContainerRuntime>>>,
     subpackageByPackageName: Arc<RwLock<BTreeMap<String, ToolPkgSubpackageRuntime>>>,
     runtimeChangeListeners: Arc<Mutex<Vec<ToolPkgRuntimeChangeListener>>>,
-    toolPkgExecutionEngines: Arc<Mutex<BTreeMap<String, ToolPkgExecutionEngineEntry>>>,
+    toolPkgExecutionEngines: Arc<Mutex<ToolPkgExecutionEngineRegistry>>,
     executionEngineFactory: Arc<dyn ToolPkgExecutionEngineFactory>,
     assetSource: Arc<dyn ToolPkgAssetSource>,
     fileSystemHost: Arc<dyn FileSystemHost>,
@@ -67,7 +84,7 @@ impl ToolPkgManager {
             containers: Arc::new(RwLock::new(BTreeMap::new())),
             subpackageByPackageName: Arc::new(RwLock::new(BTreeMap::new())),
             runtimeChangeListeners: Arc::new(Mutex::new(Vec::new())),
-            toolPkgExecutionEngines: Arc::new(Mutex::new(BTreeMap::new())),
+            toolPkgExecutionEngines: Arc::new(Mutex::new(ToolPkgExecutionEngineRegistry::default())),
             executionEngineFactory,
             assetSource,
             fileSystemHost,
@@ -80,7 +97,7 @@ impl ToolPkgManager {
         &mut self,
         executionEngineFactory: Arc<dyn ToolPkgExecutionEngineFactory>,
     ) {
-        self.removeExecutionEnginesMatching(|_| true);
+        self.removeExecutionEnginesMatching(|_| true, |registry| registry.factoryGeneration += 1);
         self.executionEngineFactory = executionEngineFactory;
     }
 
@@ -251,7 +268,24 @@ impl ToolPkgManager {
             .subpackageByPackageName
             .write()
             .expect("toolpkg subpackage runtime lock poisoned") = subpackageByPackageName;
-        self.removeExecutionEnginesMatching(|entry| entry.activeLeases == 0);
+        self.removeExecutionEnginesMatching(|entry| entry.activeLeases == 0, |_| {});
+    }
+
+    /// Checks one container using the same direct-or-subpackage rule as the active catalog.
+    #[allow(non_snake_case)]
+    pub fn isEnabledToolPkgContainer(
+        &self,
+        packageName: &str,
+        enabledPackageNames: &[String],
+    ) -> bool {
+        let containers = self.containers.read().expect("toolpkg container runtime lock poisoned");
+        let Some(runtime) = containers.get(packageName.trim()) else {
+            return false;
+        };
+        enabledPackageNames.iter().any(|enabled| {
+            enabled == &runtime.packageName
+                || runtime.subpackages.iter().any(|subpackage| enabled == &subpackage.packageName)
+        })
     }
 
     /// Returns the ToolPkg containers enabled directly or through a subpackage.
@@ -398,6 +432,30 @@ impl ToolPkgManager {
         containerPackageName: &str,
         acquireLease: bool,
     ) -> Result<Arc<dyn JsExecutionEngine>, String> {
+        let (existing, generation) = self.cachedExecutionEngine(contextKey, containerPackageName, acquireLease)?;
+        if let Some(engine) = existing { return Ok(engine); }
+        let context = self.executionContext(contextKey, containerPackageName)?;
+        let created = self.executionEngineFactory.createToolPkgExecutionEngine(context)?;
+        self.publishExecutionEngine(contextKey, containerPackageName, acquireLease, generation, created)
+    }
+
+    /// Acquires a counted page lease while awaiting a prepared engine outside registry locks.
+    #[allow(non_snake_case)]
+    pub async fn acquireToolPkgExecutionEngineAsync(
+        &self, contextKey: &str, containerPackageName: &str,
+    ) -> Result<(), String> {
+        let (existing, generation) = self.cachedExecutionEngine(contextKey, containerPackageName, true)?;
+        if existing.is_some() { return Ok(()); }
+        let context = self.executionContext(contextKey, containerPackageName)?;
+        let created = self.executionEngineFactory.acquireToolPkgExecutionEngine(context).await?;
+        self.publishExecutionEngine(contextKey, containerPackageName, true, generation, created).map(|_| ())
+    }
+
+    /// Validates an explicit owner and counts a lease only for an existing matching entry.
+    #[allow(non_snake_case)]
+    fn cachedExecutionEngine(
+        &self, contextKey: &str, containerPackageName: &str, acquireLease: bool,
+    ) -> Result<(Option<Arc<dyn JsExecutionEngine>>, ExecutionEngineGeneration), String> {
         let normalizedKey = contextKey.trim();
         let normalizedContainer = containerPackageName.trim();
         if normalizedKey.is_empty() { return Err("ToolPkg execution context key is required".into()); }
@@ -405,24 +463,48 @@ impl ToolPkgManager {
         {
             let mut engines = self.toolPkgExecutionEngines.lock()
                 .expect("toolpkg execution engine mutex poisoned");
-            if let Some(entry) = engines.get_mut(normalizedKey) {
+            let packageGeneration = *engines.packageGenerations.entry(normalizedContainer.to_string()).or_insert(0);
+            let generation = (engines.factoryGeneration, packageGeneration);
+            if let Some(entry) = engines.entries.get_mut(normalizedKey) {
                 if entry.containerPackageName != normalizedContainer { return Err("ToolPkg execution context belongs to a different container".into()); }
                 if acquireLease { entry.activeLeases += 1; }
-                return Ok(entry.engine.clone());
+                return Ok((Some(entry.engine.clone()), generation));
             }
+            Ok((None, generation))
         }
-        let apiVersion = self.getToolPkgContainerRuntime(normalizedContainer)
-            .ok_or_else(|| format!("ToolPkg execution context requires a registered container: {normalizedContainer}"))?.apiVersion;
-        let created = self.executionEngineFactory.createToolPkgExecutionEngine(ToolPkgExecutionContext {
-            context_key: normalizedKey.to_string(),
-            container_package_name: normalizedContainer.to_string(),
-            api_version: apiVersion,
-            text_resource_host: Arc::new(self.clone()),
-        })?;
+    }
+
+    /// Captures the registered package identity and resource owner for a new execution context.
+    #[allow(non_snake_case)]
+    fn executionContext(&self, contextKey: &str, containerPackageName: &str) -> Result<ToolPkgExecutionContext, String> {
+        let normalizedKey = contextKey.trim();
+        let normalizedContainer = containerPackageName.trim();
+        let apiVersion = self.containers.read().expect("toolpkg container registry poisoned")
+            .get(normalizedContainer)
+            .ok_or_else(|| format!("ToolPkg execution context requires a registered container: {normalizedContainer}"))?
+            .apiVersion.clone();
+        Ok(ToolPkgExecutionContext {
+            context_key: normalizedKey.to_string(), container_package_name: normalizedContainer.to_string(),
+            api_version: apiVersion, text_resource_host: Arc::new(self.clone()),
+        })
+    }
+
+    /// Publishes a freshly bound engine and destroys an unused racing creator outside locks.
+    #[allow(non_snake_case)]
+    fn publishExecutionEngine(
+        &self, contextKey: &str, containerPackageName: &str, acquireLease: bool,
+        generation: ExecutionEngineGeneration, created: Arc<dyn JsExecutionEngine>,
+    ) -> Result<Arc<dyn JsExecutionEngine>, String> {
+        let normalizedKey = contextKey.trim();
+        let normalizedContainer = containerPackageName.trim();
         let winner = {
             let mut engines = self.toolPkgExecutionEngines.lock()
                 .expect("toolpkg execution engine mutex poisoned");
-            if let Some(entry) = engines.get_mut(normalizedKey) {
+            let packageGeneration = *engines.packageGenerations.get(normalizedContainer)
+                .expect("Acquisition must capture a package generation");
+            if generation != (engines.factoryGeneration, packageGeneration) {
+                Err("ToolPkg execution context was revoked during engine acquisition".to_string())
+            } else if let Some(entry) = engines.entries.get_mut(normalizedKey) {
                 if entry.containerPackageName != normalizedContainer {
                     Err("ToolPkg execution context belongs to a different container".to_string())
                 } else {
@@ -430,7 +512,7 @@ impl ToolPkgManager {
                     Ok(Some(entry.engine.clone()))
                 }
             } else {
-                engines.insert(normalizedKey.to_string(), ToolPkgExecutionEngineEntry {
+                engines.entries.insert(normalizedKey.to_string(), ToolPkgExecutionEngineEntry {
                     containerPackageName: normalizedContainer.to_string(),
                     engine: created.clone(), activeLeases: usize::from(acquireLease),
                 });
@@ -466,7 +548,7 @@ impl ToolPkgManager {
             .toolPkgExecutionEngines
             .lock()
             .expect("toolpkg execution engine mutex poisoned");
-        let entry = engines.get(normalizedKey)?;
+        let entry = engines.entries.get(normalizedKey)?;
         assert_eq!(
             entry.containerPackageName, normalizedContainer,
             "ToolPkg execution context belongs to a different container"
@@ -487,7 +569,7 @@ impl ToolPkgManager {
                 .toolPkgExecutionEngines
                 .lock()
                 .expect("toolpkg execution engine mutex poisoned");
-            let Some(entry) = engines.get_mut(normalizedKey) else {
+            let Some(entry) = engines.entries.get_mut(normalizedKey) else {
                 return;
             };
             assert_eq!(
@@ -500,7 +582,7 @@ impl ToolPkgManager {
             );
             entry.activeLeases -= 1;
             if entry.activeLeases == 0 {
-                engines.remove(normalizedKey)
+                engines.entries.remove(normalizedKey)
             } else {
                 None
             }
@@ -517,7 +599,10 @@ impl ToolPkgManager {
         if normalizedContainer.is_empty() {
             return;
         }
-        self.removeExecutionEnginesMatching(|entry| entry.containerPackageName == normalizedContainer);
+        self.removeExecutionEnginesMatching(
+            |entry| entry.containerPackageName == normalizedContainer,
+            |registry| { *registry.packageGenerations.entry(normalizedContainer.to_string()).or_insert(0) += 1; },
+        );
     }
 
     /// Removes selected registry entries under the lock and destroys their workers after unlocking.
@@ -525,19 +610,21 @@ impl ToolPkgManager {
     fn removeExecutionEnginesMatching(
         &self,
         shouldRemove: impl Fn(&ToolPkgExecutionEngineEntry) -> bool,
+        revoke: impl FnOnce(&mut ToolPkgExecutionEngineRegistry),
     ) {
         let removed = {
             let mut engines = self
                 .toolPkgExecutionEngines
                 .lock()
                 .expect("toolpkg execution engine mutex poisoned");
-            let keys = engines
+            revoke(&mut engines);
+            let keys = engines.entries
                 .iter()
                 .filter(|(_, entry)| shouldRemove(entry))
                 .map(|(key, _)| key.clone())
                 .collect::<Vec<_>>();
             keys.into_iter()
-                .map(|key| engines.remove(&key).expect("selected engine must remain registered while locked"))
+                .map(|key| engines.entries.remove(&key).expect("selected engine must remain registered while locked"))
                 .collect::<Vec<_>>()
         };
         for entry in removed {
@@ -1117,6 +1204,15 @@ mod tests {
                 .push(engine.clone());
             Ok(engine)
         }
+
+        /// Completes the asynchronous factory contract with this consumer's explicit engine implementation.
+        #[allow(non_snake_case)]
+        fn acquireToolPkgExecutionEngine(
+            &self, context: ToolPkgExecutionContext,
+        ) -> crate::javascript::JsExecutionFuture<Result<Arc<dyn JsExecutionEngine>, String>> {
+            let result = self.createToolPkgExecutionEngine(context);
+            Box::pin(async move { result })
+        }
     }
 
     /// Supplies no assets because registry tests only exercise engine ownership.
@@ -1552,6 +1648,63 @@ mod tests {
             .expect("shared module must exist")
             .contains("createDefinition"));
     }
+    struct AcquisitionTestWaker;
+
+    impl std::task::Wake for AcquisitionTestWaker {
+        /// Keeps immediately completing factory tests independent of an async executor.
+        fn wake(self: Arc<Self>) {}
+    }
+
+    /// Polls the recording factory's immediate asynchronous acquisition exactly once.
+    fn finishImmediateAcquisition(future: impl std::future::Future<Output = Result<(), String>>) -> Result<(), String> {
+        let waker = std::task::Waker::from(Arc::new(AcquisitionTestWaker));
+        let mut context = std::task::Context::from_waker(&waker);
+        let mut future = std::pin::pin!(future);
+        match future.as_mut().poll(&mut context) {
+            std::task::Poll::Ready(result) => result,
+            std::task::Poll::Pending => panic!("Recording factory must complete immediately"),
+        }
+    }
+
+    /// Asynchronous acquisition preserves counted leases and reuses the live page context.
+    #[test]
+    fn asynchronousAcquisitionKeepsCountedLeases() {
+        let (manager, factory) = recordingManager();
+        finishImmediateAcquisition(manager.acquireToolPkgExecutionEngineAsync("async-page", "package_a")).unwrap();
+        finishImmediateAcquisition(manager.acquireToolPkgExecutionEngineAsync("async-page", "package_a")).unwrap();
+        assert_eq!(factory.engines.lock().unwrap().len(), 1);
+        manager.releaseToolPkgExecutionEngine("async-page", "package_a");
+        assert!(manager.findToolPkgExecutionEngine("async-page", "package_a").is_some());
+        manager.releaseToolPkgExecutionEngine("async-page", "package_a");
+        assert!(factory.engines.lock().unwrap()[0].destroyed.load(Ordering::Acquire));
+    }
+
+    /// Revoking a container while preparation is pending prevents publication of a stale engine.
+    #[test]
+    fn asynchronousAcquisitionRejectsRevokedContainer() {
+        let (manager, factory) = recordingManager();
+        let revoker = manager.clone();
+        *factory.onCreate.lock().unwrap() = Some(Arc::new(move || {
+            revoker.revokeContainerExecutionContexts("package_a");
+        }));
+        let result = finishImmediateAcquisition(manager.acquireToolPkgExecutionEngineAsync("async-revoked", "package_a"));
+        assert_eq!(result.unwrap_err(), "ToolPkg execution context was revoked during engine acquisition");
+        assert!(manager.findToolPkgExecutionEngine("async-revoked", "package_a").is_none());
+        assert!(factory.engines.lock().unwrap()[0].destroyed.load(Ordering::Acquire));
+        *factory.onCreate.lock().unwrap() = None;
+    }
+
+    /// Factory failures leave no published page context or counted lease.
+    #[test]
+    fn asynchronousAcquisitionPreservesFactoryError() {
+        let (manager, factory) = recordingManager();
+        *factory.creationError.lock().unwrap() = Some("prepared bootstrap failed".into());
+        let result = finishImmediateAcquisition(manager.acquireToolPkgExecutionEngineAsync("async-error", "package_a"));
+        assert_eq!(result.unwrap_err(), "prepared bootstrap failed");
+        assert!(manager.findToolPkgExecutionEngine("async-error", "package_a").is_none());
+        assert!(factory.engines.lock().unwrap().is_empty());
+    }
+
     /// Verifies failed startup creates no cached engine and consumes no context lease.
     #[test]
     fn failedInitializationDoesNotRegisterAnEngineOrLease() {

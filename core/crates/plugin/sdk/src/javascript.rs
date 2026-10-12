@@ -269,6 +269,13 @@ pub trait JsExecutionProvider: Send + Sync {
         context: ToolPkgExecutionContext,
     ) -> Result<Arc<dyn JsExecutionEngine>, String>;
 
+    /// Acquires a prepared engine and binds its package without blocking the caller.
+    fn acquire_toolpkg_execution_engine(
+        &self,
+        execution_host: Arc<dyn JsExecutionHost>,
+        context: ToolPkgExecutionContext,
+    ) -> JsExecutionFuture<Result<Arc<dyn JsExecutionEngine>, String>>;
+
     /// Creates one package executor bound to caller-owned runtime contracts.
     fn create_package_executor(
         &self,

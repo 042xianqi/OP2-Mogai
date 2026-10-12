@@ -19,7 +19,10 @@ implementation. Applications implement the SDK traits and inject their own host 
 - `ToolPkgExecutionEngineFactory` creates JavaScript engines.
 - `ToolPkgAssetSource` supplies embedded ToolPkg archives.
 - `PackageStateResolver` selects conditional JavaScript package states.
-- `ToolPkgPackageHost` supplies ToolPkg persistence and host file access.
+- `ToolPkgPackageHost` supplies ToolPkg persistence and host file access. Its required
+  `getToolPkgContainerRuntime` method resolves one container without cloning the full catalog.
+  `ToolPkgPackageService::prepareToolPkgComposeDslScript` captures the enabled module and
+  declared export for later resource I/O; the synchronous SDK reader uses the same resolution.
 
 ## Entry Points
 
@@ -91,6 +94,12 @@ A JavaScript engine crate implements `JsExecutionProvider`. The top-level applic
 that provider and injects it into the tool system. Package execution is represented by
 `JsPackageExecutor`, which binds one `JsPackageRuntime` and one `JsExecutionHost` without exposing
 engine-specific types.
+
+Providers explicitly implement asynchronous `acquire_toolpkg_execution_engine` in addition to
+synchronous creation. Factories implement `acquireToolPkgExecutionEngine` for the same purpose.
+`ToolPkgManager::acquireToolPkgExecutionEngineAsync` awaits that contract without holding its engine
+registry lock, then publishes a counted lease only if the package and factory generations still
+match. Acquisition futures use `JsExecutionFuture` so the Host can preserve executor affinity.
 
 ## Rust Package Execution Runtime
 

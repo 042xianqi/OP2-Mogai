@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 use std::sync::{Arc, OnceLock};
 
 use operit_host_api::HostManager::defaultHostJavaScriptRuntimeHost;
-use operit_host_api::TimeUtils::currentTimeMillisU128;
 use operit_host_api::{
     HostError, HostJavaScriptRuntime, HostJavaScriptRuntimeHost, HostJavaScriptRuntimeStateHandle,
     HostResult,
@@ -38,17 +37,16 @@ struct CompilerState {
     bytes: usize,
 }
 
-/// Reports executor work separately from caller queueing and transport.
+/// Returns lowered source and exposes cache reuse to regression tests.
 struct Compilation {
     script: String,
+    #[cfg(test)]
     cache_hit: bool,
-    elapsed_ms: u128,
 }
 
 impl CompilerState {
     /// Lowers source without evaluating plugin code and reuses only exact source/identity matches.
     fn prepare(&mut self, source: String, identity: String) -> HostResult<Compilation> {
-        let started = currentTimeMillisU128();
         if let Some(index) = self
             .entries
             .iter()
@@ -62,8 +60,8 @@ impl CompilerState {
             self.entries.push_back(entry);
             return result.map(|script| Compilation {
                 script,
+                #[cfg(test)]
                 cache_hit: true,
-                elapsed_ms: currentTimeMillisU128().saturating_sub(started),
             });
         }
         let result = self
@@ -105,8 +103,8 @@ impl CompilerState {
         }
         result.map(|script| Compilation {
             script,
+            #[cfg(test)]
             cache_hit: false,
-            elapsed_ms: currentTimeMillisU128().saturating_sub(started),
         })
     }
 }
@@ -171,17 +169,11 @@ impl Drop for ComposeCompiler {
 /// Shares immutable lowered code process-wide while keeping parser failures and page state isolated.
 pub(crate) fn prepareComposeModule(source: String, identity: String) -> HostResult<String> {
     static COMPILER: OnceLock<HostResult<ComposeCompiler>> = OnceLock::new();
-    let started = currentTimeMillisU128();
-    let bytes = source.len();
     let compiler = COMPILER
         .get_or_init(|| ComposeCompiler::new(defaultHostJavaScriptRuntimeHost()))
         .as_ref()
         .map_err(Clone::clone)?;
-    let result = compiler.prepare(source, identity.clone())?;
-    AppLogger::i("ComposeCompiler", &format!(
-        "event=compose_compile module={identity} sourceBytes={bytes} cache={} workMs={} totalMs={}",
-        if result.cache_hit { "hit" } else { "miss" }, result.elapsed_ms, currentTimeMillisU128().saturating_sub(started),
-    ));
+    let result = compiler.prepare(source, identity)?;
     Ok(result.script)
 }
 

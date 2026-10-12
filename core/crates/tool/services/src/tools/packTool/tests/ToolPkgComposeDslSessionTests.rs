@@ -101,6 +101,13 @@ async fn native_character_editor_webview_actions_preserve_session_revision_order
             return {success:true, data:null};
         };
         ToolPkg.readResource = async function() { await Promise.resolve(); return '/fixture/character-memory.html'; };
+        ToolPkg.ipc.on('character-memory.request', async function(request, meta) {
+            if (request.action !== 'snapshot' || meta.channel !== 'character-memory.request') {
+                throw new Error('Unexpected editor fixture IPC request');
+            }
+            await Promise.resolve();
+            return {fixture: 'character-snapshot'};
+        });
         return true;
     };"#;
     engine.execute_script_function(setup, "install", &options(), &BTreeMap::new(), None, false, 60, None).await.unwrap();
@@ -124,14 +131,21 @@ async fn native_character_editor_webview_actions_preserve_session_revision_order
     let mut tasks = Vec::new();
     for index in 0..12 {
         let session = session.clone();
-        let method = if index % 2 == 0 { "currentTheme" } else { "currentScreen" };
-        let action = methods[method]["__actionId"].as_str().unwrap().to_string();
-        let request = command(&format!("web-{index}"), None, Some(action), Some(serde_json::json!([])));
+        let method = if index % 2 == 0 { "loadScreen" } else { "request" };
+        let action = methods[method]["__actionId"].as_str().expect("current editor bridge method must be registered").to_string();
+        let payload = if method == "loadScreen" { serde_json::json!([]) } else { serde_json::json!([{"action":"snapshot"}]) };
+        let request = command(&format!("web-{index}"), None, Some(action), Some(payload));
         tasks.push(async move { session.execute(request).await; });
     }
     futures_util::future::join_all(tasks).await;
     events.extend(drain(&mut stream));
     assert_revisions(&events);
+    for index in 0..12 {
+        let result = events.iter().find(|event| event.requestId == format!("web-{index}") && event.phase == "final")
+            .and_then(|event| event.actionResult.as_ref()).expect("editor bridge action must return its result");
+        let snapshot = if index % 2 == 0 { &result["snapshot"] } else { result };
+        assert_eq!(snapshot, &serde_json::json!({"fixture":"character-snapshot"}));
+    }
     assert_eq!(events.iter().filter(|event| event.phase == "complete").count(), 14);
     assert_eq!(events.iter().filter(|event| event.phase == "final").count(), 14);
     session.close(); engine.destroy();

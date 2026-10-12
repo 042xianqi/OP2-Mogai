@@ -545,6 +545,9 @@
               return;
             }
           }
+          const position = graphEntry(graph.positions, graph.selected), viewport = graphViewport(graph);
+          const scale = Math.max(1, graph.camera.scale);
+          graph.camera = { scale, x: viewport.width / 2 - position.x * scale, y: viewport.height / 2 - position.y * scale };
           updateGraphSurface2(graph);
           return;
         }
@@ -758,12 +761,34 @@
       const pointer = pointerById(event.pointerId);
       state.pointers.delete(event.pointerId);
       if (pointer.surface.hasPointerCapture(event.pointerId)) pointer.surface.releasePointerCapture(event.pointerId);
+      for (const active of state.pointers.values()) {
+        active.startX = active.x;
+        active.startY = active.y;
+        if (active.node !== null) {
+          const position = graphEntry(topDialog("graph").positions, active.node.id);
+          active.node.start = { x: position.x, y: position.y };
+        }
+      }
     }
     function onWheel(event) {
       if (!(event.target instanceof Element) || event.target.closest("[data-graph-surface]") === null) return;
       event.preventDefault();
       const dialog = topDialog("graph"), bounds = requireElement(event.target.closest("[data-graph-surface]"), SVGSVGElement).getBoundingClientRect();
-      dialog.camera = zoomMemoryGraph(dialog.camera, { x: event.clientX - bounds.left, y: event.clientY - bounds.top }, Math.exp(-event.deltaY * 15e-4));
+      const deltaMode = event.deltaMode;
+      let delta = event.deltaY;
+      switch (deltaMode) {
+        case WheelEvent.DOM_DELTA_PIXEL:
+          break;
+        case WheelEvent.DOM_DELTA_LINE:
+          delta *= 16;
+          break;
+        case WheelEvent.DOM_DELTA_PAGE:
+          delta *= bounds.height;
+          break;
+        default:
+          throw new Error(`Unsupported wheel delta mode: ${deltaMode}`);
+      }
+      dialog.camera = zoomMemoryGraph(dialog.camera, { x: event.clientX - bounds.left, y: event.clientY - bounds.top }, Math.exp(-delta * 15e-4));
       updateGraphSurface2(dialog);
     }
     function onKeyDown(event) {
@@ -2432,7 +2457,7 @@ ${sections.join("\n\n")}`;
       dialogsRoot.addEventListener("pointermove", gestures.onPointerMove);
       dialogsRoot.addEventListener("pointerup", gestures.onPointerUp);
       dialogsRoot.addEventListener("pointercancel", gestures.onPointerUp);
-      dialogsRoot.addEventListener("wheel", gestures.onWheel, { passive: false });
+      document.addEventListener("wheel", gestures.onWheel, { passive: false, capture: true });
       dialogsRoot.addEventListener("keydown", gestures.onKeyDown);
     }
     async function initialize2(view = "characters", initial) {

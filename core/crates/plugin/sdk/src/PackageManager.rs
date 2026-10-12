@@ -593,6 +593,15 @@ mod tests {
         ) -> Result<Arc<dyn JsExecutionEngine>, String> {
             Ok(Arc::new(TestExecutionEngine))
         }
+
+        /// Completes the asynchronous factory contract with this consumer's explicit engine implementation.
+        #[allow(non_snake_case)]
+        fn acquireToolPkgExecutionEngine(
+            &self, context: ToolPkgExecutionContext,
+        ) -> crate::javascript::JsExecutionFuture<Result<Arc<dyn JsExecutionEngine>, String>> {
+            let result = self.createToolPkgExecutionEngine(context);
+            Box::pin(async move { result })
+        }
     }
 
     /// Asset source used by tests that load the ToolPkg hook main entry.

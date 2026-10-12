@@ -123,7 +123,10 @@ impl FileSystemHost for ResourceHost {
     fn environmentDescriptor(&self) -> HostEnvironmentDescriptor {
         HostEnvironmentDescriptor::default()
     }
+    /// Accepts host-native separators when listing the virtual fixture directory.
     fn listFiles(&self, path: &str) -> HostResult<Vec<FileEntry>> {
+        let normalized = path.replace('\\', "/");
+        let path = normalized.as_str();
         if self.invalid_name {
             return Ok(vec![FileEntry {
                 name: "../outside".into(),
@@ -153,7 +156,10 @@ impl FileSystemHost for ResourceHost {
             })
             .collect())
     }
+    /// Accepts host-native separators when reading a virtual fixture resource.
     fn readFileBytes(&self, path: &str) -> HostResult<Vec<u8>> {
+        let normalized = path.replace('\\', "/");
+        let path = normalized.as_str();
         self.reads.lock().unwrap().push(path.into());
         if self.fail {
             return Err(operit_host_api::HostError::new("read failed"));

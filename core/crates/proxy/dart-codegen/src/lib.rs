@@ -2121,6 +2121,7 @@ mod tests {
             args: vec![],
             rust_return_type: String::new(),
             is_async: false,
+            returns_owned_future: false,
             cfg_attrs: vec![],
             doc_lines: vec![],
             protocol: MethodProtocol::Watch(operit_rslink_codegen::WatchProtocol {

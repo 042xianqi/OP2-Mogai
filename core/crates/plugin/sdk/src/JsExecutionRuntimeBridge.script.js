@@ -146,7 +146,7 @@
                 throw new Error('Required host binding __operitNativeCallToolStructured is unavailable');
             }
             return invokeHostAsync(root.__operitNativeCallToolStructured,
-                [parsed.type, parsed.name, parsed.params], parseToolResult);
+                [parsed.type, parsed.name, parsed.params, String(root.__operitCurrentCallId)], parseToolResult);
         } catch (error) {
             return Promise.reject(error);
         }

@@ -31,6 +31,10 @@ pub trait ToolPkgPackageHost: Send + Sync {
     #[allow(non_snake_case)]
     fn toolPkgContainersInternal(&self) -> BTreeMap<String, ToolPkgContainerRuntime>;
 
+    /// Returns only the requested container without copying the full package catalog.
+    #[allow(non_snake_case)]
+    fn getToolPkgContainerRuntime(&self, packageName: &str) -> Option<ToolPkgContainerRuntime>;
+
     /// Returns all registered ToolPkg subpackage runtimes keyed by package name.
     #[allow(non_snake_case)]
     fn toolPkgSubpackageByPackageNameInternal(&self) -> BTreeMap<String, ToolPkgSubpackageRuntime>;
@@ -94,6 +98,29 @@ pub trait ToolPkgPackageHost: Send + Sync {
         runtime: &ToolPkgContainerRuntime,
         resourcePath: &str,
     ) -> Option<Vec<u8>>;
+}
+
+/// Captures the exact Compose entry and package revision before resource I/O begins.
+pub struct ToolPkgComposeDslScriptSource {
+    runtime: ToolPkgContainerRuntime,
+    screen: String,
+    export_name: Option<String>,
+}
+
+impl ToolPkgComposeDslScriptSource {
+    /// Reads the captured entry and binds its declared export with the supplied resource capability.
+    pub fn read(self, read_resource: impl FnOnce(&ToolPkgContainerRuntime, &str) -> Option<Vec<u8>>) -> Option<String> {
+        let bytes = read_resource(&self.runtime, &self.screen)?;
+        let mut script = String::from_utf8(bytes).ok()?;
+        if let Some(export_name) = self.export_name {
+            let export_name = serde_json::to_string(&export_name)
+                .expect("registered screen export name must serialize");
+            script.push_str(&format!(
+                "\n;Object.defineProperty(module.exports, '__operit_compose_entry_export', {{value: {export_name}}});\n"
+            ));
+        }
+        Some(script)
+    }
 }
 
 /// Provides SDK-owned ToolPkg package queries and resource workflows.
@@ -965,22 +992,20 @@ impl<'a> ToolPkgPackageService<'a> {
         None
     }
 
-    /// Reads the Compose DSL script for one enabled ToolPkg UI module.
+    /// Resolves one enabled Compose entry without reading its resource files.
     #[allow(non_snake_case)]
-    pub fn getToolPkgComposeDslScript(
+    pub fn prepareToolPkgComposeDslScript(
         &self,
         containerPackageName: &str,
         uiModuleId: Option<&str>,
-    ) -> Option<String> {
+    ) -> Option<ToolPkgComposeDslScriptSource> {
         self.packageManager.ensureInitialized();
         let normalizedContainerPackageName = self
             .packageManager
             .normalizePackageName(containerPackageName);
         let runtime = self
             .packageManager
-            .toolPkgContainersInternal()
-            .get(&normalizedContainerPackageName)
-            .cloned()?;
+            .getToolPkgContainerRuntime(&normalizedContainerPackageName)?;
         let enabledSet = self.packageManager.getEnabledPackageNameSetInternal();
         if !enabledSet.contains(&runtime.packageName) {
             return None;
@@ -1006,63 +1031,31 @@ impl<'a> ToolPkgPackageService<'a> {
             return None;
         }
 
-        let bytes = self
-            .packageManager
-            .readToolPkgResourceBytes(&runtime, &uiModule.screen)?;
-        let mut script = String::from_utf8(bytes).ok()?;
-        if let Some(exportName) = &uiModule.screenExport {
-            let exportName = serde_json::to_string(exportName)
-                .expect("registered screen export name must serialize");
-            // Bind the declared entry explicitly instead of guessing a default export from the module.
-            script.push_str(&format!(
-                "\n;Object.defineProperty(module.exports, '__operit_compose_entry_export', {{value: {exportName}}});\n"
-            ));
-        }
-        Some(script)
+        let screen = uiModule.screen.clone();
+        let export_name = uiModule.screenExport.clone();
+        Some(ToolPkgComposeDslScriptSource { runtime, screen, export_name })
     }
 
-    /// Returns the Compose DSL screen path for one enabled ToolPkg UI module.
+    /// Reads the Compose entry synchronously for SDK consumers.
+    #[allow(non_snake_case)]
+    pub fn getToolPkgComposeDslScript(
+        &self,
+        containerPackageName: &str,
+        uiModuleId: Option<&str>,
+    ) -> Option<String> {
+        self.prepareToolPkgComposeDslScript(containerPackageName, uiModuleId)?
+            .read(|runtime, screen| self.packageManager.readToolPkgResourceBytes(runtime, screen))
+    }
+
+    /// Returns the screen path using the same module resolution as script loading.
     #[allow(non_snake_case)]
     pub fn getToolPkgComposeDslScreenPath(
         &self,
         containerPackageName: &str,
         uiModuleId: Option<&str>,
     ) -> Option<String> {
-        self.packageManager.ensureInitialized();
-        let normalizedContainerPackageName = self
-            .packageManager
-            .normalizePackageName(containerPackageName);
-        let runtime = self
-            .packageManager
-            .toolPkgContainersInternal()
-            .get(&normalizedContainerPackageName)
-            .cloned()?;
-        let enabledSet = self.packageManager.getEnabledPackageNameSetInternal();
-        if !enabledSet.contains(&runtime.packageName) {
-            return None;
-        }
-
-        let uiModule =
-            if let Some(uiModuleId) = uiModuleId.map(str::trim).filter(|value| !value.is_empty()) {
-                runtime.uiModules.iter().find(|module| {
-                    module.id.eq_ignore_ascii_case(uiModuleId)
-                        && module
-                            .runtime
-                            .eq_ignore_ascii_case(TOOLPKG_RUNTIME_COMPOSE_DSL)
-                })
-            } else {
-                runtime.uiModules.iter().find(|module| {
-                    module
-                        .runtime
-                        .eq_ignore_ascii_case(TOOLPKG_RUNTIME_COMPOSE_DSL)
-                })
-            }?;
-
-        let screen = uiModule.screen.trim().to_string();
-        if screen.is_empty() {
-            return None;
-        }
-        Some(screen)
+        self.prepareToolPkgComposeDslScript(containerPackageName, uiModuleId)
+            .map(|source| source.screen.trim().to_string())
     }
 
     /// Reads a UTF-8 text resource from an enabled ToolPkg container or subpackage.

@@ -5,7 +5,8 @@ import 'ComposeDslImageSource.dart';
 import '../../../../core/application/PluginHotReload.dart';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show listEquals, debugPrintSynchronously;
+import 'package:flutter/foundation.dart'
+    show listEquals, debugPrintSynchronously;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -95,16 +96,16 @@ class ToolPkgUiLauncherScreen extends StatefulWidget {
       _ToolPkgUiLauncherScreenState();
 }
 
-/// First-load stages are logged by default; profiling also includes later updates.
+/// Logs loading stages only when plugin UI profiling is explicitly enabled.
 /// Frame completion is a Flutter tree measurement, not a GPU presentation timestamp.
 class _ToolPkgUiLoadTiming {
+  /// Starts the optional profiling clock for one UI load.
   _ToolPkgUiLoadTiming(
     this.label, {
     bool firstLoad = false,
     int? queueWaitMicros,
     int? startedAfterMicros,
-  }) : _watch =
-           firstLoad || const bool.fromEnvironment('OPERIT_PROFILE_PLUGIN_UI')
+  }) : _watch = const bool.fromEnvironment('OPERIT_PROFILE_PLUGIN_UI')
            ? (Stopwatch()..start())
            : null {
     if (_watch != null && queueWaitMicros != null) {
@@ -129,6 +130,7 @@ class _ToolPkgUiLoadTiming {
     return result;
   }
 
+  /// Records a loading stage while plugin UI profiling is enabled.
   void mark(String stage, {int? startedMicros}) {
     final watch = _watch;
     if (watch == null) return;
@@ -176,7 +178,7 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
   Object? _composeSessionError;
   StackTrace? _composeSessionErrorStack;
   bool _composeHasRendered = false;
-  final _firstTreeWatch = Stopwatch()..start();
+  final _firstTreeWatch = Stopwatch();
   bool _firstTreeFrameReported = false;
   bool _firstTreeFrameScheduled = false;
   StreamController<core_proxy.ToolPkgComposeDslCommand>? _composeCommands;
@@ -187,9 +189,13 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
   GeneratedApplicationPackageManagerCoreProxy get _packageManager =>
       widget.clients.application.packageManager();
 
+  /// Registers the screen lifecycle and starts explicitly requested UI profiling.
   @override
   void initState() {
     super.initState();
+    if (const bool.fromEnvironment('OPERIT_PROFILE_PLUGIN_UI')) {
+      _firstTreeWatch.start();
+    }
     ComposeDslWebViewHostRegistry.ensureHostInteractionRegistered();
     PluginHotReload.revision.addListener(_reloadDevelopmentPackage);
   }
@@ -536,6 +542,7 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
   /// Measures first committed DSL-tree frame, including any initial render queue.
   /// A prewarmed sidebar can complete this while its presentation is hidden.
   void _reportFirstTreeFrame() {
+    if (!const bool.fromEnvironment('OPERIT_PROFILE_PLUGIN_UI')) return;
     if (_firstTreeFrameReported || _firstTreeFrameScheduled) return;
     _firstTreeFrameScheduled = true;
     final treeReadyMicros = _firstTreeWatch.elapsedMicroseconds;
@@ -594,11 +601,6 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
         containerPackageName: executionContext.containerPackageName,
       ),
     );
-    ClientLogger.i(
-      'event=compose_session_open package=${executionContext.containerPackageName} '
-      'context=${executionContext.contextKey} session=$sessionId',
-      tag: _logTag,
-    );
     _composeSessionId = sessionId;
     _composeSessionError = null;
     _composeSessionErrorStack = null;
@@ -642,11 +644,6 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
   Future<void> _releaseExecutionContext(
     ({String contextKey, String containerPackageName}) executionContext,
   ) async {
-    ClientLogger.i(
-      'event=compose_session_close package=${executionContext.containerPackageName} '
-      'context=${executionContext.contextKey} session=$_composeSessionId',
-      tag: _logTag,
-    );
     final commands = _composeCommands;
     final updates = _composeUpdates;
     final submission = _composeSubmission;
@@ -672,13 +669,17 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
     final oldRoot = _renderResult?.tree;
     final update = event.update;
     if (update != null) {
-      final watch = const bool.fromEnvironment('OPERIT_PROFILE_COMPOSE_STAGES') ? (Stopwatch()..start()) : null;
+      final watch = const bool.fromEnvironment('OPERIT_PROFILE_COMPOSE_STAGES')
+          ? (Stopwatch()..start())
+          : null;
       _nodeStore.apply(update);
       if (watch != null) {
-        debugPrintSynchronously('event=compose_pipeline_stage stage=dart-node-apply '
-            'durationMs=${(watch.elapsedMicroseconds / 1000).toStringAsFixed(3)} '
-            'wallMicros=${DateTime.now().microsecondsSinceEpoch} request=${event.requestId} '
-            'revision=${update.revision} nodes=${update.upserts.length}');
+        debugPrintSynchronously(
+          'event=compose_pipeline_stage stage=dart-node-apply '
+          'durationMs=${(watch.elapsedMicroseconds / 1000).toStringAsFixed(3)} '
+          'wallMicros=${DateTime.now().microsecondsSinceEpoch} request=${event.requestId} '
+          'revision=${update.revision} nodes=${update.upserts.length}',
+        );
       }
     }
     if (oldRoot == null && update == null) return;
@@ -966,7 +967,8 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
     return <String, Object?>{
       if (updateInputs) '__operit_update_inputs': true,
       if (updateInputs) '__operit_input_state': widget.initialState,
-      if (const bool.fromEnvironment('OPERIT_PROFILE_COMPOSE_STAGES')) '__operit_profile_compose_stages': true,
+      if (const bool.fromEnvironment('OPERIT_PROFILE_COMPOSE_STAGES'))
+        '__operit_profile_compose_stages': true,
       'packageName': widget.plugin.packageName,
       'theme': pluginThemeSnapshot(_themeScheme!),
       'containerPackageName': widget.plugin.packageName,

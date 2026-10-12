@@ -30,48 +30,36 @@ export function renderMemoryMenu(ctx: ComposeDslContext): ComposeNode {
   if (chatId !== null) chatIdentity(chatId, "memory menu chatId");
   const owner = ctx.useRef("memory-menu-chat", chatId);
   const [preferences, setPreferences] = ctx.useState<GlobalMemoryPreferences | null>("memory-menu-preferences", null);
-  const [queue, setQueue] = ctx.useState<MemoryAutoSaveStatus | null>("memory-menu-queue", null);
+  const [, setQueue] = ctx.useState<MemoryAutoSaveStatus | null>("memory-menu-queue", null);
   const [expanded, setExpanded] = ctx.useState("memory-menu-expanded", false);
   const [busy, setBusy] = ctx.useState("memory-menu-busy", false);
   const liveBusy = ctx.useRef("memory-menu-busy-live", false);
   const started = ctx.useRef("memory-menu-started", false);
-  const polling = ctx.useRef("memory-menu-polling", false);
   const colors = ctx.MaterialTheme.colorScheme;
+  /** Rejects actions retained after the host changes the chat owner. */
   function assertOwner(): void {
     const [current] = ctx.useState<string | null>("chatId", null);
     if (current !== owner.current) throw new Error("Memory menu chat owner changed");
   }
   assertOwner();
-  /** Reads the queue for this chat and preserves the original nonblocking polling failure behavior. */
-  async function poll(): Promise<void> {
+  /** Reads current queue status only when the menu or a user action requests it. */
+  async function refreshQueue(): Promise<void> {
     assertOwner();
-    if (polling.current || chatId === null) return;
-    polling.current = true;
-    try { const value = await request({ action: "readChatMemoryAutoSaveStatus", chatId }); assertOwner(); setQueue(value); }
-    catch (error) { console.error("Memory queue status: " + String(error)); }
-    finally { polling.current = false; }
+    if (chatId === null) return;
+    const value = await request({ action: "readChatMemoryAutoSaveStatus", chatId });
+    assertOwner(); setQueue(value);
   }
-  /** Schedules the same three-second queue checks within this Compose execution's cancellable timers. */
-  function schedulePoll(): void {
-    setTimeout(async () => { assertOwner(); await poll(); schedulePoll(); }, 3000);
-  }
-  /** Matches the original one-second preference refresh without changing the group's local expansion state. */
-  function schedulePreferences(): void {
-    setTimeout(async () => {
-      assertOwner();
-      try {
-        const value = await request({ action: "readGlobalMemoryPreferences" }); assertOwner();
-        const [current] = ctx.useState<GlobalMemoryPreferences | null>("memory-menu-preferences", null);
-        if (current === null || current.userDescriptionEnabled !== value.userDescriptionEnabled || current.autoUpdateEnabled !== value.autoUpdateEnabled) setPreferences(value);
-      } catch (error) { console.error("Memory menu preferences: " + String(error)); }
-      schedulePreferences();
-    }, 1000);
-  }
-  /** Initializes actual preferences once, then retains the original background status cadence. */
+  /** Loads persisted preferences and queue status once for this menu instance. */
   async function load(): Promise<void> {
     assertOwner(); if (started.current) return; started.current = true;
     const value = await request({ action: "readGlobalMemoryPreferences" }); assertOwner(); setPreferences(value);
-    await poll(); schedulePoll(); schedulePreferences();
+    await refreshQueue();
+  }
+  /** Reads current status before presenting the user-requested explanation. */
+  async function showInfo(): Promise<ToolPkg.JsonValue> {
+    await refreshQueue(); assertOwner();
+    const [current] = ctx.useState<MemoryAutoSaveStatus | null>("memory-menu-queue", null);
+    return { type: "toolpkg.ui.present", routeId: `toolpkg:${definition.id}:ui:memory-status`, input: { description: memoryQueueDescription(current) } };
   }
   /** Writes the same global preference consumed by prompt composition or the automatic job scheduler. */
   async function toggle(key: keyof GlobalMemoryPreferences): Promise<void> {
@@ -86,12 +74,13 @@ export function renderMemoryMenu(ctx: ComposeDslContext): ComposeNode {
     assertOwner(); if (liveBusy.current || chatId === null) return null;
     liveBusy.current = true; setBusy(true);
     try {
-      await request({ action: "updateCurrentChatMemory", chatId }); assertOwner(); await poll();
+      await request({ action: "updateCurrentChatMemory", chatId }); assertOwner(); await refreshQueue();
       return { type: "toolpkg.ui.message", message: "记忆提取完成" };
     } catch (error) {
       assertOwner(); return { type: "toolpkg.ui.message", message: "记忆提取失败：" + String(error) };
     } finally { liveBusy.current = false; assertOwner(); setBusy(false); }
   }
+  /** Creates the compact icon shared by memory menu rows. */
   function icon(name: string, color = colors.onSurfaceVariant): ComposeNode { return ctx.UI.Icon({ name, size: 16, tint: color }); }
   /** Reproduces the 32-pixel rows and 40-by-28 compact switches without a separate card. */
   function switchRow(key: keyof GlobalMemoryPreferences, name: string, title: string): ComposeNode {
@@ -112,7 +101,7 @@ export function renderMemoryMenu(ctx: ComposeDslContext): ComposeNode {
     ctx.UI.Text({ text: "记忆", style: "bodySmall" }), ctx.UI.Spacer({ width: 8 }),
     ctx.UI.Text({ text: memorySummary(preferences), style: "bodySmall", color: colors.primary, fontWeight: "600", textAlign: "end", maxLines: 1, overflow: "ellipsis", weight: 1 }),
     ctx.UI.IconButton({ key: "memory-info", tooltip: "记忆状态说明", width: 24, height: 28, contentPadding: { horizontal: 0, vertical: 0 },
-      onClick: () => { assertOwner(); return { type: "toolpkg.ui.present", routeId: `toolpkg:${definition.id}:ui:memory-status`, input: { description: memoryQueueDescription(queue) } }; },
+      onClick: showInfo,
       content: ctx.UI.Icon({ name: "InfoOutline", size: 16, tint: colors.onSurfaceVariant.copy({ alpha: 0.7 }) }) }),
     ctx.UI.Spacer({ width: 6 }), ctx.UI.Icon({ name: expanded ? "KeyboardArrowUp" : "KeyboardArrowDown", size: 20, tint: colors.onSurfaceVariant }),
   ])];

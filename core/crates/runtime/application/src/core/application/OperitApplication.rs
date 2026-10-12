@@ -691,15 +691,18 @@ impl OperitApplication {
     }
 
     /// Tests one model connection using this application's provider runtime.
-    pub async fn test_model_connection(
+    pub fn test_model_connection(
         &self,
         provider_id: String,
         model_id: String,
-    ) -> Result<ModelConnectionTestReport, String> {
-        ModelConfigManager::default()
-            .testModelConnection(&provider_id, &model_id, self.providerRuntimeContext.clone())
-            .await
-            .map_err(|error| error.to_string())
+    ) -> impl std::future::Future<Output = Result<ModelConnectionTestReport, String>> + 'static {
+        let runtime = self.providerRuntimeContext.clone();
+        async move {
+            ModelConfigManager::default()
+                .testModelConnection(&provider_id, &model_id, runtime)
+                .await
+                .map_err(|error| error.to_string())
+        }
     }
 
     /// Returns the Cargo package version compiled into the runtime crate.

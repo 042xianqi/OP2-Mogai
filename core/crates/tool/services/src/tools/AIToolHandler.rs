@@ -1002,6 +1002,11 @@ impl AIToolHandler {
         let tool = request.toLegacyTool();
         let tool = &tool;
         let isAiInvocation = matches!(policy, ToolExecutionPolicy::Ai { .. });
+        let logExecution = if isAiInvocation {
+            ChainLogger::info
+        } else {
+            ChainLogger::verbose
+        };
         let _lifecycle = if isAiInvocation {
             let lifecycle = ToolInvocationLifecycle {
                 context: context.clone(),
@@ -1013,7 +1018,7 @@ impl AIToolHandler {
             None
         };
         let startMs = operit_host_api::TimeUtils::currentTimeMillis();
-        ChainLogger::info(
+        logExecution(
             TOOL_CHAIN,
             "tool.execute.request",
             &[("tool", tool.name.clone()), ("policy", format!("{policy:?}"))],
@@ -1067,7 +1072,7 @@ impl AIToolHandler {
                         self.notifyToolExecutionResult(tool, result);
                     }
                 }
-                ChainLogger::info(
+                logExecution(
                     TOOL_CHAIN,
                     "tool.execute.completed",
                     &[("tool", tool.name.clone()), ("resultCount", results.len().to_string()),
@@ -1493,50 +1498,28 @@ impl JsExecutionHost for AIToolHandler {
             .ok_or_else(|| {
                 "HostRuntimeTaskSchedulerHost is required for ToolPkg IPC".to_string()
             })?;
-        ChainLogger::info(
-            TOOL_CHAIN,
-            "toolpkg.ipc.submit",
-            &[
-                ("package", packageTarget.clone()),
-                ("channel", channel.clone()),
-                ("targetContext", targetContextKey.clone()),
-                ("targetRuntime", targetRuntime.clone()),
-            ],
-        );
         scheduler
             .scheduleHostRuntimeAsyncTask(
                 "operit-toolpkg-ipc",
                 Box::new(move || {
                     Box::pin(async move {
-                        let startedMs = operit_host_api::TimeUtils::currentTimeMillis();
-                        ChainLogger::info(
-                            TOOL_CHAIN,
-                            "toolpkg.ipc.target_start",
-                            &[
-                                ("package", packageTarget.clone()),
-                                ("channel", channel.clone()),
-                                ("targetContext", targetContextKey.clone()),
-                                ("targetRuntime", targetRuntime.clone()),
-                            ],
-                        );
                         let result =
                             crate::tools::ToolJsRuntime::invokeToolPkgIpc(&toolHandler, request)
                                 .await;
-                        let elapsedMs = operit_host_api::TimeUtils::currentTimeMillis()
-                            .saturating_sub(startedMs);
-                        let outcome = if result.is_ok() { "success" } else { "error" };
-                        ChainLogger::info(
-                            TOOL_CHAIN,
-                            "toolpkg.ipc.target_finish",
-                            &[
-                                ("package", packageTarget),
-                                ("channel", channel),
-                                ("targetContext", targetContextKey),
-                                ("targetRuntime", targetRuntime),
-                                ("elapsedMs", elapsedMs.to_string()),
-                                ("outcome", outcome.to_string()),
-                            ],
-                        );
+                        if let Err(error) = &result {
+                            ChainLogger::error(
+                                TOOL_CHAIN,
+                                "toolpkg.ipc.target_finish",
+                                &[
+                                    ("package", packageTarget),
+                                    ("channel", channel),
+                                    ("targetContext", targetContextKey),
+                                    ("targetRuntime", targetRuntime),
+                                    ("outcome", "error".to_string()),
+                                    ("error", error.clone()),
+                                ],
+                            );
+                        }
                         completion(result);
                     })
                 }),

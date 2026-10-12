@@ -8,7 +8,9 @@ pub use core_command_catalog::{ResolvedToolPkgCoreCommand, ToolPkgCoreCommandCat
 
 #[path = "ToolPkgTextResourceCache.rs"]
 mod text_resource_cache;
-use text_resource_cache::{read_text_resources, ToolPkgTextResourceCache};
+use text_resource_cache::ToolPkgTextResourceCache;
+#[path = "ToolPkgResourceReader.rs"]
+mod resource_reader;
 
 use crate::tools::packTool::ToolPkgPublicApiUiCatalog::{discover_public_api_owners, ToolPkgPublicApiOwner};
 
@@ -18,6 +20,7 @@ use operit_store::RuntimeStorageHost::defaultRuntimeStorageHost;
 use crate::tools::packTool::ToolPkgComposeDslSession::ToolPkgComposeDslSession;
 use crate::tools::packTool::ToolPkgDesktopWidgetService::ToolPkgDesktopWidgetSnapshot;
 use std::cell::RefCell;
+use std::future::Future;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -124,6 +127,14 @@ impl ToolPkgExecutionEngineFactory for RuntimeToolPkgExecutionEngineFactory {
     ) -> Result<Arc<dyn JsExecutionEngine>, String> {
         self.jsExecutionProvider
             .create_toolpkg_execution_engine(Arc::new(self.toolHandler.clone()), context)
+    }
+
+    /// Acquires a prepared page engine through the shared execution provider.
+    #[allow(non_snake_case)]
+    fn acquireToolPkgExecutionEngine(
+        &self, context: ToolPkgExecutionContext,
+    ) -> operit_plugin_sdk::javascript::JsExecutionFuture<Result<Arc<dyn JsExecutionEngine>, String>> {
+        self.jsExecutionProvider.acquire_toolpkg_execution_engine(Arc::new(self.toolHandler.clone()), context)
     }
 }
 
@@ -349,14 +360,39 @@ impl RuntimePackageManager {
     /// Waits outside the manager lock and clones only a completed canonical registration snapshot.
     #[allow(non_snake_case)]
     pub async fn readySnapshot(manager: Arc<Mutex<Self>>) -> Result<Self, String> {
+        Self::withReady(manager, |manager| Ok(manager.clone())).await
+    }
+
+    /// Captures only request-owned state after readiness without holding the owner across await.
+    pub(crate) async fn withReady<T>(
+        manager: Arc<Mutex<Self>>,
+        capture: impl FnOnce(&Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        Self::withReadyObserved(manager, capture, |_| Ok(())).await
+    }
+
+    /// Observes readiness and lock boundaries without holding the registry across an await.
+    #[allow(non_snake_case)]
+    pub(crate) async fn withReadyObserved<T>(
+        manager: Arc<Mutex<Self>>,
+        capture: impl FnOnce(&Self) -> Result<T, String>,
+        mut observe: impl FnMut(&'static str) -> Result<(), String>,
+    ) -> Result<T, String> {
         let readiness = {
             let manager = manager.lock().map_err(|error| error.to_string())?;
+            observe("registryProbeLockMs")?;
             manager.packageRegistryReadiness()
         };
+        observe("registryProbeMs")?;
         readiness.wait_until_ready().await?;
+        observe("registryReadyMs")?;
         let manager = manager.lock().map_err(|error| error.to_string())?;
+        observe("registryOwnerLockMs")?;
         manager.packageRegistryReadiness.require_ready()?;
-        Ok(manager.clone())
+        let captured = capture(&manager)?;
+        drop(manager);
+        observe("registryCaptureMs")?;
+        Ok(captured)
     }
 
     /// Finds exact registerApi owners from the ready catalog without invoking their handlers or building domain UI inputs.
@@ -383,43 +419,94 @@ impl RuntimePackageManager {
 
     /// Calls one registerApi export in its owning main runtime without dispatching an AI tool.
     #[allow(non_snake_case)]
-    pub async fn invokeToolPkgPublicApi(
+    pub fn invokeToolPkgPublicApi(
         &self,
         packageName: &str,
         methodName: &str,
         payload: serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
-        let runtime = self.requireToolPkgPublicApiRuntime(packageName)?;
-        let declaration = selectToolPkgPublicApi(&runtime, methodName)?.clone();
-        let script = self.getRegisteredToolPkgMainScript(&runtime.packageName)
-            .ok_or_else(|| format!("ToolPkg main script is unavailable: {}", runtime.packageName))?;
-        let contextKey = format!("toolpkg_main:{}", runtime.packageName);
-        let engine = self.getToolPkgExecutionEngine(&contextKey, &runtime.packageName)?;
-        let event = operit_plugin_sdk::js_sdk::toolpkg::ToolPkgPublicApiEvent {
-            payload,
-            callerPackage: "host".to_string(),
-        };
-        let serde_json::Value::Object(event) = serde_json::to_value(event)
-            .map_err(|error| error.to_string())? else {
-            return Err("ToolPkg public API event must serialize to an object".to_string());
-        };
-        let mut params = event.into_iter().collect::<BTreeMap<_, _>>();
-        params.insert("__operit_ui_package_name".to_string(), serde_json::Value::String(runtime.packageName.clone()));
-        params.insert("toolPkgId".to_string(), serde_json::Value::String(runtime.packageName.clone()));
-        params.insert("containerPackageName".to_string(), serde_json::Value::String(runtime.packageName));
-        params.insert("__operit_execution_context_key".to_string(), serde_json::Value::String(contextKey));
-        params.insert("__operit_toolpkg_runtime_kind".to_string(), serde_json::Value::String("main".to_string()));
-        params.insert("__operit_script_screen".to_string(), serde_json::Value::String(runtime.mainEntry));
-        params.insert("__operit_toolpkg_api_version".to_string(), serde_json::Value::String(runtime.apiVersion));
-        if let Some(source) = declaration.functionSource {
-            params.insert("__operit_inline_function_name".to_string(), serde_json::Value::String(declaration.function.clone()));
-            params.insert("__operit_inline_function_source".to_string(), serde_json::Value::String(source));
+    ) -> impl Future<Output = Result<serde_json::Value, String>> + 'static {
+        let manager = self.toolPkgManager().clone();
+        let reader = self.resourceReader();
+        let apiName = format!("{packageName}/{methodName}");
+        let prepared = (|| {
+            let runtime = self.requireToolPkgPublicApiRuntime(packageName)?;
+            let declaration = selectToolPkgPublicApi(&runtime, methodName)?.clone();
+            Ok::<_, String>((runtime, declaration))
+        })();
+        async move {
+            let (runtime, declaration) = prepared?;
+            let contextKey = format!("toolpkg_main:{}", runtime.packageName);
+            let engine = manager.getToolPkgExecutionEngine(&contextKey, &runtime.packageName)?;
+            let script = reader.mainScript(&runtime)?;
+            if !manager
+                .findToolPkgExecutionEngine(&contextKey, &runtime.packageName)
+                .is_some_and(|current| Arc::ptr_eq(&current, &engine))
+            {
+                return Err("ToolPkg execution context has been released or replaced".to_string());
+            }
+            let event = operit_plugin_sdk::js_sdk::toolpkg::ToolPkgPublicApiEvent {
+                payload,
+                callerPackage: "host".to_string(),
+            };
+            let serde_json::Value::Object(event) =
+                serde_json::to_value(event).map_err(|error| error.to_string())?
+            else {
+                return Err("ToolPkg public API event must serialize to an object".to_string());
+            };
+            let mut params = event.into_iter().collect::<BTreeMap<_, _>>();
+            params.insert(
+                "__operit_ui_package_name".to_string(),
+                serde_json::Value::String(runtime.packageName.clone()),
+            );
+            params.insert(
+                "toolPkgId".to_string(),
+                serde_json::Value::String(runtime.packageName.clone()),
+            );
+            params.insert(
+                "containerPackageName".to_string(),
+                serde_json::Value::String(runtime.packageName),
+            );
+            params.insert(
+                "__operit_execution_context_key".to_string(),
+                serde_json::Value::String(contextKey),
+            );
+            params.insert(
+                "__operit_toolpkg_runtime_kind".to_string(),
+                serde_json::Value::String("main".to_string()),
+            );
+            params.insert(
+                "__operit_script_screen".to_string(),
+                serde_json::Value::String(runtime.mainEntry),
+            );
+            params.insert(
+                "__operit_toolpkg_api_version".to_string(),
+                serde_json::Value::String(runtime.apiVersion),
+            );
+            if let Some(source) = declaration.functionSource {
+                params.insert(
+                    "__operit_inline_function_name".to_string(),
+                    serde_json::Value::String(declaration.function.clone()),
+                );
+                params.insert(
+                    "__operit_inline_function_source".to_string(),
+                    serde_json::Value::String(source),
+                );
+            }
+            let raw = engine
+                .execute_script_function_async(
+                    script,
+                    declaration.function,
+                    params,
+                    BTreeMap::new(),
+                    None,
+                    true,
+                    60_000,
+                )
+                .await
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| format!("Public API returned no JSON result: {apiName}"))?;
+            serde_json::from_str(&raw).map_err(|error| error.to_string())
         }
-        let raw = engine.execute_script_function_async(
-            script, declaration.function, params, BTreeMap::new(), None, true, 60_000,
-        ).await.map_err(|error| error.to_string())?
-            .ok_or_else(|| format!("Public API returned no JSON result: {packageName}/{methodName}"))?;
-        serde_json::from_str(&raw).map_err(|error| error.to_string())
     }
 
     /// Requires a real enabled public API owner after the canonical registry has finished loading.
@@ -432,8 +519,9 @@ impl RuntimePackageManager {
         }
         let runtime = self.getToolPkgContainerRuntime(packageName)
             .ok_or_else(|| format!("ToolPkg container not found: {packageName}"))?;
-        if !self.getEnabledToolPkgContainerRuntimes().iter()
-            .any(|enabled| enabled.packageName == runtime.packageName) {
+        if !self.toolPkgManager().isEnabledToolPkgContainer(
+            &runtime.packageName, &self.getEnabledPackageNames(),
+        ) {
             return Err(format!("ToolPkg public API owner is disabled: {packageName}"));
         }
         if runtime.publicApi.is_none() {
@@ -452,7 +540,8 @@ impl RuntimePackageManager {
     /// Releases one explicitly owned ToolPkg execution engine.
     pub fn releaseToolPkgExecutionEngine(&self, contextKey: &str, containerPackageName: &str) {
         let key = (contextKey.to_string(), containerPackageName.to_string());
-        if let Some(session) = self.composeDslSessions.lock().expect("Compose session registry mutex poisoned").remove(&key) { session.close(); }
+        let mut sessions = self.composeDslSessions.lock().expect("Compose session registry mutex poisoned");
+        if let Some(session) = sessions.remove(&key) { session.close(); }
         self.toolPkgManager()
             .releaseToolPkgExecutionEngine(contextKey, containerPackageName);
     }
@@ -461,9 +550,19 @@ impl RuntimePackageManager {
     /// Acquires a lease outside the proxy's package-manager lock. Worker startup
     /// authenticates against that same manager, so synchronous proxy dispatch
     /// would deadlock while waiting for the worker to finish initialization.
-    pub async fn acquireToolPkgExecutionEngine(&self, contextKey: &str, containerPackageName: &str) -> Result<(), String> {
-        self.toolPkgManager()
-            .acquireToolPkgExecutionEngine(contextKey, containerPackageName)
+    pub fn acquireToolPkgExecutionEngine(
+        &self,
+        contextKey: &str,
+        containerPackageName: &str,
+    ) -> impl Future<Output = Result<(), String>> + 'static {
+        let manager = self.toolPkgManager().clone();
+        let contextKey = contextKey.to_string();
+        let containerPackageName = containerPackageName.to_string();
+        async move {
+            manager
+                .acquireToolPkgExecutionEngineAsync(&contextKey, &containerPackageName)
+                .await
+        }
     }
 
     #[allow(non_snake_case)]
@@ -477,23 +576,42 @@ impl RuntimePackageManager {
             .getToolPkgExecutionEngine(contextKey, containerPackageName)
     }
 
-    /// Resolves the same application session for every automatic object-proxy access.
-    pub fn openComposeDslSession(&self, contextKey: &str, containerPackageName: &str) -> Result<String, String> {
+    /// Captures session state and loads resources after releasing the package manager lock.
+    pub fn openComposeDslSession(
+        &self,
+        contextKey: &str,
+        containerPackageName: &str,
+    ) -> impl Future<Output = Result<String, String>> + 'static {
         let key = (contextKey.to_string(), containerPackageName.to_string());
-        {
-            let sessions = self.composeDslSessions.lock().expect("Compose session registry mutex poisoned");
-            if let Some(session) = sessions.get(&key) {
-                if !session.isClosed() { return Ok(session.id()); }
+        let sessions = self.composeDslSessions.clone();
+        let engines = self.toolPkgManager().clone();
+        let resources = self.toolPkgTextResources(containerPackageName);
+        let engine = engines.findToolPkgExecutionEngine(&key.0, &key.1);
+        async move {
+            let engine = engine.ok_or("Compose execution context has not been acquired or has been released")?;
+            let require_owner = || {
+                if engines.findToolPkgExecutionEngine(&key.0, &key.1)
+                    .is_some_and(|current| Arc::ptr_eq(&current, &engine)) {
+                    Ok(())
+                } else {
+                    Err("Compose execution context has been released or replaced".to_string())
+                }
+            };
+            {
+                let sessions = sessions.lock().expect("Compose session registry mutex poisoned");
+                require_owner()?;
+                if let Some(session) = sessions.get(&key) {
+                    if !session.isClosed() { return Ok(session.id()); }
+                }
             }
+            let resources = resources.await?;
+            let mut sessions = sessions.lock().expect("Compose session registry mutex poisoned");
+            // Recheck ownership after I/O while serialized with context release.
+            require_owner()?;
+            openComposeDslSessionForContext(&mut sessions, key, || {
+                Ok(ToolPkgComposeDslSession::new(engine, resources))
+            })
         }
-        let engine = self.findToolPkgExecutionEngine(contextKey, containerPackageName)
-            .ok_or("Compose execution context has not been acquired or has been released")?;
-        // Resource I/O must not hold the session registry lock or block other pages' releases.
-        let resources = self.toolPkgTextResources(containerPackageName)?;
-        let mut sessions = self.composeDslSessions.lock().expect("Compose session registry mutex poisoned");
-        openComposeDslSessionForContext(&mut sessions, key, || {
-            Ok(ToolPkgComposeDslSession::new(engine, resources))
-        })
     }
 
     #[allow(non_snake_case)]
@@ -522,7 +640,7 @@ impl RuntimePackageManager {
 
     /// Returns the SDK-owned ToolPkg manager.
     #[allow(non_snake_case)]
-    fn toolPkgManager(&self) -> &ToolPkgManager {
+    pub(crate) fn toolPkgManager(&self) -> &ToolPkgManager {
         self.pluginPackageManager.toolPkgManager()
     }
 
@@ -542,41 +660,6 @@ impl RuntimePackageManager {
     #[allow(non_snake_case)]
     fn availablePackagesMut(&mut self) -> &mut BTreeMap<String, ToolPackage> {
         self.pluginPackageManager.availablePackagesMut()
-    }
-
-    #[allow(non_snake_case)]
-    fn toolPkgCacheRootDir(&self) -> PathBuf {
-        let dir = self.storePaths.toolpkg_cache_dir();
-        let _ = self.fileSystemHost.makeDirectory(&hostPath(&dir), true);
-        dir
-    }
-
-    #[allow(non_snake_case)]
-    fn toolPkgCacheDirName(packageName: &str) -> String {
-        let normalized = packageName.trim();
-        let safeName = normalized
-            .chars()
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
-                    ch
-                } else {
-                    '_'
-                }
-            })
-            .collect::<String>();
-        let safeName = if safeName.trim().is_empty() {
-            "toolpkg".to_string()
-        } else {
-            safeName
-        };
-        let hash = javaStringHashCodeHex(normalized);
-        format!("{safeName}-{hash}")
-    }
-
-    #[allow(non_snake_case)]
-    fn toolPkgCacheDir(&self, packageName: &str) -> PathBuf {
-        self.toolPkgCacheRootDir()
-            .join(Self::toolPkgCacheDirName(packageName))
     }
 
     /// Returns the stable local identifier that binds installed market ToolPkg seals to this client.
@@ -628,262 +711,48 @@ impl RuntimePackageManager {
         ))
     }
 
-    #[allow(non_snake_case)]
+    /// Captures only the capabilities and shared caches needed for resource I/O.
+    fn resourceReader(&self) -> resource_reader::ToolPkgResourceReader {
+        resource_reader::ToolPkgResourceReader {
+            storePaths: self.storePaths.clone(),
+            fileSystemHost: self.fileSystemHost.clone(),
+            runtimeSupport: self.toolHandler.runtimeSupport(),
+            toolPkgCacheLock: self.toolPkgCacheLock.clone(),
+            toolPkgTextResourceCache: self.toolPkgTextResourceCache.clone(),
+        }
+    }
+
+    /// Invalidates the shared resources for one package.
     fn deleteToolPkgCacheDir(&self, packageName: &str) {
-        self.toolPkgTextResourceCache.invalidate(packageName);
-        let _guard = self
-            .toolPkgCacheLock
-            .lock()
-            .expect("toolpkg cache mutex poisoned");
-        self.deleteToolPkgCacheDirLocked(packageName);
+        self.resourceReader().deleteToolPkgCacheDir(packageName);
     }
 
-    #[allow(non_snake_case)]
-    fn deleteToolPkgCacheDirLocked(&self, packageName: &str) {
-        let dir = self.toolPkgCacheDir(packageName);
-        let _ = self.fileSystemHost.deleteFile(&hostPath(&dir), true);
-    }
-
-    #[allow(non_snake_case)]
-    fn ensureToolPkgCacheDir<FExtractArchive>(
-        &self,
-        packageName: &str,
-        signature: &str,
-        mainEntry: &str,
-        extractArchive: FExtractArchive,
-    ) -> Option<PathBuf>
-    where
-        FExtractArchive: Fn(&Path) -> bool,
-    {
-        let _guard = self
-            .toolPkgCacheLock
-            .lock()
-            .expect("toolpkg cache mutex poisoned");
-        let cacheDir = self.toolPkgCacheDir(packageName);
-        let signatureFile = cacheDir.join(TOOLPKG_CACHE_SIGNATURE_FILE);
-        let cacheDirExists = self
-            .fileSystemHost
-            .fileExists(&hostPath(&cacheDir))
-            .map(|info| info.exists && info.isDirectory)
-            .unwrap_or(false);
-        let signatureFileExists = self
-            .fileSystemHost
-            .fileExists(&hostPath(&signatureFile))
-            .map(|info| info.exists && !info.isDirectory)
-            .unwrap_or(false);
-        let signatureMatches = if signatureFileExists {
-            self.fileSystemHost
-                .readFile(&hostPath(&signatureFile))
-                .map(|text| text == signature)
-                .unwrap_or(false)
-        } else {
-            false
-        };
-        let mainScriptFile = cacheDir.join(mainEntry);
-        let mainScriptExists = self
-            .fileSystemHost
-            .fileExists(&hostPath(&mainScriptFile))
-            .map(|info| info.exists && !info.isDirectory)
-            .unwrap_or(false);
-
-        if cacheDirExists && signatureFileExists && signatureMatches && mainScriptExists {
-            return Some(cacheDir);
-        }
-
-        self.deleteToolPkgCacheDirLocked(packageName);
-        if self
-            .fileSystemHost
-            .makeDirectory(&hostPath(&cacheDir), true)
-            .is_err()
-        {
-            return None;
-        }
-        if !extractArchive(&cacheDir) {
-            self.deleteToolPkgCacheDirLocked(packageName);
-            return None;
-        }
-        if self
-            .fileSystemHost
-            .writeFile(&hostPath(&signatureFile), signature, false)
-            .is_err()
-        {
-            self.deleteToolPkgCacheDirLocked(packageName);
-            return None;
-        }
-        Some(cacheDir)
-    }
-
-    /// Validates mutable sources and reuses build-time fingerprints for immutable assets.
-    #[allow(non_snake_case)]
-    fn buildToolPkgCacheSignature(
-        &self,
-        sourceType: &ToolPkgSourceType,
-        sourcePath: &str,
-        version: &str,
-        mainEntry: &str,
-    ) -> Option<String> {
-        match sourceType {
-            ToolPkgSourceType::EXTERNAL | ToolPkgSourceType::MARKET => {
-                let sourceFile = PathBuf::from(sourcePath);
-                let metadata = self.fileSystemHost.fileInfo(sourcePath).ok()?;
-                if !metadata.exists {
-                    return None;
-                }
-                Some(format!(
-                    "{}|{}|{}|{}|{}|{}",
-                    if *sourceType == ToolPkgSourceType::MARKET {
-                        "market"
-                    } else {
-                        "external"
-                    },
-                    sourceFile.to_string_lossy(),
-                    metadata.size,
-                    metadata.lastModified,
-                    version,
-                    mainEntry
-                ))
-            }
-            ToolPkgSourceType::ASSET => {
-                let asset = bundledPluginAssetByName(
-                    self.toolHandler.runtimeSupport().as_ref(),
-                    sourcePath,
-                )?;
-                Some(format!(
-                    "asset|{}|{}|{}|{}|{}",
-                    sourcePath,
-                    asset.bytes.len(),
-                    asset.sha256,
-                    version,
-                    mainEntry
-                ))
-            }
-        }
-    }
-
-    #[allow(non_snake_case)]
-    fn buildToolPkgCacheSignatureForRuntime(
-        &self,
-        runtime: &ToolPkgContainerRuntime,
-    ) -> Option<String> {
-        self.buildToolPkgCacheSignature(
-            &runtime.sourceType,
-            &runtime.sourcePath,
-            &runtime.version,
-            &runtime.mainEntry,
-        )
-    }
-
-    #[allow(non_snake_case)]
-    fn extractToolPkgArchive(
-        &self,
-        runtime: &ToolPkgContainerRuntime,
-        destinationDir: &Path,
-    ) -> bool {
-        match runtime.sourceType {
-            ToolPkgSourceType::EXTERNAL | ToolPkgSourceType::MARKET => {
-                if self
-                    .fileSystemHost
-                    .fileExists(&runtime.sourcePath)
-                    .map(|info| info.exists && info.isDirectory)
-                    .unwrap_or(false)
-                {
-                    return self
-                        .fileSystemHost
-                        .copyFile(&runtime.sourcePath, &hostPath(destinationDir), true)
-                        .is_ok();
-                }
-                ToolPkgArchiveParser::extractZipEntriesFromExternal(
-                    self.fileSystemHost.as_ref(),
-                    &runtime.sourcePath,
-                    &destinationDir.to_string_lossy(),
-                )
-            }
-            ToolPkgSourceType::ASSET => {
-                let Some(asset) = bundledPluginAssetByName(
-                    self.toolHandler.runtimeSupport().as_ref(),
-                    &runtime.sourcePath,
-                ) else {
-                    return false;
-                };
-                ToolPkgArchiveParser::extractZipEntriesFromAssetBytes(
-                    asset.bytes,
-                    self.fileSystemHost.as_ref(),
-                    &destinationDir.to_string_lossy(),
-                )
-            }
-        }
-    }
-
-    #[allow(non_snake_case)]
+    /// Ensures resources exist for synchronous package installation operations.
     fn ensureToolPkgCache(&self, runtime: &ToolPkgContainerRuntime) -> Option<PathBuf> {
-        let signature = self.buildToolPkgCacheSignatureForRuntime(runtime)?;
-        self.ensureToolPkgCacheDir(
-            &runtime.packageName,
-            &signature,
-            &runtime.mainEntry,
-            |destinationDir| self.extractToolPkgArchive(runtime, destinationDir),
-        )
+        self.resourceReader().ensureToolPkgCache(runtime)
     }
 
-    /// Shares immutable text resources across sessions of the same package revision.
-    #[allow(non_snake_case)]
+    /// Captures the package revision before loading text resources outside the manager lock.
     pub fn toolPkgTextResources(
         &self,
         containerPackageName: &str,
-    ) -> Result<Arc<BTreeMap<String, String>>, String> {
-        let started = currentTimeMillis();
+    ) -> impl Future<Output = Result<Arc<BTreeMap<String, String>>, String>> + 'static {
         let packageName = self.normalizePackageName(containerPackageName);
-        let runtime = self.toolPkgManager().getToolPkgContainerRuntime(&packageName)
-            .ok_or_else(|| format!("ToolPkg container package is not registered: {packageName}"))?;
-        let signature = self.buildToolPkgCacheSignatureForRuntime(&runtime)
-            .ok_or_else(|| format!("ToolPkg package source is unavailable: {packageName}"))?;
-        let (resources, cacheHit) = self.toolPkgTextResourceCache.get_or_load(
-            &packageName,
-            &signature,
-            || {
-                // Validate/extract once for this batch. Reading each cached file must
-                // not rehash the archive or recheck its on-disk signature.
-                let directorySource = runtime.sourceType != ToolPkgSourceType::ASSET
-                    && self.fileSystemHost.fileExists(&runtime.sourcePath)
-                        .map_err(|error| error.to_string())?.isDirectory;
-                let cacheDir = if directorySource {
-                    // Reload directory sources from their actual files; changing a
-                    // child need not change the source directory's cached signature.
-                    PathBuf::from(&runtime.sourcePath)
-                } else {
-                    self.ensureToolPkgCacheDir(
-                        &packageName, &signature, &runtime.mainEntry,
-                        |destination| self.extractToolPkgArchive(&runtime, destination),
-                    ).ok_or_else(|| format!("ToolPkg package cache is unavailable: {packageName}"))?
-                };
-                read_text_resources(self.fileSystemHost.as_ref(), &cacheDir)
-            },
-        )?;
-        AppLogger::i(PACKAGE_MANAGER_LOG_TAG, &format!(
-            "event=compose_text_resources package={packageName} cacheHit={cacheHit} entries={} elapsedMs={}",
-            resources.len(), currentTimeMillis().saturating_sub(started),
-        ));
-        Ok(resources)
+        let runtime = self.toolPkgManager().getToolPkgContainerRuntime(&packageName);
+        let reader = self.resourceReader();
+        async move {
+            let runtime = runtime.ok_or_else(|| format!("ToolPkg container package is not registered: {packageName}"))?;
+            reader.toolPkgTextResources(&runtime)
+        }
     }
 
-    #[allow(non_snake_case)]
+    /// Resolves a resource for synchronous export operations.
     pub(crate) fn resolveToolPkgResourceFile(
         &self,
         runtime: &ToolPkgContainerRuntime,
-        normalizedResourcePath: &str,
+        resourcePath: &str,
     ) -> Option<PathBuf> {
-        let normalizedPath = ToolPkgArchiveParser::normalizeResourcePath(normalizedResourcePath)?;
-        let cacheDir = self.ensureToolPkgCache(runtime)?;
-        let resourceFile = cacheDir.join(normalizedPath);
-        if !self
-            .fileSystemHost
-            .fileExists(&hostPath(&resourceFile))
-            .map(|info| info.exists)
-            .unwrap_or(false)
-        {
-            return None;
-        }
-        Some(resourceFile)
+        self.resourceReader().resolveToolPkgResourceFile(runtime, resourcePath)
     }
 
     #[allow(non_snake_case)]
@@ -1481,6 +1350,20 @@ impl RuntimePackageManager {
             .collect()
     }
 
+    /// Requires one registered active container without copying or ordering the active catalog.
+    #[allow(non_snake_case)]
+    pub(crate) fn requireEnabledToolPkgContainer(&self, packageName: &str) -> Result<(), String> {
+        self.packageRegistryReadiness.require_ready()?;
+        let manager = self.toolPkgManager();
+        if !manager.isToolPkgContainer(packageName) {
+            return Err(format!("Plugin execution owner is not registered: {packageName}"));
+        }
+        if !manager.isEnabledToolPkgContainer(packageName, &self.getEnabledPackageNames()) {
+            return Err(format!("Plugin execution owner is disabled: {packageName}"));
+        }
+        Ok(())
+    }
+
     #[allow(non_snake_case)]
     /// Returns ToolPkg container runtimes that are currently enabled.
     pub fn getEnabledToolPkgContainerRuntimes(&self) -> Vec<ToolPkgContainerRuntime> {
@@ -1676,51 +1559,48 @@ impl RuntimePackageManager {
 
     #[allow(non_snake_case)]
     /// Executes one enabled ToolPkg chat message context-menu item.
-    pub async fn invokeToolPkgChatMessageMenuItem(
+    pub fn invokeToolPkgChatMessageMenuItem(
         &self,
         containerPackageName: &str,
         itemId: &str,
         chatId: &str,
         messageIndex: i32,
         message: serde_json::Value,
-    ) -> Result<Option<String>, String> {
-        let normalizedContainerPackageName = self.normalizePackageName(containerPackageName);
-        let normalizedItemId = itemId.trim();
-        let runtime = self
-            .getEnabledToolPkgContainerRuntimes()
-            .into_iter()
-            .find(|runtime| runtime.packageName == normalizedContainerPackageName)
-            .ok_or_else(|| {
-                format!("Enabled ToolPkg container not found: {normalizedContainerPackageName}")
-            })?;
-        let item = runtime
-            .chatMessageMenuItems
-            .iter()
-            .find(|item| item.id == normalizedItemId)
-            .ok_or_else(|| {
-                format!(
-                    "ToolPkg chat message menu item not found: {}:{}",
-                    runtime.packageName, normalizedItemId
-                )
-            })?;
-        self.runToolPkgMainHook(
-            &runtime.packageName,
-            &item.function,
-            operit_plugin_sdk::toolpkg::ToolPkgCommonPluginConstants::TOOLPKG_EVENT_CHAT_MESSAGE_MENU_ITEM,
-            Some("chat_message_menu_item_click"),
-            Some(&item.id),
-            item.functionSource.as_deref(),
-            serde_json::json!({
-                "action": "click",
-                "chatId": chatId,
-                "messageIndex": messageIndex,
-                "menuItemId": item.id,
-                "message": message,
-            }),
-            None,
-            None,
-            None,
-        ).await
+    ) -> impl Future<Output = Result<Option<String>, String>> + 'static {
+        let manager = self.toolPkgManager().clone();
+        let enabled = self.getEnabledPackageNames();
+        let prepared = (|| {
+            let packageName = self.normalizePackageName(containerPackageName);
+            let runtime = self
+                .getEnabledToolPkgContainerRuntimes()
+                .into_iter()
+                .find(|runtime| runtime.packageName == packageName)
+                .ok_or_else(|| format!("Enabled ToolPkg container not found: {packageName}"))?;
+            let item = runtime
+                .chatMessageMenuItems
+                .iter()
+                .find(|item| item.id == itemId.trim())
+                .ok_or_else(|| {
+                    format!(
+                        "ToolPkg chat message menu item not found: {}:{}",
+                        runtime.packageName,
+                        itemId.trim()
+                    )
+                })?;
+            Ok::<_, String>(ToolPkgHookInvocation {
+                containerPackageName: runtime.packageName.clone(),
+                functionName: item.function.clone(),
+                event: operit_plugin_sdk::toolpkg::ToolPkgCommonPluginConstants::TOOLPKG_EVENT_CHAT_MESSAGE_MENU_ITEM.to_string(),
+                eventName: Some("chat_message_menu_item_click".into()),
+                pluginId: Some(item.id.clone()), inlineFunctionSource: item.functionSource.clone(),
+                eventPayload: serde_json::json!({"action": "click", "chatId": chatId,
+                    "messageIndex": messageIndex, "menuItemId": item.id, "message": message}),
+                executionContextKey: None, runtimeKind: None, envOverrides: BTreeMap::new(),
+                timestampMs: currentTimeMillis(), timeoutMillis: 60_000,
+                dispatchIntermediateOnMain: true, onIntermediateResult: None,
+            })
+        })();
+        async move { manager.dispatchToolPkgHook(&enabled, prepared?).await }
     }
 
     #[allow(non_snake_case)]
@@ -1780,16 +1660,28 @@ impl RuntimePackageManager {
 
     /// Resolves one plugin command from its directory and invokes only that selected declaration.
     #[allow(non_snake_case)]
-    pub async fn executeToolPkgCoreCommand(
+    pub fn executeToolPkgCoreCommand(
         &self,
         commandName: &str,
         args: &[String],
         jsonMode: bool,
-    ) -> Result<ToolPkgCoreCommandExecutionResult, String> {
-        self.packageRegistryReadiness.wait_until_ready().await?;
-        let resolved = self.getToolPkgCoreCommandCatalog(false)?.resolve(commandName, &[])?
-            .ok_or_else(|| format!("plugin command not found: /{commandName}"))?;
-        self.executeResolvedToolPkgCoreCommand(&resolved, args, jsonMode).await
+    ) -> impl Future<Output = Result<ToolPkgCoreCommandExecutionResult, String>> + 'static {
+        let manager = self.toolHandler.getOrCreatePackageManager();
+        let readiness = self.packageRegistryReadiness.clone();
+        let commandName = commandName.to_string();
+        let args = args.to_vec();
+        async move {
+            readiness.wait_until_ready().await?;
+            let pending = {
+                let manager = manager.lock().map_err(|error| error.to_string())?;
+                let resolved = manager
+                    .getToolPkgCoreCommandCatalog(false)?
+                    .resolve(&commandName, &[])?
+                    .ok_or_else(|| format!("plugin command not found: /{commandName}"))?;
+                manager.prepareResolvedToolPkgCoreCommand(&resolved, &args, jsonMode)
+            };
+            pending.await
+        }
     }
 
     /// Executes an immutable resolved command token without performing another name lookup.
@@ -1801,44 +1693,73 @@ impl RuntimePackageManager {
         jsonMode: bool,
     ) -> Result<ToolPkgCoreCommandExecutionResult, String> {
         self.packageRegistryReadiness.wait_until_ready().await?;
-        let info = resolved.info();
-        if !self.getEnabledToolPkgContainerRuntimes().iter().any(|runtime| runtime.packageName == info.containerPackageName) {
-            return Err(format!("plugin command is disabled: /{} ({})", info.name, info.containerPackageName));
-        }
+        self.prepareResolvedToolPkgCoreCommand(resolved, args, jsonMode).await
+    }
+
+    /// Captures one resolved command after registry readiness has been established.
+    #[allow(non_snake_case)]
+    fn prepareResolvedToolPkgCoreCommand(
+        &self,
+        resolved: &ResolvedToolPkgCoreCommand,
+        args: &[String],
+        jsonMode: bool,
+    ) -> impl Future<Output = Result<ToolPkgCoreCommandExecutionResult, String>> + 'static {
+        let manager = self.toolPkgManager().clone();
+        let enabled = self.getEnabledPackageNames();
+        let info = resolved.info().clone();
         let command = resolved.declaration();
-        let raw = self
-            .runToolPkgMainHook(
-                &info.containerPackageName,
-                &command.function,
-                operit_plugin_sdk::toolpkg::ToolPkgCommonPluginConstants::TOOLPKG_EVENT_CORE_COMMAND,
-                Some("core_command"),
-                Some(&command.id),
-                command.functionSource.as_deref(),
-                serde_json::json!({
-                    "commandId": command.id,
-                    "commandName": command.name,
-                    "args": args,
-                    "json": jsonMode,
-                }),
-                None,
-                None,
-                None,
-            ).await?
-            .ok_or_else(|| format!("plugin command /{} returned no result", info.name))?;
-        serde_json::from_str::<ToolPkgCoreCommandExecutionResult>(&raw).map_err(|error| {
-            format!("plugin command /{} returned an invalid result: {error}", info.name)
-        })
+        let invocation = ToolPkgHookInvocation {
+            containerPackageName: info.containerPackageName.clone(),
+            functionName: command.function.clone(),
+            event:
+                operit_plugin_sdk::toolpkg::ToolPkgCommonPluginConstants::TOOLPKG_EVENT_CORE_COMMAND
+                    .to_string(),
+            eventName: Some("core_command".into()),
+            pluginId: Some(command.id.clone()),
+            inlineFunctionSource: command.functionSource.clone(),
+            eventPayload: serde_json::json!({"commandId": command.id, "commandName": command.name,
+                "args": args, "json": jsonMode}),
+            executionContextKey: None,
+            runtimeKind: None,
+            envOverrides: BTreeMap::new(),
+            timestampMs: currentTimeMillis(),
+            timeoutMillis: 60_000,
+            dispatchIntermediateOnMain: true,
+            onIntermediateResult: None,
+        };
+        async move {
+            if !manager
+                .getEnabledToolPkgContainerRuntimes(&enabled)
+                .iter()
+                .any(|runtime| runtime.packageName == info.containerPackageName)
+            {
+                return Err(format!(
+                    "plugin command is disabled: /{} ({})",
+                    info.name, info.containerPackageName
+                ));
+            }
+            let raw = manager
+                .dispatchToolPkgHook(&enabled, invocation)
+                .await?
+                .ok_or_else(|| format!("plugin command /{} returned no result", info.name))?;
+            serde_json::from_str::<ToolPkgCoreCommandExecutionResult>(&raw).map_err(|error| {
+                format!(
+                    "plugin command /{} returned an invalid result: {error}",
+                    info.name
+                )
+            })
+        }
     }
 
     /// Renders a registered desktop widget and settles its initial load action for any host.
     #[allow(non_snake_case)]
-    pub async fn renderToolPkgDesktopWidget(
+    pub fn renderToolPkgDesktopWidget(
         &self,
         containerPackageName: &str,
         widgetId: &str,
         instanceId: &str,
         useEnglish: bool,
-    ) -> Result<ToolPkgDesktopWidgetSnapshot, String> {
+    ) -> impl Future<Output = Result<ToolPkgDesktopWidgetSnapshot, String>> + 'static {
         super::ToolPkgDesktopWidgetService::render(
             self,
             containerPackageName,
@@ -1846,7 +1767,6 @@ impl RuntimePackageManager {
             instanceId,
             useEnglish,
         )
-        .await
     }
 
     #[allow(non_snake_case)]
@@ -1908,25 +1828,19 @@ impl RuntimePackageManager {
 
     #[allow(non_snake_case)]
     /// Runs a navigation hook asynchronously so proxy dispatch releases the package manager lock.
-    pub async fn runToolPkgNavigationEntryAction(
+    pub fn runToolPkgNavigationEntryAction(
         &self,
         containerPackageName: &str,
         entryId: &str,
         functionName: &str,
         inlineFunctionSource: Option<&str>,
         eventPayload: serde_json::Value,
-    ) -> Result<Option<String>, String> {
+    ) -> impl Future<Output = Result<Option<String>, String>> + 'static {
         let actionContext =
             format!("package={containerPackageName}, entryId={entryId}, function={functionName}");
-        AppLogger::i(
-            PACKAGE_MANAGER_LOG_TAG,
-            &format!("Navigation action started: {actionContext}"),
-        );
-        let result = self
-            .toolPkgManager()
-            .dispatchToolPkgHookAsync(
-                &self.getEnabledPackageNames(),
-                ToolPkgHookInvocation {
+        let manager = self.toolPkgManager().clone();
+        let enabled = self.getEnabledPackageNames();
+        let invocation = ToolPkgHookInvocation {
                     containerPackageName: self.normalizePackageName(containerPackageName),
                     functionName: functionName.to_string(),
                     event: operit_plugin_sdk::toolpkg::ToolPkgCommonPluginConstants::TOOLPKG_EVENT_NAVIGATION_ENTRY_ACTION.to_string(),
@@ -1941,20 +1855,25 @@ impl RuntimePackageManager {
                     timeoutMillis: 60_000,
                     dispatchIntermediateOnMain: true,
                     onIntermediateResult: None,
-                },
-            )
-            .await;
-        match &result {
-            Ok(_) => AppLogger::i(
+                };
+        async move {
+            AppLogger::i(
                 PACKAGE_MANAGER_LOG_TAG,
-                &format!("Navigation action completed: {actionContext}"),
-            ),
-            Err(error) => AppLogger::e(
-                PACKAGE_MANAGER_LOG_TAG,
-                &format!("Navigation action failed: {actionContext}, error={error}"),
-            ),
-        };
-        result
+                &format!("Navigation action started: {actionContext}"),
+            );
+            let result = manager.dispatchToolPkgHookAsync(&enabled, invocation).await;
+            match &result {
+                Ok(_) => AppLogger::i(
+                    PACKAGE_MANAGER_LOG_TAG,
+                    &format!("Navigation action completed: {actionContext}"),
+                ),
+                Err(error) => AppLogger::e(
+                    PACKAGE_MANAGER_LOG_TAG,
+                    &format!("Navigation action failed: {actionContext}, error={error}"),
+                ),
+            };
+            result
+        }
     }
 
     #[allow(non_snake_case)]
@@ -4209,7 +4128,7 @@ impl RuntimePackageManager {
         )
     }
 
-    /// Returns the registered main script for runtime-owned ToolPkg IPC dispatch.
+    /// Reads the registered main script directly for synchronous package consumers.
     #[allow(non_snake_case)]
     pub fn getRegisteredToolPkgMainScript(&self, containerPackageName: &str) -> Option<String> {
         let normalizedContainerPackageName = self.normalizePackageName(containerPackageName);
@@ -4217,26 +4136,22 @@ impl RuntimePackageManager {
             .getRegisteredToolPkgMainScript(&normalizedContainerPackageName)
     }
 
-    #[allow(non_snake_case)]
+    /// Captures a main-script read that shares the revision cache and performs no I/O until polled.
+    pub(crate) fn mainScript(
+        &self,
+        runtime: ToolPkgContainerRuntime,
+    ) -> impl Future<Output = Result<String, String>> + 'static {
+        let reader = self.resourceReader();
+        async move { reader.mainScript(&runtime) }
+    }
+
+    /// Reads a resource for synchronous SDK host operations.
     pub(crate) fn readToolPkgResourceBytes(
         &self,
         runtime: &ToolPkgContainerRuntime,
-        normalizedResourcePath: &str,
+        resourcePath: &str,
     ) -> Option<Vec<u8>> {
-        let resourceFile = self.resolveToolPkgResourceFile(runtime, normalizedResourcePath)?;
-        if !self
-            .fileSystemHost
-            .fileExists(&hostPath(&resourceFile))
-            .map(|info| info.exists && !info.isDirectory)
-            .unwrap_or(false)
-        {
-            return None;
-        }
-        let bytes = self
-            .fileSystemHost
-            .readFileBytes(&hostPath(&resourceFile))
-            .ok()?;
-        operit_plugin_sdk::toolpkg::ToolPkgProtection::decryptIfNeeded(&bytes).ok()
+        self.resourceReader().readToolPkgResourceBytes(runtime, resourcePath)
     }
 
     #[allow(non_snake_case)]
@@ -4344,10 +4259,13 @@ impl RuntimePackageManager {
         &self,
         containerPackageName: &str,
         uiModuleId: Option<&str>,
-    ) -> Option<String> {
-        let normalizedContainerPackageName = self.normalizePackageName(containerPackageName);
-        ToolPkgPackageService::new(self)
-            .getToolPkgComposeDslScript(&normalizedContainerPackageName, uiModuleId)
+    ) -> impl Future<Output = Option<String>> + 'static {
+        let source = ToolPkgPackageService::new(self)
+            .prepareToolPkgComposeDslScript(containerPackageName, uiModuleId);
+        let reader = self.resourceReader();
+        async move {
+            source?.read(|runtime, screen| reader.readToolPkgResourceBytes(runtime, screen))
+        }
     }
 
     #[allow(non_snake_case)]
@@ -5146,6 +5064,12 @@ impl ToolPkgPackageHost for RuntimePackageManager {
     #[allow(non_snake_case)]
     fn toolPkgContainersInternal(&self) -> BTreeMap<String, ToolPkgContainerRuntime> {
         RuntimePackageManager::toolPkgContainersInternal(self)
+    }
+
+    /// Resolves one container without copying the complete catalog.
+    #[allow(non_snake_case)]
+    fn getToolPkgContainerRuntime(&self, packageName: &str) -> Option<ToolPkgContainerRuntime> {
+        RuntimePackageManager::getToolPkgContainerRuntime(self, packageName)
     }
 
     /// Returns registered ToolPkg subpackage runtimes.

@@ -197,11 +197,7 @@ impl ToolInvocationContext {
         if owner.trim().is_empty() || owner.trim() != owner { return Err("Plugin execution owner is not exact nonblank text".into()); }
         let manager = self.host.getOrCreatePackageManager();
         let registry = manager.lock().map_err(|_| "Package manager mutex poisoned")?;
-        registry.packageRegistryReadiness().require_ready()?;
-        registry.getToolPkgContainerRuntime(owner).ok_or_else(|| format!("Plugin execution owner is not registered: {owner}"))?;
-        if !registry.getEnabledToolPkgContainerRuntimes().iter().any(|runtime| runtime.packageName == owner) {
-            return Err(format!("Plugin execution owner is disabled: {owner}"));
-        }
+        registry.requireEnabledToolPkgContainer(owner)?;
         Ok(owner.to_string())
     }
 

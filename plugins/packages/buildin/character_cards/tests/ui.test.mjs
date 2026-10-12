@@ -63,8 +63,8 @@ function installManagementPresentation() {
 }
 
 /** Creates a page with its complete explicitly declared management host before document execution. */
-async function page(width = 1100, height = 950, data = fixture()) {
-  const context = await browser.newContext({ viewport: { width, height } });
+async function page(width = 1100, height = 950, data = fixture(), hasTouch = false) {
+  const context = await browser.newContext({ viewport: { width, height }, hasTouch });
   await context.addInitScript({ content: `(${installBrowserFixture.toString()})(${JSON.stringify(data)}); (${installManagementPresentation.toString()})();` });
   const page = await context.newPage();
   await page.goto(origin);
@@ -237,6 +237,135 @@ test("isolated graph search forwards the plugin query and expands only direct ne
   await graph.getByRole("button", { name: "清除搜索", exact: true }).click();
   assert.equal(await graph.locator(".graph-node").count(), 3);
   await ui.context.close();
+});
+
+/** Reads the rendered camera and viewport from the actual SVG surface. */
+async function graphCamera(graph) {
+  return graph.locator("[data-graph-surface]").evaluate(
+    /** Measures the transform used for SVG painting and hit testing. */
+    surface => {
+      const matrix = surface.firstElementChild.transform.baseVal.consolidate().matrix;
+      const bounds = surface.getBoundingClientRect();
+      return { scale: matrix.a, x: matrix.e, y: matrix.f, width: bounds.width, height: bounds.height };
+    },
+  );
+}
+
+/** Verifies list selection brings a tiny node to the viewport center at a readable scale. */
+test("memory list selection centers and reveals its graph node", async () => {
+  const ui = await page(390, 844), graph = await openCharacterGraph(ui.page);
+  try {
+    for (let step = 0; step < 8; step++) await graph.getByRole("button", { name: "缩小", exact: true }).click();
+    assert.ok((await graphCamera(graph)).scale < 0.5);
+    await graph.locator('.memory-item[data-id="memory-three"]').click();
+    const camera = await graphCamera(graph);
+    const center = await graph.locator('.graph-node[data-id="memory-three"]').evaluate(
+      /** Projects the selected node center into the surface's local viewport. */
+      node => {
+        const bounds = node.ownerSVGElement.getBoundingClientRect();
+        const point = new DOMPoint(0, 0).matrixTransform(node.getScreenCTM());
+        return { x: point.x - bounds.left, y: point.y - bounds.top };
+      },
+    );
+    assert.ok(Math.abs(center.x - camera.width / 2) < 0.01);
+    assert.ok(Math.abs(center.y - camera.height / 2) < 0.01);
+    assert.ok(camera.scale >= 1);
+    assert.equal(await graph.locator('.graph-node.selected[data-id="memory-three"]').count(), 1);
+  } finally { await ui.context.close(); }
+});
+
+/** Verifies actual wheel input zooms around the cursor and survives dialog repainting. */
+test("graph wheel zoom preserves the cursor anchor and survives selection", async () => {
+  const ui = await page(390, 844), graph = await openCharacterGraph(ui.page);
+  try {
+    const surface = graph.locator("[data-graph-surface]"), focal = { x: 35, y: 45 };
+    await surface.hover({ position: focal });
+    await ui.page.evaluate(
+      /** Waits for modal painting and compositor hit testing before sending native wheel input. */
+      () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+    );
+    const before = await graphCamera(graph);
+    await ui.page.mouse.wheel(0, -240);
+    await ui.page.waitForFunction(
+      /** Waits until the browser delivers the real asynchronous wheel event. */
+      scale => document.querySelector("[data-graph-surface] > g").transform.baseVal.consolidate().matrix.a > scale, before.scale, { timeout: 2000 },
+    );
+    const after = await graphCamera(graph);
+    assert.ok(Math.abs((focal.x - after.x) / after.scale - (focal.x - before.x) / before.scale) < 1);
+    assert.ok(Math.abs((focal.y - after.y) / after.scale - (focal.y - before.y) / before.scale) < 1);
+    await graph.locator('.memory-item[data-id="memory-one"]').click();
+    assert.equal((await graphCamera(graph)).scale, Math.max(1, after.scale));
+    await surface.hover({ position: focal });
+    await ui.page.mouse.wheel(0, 240);
+    await ui.page.waitForFunction(
+      /** Requires a real zoom-out after the selection redraw. */
+      scale => document.querySelector("[data-graph-surface] > g").transform.baseVal.consolidate().matrix.a < scale, Math.max(1, after.scale),
+    );
+    const camera = await graphCamera(graph);
+    await graph.locator(".graph-sidebar").hover({ position: { x: 15, y: 15 } });
+    await ui.page.mouse.wheel(0, 240);
+    await ui.page.waitForFunction(
+      /** Requires ordinary inspector scrolling outside the graph's wheel scope. */
+      () => document.querySelector("dialog[open] .graph-sidebar").scrollTop > 0,
+    );
+    assert.deepEqual(await graphCamera(graph), camera);
+  } finally { await ui.context.close(); }
+});
+
+/** Verifies each wheel delta unit produces the same camera change for equivalent travel. */
+test("graph wheel normalizes pixel, line and page deltas", async () => {
+  const ui = await page(), graph = await openCharacterGraph(ui.page);
+  try {
+    const surface = graph.locator("[data-graph-surface]");
+    for (const [deltaMode, deltaY] of [[0, -48], [1, -3], [2, -48 / (await graphCamera(graph)).height]]) {
+      await graph.getByRole("button", { name: "适应画布", exact: true }).click();
+      const before = await graphCamera(graph);
+      await surface.dispatchEvent("wheel", { deltaY, deltaMode, bubbles: true, cancelable: true });
+      const after = await graphCamera(graph);
+      assert.ok(Math.abs(after.scale / before.scale - Math.exp(48 * 0.0015)) < 0.000001, "Wheel unit " + deltaMode);
+    }
+  } finally { await ui.context.close(); }
+});
+
+/** Verifies browser touch input zooms the graph and preserves a node drag after lifting one finger. */
+test("graph pinch zoom continues as a node drag without jumping", { skip: browserType.name() !== "chromium" }, async () => {
+  const ui = await page(390, 844, fixture(), true), graph = await openCharacterGraph(ui.page);
+  try {
+    const node = graph.locator('.graph-node[data-id="memory-one"]');
+    await node.hover();
+    const bounds = await node.boundingBox(), before = await graphCamera(graph);
+    const session = await ui.context.newCDPSession(ui.page);
+    const first = { id: 1, x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+    const second = { id: 2, x: first.x + 60, y: first.y };
+    await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [first] });
+    await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [first, second] });
+    first.x -= 20; second.x += 20;
+    await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [first, second] });
+    const zoomed = await graphCamera(graph);
+    assert.ok(Math.abs(zoomed.scale / before.scale - 100 / 60) < 0.001);
+    assert.equal(await graph.locator(".graph-node.selected").count(), 0);
+    await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [second] });
+    const position = await node.evaluate(
+      /** Reads the actual node location before continuing the surviving touch. */
+      element => { const matrix = element.transform.baseVal.consolidate().matrix; return { x: matrix.e, y: matrix.f }; },
+    );
+    first.x += 10; first.y += 6;
+    await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [first] });
+    await ui.page.waitForFunction(
+      /** Waits for the browser to deliver the surviving finger's coalesced move. */
+      x => document.querySelector('.graph-node[data-id="memory-one"]').transform.baseVal.consolidate().matrix.e !== x, position.x, { timeout: 2000 },
+    );
+    const moved = await node.evaluate(
+      /** Reads the node location after the remaining finger's drag. */
+      element => { const matrix = element.transform.baseVal.consolidate().matrix; return { x: matrix.e, y: matrix.f }; },
+    );
+    assert.ok(Math.abs(moved.x - position.x - 10 / zoomed.scale) < 0.01);
+    assert.ok(Math.abs(moved.y - position.y - 6 / zoomed.scale) < 0.01);
+    await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    assert.equal(await graph.locator(".graph-node.selected").count(), 0);
+    await node.click();
+    assert.equal(await graph.locator('.graph-node.selected[data-id="memory-one"]').count(), 1);
+  } finally { await ui.context.close(); }
 });
 
 /** Verifies a real node press retains its SVG target and selects exactly on release. */

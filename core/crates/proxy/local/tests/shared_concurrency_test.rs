@@ -206,8 +206,10 @@ fn browser_result_json() -> String {
 
 /// Registers isolated runtime roots required by application service constructors.
 fn register_test_runtime_roots() -> Arc<TestRuntimeStorageHost> {
+    static NEXT_ROOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = NEXT_ROOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let root = std::env::temp_dir().join(format!(
-        "operit-proxy-local-shared-concurrency-{}",
+        "operit-proxy-local-shared-concurrency-{}-{id}",
         std::process::id()
     ));
     let runtime_root = root.join(RUNTIME_ROOT_DIR_PATH);
@@ -219,6 +221,34 @@ fn register_test_runtime_roots() -> Arc<TestRuntimeStorageHost> {
         workspace_root.clone(),
     ));
     Arc::new(TestRuntimeStorageHost::new(runtime_root, workspace_root))
+}
+
+/// Loads the real configuration provider required by chat creation in stream tests.
+fn proxy_with_loaded_packages(mut hosts: HostManager) -> LocalCoreProxy {
+    ui_resource_tests::configure_package_hosts(&mut hosts);
+    let app = OperitApplication::newWithContext(hosts.clone());
+    let packages = app.packageManager();
+    let mut manager = packages.lock().unwrap();
+    manager.loadAvailablePackages();
+    assert!(manager.getToolPkgLoadIssues().is_empty(), "embedded test packages must load");
+    drop(manager);
+    let bridge = operit_runtime::plugins::toolpkg::ToolPkgHookBridgeSupport::ToolPkgBridgeRuntime::new(
+        app.aiToolHandler(), hosts,
+    );
+    operit_runtime::plugins::toolpkg::ToolPkgChatLifecycleHookBridge::ToolPkgChatLifecycleHookBridge::register(bridge)
+        .expect("chat lifecycle runtime must be registered");
+    LocalCoreProxy::new(app)
+}
+
+/// Applies the watch protocol before decoding snapshots and incremental chat updates.
+fn apply_chat_message_event(previous: &mut CoreValue, event: CoreEvent) -> Vec<ChatMessage> {
+    *previous = match event.kind {
+        CoreEventKind::Snapshot | CoreEventKind::Changed => event.value,
+        CoreEventKind::Delta => previous.applyIncrementalDelta(&event.value)
+            .expect("chat message delta must apply to its previous snapshot"),
+        kind => panic!("unexpected chat message event: {kind:?}"),
+    };
+    fromCoreValue(previous.clone()).expect("chat message snapshot must decode")
 }
 
 /// Creates a CoreStream source that emits one Markdown chunk.
@@ -493,7 +523,7 @@ async fn generated_proxy_chat_instance_uses_detached_runtime_slot() {
                 Some(Arc::new(NativeHostJavaScriptRuntimeHost::new()));
             host_manager.hostRuntimeTaskSchedulerHost =
                 Some(Arc::new(NativeHostRuntimeTaskSchedulerHost::new()));
-            let proxy = LocalCoreProxy::new(OperitApplication::newWithContext(host_manager));
+            let proxy = proxy_with_loaded_packages(host_manager);
             let chat_object_id = LocalCoreProxy::generatedTargetForSchema("chatRuntimeHolderMain")
                 .expect("chatRuntimeHolderMain object id must be generated");
             let detached_slot_id = "window-slot-a";
@@ -602,7 +632,7 @@ async fn local_chat_messages_flow_update_opens_embedded_stream() {
                 Some(Arc::new(NativeHostJavaScriptRuntimeHost::new()));
             host_manager.hostRuntimeTaskSchedulerHost =
                 Some(Arc::new(NativeHostRuntimeTaskSchedulerHost::new()));
-            let proxy = LocalCoreProxy::new(OperitApplication::newWithContext(host_manager));
+            let proxy = proxy_with_loaded_packages(host_manager);
             let chat_object_id = LocalCoreProxy::generatedTargetForSchema("chatRuntimeHolderMain")
                 .expect("chatRuntimeHolderMain object id must be generated");
             let chat_id = {
@@ -631,8 +661,8 @@ async fn local_chat_messages_flow_update_opens_embedded_stream() {
             .await
             .expect("local proxy chatMessagesFlow watch must open");
             let initial_event = receive_proxy_test_event(&mut messages_stream).await;
-            let initial_messages: Vec<ChatMessage> = fromCoreValue(initial_event.value)
-                .expect("initial local chat messages must decode");
+            let mut message_value = CoreValue::Null;
+            let initial_messages = apply_chat_message_event(&mut message_value, initial_event);
             assert!(initial_messages.is_empty());
 
             let stream_id = "proxy-local-live-chat-message-stream";
@@ -654,8 +684,7 @@ async fn local_chat_messages_flow_update_opens_embedded_stream() {
             }
 
             let updated_event = receive_proxy_test_event(&mut messages_stream).await;
-            let updated_messages: Vec<ChatMessage> = fromCoreValue(updated_event.value)
-                .expect("updated local chat messages must decode");
+            let updated_messages = apply_chat_message_event(&mut message_value, updated_event);
             let stream = updated_messages
                 .iter()
                 .find_map(|message| message.contentStream.clone())
@@ -692,8 +721,7 @@ async fn local_chat_messages_flow_update_opens_embedded_stream() {
                     .addMessageToChat(completed_message, Some(chat_id.clone()));
             }
             let completed_event = receive_proxy_test_event(&mut messages_stream).await;
-            let completed_messages: Vec<ChatMessage> = fromCoreValue(completed_event.value)
-                .expect("completed local chat messages must decode");
+            let completed_messages = apply_chat_message_event(&mut message_value, completed_event);
             assert!(completed_messages
                 .iter()
                 .all(|message| message.contentStream.is_none()));
@@ -718,8 +746,7 @@ async fn local_chat_messages_flow_update_opens_embedded_stream() {
                     .addMessageToChat(second_message, Some(chat_id.clone()));
             }
             let second_event = receive_proxy_test_event(&mut messages_stream).await;
-            let second_messages: Vec<ChatMessage> =
-                fromCoreValue(second_event.value).expect("second local chat messages must decode");
+            let second_messages = apply_chat_message_event(&mut message_value, second_event);
             let second_stream = second_messages
                 .iter()
                 .find_map(|message| message.contentStream.clone())
@@ -763,7 +790,7 @@ async fn local_chat_messages_flow_update_inside_async_capture_opens_embedded_str
                 Some(Arc::new(NativeHostJavaScriptRuntimeHost::new()));
             host_manager.hostRuntimeTaskSchedulerHost =
                 Some(Arc::new(NativeHostRuntimeTaskSchedulerHost::new()));
-            let proxy = LocalCoreProxy::new(OperitApplication::newWithContext(host_manager));
+            let proxy = proxy_with_loaded_packages(host_manager);
             let chat_object_id = LocalCoreProxy::generatedTargetForSchema("chatRuntimeHolderMain")
                 .expect("chatRuntimeHolderMain object id must be generated");
             let chat_id = {
@@ -910,6 +937,70 @@ async fn shared_core_serializes_application_child_access() {
             }
         })
         .await;
+}
+
+/// A generated command call waits for startup without retaining either manager or application locks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owned_package_call_releases_locks_while_registry_is_loading() {
+    let _test_guard = SHARED_CONCURRENCY_TEST_LOCK.lock().await;
+    let storage_host = register_test_runtime_roots();
+    let mut hosts = HostManager::withFileSystemHost(Arc::new(PosixFileSystemHost::new()));
+    hosts.runtimeStorageHost = Some(storage_host.clone());
+    hosts.runtimeSqliteHost = Some(storage_host);
+    hosts.hostSecretStore = Some(Arc::new(TestSecretStore::default()));
+    hosts.hostJavaScriptRuntimeHost = Some(Arc::new(NativeHostJavaScriptRuntimeHost::new()));
+    hosts.hostRuntimeTaskSchedulerHost = Some(Arc::new(NativeHostRuntimeTaskSchedulerHost::new()));
+    let application = OperitApplication::newWithContext(hosts);
+    let manager = application.packageManager();
+    let readiness = manager.lock().unwrap().packageRegistryReadiness();
+    assert!(readiness.claim_initial_load().unwrap());
+    let proxy = LocalCoreProxy::new(application);
+    let target = LocalCoreProxy::generatedTargetForSchema("application.packageManager").unwrap();
+    let request = CoreCallRequest::new("owned-command", target, "executeToolPkgCoreCommand",
+        toCoreValue(json!({"commandName": "test-command", "args": [], "jsonMode": false})).unwrap());
+    let mut pending = Box::pin(CoreLinkSharedClient::call(&proxy, request));
+    std::future::poll_fn(|context| {
+        assert!(std::future::Future::poll(pending.as_mut(), context).is_pending());
+        std::task::Poll::Ready(())
+    }).await;
+    assert!(manager.try_lock().is_ok(), "startup must be able to acquire the canonical manager");
+    let unrelated = CoreLinkSharedClient::call(&proxy, CoreCallRequest::new(
+        "owned-unrelated", target, "getToolPkgUiRoutes",
+        toCoreValue(json!({"runtime": "compose_dsl", "useEnglish": false})).unwrap()));
+    let response = tokio::time::timeout(Duration::from_secs(2), unrelated).await.unwrap();
+    assert!(response.result.is_ok(), "another application child call must remain available");
+    readiness.fail("original startup error".into());
+    let response = tokio::time::timeout(Duration::from_secs(2), pending).await.unwrap();
+    assert_eq!(response.result.unwrap_err().message, "original startup error");
+}
+
+/// A Core command waiting on startup must not prevent unrelated application child access.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owned_core_command_releases_application_while_registry_is_loading() {
+    let _test_guard = SHARED_CONCURRENCY_TEST_LOCK.lock().await;
+    let storage_host = register_test_runtime_roots();
+    let mut hosts = HostManager::withFileSystemHost(Arc::new(PosixFileSystemHost::new()));
+    hosts.runtimeStorageHost = Some(storage_host.clone());
+    hosts.runtimeSqliteHost = Some(storage_host);
+    hosts.hostSecretStore = Some(Arc::new(TestSecretStore::default()));
+    hosts.hostJavaScriptRuntimeHost = Some(Arc::new(NativeHostJavaScriptRuntimeHost::new()));
+    hosts.hostRuntimeTaskSchedulerHost = Some(Arc::new(NativeHostRuntimeTaskSchedulerHost::new()));
+    let application = OperitApplication::newWithContext(hosts);
+    let readiness = application.packageManager().lock().unwrap().packageRegistryReadiness();
+    assert!(readiness.claim_initial_load().unwrap());
+    let proxy = LocalCoreProxy::new(application);
+    let app_target = LocalCoreProxy::generatedTargetForSchema("application").unwrap();
+    let request = CoreCallRequest::new("owned-core-command", app_target, "runCoreCommand",
+        toCoreValue(json!({"args": ["--json"]})).unwrap());
+    let mut pending = Box::pin(CoreLinkSharedClient::call(&proxy, request));
+    assert!(tokio::time::timeout(Duration::from_millis(100), &mut pending).await.is_err());
+    let unrelated = CoreLinkSharedClient::call(&proxy, CoreCallRequest::new(
+        "owned-core-unrelated", app_target, "coreVersion", toCoreValue(json!({})).unwrap()));
+    let response = tokio::time::timeout(Duration::from_secs(2), unrelated).await;
+    readiness.fail("core command startup error".into());
+    let command = tokio::time::timeout(Duration::from_secs(2), pending).await.unwrap();
+    assert!(response.expect("Core command must release the application lock").result.is_ok());
+    assert_eq!(command.result.unwrap_err().message, "core command startup error");
 }
 
 /// Covers the local-proxy to annotation-route boundary used by Flutter chat pages.
@@ -1138,3 +1229,6 @@ mod annotated_route_tests {
             .await;
     }
 }
+
+#[path = "support/ui_resource_tests.rs"]
+mod ui_resource_tests;

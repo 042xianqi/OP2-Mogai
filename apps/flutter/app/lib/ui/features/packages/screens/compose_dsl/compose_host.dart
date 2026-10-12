@@ -156,11 +156,15 @@ class _ComposeHostState extends State<_ComposeHost> {
         return;
       }
       _hasDispatchedInitialOnLoad = true;
-      final watch = Stopwatch()..start();
+      final watch = const bool.fromEnvironment('OPERIT_PROFILE_PLUGIN_UI')
+          ? (Stopwatch()..start())
+          : null;
       final owner = widget.webViewHostContext;
       await widget.onAction(currentRootOnLoadActionId, null);
-      final actionMicros = watch.elapsedMicroseconds;
       if (!mounted || widget.error != null) return;
+      WidgetsBinding.instance.ensureVisualUpdate();
+      if (watch == null) return;
+      final actionMicros = watch.elapsedMicroseconds;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted ||
             widget.error != null ||
@@ -177,7 +181,6 @@ class _ComposeHostState extends State<_ComposeHost> {
           tag: 'ToolPkgUiLauncher',
         );
       });
-      WidgetsBinding.instance.ensureVisualUpdate();
     });
   }
 }

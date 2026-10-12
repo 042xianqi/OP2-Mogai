@@ -6,38 +6,95 @@ use operit_host_api::FileSystemHost;
 use operit_plugin_sdk::toolpkg::{ToolPkgParser::ToolPkgArchiveParser, ToolPkgProtection};
 
 type TextResources = Arc<BTreeMap<String, String>>;
-type PackageResources = Arc<Mutex<Option<(String, TextResources)>>>;
+type PackageResources = Arc<Mutex<Option<CachedResources>>>;
 
-/// Shares source snapshots, never JavaScript state, across a package's page sessions.
+/// Retains requested texts and an optional complete snapshot for one package revision.
+struct CachedResources {
+    signature: String,
+    texts: BTreeMap<String, String>,
+    snapshot: Option<TextResources>,
+}
+
+/// Shares revision-scoped text resources, never JavaScript state, across package callers.
 #[derive(Default)]
 pub(super) struct ToolPkgTextResourceCache {
     packages: Mutex<BTreeMap<String, PackageResources>>,
 }
 
 impl ToolPkgTextResourceCache {
-    /// Serializes only loads of the same package; unrelated packages load independently.
+    /// Captures a package slot so invalidation also detaches requests already loading.
+    fn package_slot(&self, package: &str) -> Result<PackageResources, String> {
+        Ok(self
+            .packages
+            .lock()
+            .map_err(|error| error.to_string())?
+            .entry(package.into())
+            .or_default()
+            .clone())
+    }
+
+    /// Loads the complete snapshot only for callers that explicitly request all resources.
     pub(super) fn get_or_load(
         &self,
         package: &str,
         signature: &str,
         load: impl FnOnce() -> Result<BTreeMap<String, String>, String>,
     ) -> Result<(TextResources, bool), String> {
-        let slot = self
-            .packages
-            .lock()
-            .map_err(|error| error.to_string())?
-            .entry(package.into())
-            .or_default()
-            .clone();
+        let slot = self.package_slot(package)?;
         let mut entry = slot.lock().map_err(|error| error.to_string())?;
-        if let Some((cached_signature, resources)) = &*entry {
-            if cached_signature == signature {
-                return Ok((resources.clone(), true));
+        if let Some(cached) = &*entry {
+            if cached.signature == signature {
+                if let Some(resources) = &cached.snapshot {
+                    return Ok((resources.clone(), true));
+                }
             }
         }
         let resources = Arc::new(load()?);
-        *entry = Some((signature.into(), resources.clone()));
+        *entry = Some(CachedResources {
+            signature: signature.into(),
+            texts: BTreeMap::new(),
+            snapshot: Some(resources.clone()),
+        });
         Ok((resources, false))
+    }
+
+    /// Loads exactly one requested text while sharing revision and invalidation with full snapshots.
+    pub(super) fn get_or_load_text(
+        &self,
+        package: &str,
+        signature: &str,
+        path: &str,
+        load: impl FnOnce() -> Result<String, String>,
+    ) -> Result<(String, bool), String> {
+        let slot = self.package_slot(package)?;
+        let mut entry = slot.lock().map_err(|error| error.to_string())?;
+        if let Some(cached) = &*entry {
+            if cached.signature == signature {
+                if let Some(resources) = &cached.snapshot {
+                    let text = resources.get(path).ok_or_else(|| {
+                        format!("ToolPkg text resource is unavailable: {package}/{path}")
+                    })?;
+                    return Ok((text.clone(), true));
+                }
+                if let Some(text) = cached.texts.get(path) {
+                    return Ok((text.clone(), true));
+                }
+            }
+        }
+        let text = load()?;
+        if !entry.as_ref().is_some_and(|cached| cached.signature == signature) {
+            *entry = Some(CachedResources {
+                signature: signature.into(),
+                texts: BTreeMap::new(),
+                snapshot: None,
+            });
+        }
+        entry
+            .as_mut()
+            .expect("loaded revision must be installed")
+            .texts
+            .insert(path.into(), text.clone());
+        Ok((text, false))
     }
 
     /// Detaches in-flight loads too, so they cannot republish an invalidated snapshot.
@@ -48,6 +105,7 @@ impl ToolPkgTextResourceCache {
             .remove(package);
     }
 
+    /// Removes every cached read form for packages no longer owned by the registry.
     pub(super) fn retain_packages(&self, packages: &BTreeSet<String>) {
         self.packages
             .lock()
@@ -55,6 +113,7 @@ impl ToolPkgTextResourceCache {
             .retain(|name, _| packages.contains(name));
     }
 
+    /// Invalidates both individual texts and full snapshots during registry reload.
     pub(super) fn clear(&self) {
         self.packages
             .lock()
