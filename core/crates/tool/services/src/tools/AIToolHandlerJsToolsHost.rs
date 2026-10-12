@@ -197,6 +197,7 @@ where
         tool_type: "default".to_string(),
         tool_name: name.as_str().to_string(),
         parameters,
+        device: None,
     });
     let host = host.clone();
     Box::pin(async move {

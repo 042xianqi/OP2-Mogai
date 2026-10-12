@@ -40,6 +40,7 @@ pub struct LocalCoreProxy {
     chatRuntimeHolder: Arc<tokio::sync::Mutex<ChatRuntimeHolder>>,
     hostManager: HostManager,
     toolRuntimeSupport: Arc<dyn ToolRuntimeSupport>,
+    deviceToolService: Arc<dyn operit_tools::tools::DeviceTools::DeviceToolService>,
     coreStreamPool: Arc<CoreStreamPool>,
 }
 
@@ -54,6 +55,13 @@ impl LocalCoreProxy {
         })
     }
 
+    /// Returns this application's incoming device tool service.
+    pub fn deviceToolService(&self) -> Arc<dyn operit_tools::tools::DeviceTools::DeviceToolService> {
+        self.deviceToolService.clone()
+    }
+    pub fn bindDeviceToolRuntime(&self, runtime: Arc<dyn operit_tools::tools::DeviceTools::DeviceToolRuntime>) -> Result<(), String> {
+        self.toolRuntimeSupport.bindDeviceToolRuntime(runtime)
+    }
     /// Returns the host manager captured by this local proxy.
     pub fn hostManager(&self) -> &HostManager {
         &self.hostManager
@@ -121,11 +129,13 @@ impl LocalCoreProxy {
         #[cfg(not(target_arch = "wasm32"))]
         let coreCommandRuntime = Self::installCoreCommandExecutor(&mut application);
         let toolRuntimeSupport = application.toolHandler.runtimeSupport();
+        let deviceToolService = Arc::new(application.toolHandler.clone());
         let chatRuntimeHolder = application.chatRuntimeHolder.clone();
         Self {
             peerServices: Arc::new(std::sync::OnceLock::new()),
             hostManager: application.hostManager.clone(),
             toolRuntimeSupport,
+            deviceToolService,
             application: Arc::new(Mutex::new(application)),
             #[cfg(not(target_arch = "wasm32"))]
             _coreCommandRuntime: coreCommandRuntime,

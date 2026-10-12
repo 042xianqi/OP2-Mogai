@@ -333,6 +333,15 @@ pub trait EdgeToolRuntime: Send + Sync {
 
 /// Provides runtime-owned services that the tools crate must not own.
 pub trait ToolRuntimeSupport: Send + Sync {
+    fn bindDeviceToolRuntime(&self, _runtime: Arc<dyn crate::tools::DeviceTools::DeviceToolRuntime>) -> Result<(), String> {
+        Err("Device tool routing is not supported by this runtime".into())
+    }
+    fn executeDeviceTool(&self, _request: operit_plugin_sdk::javascript::JsToolCallRequest,
+        _preflight: Option<crate::tools::DeviceTools::DeviceToolPreflight>)
+        -> operit_plugin_sdk::javascript::JsExecutionCompletion<operit_plugin_sdk::javascript::JsToolCallResult> {
+        Box::pin(async { crate::tools::DeviceTools::failure("Device tool routing is not initialized") })
+    }
+
     /// Installs the Core-owned Edge port router, never a process-global client.
     fn bindEdgeToolRuntime(&self, _runtime: Arc<dyn EdgeToolRuntime>) -> Result<(), String> {
         Err("Edge tool routing is not supported by this runtime".into())

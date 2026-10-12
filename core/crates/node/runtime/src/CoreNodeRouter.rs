@@ -28,6 +28,9 @@ use crate::RuntimeRemoteLinkService::{
 
 #[path = "peer/sync_dispatch.rs"]
 mod sync_dispatch;
+#[path = "device_tools.rs"]
+mod device_tools;
+use operit_tools::tools::DeviceTools::{DeviceToolService, DEVICE_TOOL_TARGET};
 
 // An event sender may not impersonate another Edge or use Target to bypass the
 // Binding permission path. Called only after normal incoming-route validation.
@@ -83,6 +86,7 @@ struct CoreNodePushState {
 /// Routes incoming Core Link traffic through CoreNode Binding and Space routing state.
 #[derive(Clone)]
 pub struct CoreNodeRouter {
+    deviceToolService: Arc<std::sync::OnceLock<Arc<dyn DeviceToolService>>>,
     peerServices: Arc<std::sync::OnceLock<NodeServices>>,
     localCore: Arc<CoreNodeLocalRuntime>,
     bindingStore: Arc<dyn CoreNodeBindingRuntime>,
@@ -307,6 +311,7 @@ impl CoreNodeRouter {
             }))
             .expect("CoreNodeRouter requires tool routing state registration");
         let router = Self {
+            deviceToolService: Arc::new(std::sync::OnceLock::new()),
             peerServices,
             localCore,
             bindingStore,
@@ -1454,6 +1459,9 @@ impl CoreNodeRouter {
     #[allow(non_snake_case)]
     async fn executeLocalCall(&self, request: CoreCallRequest) -> CoreCallResponse {
         let requestId = request.requestId.clone();
+        if request.target == DEVICE_TOOL_TARGET {
+            return CoreCallResponse::err(requestId, CoreLinkError::new("DEVICE_TOOL_MODE_INVALID", "Device tools require a cancellable watch"));
+        }
         let applicationObjectId = self.localCore.targetForSchema("application");
         let isApplicationCall =
             applicationObjectId.is_some_and(|objectId| objectId == request.target);
@@ -2202,6 +2210,9 @@ impl CoreNodeRouter {
         }
         match self.validateIncomingRoute(&previousNodeId, &request) {
             Ok(true) => {
+                if request.payload.target == DEVICE_TOOL_TARGET {
+                    return CoreCallResponse::err(requestId, CoreLinkError::new("DEVICE_TOOL_MODE_INVALID", "Device tools require a cancellable watch"));
+                }
                 if let Err(error) = validateEdgeEventOrigin(&request.payload, &request.originNodeId, request.routeKind) {
                     return CoreCallResponse::err(requestId, error);
                 }
@@ -2337,6 +2348,9 @@ impl CoreNodeRouter {
             ),
         );
         if atTarget {
+            if request.payload.target == DEVICE_TOOL_TARGET {
+                return self.openDeviceToolWatch(request.payload, request.originNodeId, request.routeKind);
+            }
             if request.routeKind == RoutedCoreRequestKind::SpaceBinding {
                 return self
                     .watchSpaceWithOrigin(request.payload, request.originNodeId)
@@ -2512,6 +2526,9 @@ impl CoreLinkSharedClient for CoreNodeRouter {
 
     /// Opens a watch stream on the CoreNode selected by generated metadata.
     async fn watch(&self, request: CoreWatchRequest) -> Result<CoreEventStream, CoreLinkError> {
+        if request.target == DEVICE_TOOL_TARGET {
+            return self.openDeviceToolWatch(request, self.localNodeId.clone(), RoutedCoreRequestKind::Target);
+        }
         if request.target == CORE_STREAM_TARGET {
             operit_util::AppLogger::AppLogger::trace(
                 "CoreNodeRouteTrace",
@@ -2834,6 +2851,7 @@ mod tests {
 
     mod peer_fixture { include!("router_peer_fixture.rs"); }
     use peer_fixture::{TestRouteTarget, TestPeerService, installTestPeer};
+    include!("device_tools_tests.rs");
 
     /// Stores runtime records in memory for route and Space integration tests.
     #[derive(Clone)]
@@ -3977,6 +3995,7 @@ mod tests {
             targetNodeId.to_string(),
         ));
         CoreNodeRouter {
+            deviceToolService: Arc::new(std::sync::OnceLock::new()),
             peerServices: Arc::new(OnceLock::new()),
             localCore: Arc::new(testLocalRuntime(storage)),
             bindingStore,
@@ -4093,6 +4112,7 @@ mod tests {
         let bindingRuntime: Arc<dyn CoreNodeBindingRuntime> = bindingStore.clone();
         (
             CoreNodeRouter {
+                deviceToolService: Arc::new(std::sync::OnceLock::new()),
                 peerServices: Arc::new(OnceLock::new()),
                 localCore: Arc::new(localRuntime),
                 bindingStore: bindingRuntime,

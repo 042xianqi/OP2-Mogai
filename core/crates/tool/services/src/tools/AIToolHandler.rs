@@ -1177,6 +1177,15 @@ impl AIToolHandler {
     /// Resolves and directly executes a non-AI tool request through the registered tool chain.
     #[allow(non_snake_case)]
     pub async fn executeTool(&mut self, tool: AITool) -> ToolResult {
+        self.executeToolWithAccess(tool, ToolExecutionAccess::Direct).await
+    }
+
+    /// Runs receiver-owned permission checks while retaining ordinary tool hooks and lifecycle.
+    pub async fn executeToolWithPermissions(&mut self, tool: AITool) -> ToolResult {
+        self.executeToolWithAccess(tool, ToolExecutionAccess::AiPermission).await
+    }
+
+    async fn executeToolWithAccess(&mut self, tool: AITool, access: ToolExecutionAccess) -> ToolResult {
         ChainLogger::info(
             TOOL_CHAIN,
             "tool.execute.request",
@@ -1231,6 +1240,18 @@ impl AIToolHandler {
             return validationFailedResult;
         }
 
+        if matches!(access, ToolExecutionAccess::AiPermission) {
+            let preflight = match executor.accessSpec(&tool) {
+                Ok(spec) => self.executeAccessPreflightAsync(&tool, spec).await.map(|_| ()),
+                Err(error) => Err(ToolResult {toolName: tool.name.clone(), success: false,
+                    result: stringResultData(""), error: Some(format!("Tool access declaration failed: {error}"))}),
+            };
+            if let Err(result) = preflight {
+                self.notifyToolExecutionResult(&tool, &result);
+                self.notifyToolExecutionFinished(&tool);
+                return result;
+            }
+        }
         self.notifyToolExecutionStarted(&tool);
         ChainLogger::info(
             TOOL_CHAIN,
@@ -1420,6 +1441,30 @@ impl JsExecutionHost for AIToolHandler {
         &self,
         request: JsToolCallRequest,
     ) -> operit_plugin_sdk::javascript::JsExecutionCompletion<JsToolCallResult> {
+        if let Some(device) = &request.device {
+            if device.action != operit_plugin_sdk::javascript::JsDeviceToolAction::Execute {
+                return self.runtimeSupport().executeDeviceTool(request, None);
+            }
+            let host = self.clone();
+            let tool = AITool {
+                name: request.qualified_tool_name(),
+                parameters: request.parameters.iter().map(|(name, value)| ToolParameter {
+                    name: name.clone(),
+                    value: match value {
+                        serde_json::Value::Null => String::new(),
+                        serde_json::Value::String(value) => value.clone(),
+                        value => value.to_string(),
+                    },
+                }).collect(),
+            };
+            let preflight = Box::pin(async move {
+                match host.checkToolInterception(&tool).await {
+                    AIToolHookDecision::Block(reason) => Err(reason),
+                    _ => Ok(()),
+                }
+            });
+            return self.runtimeSupport().executeDeviceTool(request, Some(preflight));
+        }
         let host = self.clone();
         Box::pin(async move {
             let tool = AITool {

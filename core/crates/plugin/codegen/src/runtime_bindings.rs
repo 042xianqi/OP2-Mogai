@@ -419,8 +419,13 @@ function __operitToolsBuildParameters(namespace, method, overloads, args) {
     return parameters;
 }
 
-function __operitInvokeToolsBinding(namespace, method, toolName, overloads, args) {
-    return toolCall(toolName, __operitToolsBuildParameters(namespace, method, overloads, args));
+function __operitInvokeToolsBinding(namespace, method, toolName, overloads, args, receiver) {
+    var parameters = __operitToolsBuildParameters(namespace, method, overloads, args);
+    if (receiver && receiver.__operitDeviceContext) {
+        var device = receiver.__operitDeviceContext;
+        return __operitDeviceToolCall(device.nodeId, "default", toolName, parameters, device.options);
+    }
+    return toolCall(toolName, parameters);
 }
 
 "#,
@@ -536,12 +541,26 @@ function __operitInvokeToolsBinding(namespace, method, toolName, overloads, args
     if chat_namespace_open {
         output.push_str("});\n");
     }
+    output.push_str(r#"
+function __operitCopyToolsNamespaces(source) {
+    var target = {};
+    Object.keys(source).forEach(function(key) {
+        var value = source[key];
+        var isNamespace = value && (typeof value === "object" ||
+            (typeof value === "function" && Object.keys(value).length > 0));
+        target[key] = isNamespace ? __operitCopyToolsNamespaces(value) : value;
+    });
+    return target;
+}
+var __operitCanonicalTools = __operitCopyToolsNamespaces(Tools);
+"#);
     // Embed the handwritten legacy adapters after the canonical Tools namespace exists.
     for relative_path in [
         "compat/v1/files.js",
         "compat/v1/chat.js",
         "compat/v1/workflow.js",
         "compat/v1/install.js",
+        "DeviceTools.script.js",
     ] {
         output.push('\n');
         output.push_str(&fs::read_to_string(sdk_src.join(relative_path))?);
@@ -560,7 +579,7 @@ fn generated_js_function(
     overloads: &str,
 ) -> String {
     format!(
-        "function({signature}) {{\n    return __operitInvokeToolsBinding(\"{namespace}\", \"{method}\", \"{tool}\", [{overloads}], Array.prototype.slice.call(arguments));\n}}"
+        "function({signature}) {{\n    return __operitInvokeToolsBinding(\"{namespace}\", \"{method}\", \"{tool}\", [{overloads}], Array.prototype.slice.call(arguments), this);\n}}"
     )
 }
 

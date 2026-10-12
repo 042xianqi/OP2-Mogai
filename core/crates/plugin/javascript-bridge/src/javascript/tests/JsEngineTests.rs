@@ -146,6 +146,9 @@ impl JsExecutionHost for TestPluginConfigExecutionHost {
         let gatedToolStarted = self.gatedToolStarted.clone();
         let edgePortCalls = self.edgePortCalls.clone();
         Box::pin(async move {
+            if request.device.is_some() {
+                return JsToolCallResult {success:true, data:JsToolCallResultData::Value(serde_json::to_value(request).unwrap()), error:None};
+            }
             if matches!(request.tool_name.as_str(),"edge_execute"|"io_execute") {
                 edgePortCalls.lock().unwrap().push(serde_json::json!({"tool":request.tool_name,"params":request.parameters}));
                 let node = request.parameters["node_id"].as_str().unwrap_or("");
@@ -3380,4 +3383,32 @@ async fn bridge_roundtrip_benchmark() {
         );
         engine.destroy();
     }
+}
+
+/// Uses the real generated namespaces and native bridge, including overload dispatch.
+#[tokio::test(flavor = "current_thread")]
+async fn device_tools_cross_native_bridge_without_leaking_target_into_parameters() {
+    ensure_test_runtime_root();
+    let engine = newTestJsEngine(Arc::new(TestPluginConfigExecutionHost::default()));
+    let mut params = testParams();
+    params.insert("__operit_toolpkg_api_version".into(), Value::String("2.0.0".into()));
+    let output = engine.execute_script_function(
+        r#"exports.run = async function() {
+            return await Promise.all([
+                Tools.device('desktop').Files.read('/desktop.txt'),
+                Tools.device('phone').Files.read({path:'/phone.txt'}),
+                Tools.device('desktop').call('example:echo', {value:'{\"literal\":true}'}),
+                Tools.device('phone').catalog()
+            ]);
+        };"#, "run", &params, &BTreeMap::new(), None, true, 5, None,
+    ).await.unwrap().unwrap();
+    let values: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(values[0]["device"]["nodeId"], "desktop");
+    assert_eq!(values[1]["device"]["nodeId"], "phone");
+    assert_eq!(values[0]["parameters"], serde_json::json!({"path":"/desktop.txt"}));
+    assert_eq!(values[1]["parameters"], serde_json::json!({"path":"/phone.txt"}));
+    assert_eq!(values[2]["tool_name"], "example:echo");
+    assert_eq!(values[2]["parameters"]["value"], "{\"literal\":true}");
+    assert_eq!(values[3]["device"]["action"], "catalog");
+    engine.destroy();
 }
