@@ -2673,6 +2673,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsRuntimeBaseUrl => 'Device address';
 
   @override
+  String get settingsRuntimeTcpAddressHint =>
+      'host:port, for example 192.168.1.10:37195';
+
+  @override
   String settingsRuntimeConnectionFailed(String error) {
     return 'Device connection failed: $error';
   }
@@ -3831,6 +3835,21 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsRuntimeControlAddRole => 'Add role';
+
+  @override
+  String get settingsRuntimeControlEditRole => 'Edit role';
+
+  @override
+  String get settingsRuntimeControlDeleteRole => 'Delete role';
+
+  @override
+  String settingsRuntimeControlDeleteRoleTitle(String roleName) {
+    return 'Delete role $roleName?';
+  }
+
+  @override
+  String get settingsRuntimeControlDeleteRoleMessage =>
+      'Devices holding this role fall back to the default user identity.';
 
   @override
   String get settingsRuntimeControlGrantRole => 'Grant role';
