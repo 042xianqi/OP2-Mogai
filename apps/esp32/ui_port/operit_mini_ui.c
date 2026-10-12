@@ -23,6 +23,7 @@ typedef struct {
     char action[128], name[43], latency[16];
     uint8_t status;
 } plugin_t;
+typedef struct { char action[109], title[49]; bool selected; } conversation_t;
 typedef struct {
     operit_ui_scene_cb_t scene_painter;
     bool scene_active, scene_press;
@@ -37,7 +38,11 @@ typedef struct {
     unsigned node_count, message_count, chat_scroll;
     bool chat_follow_tail, chat_has_older, chat_has_newer;
     char code[7], prompt[256], space[96], chat[1024], task[128];
-    char error[192], draft[512], submitted[512];
+    char error[192], draft[512], chat_id[97];
+    /* Browsing is disabled while sending; three list rows reuse send scratch. */
+    union { char submitted[512]; conversation_t conversations[3]; };
+    unsigned conversation_count, conversation_offset, conversation_total;
+    bool conversations_loading, conversations_error_shown;
     node_t nodes[NODE_LIMIT];
     plugin_t plugins[6];
     unsigned plugin_count, plugin_offset, plugin_total;
@@ -233,6 +238,7 @@ static bool chat_swipe(const char *direction) {
 static int page(void) { return ui.code[0] ? 0 : ui.prompt[0] ? 3 : ui.scene_active&&!ui.error[0] ? 12 : ui.sidebar ? 8 : ui.page; }
 const char *operit_ui_current_page(void) {
     switch(page()) {
+        case 13: return "Conversations";
         case 12: return "edge_scene";
         case 0:return "Pairing"; case 1:return "Settings"; case 2:return "Chat";
         case 3:return "Space"; case 4:return "Unpair"; case 5:return "LeaveSpace";
@@ -242,6 +248,7 @@ const char *operit_ui_current_page(void) {
 }
 static const char *page_title(void) {
     switch(page()) {
+        case 13: return "对话列表";
         case 12: return "edge_scene";
         case 0:return "配对码"; case 1:return "设置"; case 2:return "Operit";
         case 3:return "空间审批"; case 4:return "解除配对"; case 5:return "退出空间";
@@ -292,18 +299,19 @@ static void scene(void) {
         icon_node("sidebar_toggle","","close_sidebar",136,0,44,40,true,ICON_CLOSE);
         node("sidebar_face","","expression",49,43,82,51,true,1);
         icon_node("sidebar_expression","表情","expression",12,102,156,36,true,ICON_FACE);
-        icon_node("sidebar_chat","表情 / 对话","chat",12,143,156,36,true,ICON_CHAT);
+        icon_node("sidebar_chat","对话列表","conversations",12,143,156,36,ui.connected&&!ui.sending,ICON_CHAT);
         icon_node("sidebar_plugins","插件","plugins",12,190,48,44,true,ICON_PLUGIN);
         icon_node("sidebar_settings","设置","settings",120,190,48,44,true,ICON_SETTINGS);
         node("sidebar_backdrop","","close_sidebar",180,0,140,240,true,1);
         return;
     }
-    bool detail=page()==9||page()==10||page()==11||(page()==0&&!ui.code[0]);
+    bool detail=page()==13||page()==9||page()==10||page()==11||(page()==0&&!ui.code[0]);
     bool menuEnabled=!ui.code[0]&&!ui.prompt[0]&&page()!=4&&page()!=5;
-    if(detail)icon_node("page_back","","settings",0,0,44,42,true,ICON_BACK);
+    if(detail)icon_node("page_back","",page()==13?"chat":"settings",0,0,44,42,true,ICON_BACK);
     else icon_node("sidebar_toggle","","sidebar",0,0,44,42,menuEnabled,ICON_MENU);
     node("title",page_title(),NULL,44,6,142,30,true,1);
     if(page()==6)icon_node("plugins_test_all","","edge_plugins_test_all",276,0,44,42,ui.connected&&!ui.plugins_loading&&!ui.plugins_testing,ICON_BOLT);
+    else if(page()==13)icon_node("edge_new","新建","edge_new",216,0,104,42,ui.connected&&!ui.sending,ICON_CHAT);
     else node("link_status",ui.connected ? "已连接" : ui.paired ? "已配对 / 离线" : "未配对",NULL,188,6,130,30,true,1);
     if (ui.error[0] && !ui.code[0] && !ui.prompt[0]) {
         node("error",ui.error,NULL,16,50,288,122,true,1);
@@ -354,6 +362,17 @@ static void scene(void) {
         node("plugins_prev","上一页","edge_plugins_prev",10,199,70,32,ui.connected&&!ui.plugins_loading&&!ui.plugins_testing&&ui.plugin_offset>0,1);
         node("plugins_refresh",ui.plugins_testing?"测试中":ui.plugins_loading?"读取中":"刷新","edge_plugins_refresh",123,199,70,32,ui.connected&&!ui.plugins_loading&&!ui.plugins_testing,1);
         node("plugins_next","下一页","edge_plugins_next",240,199,70,32,ui.connected&&!ui.plugins_loading&&!ui.plugins_testing&&ui.plugin_offset+ui.plugin_count<ui.plugin_total,1);
+    } else if (page()==13) {
+        static const char *ids[]={"conversation_0","conversation_1","conversation_2"};
+        for(unsigned i=0;i<ui.conversation_count;++i) {
+            conversation_t *p=ui.conversations+i;
+            node(ids[i],p->title,p->action,14,52+i*47,292,43,ui.connected&&!ui.sending&&!ui.conversations_loading&&p->action[0],1);
+            ui.nodes[ui.node_count-1].icon=ICON_CHAT;
+        }
+        if(!ui.conversation_count)node("conversations_empty",!ui.connected?"等待 Core 连接":ui.conversations_loading?"读取对话列表…":"暂无对话",NULL,22,76,276,76,true,1);
+        node("conversations_prev","上一页","conversations_prev",10,199,70,32,ui.connected&&!ui.conversations_loading&&ui.conversation_offset>0,1);
+        node("conversations_refresh",ui.conversations_loading?"读取中":"刷新","conversations_refresh",123,199,70,32,ui.connected&&!ui.sending&&!ui.conversations_loading,1);
+        node("conversations_next","下一页","conversations_next",240,199,70,32,ui.connected&&!ui.conversations_loading&&ui.conversation_offset+3<ui.conversation_total,1);
     } else if (page()==7) {
         node("expression_face","",NULL,70,68,180,112,true,1);
         node("expression_caption","Operit",NULL,134,191,100,26,true,1);
@@ -617,6 +636,7 @@ static void paint_nodes(void) {
         bool active=(same(item->id,"sidebar_chat")&&ui.page==2)||(same(item->id,"sidebar_expression")&&ui.page==7);
         bool confirm=same(item->id,"unpair_confirm")||same(item->id,"space_leave_confirm");
         bool filled=active||same(item->id,"edge_space_approve");
+        if(!strncmp(item->id,"conversation_",13))filled=ui.conversations[item->id[13]-'0'].selected;
         if(filled)rect(item->x,item->y,item->w,item->h,rgb(0x263e31));
         if(confirm||same(item->id,"edge_space_reject")||same(item->id,"unpair_cancel")||same(item->id,"space_leave_cancel"))
             outline(item->x,item->y,item->w,item->h,rgb(confirm?0x73534d:0x344d3d));
@@ -694,7 +714,20 @@ static void activate(const char *action) {
     else if (!strcmp(action,"plugins")) {ui.sidebar=false;ui.page=6;if(ui.action&&ui.connected)ui.action("edge_plugins_refresh",ui.context);}
     else if (!strcmp(action,"expression")) {ui.sidebar=false;ui.page=7;}
     else if (!strcmp(action,"pairing")) ui.page=0;
-    else if (!strcmp(action,"chat")) {ui.sidebar=false;ui.page=2;}
+    else if (!strcmp(action,"chat")) {ui.sidebar=false;ui.page=2;if(!ui.sending)ui.submitted[0]=0;}
+    else if (!strcmp(action,"conversations")||!strcmp(action,"conversations_refresh")||!strcmp(action,"conversations_prev")||!strcmp(action,"conversations_next")) {
+        if(!ui.connected||ui.sending)return;
+        if(!strcmp(action,"conversations")){ui.sidebar=false;ui.page=13;ui.conversation_offset=0;}
+        else if(!strcmp(action,"conversations_prev"))ui.conversation_offset=ui.conversation_offset>=3?ui.conversation_offset-3:0;
+        else if(!strcmp(action,"conversations_next")&&ui.conversation_offset+3<ui.conversation_total)ui.conversation_offset+=3;
+        memset(ui.conversations,0,sizeof(ui.conversations));ui.conversation_count=0;ui.conversations_loading=true;ui.conversations_error_shown=false;ui.error[0]=0;
+        if(ui.action)ui.action("edge_conversations_refresh",ui.context);
+    }
+    else if (!strncmp(action,"edge_select:",12)) {
+        if(!ui.connected||ui.sending)return;
+        if(!strcmp(action+12,ui.chat_id)){ui.page=2;ui.submitted[0]=0;}
+        else if(ui.action)ui.action(action,ui.context);
+    }
     else if (!strcmp(action,"space_leave")) ui.page=5;
     else if (!strcmp(action,"confirm_space_leave")) { if(ui.action) ui.action("edge_space_leave",ui.context); ui.page=1; }
     else if (!strcmp(action,"edge_unpair")) ui.page=4;
@@ -764,7 +797,7 @@ void operit_ui_set_touch(uint16_t x,uint16_t y,bool down) {
     }
     ui.pressed=down;
 }
-void operit_ui_navigate_home(void) { ui.sidebar=false;ui.page=2;invalidate(); }
+void operit_ui_navigate_home(void) { ui.sidebar=false;ui.page=2;if(!ui.sending)ui.submitted[0]=0;invalidate(); }
 void operit_ui_navigate_apps(void) { ui.sidebar=false;ui.page=6;invalidate(); }
 void operit_ui_set_connection(bool wifi,bool edge) { if(ui.wifi!=wifi||ui.connected!=edge){ui.wifi=wifi;ui.connected=edge;invalidate();} }
 void operit_ui_set_paired(bool paired) { if(ui.paired!=paired){ui.paired=paired;ui.sidebar=false;if(ui.page==0)ui.page=2;invalidate();} }
@@ -791,7 +824,12 @@ SETTER(chat_task,task)
 SETTER(chat_draft,draft)
 void operit_ui_action_error(const char *value){if(copy(ui.error,sizeof(ui.error),value))invalidate();}
 void operit_ui_set_chat_preview(const char *value){(void)value;}
-void operit_ui_set_chat_identity(const char *id,const char *character){(void)id;(void)character;}
+void operit_ui_set_chat_identity(const char *id,const char *character){
+    (void)character;if(!id)id="";
+    bool switched=ui.chat_id[0]&&strcmp(ui.chat_id,id);
+    if(copy(ui.chat_id,sizeof(ui.chat_id),id))invalidate();
+    if(switched){ui.draft[0]=0;ui.submitted[0]=0;ui.conversation_count=0;if(ui.page==13)ui.page=2;invalidate();}
+}
 void operit_ui_set_expression(const char *expression){
     uint8_t next=expression&&(!strcmp(expression,"sad")||!strcmp(expression,"error"))?1:
         expression&&(!strcmp(expression,"sleepy")||!strcmp(expression,"booting"))?2:0;
@@ -805,13 +843,13 @@ unsigned operit_ui_emoji_style(void){return 0;}
 bool operit_emoji_color_available(void){return false;}
 const char *operit_ui_chat_draft(void){return ui.submitted;}
 void operit_ui_submit_chat(void){
-    if(!ui.connected||!ui.draft[0]||ui.sending) return;
+    if(ui.page==13||!ui.connected||!ui.draft[0]||ui.sending) return;
     copy(ui.submitted,sizeof(ui.submitted),ui.draft);ui.sending=true;
     if(ui.action) ui.action("edge_send",ui.context);invalidate();
 }
 void operit_ui_chat_send_result(bool ok,const char *error){
     ui.sending=false;
-    if(ok) {ui.draft[0]=0;ui.submitted[0]=0;} else copy(ui.error,sizeof(ui.error),error&&*error?error:"发送失败");
+    if(ok) {ui.draft[0]=0;if(ui.page!=13)ui.submitted[0]=0;} else copy(ui.error,sizeof(ui.error),error&&*error?error:"发送失败");
     invalidate();
 }
 /* One bounded, volatile window shared by painting and screen inspection. */
@@ -894,8 +932,35 @@ void operit_ui_finish_plugins(unsigned count,unsigned offset,unsigned total,bool
     ui.plugin_count=count;ui.plugin_offset=offset;ui.plugin_total=total;ui.plugins_loading=loading;
     if(changed)invalidate();
 }
-void operit_ui_set_conversation(unsigned index,const char *id,const char *title,const char *character,bool selected){(void)index;(void)id;(void)title;(void)character;(void)selected;}
-void operit_ui_finish_conversations(unsigned count){(void)count;}
+void operit_ui_set_conversation(unsigned index,const char *id,const char *title,const char *character,bool selected){
+    (void)character;
+    if(ui.page!=13||index<ui.conversation_offset||index>=ui.conversation_offset+3)return;
+    conversation_t *p=ui.conversations+(index-ui.conversation_offset);
+    char action[109]={0};
+    /* Never truncate an identifier into a different selectable conversation. */
+    if(id&&*id&&strlen(id)<=96)snprintf(action,sizeof(action),"edge_select:%s",id);
+    bool changed=copy(p->action,sizeof(p->action),action);
+    changed=copy(p->title,sizeof(p->title),title&&*title?title:"未命名对话")||changed;
+    if(p->selected!=selected){p->selected=selected;changed=true;}
+    if(changed)invalidate();
+}
+void operit_ui_finish_conversations(unsigned count){
+    if(ui.page!=13)return;if(count>24)count=24;
+    if(ui.conversation_offset>=count&&ui.conversation_offset){
+        ui.conversation_offset=count?((count-1)/3)*3:0;
+        ui.conversation_count=0;memset(ui.conversations,0,sizeof(ui.conversations));
+        if(ui.action)ui.action("edge_conversations_refresh",ui.context);
+        invalidate();return;
+    }
+    unsigned visible=count>ui.conversation_offset?count-ui.conversation_offset:0;if(visible>3)visible=3;
+    if(ui.conversation_count!=visible||ui.conversation_total!=count){ui.conversation_count=visible;ui.conversation_total=count;invalidate();}
+}
+void operit_ui_set_conversations_state(bool loading,const char *error){
+    if(ui.page!=13)return;
+    if(ui.conversations_loading!=loading){ui.conversations_loading=loading;invalidate();}
+    if(loading||!error||!*error)ui.conversations_error_shown=false;
+    else if(!ui.conversations_error_shown){ui.conversations_error_shown=true;operit_ui_action_error(error);}
+}
 /* The renderer explicitly rejects dynamic layout editing. Never silently
  * turn a deployed layout into a different set of touch targets. */
 void operit_ui_layout_clear(uint32_t color){(void)color;operit_ui_action_error("自绘 UI 暂不支持布局编辑");}
@@ -934,6 +999,7 @@ static const char *inspect_format(bool compact) {
         node_t *n=ui.nodes+i;
         append("%s{\"id\":",i?",":"");string(n->id);append(",\"text\":");string(n->text);
         if(!strncmp(n->id,"plugin_probe_",13)){plugin_t *p=ui.plugins+(n->id[strlen(n->id)-1]-'0');append(",\"probeState\":%u,\"latency\":",p->status);string(p->latency);append(",\"latencyColor\":%u",(unsigned)rgb(p->status==2?0x71e5a2:p->status==3?0xf07878:0x849c8d));}
+        if(!strncmp(n->id,"conversation_",13))append(",\"selected\":%s",ui.conversations[n->id[13]-'0'].selected?"true":"false");
         if(same(n->id,"plugins_test_all"))append(",\"iconColor\":%u",(unsigned)rgb(0xffffff));
         append(",\"action\":");string(n->action);
         if(!compact)append(",\"role\":\"%s\",\"visible\":true,\"clickable\":%s",n->action?"button":"label",n->action?"true":"false");

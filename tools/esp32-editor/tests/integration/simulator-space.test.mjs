@@ -519,6 +519,45 @@ ${adapterJs}
     const stored = await core.command(['core', 'chat', 'show', chatId]);
     assert(JSON.stringify(stored).includes('SIM_CHAT_OK'), 'reply must be stored on Core, not fabricated by simulator');
     t.diagnostic('automatic Space chat route, rendered new-chat action, Edge send and real Core streamed reply passed (local deterministic provider)');
+    assert.equal(initialChat.chat.conversations, null, 'metadata must not load before list browsing');
+    const coreSelectionBefore = await core.command(['core','chat','current']);
+    let lastCreatedId=chatId;
+    for(let i=0;i<3;i++) {
+      await update();await tap('sidebar_toggle');await tap('sidebar_chat');await tap('edge_new');
+      const extra=await waitDevice('another Edge-created conversation',device=>device.chat.chatId!==lastCreatedId&&!device.chat.initializing&&!device.chat.sending);
+      lastCreatedId=extra.chat.chatId;
+    }
+    const browse = async () => {
+      await update();call('navigate_home');await tap('sidebar_toggle');await tap('sidebar_chat');
+      const listed=await waitDevice('bounded conversation metadata',device=>!device.chat.conversationsLoading&&device.chat.conversations?.length>=5&&!device.chat.conversationsError);
+      await update();assert.equal(screen().page,'Conversations');return listed.chat.conversations.length;
+    };
+    const selectRendered = async target => {
+      let hit;
+      for(let page=0;page<8;page++) {
+        hit=screen().nodes.find(n=>n.action==='edge_select:'+target);if(hit)break;
+        await tap('conversations_next');await update();
+      }
+      assert(hit,`missing rendered conversation ${target}`);
+      await tap(hit.id);
+      await waitDevice('selected Edge conversation',device=>device.chat.chatId===target&&!device.chat.initializing);
+      await update();assert.equal(screen().page,'Chat');
+    };
+    const listedCount=await browse();assert.equal(screen().nodes.filter(n=>/^conversation_/.test(n.id)).length,3);
+    assert(screen().nodes.some(n=>n.selected===true),'current conversation is visibly marked');
+    await tap('conversations_next');await update();
+    assert.equal(screen().nodes.filter(n=>/^conversation_/.test(n.id)).length,Math.min(3,listedCount-3));
+    await tap('conversations_prev');await update();
+    await selectRendered(initialChat.chat.chatId);
+    assert(!(await state()).device.chat.messages.some(m=>m.text==='SIM_CHAT_OK'),'switching does not retain another chat transcript');
+    await browse();await selectRendered(chatId);
+    await waitDevice('selected chat history restored',device=>device.chat.messages.some(m=>m.text==='SIM_CHAT_OK'));
+    assert.deepEqual(await core.command(['core','chat','current']),coreSelectionBefore,'Edge selection must not change Core desktop selection');
+    assert.equal(providerRequests.length,1,'browsing and selection must not resend messages');
+    await assert.rejects(()=>post('/api/simulator/action',{action:'edge_select:missing-chat'}),/不存在|刷新/);
+    assert.equal((await state()).device.chat.chatId,chatId);
+    t.diagnostic('rendered list/new/pagination/current mark/switch and history restoration passed; Core UI selection and provider send count unchanged');
+
     // Exercise the same Edge send/Binding route with a real bundled Core
     // ToolPkg. Inspect structured persisted parts, not just a model's claim.
     const beforePlugin = providerRequests.length;

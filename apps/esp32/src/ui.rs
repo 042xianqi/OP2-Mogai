@@ -54,6 +54,7 @@ unsafe extern "C" {
         selected: bool,
     );
     fn operit_ui_finish_conversations(count: u32);
+    fn operit_ui_set_conversations_state(loading: bool, error: *const c_char);
     fn operit_ui_action_error(error: *const c_char);
     fn operit_ui_set_chat_task(text: *const c_char);
     fn operit_ui_set_plugin(index: u32, id: *const c_char, name: *const c_char, status: u32, latency_ms: u32);
@@ -281,6 +282,7 @@ impl Esp32Ui {
         }
         unsafe {
             operit_ui_finish_conversations(rows.len() as u32);
+            operit_ui_set_conversations_state(state["conversationsLoading"].as_bool().unwrap_or(false), string(state["conversationsError"].as_str().unwrap_or("")).as_ptr());
         }
     }
 

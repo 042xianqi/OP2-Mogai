@@ -105,3 +105,18 @@ test('scene preview retries a transient null snapshot at the same revision', asy
   view.update(state);
   assert.equal(calls, 2);
 });
+
+test('browser adapter forwards real conversation metadata, loading, error and selected identity',async()=>{
+  const {ui,view,inspect,actions}=await fixture();ui._operit_ui_set_connection(1,1);
+  const tap=id=>ui.ccall('operit_ui_debug_tap','number',['string'],[id]);
+  const state={sessionId:'one',paired:true,chat:{connected:true,chatId:'a',conversationsLoading:true,conversations:[]}};
+  view.update(state);tap('sidebar_toggle');tap('sidebar_chat');view.update(state);
+  assert.equal(inspect().nodes.find(n=>n.id==='conversations_empty').text,'读取对话列表…');
+  state.chat.conversationsLoading=false;state.chat.conversations=[{id:'a',title:'当前对话'},{id:'b',title:'其他对话'}];view.update(state);
+  assert.equal(inspect().nodes.find(n=>n.id==='conversation_0').selected,true);
+  tap('conversation_1');assert.equal(actions.at(-1),'edge_select:b');
+  state.chat.conversationsError='对话已被删除';view.update(state);assert.equal(inspect().nodes.find(n=>n.id==='error').text,'对话已被删除');
+  tap('dismiss_error');view.update(state);assert(!inspect().nodes.some(n=>n.id==='error'),'polling the same error must leave refresh reachable');
+  tap('conversations_refresh');assert.equal(actions.at(-1),'edge_conversations_refresh');
+  state.chat.conversationsError=null;state.chat.chatId='b';view.update(state);assert.equal(inspect().page,'Chat');
+});

@@ -48,6 +48,7 @@ export class DeviceView {
       ['number', 'string', 'string', 'string', 'number'],
       [index, item.id, item.title, item.characterCardName ?? '', item.id === chat.chatId ? 1 : 0]));
     runtime.ccall('operit_ui_finish_conversations', null, ['number'], [conversations.length]);
+    runtime.ccall('operit_ui_set_conversations_state', null, ['number', 'string'], [chat.conversationsLoading ? 1 : 0, chat.conversationsError ?? '']);
     const plugins = state.plugins;
     runtime.ccall('operit_ui_set_plugin_category', null, ['number'], [plugins?.category === 'exclusive' ? 1 : 0]);
     const items = (plugins?.items ?? []).slice(0, 6);

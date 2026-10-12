@@ -61,6 +61,8 @@ export interface DeviceState {
             sender: string;
             text: string;
         }[];
+        conversationsLoading?: boolean;
+        conversationsError?: string | null;
         conversations?: {
             id: string;
             title: string;

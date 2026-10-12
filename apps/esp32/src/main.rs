@@ -515,6 +515,9 @@ fn runFirmware(
                 "edge_history_older" | "edge_history_newer" => {
                     if let Err(error) = crate::edge_chat::moveHistory(action == "edge_history_older") { ui.actionError(&error); }
                 }
+                "edge_conversations_refresh" => {
+                    if let Err(error) = crate::edge_chat::conversationsAction() { ui.actionError(&error); }
+                }
                 "edge_new" => {
                     if let Err(error) = crate::edge_chat::newChat() {
                         ui.actionError(&error);

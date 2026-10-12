@@ -45,6 +45,7 @@ void operit_ui_set_chat_history(bool older, bool newer);
 void operit_ui_finish_messages(unsigned count);
 void operit_ui_set_conversation(unsigned index, const char *id, const char *title, const char *character, bool selected);
 void operit_ui_finish_conversations(unsigned count);
+void operit_ui_set_conversations_state(bool loading, const char *error);
 void operit_ui_action_error(const char *error);
 void operit_ui_set_chat_task(const char *text);
 void operit_ui_set_plugin(unsigned index, const char *id, const char *name, unsigned status, unsigned latency_ms);

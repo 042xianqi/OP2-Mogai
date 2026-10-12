@@ -465,3 +465,45 @@ test('chat microphone is visible offline and emits a distinct action only when c
   call('chat_send_result',['number','string'],[1,'']);
   assert.equal(tap('edge_voice'),1);assert.equal(actions.at(-1),'edge_voice');
 });
+
+async function conversationFixture() {
+  const f=await fixture();f.call('set_paired',['number'],[1]);f.call('set_connection',['number','number'],[1,1]);
+  f.call('set_chat_identity',['string','string'],['chat-1','Operit']);
+  f.call('set_chat_draft',['string'],['原对话的草稿']);
+  assert.equal(f.tap('sidebar_toggle'),1);assert.equal(f.tap('sidebar_chat'),1);
+  assert.equal(f.inspect().page,'Conversations');assert.deepEqual(f.actions,['edge_conversations_refresh']);
+  f.fill=(count=8,selected='chat-1')=>{
+    for(let i=0;i<count;i++)f.call('set_conversation',['number','string','string','string','number'],[i,`chat-${i}`,`对话 ${i} 中文`, '', `chat-${i}`===selected?1:0]);
+    f.call('finish_conversations',['number'],[count]);f.call('set_conversations_state',['number','string'],[0,'']);
+  };return f;
+}
+test('conversation list pages three rows, highlights current chat, and waits for confirmed identity before clearing a draft',options,async()=>{
+  const f=await conversationFixture();assert.equal(f.inspect().nodes.find(n=>n.id==='conversations_empty').text,'读取对话列表…');
+  f.fill();let rows=f.inspect().nodes.filter(n=>/^conversation_/.test(n.id));
+  assert.deepEqual(rows.map(n=>n.action),['edge_select:chat-0','edge_select:chat-1','edge_select:chat-2']);assert.equal(rows[1].selected,true);
+  const painted=f.frame();assert.equal(f.tap('conversations_next'),1);assert.equal(f.tap('conversations_next'),0,'no second paging while rebuilding page');
+  f.fill();rows=f.inspect().nodes.filter(n=>/^conversation_/.test(n.id));assert.deepEqual(rows.map(n=>n.action),['edge_select:chat-3','edge_select:chat-4','edge_select:chat-5']);assert.notDeepEqual(f.frame(),painted);
+  assert.equal(f.tap('conversations_next'),1);f.fill();assert.equal(f.tap('conversations_next'),0);assert.equal(f.inspect().nodes.filter(n=>/^conversation_/.test(n.id)).length,2);
+  assert.equal(f.tap('conversations_prev'),1);f.fill();assert.equal(f.tap('conversation_1'),1);assert.equal(f.actions.at(-1),'edge_select:chat-4');
+  assert.equal(f.inspect().page,'Conversations');
+  f.call('action_error',['string'],['对话已被删除']);assert.equal(f.tap('dismiss_error'),1);assert.equal(f.inspect().page,'Conversations');
+  f.call('set_chat_identity',['string','string'],['chat-4','Operit']);assert.equal(f.inspect().page,'Chat');
+  assert.equal(f.inspect().nodes.find(n=>n.id==='chat_draft').text,'电脑输入…');
+  assert(f.inspect().staticBytes<10*1024);assert.equal(f.ui._simulator_heap_used(),0);
+});
+test('list handles deletion, invalid IDs, offline, approvals, and send scratch without stale selectable rows',options,async()=>{
+  const f=await conversationFixture();f.fill();f.tap('conversations_next');f.fill();f.tap('conversations_next');f.fill();
+  f.fill(2);assert.equal(f.actions.at(-1),'edge_conversations_refresh');f.fill(2);
+  assert.deepEqual(f.inspect().nodes.filter(n=>/^conversation_/.test(n.id)).map(n=>n.action),['edge_select:chat-0','edge_select:chat-1']);
+  f.call('set_conversation',['number','string','string','string','number'],[0,'x'.repeat(97),'无效标识','',0]);assert.equal(f.tap('conversation_0'),0);
+  f.call('set_connection',['number','number'],[1,0]);assert.equal(f.tap('conversation_1'),0);assert.equal(f.tap('edge_new'),0);
+  f.call('set_connection',['number','number'],[1,1]);f.call('set_pairing_code',['string'],['123456']);assert.equal(f.inspect().page,'Pairing');assert.equal(f.tap('conversation_1'),0);
+  f.call('set_pairing_code',['string'],['']);f.call('set_space_join_prompt',['string','number'],['加入空间',0]);assert.equal(f.inspect().page,'Space');
+  f.call('set_space_join_prompt',['string','number'],['',0]);f.tap('page_back');assert.equal(f.inspect().page,'Chat');
+  assert.equal(f.inspect().nodes.find(n=>n.id==='chat_draft').text,'原对话的草稿');
+  f.call('submit_chat');const submitted=f.ui.ccall('operit_ui_chat_draft','string',[],[]);assert.equal(submitted,'原对话的草稿');
+  f.tap('sidebar_toggle');assert.equal(f.tap('sidebar_chat'),0,'browsing may not overwrite an in-flight send');
+  f.call('navigate_home');assert.equal(f.ui.ccall('operit_ui_chat_draft','string',[],[]),submitted);
+  f.call('chat_send_result',['number','string'],[1,'']);f.tap('sidebar_toggle');f.tap('sidebar_chat');f.fill();
+  f.call('chat_send_result',['number','string'],[1,'']);assert.equal(f.tap('conversation_0'),1,'a late send receipt may not corrupt a list ID');
+});
