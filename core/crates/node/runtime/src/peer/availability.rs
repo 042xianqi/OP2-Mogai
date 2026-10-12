@@ -5,7 +5,6 @@ use operit_store::NetworkControlStore::NetworkControlStore;
 use tokio::sync::oneshot;
 
 const DISCOVERY_INTERVAL_MS: u64 = 3_000;
-const CONNECT_DEADLINE_MS: u64 = 30_000;
 const MAX_CONNECTING_PEERS: usize = 4;
 
 pub(super) struct AvailabilityWorker {
@@ -82,12 +81,9 @@ impl HostRuntimePeerService {
                             lastPeer = Some(node.clone());
                             connecting.insert(node.clone());
                             let service = service.clone();
-                            let tasks = tasks.clone();
                             pending.push(Box::pin(async move {
-                                let result = tokio::select! {
-                                    result = service.acquirePooledChannel(&node) => result.map(drop),
-                                    _ = tasks.waitForHostRuntimeDelay(CONNECT_DEADLINE_MS) => Err(CoreLinkError::new("PEER_CONNECT_TIMEOUT", "Authenticated connection establishment timed out")),
-                                };
+                                // The acquisition carries its own connect deadline.
+                                let result = service.acquirePooledChannel(&node).await.map(drop);
                                 (node, result)
                             }));
                         }

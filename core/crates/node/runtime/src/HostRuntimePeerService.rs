@@ -29,6 +29,10 @@ const HANDSHAKE: &str = "$peer.pairing";
 const PAIRING_LIFETIME_MS: i64 = 300_000;
 const MAX_POOLED_CHANNELS_PER_PEER: usize = 8;
 const MAX_LOGICAL_LEASES_PER_CHANNEL: usize = 16;
+/// Establishing one authenticated connection is bounded here rather than by the
+/// caller, so a dial to an unreachable peer becomes an error for every business
+/// call, watch and push instead of holding whoever asked for it.
+const CONNECT_DEADLINE_MS: u64 = 30_000;
 /// Last transport/session failure only; no credentials or message contents.
 pub fn peerSessionDiagnostic() -> Option<String> { duplex::diagnostic() }
 
@@ -265,8 +269,23 @@ impl HostRuntimePeerService {
         self.state.liveChannels.lock().unwrap().get(node).is_some_and(|channels| channels.iter()
             .filter_map(Weak::upgrade).any(|channel| channel.isAvailable()))
     }
-    /// Acquires a lazily created multiplexed channel from the fixed per-peer pool.
+    /// Acquires one channel for the peer within the connect deadline. The bound
+    /// belongs to the acquisition itself: only the availability worker used to
+    /// wrap it, so every other caller could wait on an unreachable address for
+    /// as long as the transport took to give up.
     pub(super) async fn acquirePooledChannel(&self, node: &str) -> Result<ChannelLease, CoreLinkError> {
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(CONNECT_DEADLINE_MS),
+            self.acquirePooledChannelUnbounded(node),
+        ).await {
+            Ok(lease) => lease,
+            Err(_) => Err(CoreLinkError::new("PEER_CONNECT_TIMEOUT", "Authenticated connection establishment timed out")),
+        }
+    }
+
+    /// Acquires a lazily created multiplexed channel from the fixed per-peer pool.
+    /// Call acquirePooledChannel instead: this form waits without a deadline.
+    async fn acquirePooledChannelUnbounded(&self, node: &str) -> Result<ChannelLease, CoreLinkError> {
         self.requirePeerConnectionAllowed(node)?;
         if let Some(channel) = self.cachedSession(node) {
             if self.outbound(node).is_err() && !self.sessionScopeAllowed(node, &channel)? {
