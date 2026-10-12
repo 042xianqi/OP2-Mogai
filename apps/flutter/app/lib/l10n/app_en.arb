@@ -1318,6 +1318,7 @@
   "settingsRuntimeStartPairing": "Start connection",
   "settingsRuntimeFinishPairing": "Finish connection",
   "settingsRuntimeBaseUrl": "Device address",
+  "settingsRuntimeTcpAddressHint": "host:port, for example 192.168.1.10:37195",
   "settingsRuntimeConnectionFailed": "Device connection failed: {error}",
   "@settingsRuntimeConnectionFailed": {
     "placeholders": {
@@ -1924,6 +1925,11 @@
   "settingsRuntimeControlRoles": "Roles",
   "settingsRuntimeControlAudit": "Audit",
   "settingsRuntimeControlAddRole": "Add role",
+  "settingsRuntimeControlEditRole": "Edit role",
+  "settingsRuntimeControlDeleteRole": "Delete role",
+  "settingsRuntimeControlDeleteRoleTitle": "Delete role {roleName}?",
+  "@settingsRuntimeControlDeleteRoleTitle": {"placeholders": {"roleName": {"type": "String"}}},
+  "settingsRuntimeControlDeleteRoleMessage": "Devices holding this role fall back to the default user identity.",
   "settingsRuntimeControlGrantRole": "Grant role",
   "settingsRuntimeControlAddIdentity": "Add identity",
   "settingsRuntimeControlBindDevice": "Bind device",

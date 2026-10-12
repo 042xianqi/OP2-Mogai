@@ -1311,6 +1311,7 @@
   "settingsRuntimeStartPairing": "开始连接",
   "settingsRuntimeFinishPairing": "完成连接",
   "settingsRuntimeBaseUrl": "设备地址",
+  "settingsRuntimeTcpAddressHint": "host:端口，例如 192.168.1.10:37195",
   "settingsRuntimeConnectionFailed": "设备连接失败：{error}",
   "@settingsRuntimeConnectionFailed": {
     "placeholders": {
@@ -1917,6 +1918,11 @@
   "settingsRuntimeControlRoles": "角色",
   "settingsRuntimeControlAudit": "审计",
   "settingsRuntimeControlAddRole": "添加角色",
+  "settingsRuntimeControlEditRole": "编辑角色",
+  "settingsRuntimeControlDeleteRole": "删除角色",
+  "settingsRuntimeControlDeleteRoleTitle": "删除角色 {roleName}？",
+  "@settingsRuntimeControlDeleteRoleTitle": {"placeholders": {"roleName": {"type": "String"}}},
+  "settingsRuntimeControlDeleteRoleMessage": "持有该角色的设备将回退为默认的普通用户身份。",
   "settingsRuntimeControlGrantRole": "授予角色",
   "settingsRuntimeControlAddIdentity": "添加身份",
   "settingsRuntimeControlBindDevice": "绑定设备",

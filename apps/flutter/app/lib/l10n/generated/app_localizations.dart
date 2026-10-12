@@ -4828,6 +4828,12 @@ abstract class AppLocalizations {
   /// **'Device address'**
   String get settingsRuntimeBaseUrl;
 
+  /// No description provided for @settingsRuntimeTcpAddressHint.
+  ///
+  /// In en, this message translates to:
+  /// **'host:port, for example 192.168.1.10:37195'**
+  String get settingsRuntimeTcpAddressHint;
+
   /// No description provided for @settingsRuntimeConnectionFailed.
   ///
   /// In en, this message translates to:
@@ -6854,6 +6860,30 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Add role'**
   String get settingsRuntimeControlAddRole;
+
+  /// No description provided for @settingsRuntimeControlEditRole.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit role'**
+  String get settingsRuntimeControlEditRole;
+
+  /// No description provided for @settingsRuntimeControlDeleteRole.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete role'**
+  String get settingsRuntimeControlDeleteRole;
+
+  /// No description provided for @settingsRuntimeControlDeleteRoleTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete role {roleName}?'**
+  String settingsRuntimeControlDeleteRoleTitle(String roleName);
+
+  /// No description provided for @settingsRuntimeControlDeleteRoleMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Devices holding this role fall back to the default user identity.'**
+  String get settingsRuntimeControlDeleteRoleMessage;
 
   /// No description provided for @settingsRuntimeControlGrantRole.
   ///

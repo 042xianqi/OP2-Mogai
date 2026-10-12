@@ -216,6 +216,7 @@ class _NetworkControlPanelState extends State<NetworkControlPanel> {
     final capabilities = spaceCapabilityValues(
       role.capabilities,
     ).map((value) => spaceCapabilityLabel(value, l10n)).join('、');
+    final editable = !_builtinRoleIds.contains(role.roleId);
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
@@ -224,7 +225,99 @@ class _NetworkControlPanelState extends State<NetworkControlPanel> {
         subtitle: Text(
           '${l10n.settingsRuntimeControlCurrentCapabilities}: $capabilities',
         ),
+        trailing: editable
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  IconButton(
+                    tooltip: l10n.settingsRuntimeControlEditRole,
+                    icon: const Icon(Icons.edit_outlined, size: 20),
+                    onPressed: () => _editIdentity(role, l10n),
+                  ),
+                  IconButton(
+                    tooltip: l10n.settingsRuntimeControlDeleteRole,
+                    icon: const Icon(Icons.delete_outline, size: 20),
+                    onPressed: () => _deleteIdentity(role, l10n),
+                  ),
+                ],
+              )
+            : null,
       ),
+    );
+  }
+
+  /// Opens the identity editor pre-filled for updating one existing role.
+  Future<void> _editIdentity(
+    generated.NetworkControlRole role,
+    AppLocalizations l10n,
+  ) async {
+    final topology = _topology;
+    if (topology == null) {
+      return;
+    }
+    final result = await _IdentityEditor.show(
+      context,
+      title: l10n.settingsRuntimeControlEditRole,
+      choices: spaceCapabilityChoices(l10n)
+          .where((choice) => _hasCapability(topology, choice.value))
+          .toList(growable: false),
+      initialName: role.displayName,
+      initialCapabilities: spaceCapabilityValues(role.capabilities),
+    );
+    if (result == null) {
+      return;
+    }
+    await _runCommand(
+      () => widget.clients.server.runtimeRemoteLinkService
+          .updateDeviceSpaceRole(
+            role: generated.NetworkControlRole(
+              roleId: role.roleId,
+              displayName: result.name,
+              capabilities: result.capabilities,
+            ),
+          ),
+      feedback: l10n.settingsRuntimeControlEditRole,
+    );
+  }
+
+  /// Confirms and removes one custom role.
+  Future<void> _deleteIdentity(
+    generated.NetworkControlRole role,
+    AppLocalizations l10n,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(
+          l10n.settingsRuntimeControlDeleteRoleTitle(
+            spaceIdentityDisplayName(role.displayName, l10n),
+          ),
+        ),
+        content: Text(l10n.settingsRuntimeControlDeleteRoleMessage),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(
+              MaterialLocalizations.of(dialogContext).cancelButtonLabel,
+            ),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(dialogContext).colorScheme.error,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(MaterialLocalizations.of(dialogContext).okButtonLabel),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      return;
+    }
+    await _runCommand(
+      () => widget.clients.server.runtimeRemoteLinkService
+          .removeDeviceSpaceRole(roleId: role.roleId),
+      feedback: l10n.settingsRuntimeControlDeleteRole,
     );
   }
 
@@ -408,20 +501,34 @@ class _IdentityDefinition {
 /// Edits an identity name and its human-readable capabilities.
 class _IdentityEditor extends StatefulWidget {
   /// Creates the identity editor.
-  const _IdentityEditor({required this.title, required this.choices});
+  const _IdentityEditor({
+    required this.title,
+    required this.choices,
+    this.initialName,
+    this.initialCapabilities,
+  });
 
   final String title;
   final List<SpaceCapabilityChoice> choices;
+  final String? initialName;
+  final List<String>? initialCapabilities;
 
   /// Opens the editor and returns a validated definition.
   static Future<_IdentityDefinition?> show(
     BuildContext context, {
     required String title,
     required List<SpaceCapabilityChoice> choices,
+    String? initialName,
+    List<String>? initialCapabilities,
   }) {
     return showDialog<_IdentityDefinition>(
       context: context,
-      builder: (_) => _IdentityEditor(title: title, choices: choices),
+      builder: (_) => _IdentityEditor(
+        title: title,
+        choices: choices,
+        initialName: initialName,
+        initialCapabilities: initialCapabilities,
+      ),
     );
   }
 
@@ -439,8 +546,11 @@ class _IdentityEditorState extends State<_IdentityEditor> {
   @override
   void initState() {
     super.initState();
-    _name = TextEditingController();
-    _selected = <String>{};
+    _name = TextEditingController(text: widget.initialName ?? '');
+    // Capabilities the current administrator cannot see stay selected so an
+    // edit never silently narrows a role the issuer holds no capability for;
+    // the replicated command still rejects unauthorized capability grants.
+    _selected = <String>{...?widget.initialCapabilities};
   }
 
   /// Releases the editor controls.
@@ -547,6 +657,16 @@ bool _hasCapability(
       (identity.capabilities.contains('*') ||
           identity.capabilities.contains(capability));
 }
+
+/// Role ids seeded by the Space bootstrap; built-in roles cannot be edited or removed.
+const _builtinRoleIds = <String>{
+  'admin',
+  'user',
+  'relay',
+  'storage',
+  'runner',
+  'auditor',
+};
 
 /// Generates an internal assignment identifier for the replicated command.
 String _generatedControlId(String prefix) {

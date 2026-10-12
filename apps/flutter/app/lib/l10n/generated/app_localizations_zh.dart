@@ -2563,6 +2563,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeBaseUrl => '设备地址';
 
   @override
+  String get settingsRuntimeTcpAddressHint => 'host:端口，例如 192.168.1.10:37195';
+
+  @override
   String settingsRuntimeConnectionFailed(String error) {
     return '设备连接失败：$error';
   }
@@ -3677,6 +3680,21 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settingsRuntimeControlAddRole => '添加角色';
+
+  @override
+  String get settingsRuntimeControlEditRole => '编辑角色';
+
+  @override
+  String get settingsRuntimeControlDeleteRole => '删除角色';
+
+  @override
+  String settingsRuntimeControlDeleteRoleTitle(String roleName) {
+    return '删除角色 $roleName？';
+  }
+
+  @override
+  String get settingsRuntimeControlDeleteRoleMessage =>
+      '持有该角色的设备将回退为默认的普通用户身份。';
 
   @override
   String get settingsRuntimeControlGrantRole => '授予角色';
