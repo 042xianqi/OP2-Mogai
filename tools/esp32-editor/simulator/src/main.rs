@@ -5,6 +5,7 @@ mod edge_chat;
 mod memory;
 mod audio;
 mod core_access;
+mod send_receipt;
 use operit_link::protocol::LinkDeviceInfo;
 use operit_node_edge::PeerRouter::EdgePeerRouter;
 use operit_node_runtime::{
@@ -193,6 +194,8 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
     routePoll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut chatRoute = edge_chat::SpaceChatRoute::default();
     let mut coreAccess = core_access::CoreAccess::default();
+    let sessionId = uuid::Uuid::new_v4().to_string();
+    let mut sendReceipt = send_receipt::SendReceipt::default();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     loop {
         let line = tokio::select! {
@@ -216,7 +219,8 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
                     .and_then(|s| s.peers().pairedPeers().ok())
                     .is_some_and(|p| !p.is_empty());
                 let chat_state = edge_chat::snapshot();
-                let chat_screen = edge_chat::screenText();
+                let chat_screen = edge_chat::screenTextFromSnapshot(&chat_state);
+                sendReceipt.capture(edge_chat::takeSendResult());
                 let pairing_code = services
                     .as_ref()
                     .ok()
@@ -230,7 +234,7 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
                 let space_join = spaceService.incomingDeviceSpaceJoins().await
                     .ok()
                     .and_then(|requests| requests.into_iter().find(|request| request.canApprove));
-                Ok(serde_json::json!({"address": address,
+                Ok(serde_json::json!({"address": address, "sessionId": sessionId,
                 "scene": scenePlugin.summary(),
                 "audio": microphone.snapshot(),
                 "coreAccess": coreAccess.snapshot(),
@@ -245,10 +249,7 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
                 "lastAction": *lastAction.lock().unwrap(),
                 "plugins": edge_chat::pluginsSnapshot(), "chat": chat_state, "chatPreview": edge_chat::preview(), "chatScreen": chat_screen,
                 "chatTask": edge_chat::taskStatus(),
-                "chatSendResult": edge_chat::takeSendResult().map(|result| match result {
-                    Ok(()) => serde_json::json!({"ok": true}),
-                    Err(error) => serde_json::json!({"ok": false, "error": error}),
-                })}))
+                "chatSendResult": sendReceipt.snapshot()}))
             }
             Some("audioConfigure") => microphone.configure(&request),
             Some("coreAccess") => match services.as_ref() {
@@ -353,11 +354,20 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(encoded)
                     .map_err(|_| "Invalid image bytes".to_string())?;
+                sendReceipt.capture(edge_chat::takeSendResult());
                 edge_chat::sendImage(bytes, request["mimeType"].as_str().unwrap_or("").into())
-                    .map(|_| serde_json::json!({"accepted":true}))
+                    .map(|_| {
+                        sendReceipt.begin(request["sendId"].as_str());
+                        serde_json::json!({"accepted":true})
+                    })
             })(),
-            Some("send") => edge_chat::send(request["text"].as_str().unwrap_or("").into())
-                .map(|_| serde_json::json!({"ok": true})),
+            Some("send") => {
+                sendReceipt.capture(edge_chat::takeSendResult());
+                edge_chat::send(request["text"].as_str().unwrap_or("").into()).map(|_| {
+                    sendReceipt.begin(request["sendId"].as_str());
+                    serde_json::json!({"ok": true})
+                })
+            }
             _ => Err("Unknown simulator command".into()),
         };
         match result {

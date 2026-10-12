@@ -10,6 +10,8 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {performDeviceAction} from '../../web/device-actions.ts';
+import {simulatorViewState} from '../../web/device-state.ts';
+import {DeviceView} from '../../web/device-view.ts';
 
 const root = fileURLToPath(new URL('../../../../', import.meta.url));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -235,6 +237,10 @@ test(process.env.OPERIT_SIM_AUDIO_ONLY === '1'
       assert.equal(ui.ccall('operit_ui_debug_tap', 'number', ['string'], [id]), 1, `not a clickable UI node: ${id}`);
       await Promise.all(actions.splice(0));
     };
+    // Use the browser adapter itself so omitted state fields cannot pass only
+    // because an independent integration fixture happened to set them.
+    const deviceView = new DeviceView(ui, {update() {}}, (ok, error) =>
+      call('chat_send_result', ['number', 'string'], [ok ? 1 : 0, error ?? '']));
     const update = async () => {
       const current = await state();
       assert.equal(current.running, true, `simulator exited: ${current.output}`);
@@ -242,32 +248,8 @@ test(process.env.OPERIT_SIM_AUDIO_ONLY === '1'
       const device = current.device;
       review = {requestId: device.spaceJoinRequestId, assignmentVersion: device.spaceJoinAssignmentVersion};
       ui._operit_ui_set_connection(1, device.chat.connected ? 1 : 0);
-      call('set_chat_identity', ['string', 'string'], [device.chat.chatId ?? '', device.chatPreview]);
-      const messages=(device.chat.messages ?? []).filter(message=>message.text?.trim()).slice(-12);
-      messages.forEach((message,index)=>call('set_message',['number','number','string'],
-        [index,message.sender==='user'?1:0,message.text]));
-      call('finish_messages',['number'],[messages.length]);
-      const plugins=device.plugins ?? {};
-      call('set_plugin_category',['number'],[plugins.category==='exclusive'?1:0]);
-      (plugins.items ?? []).slice(0,6).forEach((item,index)=>{
-        call('set_plugin',['number','string','string','number','number'],[index,item.id,item.name,
-          item.status==='probing'?1:item.status==='success'?2:item.status==='failure'?3:0,item.latencyMs??0]);
-        call('set_plugin_test',['number','number','number','string'],[index,
-          item.toolStatus==='probing'?1:item.toolStatus==='success'?2:item.toolStatus==='failure'?3:0,
-          item.toolLatencyMs??0,item.testError??'']);
-      });
-      const details=plugins.details??{};
-      call('set_plugin_details',['string','string','string','number','number','number','string'],
-        [details.id??'',details.description??'',(details.tools??[]).join('\n'),details.toolOffset??0,details.toolTotal??0,details.loading?1:0,details.error??'']);
-      call('set_plugin_testing',['number'],[plugins.testing?1:0]);
-      call('finish_plugins',['number','number','number','number','string'],
-        [(plugins.items??[]).length,plugins.offset??0,plugins.total??0,plugins.loading?1:0,plugins.error??'']);
-      call('set_chat_screen', ['string'], [device.chatScreen]);
-      call('set_chat_task', ['string'], [device.chatTask]);
+      deviceView.update(simulatorViewState(current));
       call('set_scene', ['number','number','number'], [device.scene?.active ? 1 : 0, device.scene?.revision ?? 0, 0]);
-      call('set_paired', ['number'], [device.paired ? 1 : 0]);
-      call('set_pairing_code', ['string'], [device.pairingCode]);
-      call('set_space_join_prompt', ['string', 'number'], [device.spaceJoinPrompt, 0]);
       for (let i = 0; i < 20; i++) ui._operit_ui_pump(20);
       return current;
     };
@@ -516,11 +498,17 @@ ${adapterJs}
     await update(); call('navigate_home'); await tap('sidebar_toggle'); await tap('sidebar_settings'); await tap('settings_device'); await tap('edge_new');
     const created = await waitDevice('Edge-created chat', device => device.chat.chatId && device.chat.chatId !== initialChat.chat.chatId && !device.chat.sending);
     const chatId = created.chat.chatId;
-    await post('/api/simulator/send', {text: 'SIM_CHAT'});
+    await post('/api/simulator/send', {text: 'SIM_CHAT', sendId: 'browser-fixture-send'});
     const firstReply = await waitDevice('first streamed reply', device =>
       device.chat.messages.some(message => message.text === 'SIM_CHAT_OK') && !device.chat.generating);
     assert(firstReply.chat.messages.some(message => message.sender === 'user' && message.text === 'SIM_CHAT'));
     assert.equal(providerRequests.length, 1);
+    const receipt = (await state()).device.chatSendResult;
+    assert.equal(receipt.ok, true);
+    assert.equal(receipt.sendId, 'browser-fixture-send');
+    const observers = await Promise.all([state(), state()]);
+    for (const observer of observers) assert.deepEqual(observer.device.chatSendResult, receipt,
+      'debug/state observers must not steal the browser send acknowledgement');
     await update();
     const painted=screen();
     assert.equal(painted.page,'Chat');

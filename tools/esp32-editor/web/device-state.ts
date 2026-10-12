@@ -6,6 +6,7 @@ export interface CoreAccessState {
 }
 
 export interface DeviceState {
+    sessionId?: string;
     coreAccess?: CoreAccessState;
     error?: string;
     address?: string;
@@ -53,6 +54,8 @@ export interface DeviceState {
     chatTask?: string;
     chat?: {
         connected?: boolean;
+        hasOlder?: boolean;
+        hasNewer?: boolean;
         chatId?: string;
         messages?: {
             sender: string;
@@ -66,6 +69,8 @@ export interface DeviceState {
         error?: string;
     };
     chatSendResult?: {
+        id: number;
+        sendId?: string | null;
         ok: boolean;
         error?: string;
     } | null;
@@ -78,6 +83,7 @@ export function simulatorViewState(state: {
 }): DeviceState {
     const device = state.ready === true ? state.device : null;
     return {
+        sessionId: device?.sessionId,
         running: state.ready === true, connected: device?.chat?.connected === true, paired: device?.paired === true,
         pairingCode: device?.pairingCode ?? '', spaceState: simulatorConnectionLabel(device),
         spaceJoinPrompt: device?.spaceJoinPrompt ?? '', spaceJoinBusy: device?.spaceJoinBusy ?? false,

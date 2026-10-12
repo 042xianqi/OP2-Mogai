@@ -38,6 +38,8 @@ test('editor starts real TCP device, serves firmware UI, persists token and stop
   await new Promise(resolve => setTimeout(resolve, 100));
   const first = await ready();
   assert.equal(first.device.chat.connected, false);
+  assert.match(first.device.sessionId, /^[0-9a-f-]{36}$/);
+  assert.equal((await state()).device.sessionId, first.device.sessionId);
   assert.equal(first.device.memory.profile, 'esp32-2432s028');
   assert.equal(first.device.memory.kind, 'configured-limits');
   assert.equal(first.device.memory.maxPeerMessageBytes, 8192);
@@ -52,6 +54,11 @@ test('editor starts real TCP device, serves firmware UI, persists token and stop
     (process.platform === 'win32' ? '.exe' : ''));
   assert((await stat(runtimeData)).isDirectory(), 'runtime data must not collide with the executable');
   assert((await stat(runtimeExecutable)).isFile(), 'the child executable has its own path');
+
+  const invalidSend = await fetch(base + '/api/simulator/send', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({text:'test',sendId:'x'.repeat(65)})});
+  assert.equal(invalidSend.status,400);
+  assert.match((await invalidSend.json()).error,/发送编号/);
 
   const invalidImage = await fetch(base + '/api/simulator/send-image', {method:'POST',headers:{'Content-Type':'text/plain'},body:'not an image'});
   assert.equal(invalidImage.status,400);
@@ -110,5 +117,7 @@ test('editor starts real TCP device, serves firmware UI, persists token and stop
   });
   await fetch(base + '/api/simulator/start', {method: 'POST'});
   await new Promise(resolve => setTimeout(resolve, 100));
-  assert.equal((await ready()).token, first.token);
+  const restarted = await ready();
+  assert.equal(restarted.token, first.token);
+  assert.notEqual(restarted.device.sessionId, first.device.sessionId);
 });

@@ -57,7 +57,7 @@ export function mountCoreAccess(container: HTMLElement): (ready: boolean, state?
                 if (!state.pairing) get<HTMLInputElement>('code').value = '';
                 get<HTMLInputElement>('token').value = '';
             } catch (error) { get('error').textContent = errorMessage(error); }
-            finally { busy = false; render(); }
+            finally { busy = false; render(); window.dispatchEvent(new Event('operit-simulator-refresh')); }
         });
     }
     return (isReady, snapshot) => {

@@ -21,8 +21,6 @@ let output = '';
 let token = '';
 let sequence = 0;
 let lifecycle = 0;
-// Each browser has its own self-drawn UI request counter. Only the page that opened
-// the preview may drain the simulator's destructive, single-chunk queue.
 let previousExit: Promise<void> = Promise.resolve();
 const pending = new Map<number, {resolve: (value: unknown) => void; reject: (error: Error) => void}>();
 
@@ -215,6 +213,8 @@ export async function simulatorRoute(req: IncomingMessage, res: ServerResponse, 
     } else if (url.pathname === '/api/simulator/memory' && req.method === 'GET') {
       reply(200, ready ? await rpc('memory') : null);
     } else if (url.pathname === '/api/simulator/send-image' && req.method === 'POST') {
+      const sendId = req.headers['x-operit-send-id'];
+      if (sendId !== undefined && (typeof sendId !== 'string' || sendId.length > 64)) throw new Error('无效的发送编号');
       const mimeType = req.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase();
       if (mimeType !== 'image/png' && mimeType !== 'image/jpeg') throw new Error('只支持 PNG/JPEG 图片');
       const chunks: Buffer[] = []; let total = 0;
@@ -225,7 +225,7 @@ export async function simulatorRoute(req: IncomingMessage, res: ServerResponse, 
       }
       if (!total) throw new Error('图片为空');
       const base64 = Buffer.concat(chunks).toString('base64');
-      reply(200, await rpc('sendImage', {mimeType, bytes: base64}));
+      reply(200, await rpc('sendImage', {mimeType, bytes: base64, sendId}));
     } else if (url.pathname === '/api/simulator/debug/commands' && req.method === 'GET') {
       reply(200, takeUiCommands());
     } else if (url.pathname === '/api/simulator/debug/result' && req.method === 'POST') {
@@ -260,10 +260,11 @@ export async function simulatorRoute(req: IncomingMessage, res: ServerResponse, 
         body += String(chunk);
         if (Buffer.byteLength(body) > 8192) throw new Error('消息过长');
       }
-      const input = JSON.parse(body) as {action?: unknown; text?: unknown; requestId?: unknown; assignmentVersion?: unknown};
+      const input = JSON.parse(body) as {action?: unknown; text?: unknown; sendId?: unknown; requestId?: unknown; assignmentVersion?: unknown};
       if (url.pathname.endsWith('/send')) {
         if (typeof input.text !== 'string') throw new Error('缺少消息内容');
-        reply(200, await rpc('send', {text: input.text}));
+        if (input.sendId !== undefined && (typeof input.sendId !== 'string' || input.sendId.length > 64)) throw new Error('无效的发送编号');
+        reply(200, await rpc('send', {text: input.text, sendId: input.sendId}));
         return true;
       }
       if (typeof input.action !== 'string') throw new Error('缺少设备 action');

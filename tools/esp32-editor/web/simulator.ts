@@ -50,6 +50,7 @@ audioButton.addEventListener('click', async () => {
   finally { audioPending = false; void refresh(); }
 });
 let polling = false;
+let refreshRequested = false;
 let pendingAction = false;
 
 async function readResponse(response: Response): Promise<SimulatorStatus> {
@@ -58,7 +59,7 @@ async function readResponse(response: Response): Promise<SimulatorStatus> {
   return value;
 }
 async function refresh(): Promise<void> {
-  if (polling) return;
+  if (polling) { refreshRequested = true; return; }
   polling = true;
   try {
     const response = await fetch('/api/simulator/state');
@@ -78,7 +79,10 @@ async function refresh(): Promise<void> {
     // Let the 自绘 UI host reflect the real running session instead of debug toggles.
     window.dispatchEvent(new CustomEvent('operit-simulator-state', {detail: simulatorViewState(state)}));
   } catch (e) { label.textContent = errorMessage(e); summary.textContent = '请求失败'; }
-  finally { polling = false; }
+  finally {
+    polling = false;
+    if (refreshRequested) { refreshRequested = false; void refresh(); }
+  }
 }
 copyButton.addEventListener('click', () => {
   void navigator.clipboard.writeText(token.value).catch(e => { label.textContent = errorMessage(e); summary.textContent = '请求失败'; });
@@ -101,4 +105,5 @@ void fetch('/api/simulator/start', {method: 'POST'}).then(async response => {
   await readResponse(response);
   await refresh();
 }).catch(e => { label.textContent = errorMessage(e); summary.textContent = '请求失败'; });
-window.setInterval(() => void refresh(), 1000);
+window.addEventListener('operit-simulator-refresh', () => void refresh());
+window.setInterval(() => void refresh(), 250);
