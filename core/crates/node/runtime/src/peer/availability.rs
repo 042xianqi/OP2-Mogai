@@ -75,6 +75,8 @@ impl HostRuntimePeerService {
                                 continue;
                             }
                             if connecting.contains(&peer.nodeId) || service.hasLiveChannel(&peer.nodeId) { continue; }
+                            // Dialing is pointless while a return connection already carries calls.
+                            if service.dialSuppressed(&peer.nodeId) { continue; }
                             if !(peer.outbound || service.spaceOutbound(&peer.nodeId).is_ok()) { continue; }
                             if connecting.len() >= MAX_CONNECTING_PEERS.min(service.state.limits.concurrentProbes) { break; }
                             let node = peer.nodeId;
