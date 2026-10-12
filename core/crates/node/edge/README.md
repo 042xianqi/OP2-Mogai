@@ -8,6 +8,16 @@ does not represent the full `CoreNode` defined by the Space architecture. It
 does not own `OperitApplication`, providers, ToolPkg, chat orchestration,
 persistence, identity, Access sessions, Space sync, or Proxy implementations.
 
+## Pairing startup
+
+Firmware, simulator and other Edge apps use `peer::createPeerService` to select
+code-only pairing in the shared runtime. The receiver never asks for an Edge
+token, including on remote network connections. Confirm the six-digit code on
+the receiving device; pairing alone does not grant Space membership or business
+permissions. Outbound pairing to a Core follows the Core receiver's policy.
+The existing listener preference schema keeps an empty token field for
+compatibility, without a configured Edge secret.
+
 ## Native plugins
 
 Firmware registers small `EdgePlugin` implementations at startup with

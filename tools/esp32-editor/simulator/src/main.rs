@@ -9,7 +9,6 @@ mod send_receipt;
 use operit_link::protocol::LinkDeviceInfo;
 use operit_node_edge::PeerRouter::EdgePeerRouter;
 use operit_node_runtime::{
-    HostRuntimePeerService::HostRuntimePeerService,
     NodeServices::{NodeServices, PeerTransport},
     PeerStateStore::{PeerHostConfig, PeerHostPortMode, PeerStateStore},
 };
@@ -130,7 +129,7 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
     let (services, startListener) = match nodeServices {
         Some(services) => (services, false),
         None => {
-            let peers = HostRuntimePeerService::newWithLimits(
+            let peers = operit_node_edge::peer::createPeerService(
                 Arc::new(hostManager.clone()),
                 &edgeRouter,
                 deviceInfo.clone(),
@@ -143,8 +142,7 @@ async fn run(nodeServices: Option<NodeServices>) -> Result<(), Box<dyn std::erro
             };
             PeerStateStore::new(storage.clone()).saveHostConfig(&PeerHostConfig {
                 bindAddress: configuredAddress.clone(),
-                token: std::env::var("OPERIT_SIM_TOKEN")
-                    .unwrap_or_else(|_| "operit-simulator-token".into()),
+                token: String::new(),
                 transports: vec![PeerTransport::Tcp],
                 discoveryEnabled: std::env::var("OPERIT_SIM_DISCOVERY")
                     .map_or(true, |value| value != "false" && value != "0"),

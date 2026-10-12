@@ -105,7 +105,17 @@ struct PeerDialState {
     suppressedUntil: i64,
 }
 
+/// Local receiver policy; callers and remote device metadata cannot select it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PeerPairingPolicy {
+    /// Core listeners require a token before starting pairing outside the LAN.
+    LocalCodeOrRemoteToken,
+    /// Edge listeners confirm every pairing with the receiving device's code.
+    ConfirmationCodeOnly,
+}
+
 struct State {
+    pairingPolicy: PeerPairingPolicy,
     limits: PeerRuntimeLimits,
     host: Arc<HostManager>,
     link: HostPeerLink,
@@ -149,6 +159,13 @@ impl HostRuntimePeerService {
     pub fn newWithLimits<R: PeerRouter + 'static>(
         host: Arc<HostManager>, router: &Arc<R>, info: LinkDeviceInfo, limits: PeerRuntimeLimits,
     ) -> Result<Arc<Self>, String> {
+        Self::newWithPairingPolicy(host, router, info, limits, PeerPairingPolicy::LocalCodeOrRemoteToken)
+    }
+    /// Uses the embedding node's local pairing policy with the shared handshake.
+    pub fn newWithPairingPolicy<R: PeerRouter + 'static>(
+        host: Arc<HostManager>, router: &Arc<R>, info: LinkDeviceInfo,
+        limits: PeerRuntimeLimits, pairingPolicy: PeerPairingPolicy,
+    ) -> Result<Arc<Self>, String> {
         if limits.incomingSessions == 0 || limits.pendingPairings == 0 || limits.concurrentProbes == 0 {
             return Err("Peer runtime limits must be positive".into());
         }
@@ -159,6 +176,7 @@ impl HostRuntimePeerService {
             .ok_or("Runtime storage Host is not installed")?;
         let service = Arc::new(Self {
             state: Arc::new(State {
+                pairingPolicy,
                 limits,
                 host,
                 link,
@@ -597,12 +615,13 @@ impl HostRuntimePeerService {
             },
         };
         let config = self.state.store.hostConfig().map_err(error)?.ok_or_else(|| error("Listener not configured"))?;
-        // 免 token 必须同时开启本地发现，且来源是 Host 实际接入地址；未知来源 fail closed。
+        // Core 的局域网免 token 要求开启本地发现且来源为 Host 实际接入地址。
+        // Edge 的配对码策略由本机启动选择，不采信远端身份或目标地址。
         let lan = config.discoveryEnabled && raw.remoteAddress().is_some_and(|a| isLocalAddress(a.ip()));
         // USB serial is a physically attached, point-to-point pairing channel.
         // It has no IP remote address, so treat it as local instead of forcing
         // the user to provision a second network token before pairing.
-        let tokenRequired = pairingTokenRequired(&hello.purpose, raw.transport(), lan);
+        let tokenRequired = pairingTokenRequired(self.state.pairingPolicy, &hello.purpose, raw.transport(), lan);
         let (private, public) = crypto::ephemeral()?;
         let id = if hello.purpose == "start" { uuid::Uuid::new_v4().to_string() } else { hello.sessionId.clone() };
         let transcript = crypto::Transcript { version: PAIRING_SERVICE_VERSION, sessionId: id.clone(),
@@ -737,8 +756,9 @@ fn parseTransport(t: &str) -> Result<PeerTransport, CoreLinkError> { match t {
     "http" => Ok(PeerTransport::Http), "ws" => Ok(PeerTransport::WebSocket), "tcp" => Ok(PeerTransport::Tcp),
     "serial" => Ok(PeerTransport::Serial), "bluetooth" => Ok(PeerTransport::Bluetooth), _ => Err(error("Unknown transport")),
 } }
-fn pairingTokenRequired(purpose: &str, transport: PeerTransport, lan: bool) -> bool {
-    purpose == "start" && !lan && transport != PeerTransport::Serial
+fn pairingTokenRequired(policy: PeerPairingPolicy, purpose: &str, transport: PeerTransport, lan: bool) -> bool {
+    policy == PeerPairingPolicy::LocalCodeOrRemoteToken
+        && purpose == "start" && !lan && transport != PeerTransport::Serial
 }
 
 fn isLocalAddress(address: std::net::IpAddr) -> bool { match address {
@@ -1242,18 +1262,30 @@ mod pairing_policy_tests {
 
     #[test]
     fn serial_pairing_is_local_without_network_token() {
-        assert!(!pairingTokenRequired("start", PeerTransport::Serial, false));
+        assert!(!pairingTokenRequired(PeerPairingPolicy::LocalCodeOrRemoteToken, "start", PeerTransport::Serial, false));
     }
 
     #[test]
     fn network_pairing_still_requires_token_off_lan() {
-        assert!(pairingTokenRequired("start", PeerTransport::Tcp, false));
-        assert!(!pairingTokenRequired("start", PeerTransport::Tcp, true));
+        assert!(pairingTokenRequired(PeerPairingPolicy::LocalCodeOrRemoteToken, "start", PeerTransport::Tcp, false));
+        assert!(!pairingTokenRequired(PeerPairingPolicy::LocalCodeOrRemoteToken, "start", PeerTransport::Tcp, true));
+    }
+
+    #[test]
+    fn edge_pairing_never_requires_a_token() {
+        for transport in [PeerTransport::Tcp, PeerTransport::Serial, PeerTransport::Http,
+            PeerTransport::WebSocket, PeerTransport::Bluetooth] {
+            for lan in [true, false] {
+                for purpose in ["start", "finish", "session", "space"] {
+                    assert!(!pairingTokenRequired(PeerPairingPolicy::ConfirmationCodeOnly, purpose, transport, lan));
+                }
+            }
+        }
     }
 
     #[test]
     fn established_serial_sessions_never_use_pairing_token() {
-        assert!(!pairingTokenRequired("session", PeerTransport::Serial, false));
+        assert!(!pairingTokenRequired(PeerPairingPolicy::LocalCodeOrRemoteToken, "session", PeerTransport::Serial, false));
     }
 }
 

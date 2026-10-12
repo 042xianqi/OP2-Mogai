@@ -114,6 +114,11 @@ cargo check --manifest-path core/Cargo.toml -p operit-proxy-local
   and current Space admission; it creates neither reverse pairing nor a role.
 - The embedding app owns the `PeerRouter`. Peer services and idle dispatchers
   hold weak references; releasing the router returns `PEER_ROUTER_CLOSED`.
+- Pairing policy is selected locally by the embedding node. The normal
+  constructors retain Core's token requirement for non-LAN pairing; Edge uses
+  `peer::createPeerService` with `ConfirmationCodeOnly`. The wire handshake,
+  six-digit confirmation, encrypted sessions and Space authorization are shared.
+  This policy never comes from the connecting device's metadata.
 - `newWithLimits` accepts `PeerRuntimeLimits`; the existing `new` keeps normal
   defaults. Firmware and simulator select `constrained()` explicitly. Shared
   session limits and probe concurrency do not depend on an OS name.

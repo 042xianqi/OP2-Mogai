@@ -2,8 +2,9 @@
 
 The ESP32 advertises `_operit-edge._tcp` over mDNS. Use the Core application's
 device scan to discover it, start pairing, and enter the code displayed on the
-ESP32. Core and Edge must be on the same reachable LAN. Opening the browser
-editor automatically starts a separately identified `esp32-edge-simulator`.
+ESP32. LAN discovery finds local devices; a remote Edge can also be paired by
+its reachable address. Opening the browser editor automatically starts a
+separately identified `esp32-edge-simulator`.
 
 The firmware registers a native `device.status` plugin. Its `read` action
 returns board id, expression, IP address, and Wi-Fi name over the paired Link.
@@ -12,18 +13,15 @@ rendered on this display unless it has an explicit Edge adaptation.
 
 ## Local configuration
 
-The ESP32 uses the same Edge token as the Core/CLI main link. Put that token in
-the local `.edge-token` file under `apps/esp32`; the firmware build reads it
-automatically. The file is ignored by Git and must never be committed or
-included in logs. `OPERIT_EDGE_TOKEN` can still override it for CI or a
-deliberate one-off build:
+Edge pairing uses the six-digit code shown on the receiving device, for both
+serial and network connections. No Edge token, `.edge-token` file, or
+`OPERIT_EDGE_TOKEN` environment variable is needed. Legacy token settings are
+ignored; firmware startup clears the unused shared listener token field.
 
-```powershell
-cargo build --release
-```
-
-Leave the setup page's token field empty to keep using this same token. Enter a
-different value only when the Core/CLI token is intentionally being rotated.
+Configure Wi-Fi from the setup page or with `OPERIT_WIFI_SSID` and
+`OPERIT_WIFI_PASSWORD`. Pairing still verifies the devices and shared keys;
+joining a Space remains a separate, approved action. A Core receiving a remote
+pairing continues to apply its own token policy.
 
 Use the ESP32 toolchain and partition table documented in the repository's
 `BUILDING.md`. Select the actual serial port for your device rather than assuming

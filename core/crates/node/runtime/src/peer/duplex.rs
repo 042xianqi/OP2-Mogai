@@ -571,7 +571,7 @@ mod tests {
         let storage=Arc::new(Storage::default());
         operit_store::CoreSpaceStore::CoreSpaceStore::newNodeLocal(storage.clone()).initialize().unwrap();
         let router=Arc::new(Router {node:node.into(),scope:Mutex::new(Some("space".into())),calls:AtomicUsize::new(0)});
-        let service=HostRuntimePeerService { state:Arc::new(State { limits:PeerRuntimeLimits::default(),
+        let service=HostRuntimePeerService { state:Arc::new(State { pairingPolicy:PeerPairingPolicy::LocalCodeOrRemoteToken, limits:PeerRuntimeLimits::default(),
             host:Arc::new(HostManager {runtimeStorageHost:Some(storage.clone()),..HostManager::default()}),link:HostPeerLink::default(),
             store:PeerStateStore::new(storage),nodeId:node.into(),info:LinkDeviceInfo {platform:"test".into(),model:"test".into(), pairingIncarnation: None },router:Arc::downgrade(&(router.clone() as Arc<dyn PeerRouter>)),
             listeners:AsyncMutex::default(),connections:Mutex::default(),pooledChannels:Mutex::default(),liveChannels:Mutex::default(),callableInbound:Mutex::default(),dialStates:Mutex::default(),advertisements:Mutex::default(),slots:Arc::new(tokio::sync::Semaphore::new(2)),

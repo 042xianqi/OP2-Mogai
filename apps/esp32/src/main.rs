@@ -90,7 +90,6 @@ fn runFirmware(
     use operit_host_api::{HostError, HostRuntimeTaskSchedulerHost};
     use operit_link::protocol::LinkDeviceInfo;
     use operit_node_edge::PeerRouter::EdgePeerRouter;
-    use operit_node_runtime::HostRuntimePeerService::HostRuntimePeerService;
     use operit_node_runtime::NodeServices::NodeServices;
     use operit_node_runtime::PeerStateStore::{PeerHostConfig, PeerHostPortMode, PeerStateStore};
     use operit_store::CoreNodeIdentityStore::CoreNodeIdentityStore;
@@ -258,7 +257,7 @@ fn runFirmware(
     let injectedServices = nodeServices;
     let peerService = match injectedServices.as_ref() {
         Some(services) => services.peers(),
-        None => HostRuntimePeerService::newWithLimits(
+        None => operit_node_edge::peer::createPeerService(
             Arc::new(hostManager.clone()),
             &edgeRouter,
             deviceInfo.clone(),
@@ -271,7 +270,7 @@ fn runFirmware(
         let configChanged = match peers.hostConfig().map_err(HostError::new)? {
             Some(saved) => {
                 saved.bindAddress != peerBindAddress
-                    || saved.token != config.edgeToken
+                    || !saved.token.is_empty()
                     || saved.transports != peerTransports
                     || !saved.discoveryEnabled
                     || saved.portMode != PeerHostPortMode::Fixed
@@ -282,7 +281,8 @@ fn runFirmware(
             peers
                 .saveHostConfig(&PeerHostConfig {
                     bindAddress: peerBindAddress,
-                    token: config.edgeToken.clone(),
+                    // The shared listener schema retains an empty legacy field.
+                    token: String::new(),
                     transports: peerTransports.clone(),
                     discoveryEnabled: true,
                     portMode: PeerHostPortMode::Fixed,

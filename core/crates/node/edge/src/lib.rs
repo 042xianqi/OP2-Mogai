@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 pub mod PeerRouter;
+pub mod peer;
 
 use std::sync::Arc;
 use operit_node_runtime::NodeServices::NodeServices;

@@ -12,7 +12,6 @@ panel.innerHTML = `<details>
     <dl class="simulator-details">
       <div><dt>状态</dt><dd id="sim-status" role="status">模拟设备已停止</dd></div>
       <div><dt>TCP</dt><dd id="sim-address">-</dd></div>
-      <div><dt>Edge Token</dt><dd class="sim-token"><input id="sim-token" type="text" readonly spellcheck="false" aria-label="Edge Token"><button id="sim-copy" disabled>复制</button></dd></div>
     </dl>
     <fieldset><legend>模拟麦克风</legend>
       <p class="note">16 kHz 单声道 PCM，440 Hz 测试音。Core 插件通过 Tools.Edge 打开 sim-pcm，沿已批准的设备空间 TCP 连接接收。此处只配置输入源。</p>
@@ -29,10 +28,8 @@ document.querySelector('footer')!.after(panel);
 const label = panel.querySelector<HTMLElement>('#sim-status')!;
 const summary = panel.querySelector<HTMLElement>('#sim-summary')!;
 const address = panel.querySelector<HTMLElement>('#sim-address')!;
-const token = panel.querySelector<HTMLInputElement>('#sim-token')!;
 const startButton = panel.querySelector<HTMLButtonElement>('#sim-start')!;
 const stopButton = panel.querySelector<HTMLButtonElement>('#sim-stop')!;
-const copyButton = panel.querySelector<HTMLButtonElement>('#sim-copy')!;
 const audioButton = panel.querySelector<HTMLButtonElement>('#sim-audio-apply')!;
 const audioStatus = panel.querySelector<HTMLElement>('#sim-audio-status')!;
 const audioError = panel.querySelector<HTMLElement>('#sim-audio-error')!;
@@ -64,7 +61,6 @@ async function refresh(): Promise<void> {
   try {
     const response = await fetch('/api/simulator/state');
     const state = await readResponse(response);
-    token.value = state.token ?? '';
     updateCoreAccess(state.ready === true, state.device?.coreAccess);
     const audio = (state.device as typeof state.device & {audio?: {active: boolean; durationMs: number; blocks: number; byteLength: number; error?: string}})?.audio;
     audioButton.disabled = audioPending || !state.ready || audio?.active === true;
@@ -75,7 +71,6 @@ async function refresh(): Promise<void> {
     panel.querySelector('#sim-log')!.textContent = state.output ?? '';
     startButton.disabled = pendingAction || state.running === true;
     stopButton.disabled = pendingAction || state.running !== true;
-    copyButton.disabled = !token.value;
     // Let the 自绘 UI host reflect the real running session instead of debug toggles.
     window.dispatchEvent(new CustomEvent('operit-simulator-state', {detail: simulatorViewState(state)}));
   } catch (e) { label.textContent = errorMessage(e); summary.textContent = '请求失败'; }
@@ -84,9 +79,6 @@ async function refresh(): Promise<void> {
     if (refreshRequested) { refreshRequested = false; void refresh(); }
   }
 }
-copyButton.addEventListener('click', () => {
-  void navigator.clipboard.writeText(token.value).catch(e => { label.textContent = errorMessage(e); summary.textContent = '请求失败'; });
-});
 for (const action of ['start', 'stop']) {
   panel.querySelector(`#sim-${action}`)!.addEventListener('click', async () => {
     if (pendingAction) return;

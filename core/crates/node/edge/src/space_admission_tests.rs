@@ -72,13 +72,15 @@ fn node_from_storage(storage: Arc<Storage>) -> (Arc<Storage>, Arc<EdgePeerRouter
         runtimeStorageHost: Some(storage.clone()), tcpHost: Some(Arc::new(NativeTcpHost)),
         hostRuntimeTaskSchedulerHost: Some(Arc::new(NativeHostRuntimeTaskSchedulerHost)), ..HostManager::default()
     });
-    let peer = HostRuntimePeerService::new(host.clone(), &router, operit_link::protocol::LinkDeviceInfo { platform: "test".into(), model: "test".into() , pairingIncarnation: None }).unwrap();
+    let peer = crate::peer::createPeerService(host.clone(), &router,
+        operit_link::protocol::LinkDeviceInfo { platform: "test".into(), model: "test".into(), pairingIncarnation: None },
+        operit_node_runtime::HostRuntimePeerService::PeerRuntimeLimits::default()).unwrap();
     let space = NodeSpaceService::new(storage.clone(), peer.clone()).unwrap();
     space.initialize(CoreSpaceDeviceProfile { nodeId: id, displayName: if bounded { "ESP32-2432S028" } else { "HAN-DESKTOP (Windows)" }.into(), userName: String::new(), platform: if bounded { "esp32" } else { "windows" }.into(), model: if bounded { "ESP32-2432S028" } else { "Windows desktop" }.into(), coreVersion: None, pairingIncarnation: None, updatedAt: 1 }).unwrap();
     router.installSpace(space.clone()).unwrap();
     router.install(Arc::new(EdgeNode::fromHostManager((*host).clone()).withNodeServices(NodeServices::new(peer.clone())))).unwrap();
     if configureListener {
-        PeerStateStore::new(storage.clone()).saveHostConfig(&PeerHostConfig { bindAddress: "127.0.0.1:0".into(), token: "test-token".into(), transports: vec![PeerTransport::Tcp], discoveryEnabled: false, portMode: PeerHostPortMode::Automatic, updatedAt: 1 }).unwrap();
+        PeerStateStore::new(storage.clone()).saveHostConfig(&PeerHostConfig { bindAddress: "127.0.0.1:0".into(), token: String::new(), transports: vec![PeerTransport::Tcp], discoveryEnabled: false, portMode: PeerHostPortMode::Automatic, updatedAt: 1 }).unwrap();
     }
     (storage, router, peer, space)
 }
@@ -113,7 +115,7 @@ async fn paired_edge_requires_explicit_approval_and_restores_space() {
         b_peer.startListening(&[PeerTransport::Tcp]).await.unwrap();
         let address = PeerStateStore::new(b_store.clone()).hostConfig().unwrap().unwrap().bindAddress;
         let b_id = b_space.localNodeId(); let a_id = a_space.localNodeId();
-        let pairing = a_peer.startPairing(PeerEndpoint { nodeId: b_id.clone(), address }, PeerTransport::Tcp, Some("test-token")).await.unwrap();
+        let pairing = a_peer.startPairing(PeerEndpoint { nodeId: b_id.clone(), address }, PeerTransport::Tcp, None).await.unwrap();
         let code = b_peer.pairingPrompts().unwrap()[0].confirmationCode.clone();
         a_peer.finishPairing(&pairing.pairingId, &code).await.unwrap();
         print_size("paired", &b_store);
@@ -163,7 +165,7 @@ async fn failed_local_cancellation_preserves_pending_request_and_can_retry() {
     let address = PeerStateStore::new(gatewayStorage).hostConfig().unwrap().unwrap().bindAddress;
     let pairing = applicantPeer.startPairing(PeerEndpoint {
         nodeId: gateway.localNodeId(), address,
-    }, PeerTransport::Tcp, Some("test-token")).await.unwrap();
+    }, PeerTransport::Tcp, None).await.unwrap();
     let code = gatewayPeer.pairingPrompts().unwrap()[0].confirmationCode.clone();
     applicantPeer.finishPairing(&pairing.pairingId, &code).await.unwrap();
     let request = applicant.requestDeviceSpaceJoin(gateway.localNodeId()).await.unwrap();
@@ -225,7 +227,7 @@ async fn approval_retry_recovers_each_partial_write_without_duplicate_admission(
             let gateway_id = gateway.localNodeId();
             let applicant_id = applicant.localNodeId();
             let address = PeerStateStore::new(storage.clone()).hostConfig().unwrap().unwrap().bindAddress;
-            let pairing = applicant_peer.startPairing(PeerEndpoint { nodeId: gateway_id.clone(), address }, PeerTransport::Tcp, Some("test-token")).await.unwrap();
+            let pairing = applicant_peer.startPairing(PeerEndpoint { nodeId: gateway_id.clone(), address }, PeerTransport::Tcp, None).await.unwrap();
             let code = gateway_peer.pairingPrompts().unwrap()[0].confirmationCode.clone();
             applicant_peer.finishPairing(&pairing.pairingId, &code).await.unwrap();
             // Real hardware contains earlier declined/expired applications.
@@ -479,6 +481,10 @@ mod core_edge {
     fn edge_node(storage: Arc<Storage>) -> EdgeFixture { edge_node_with_audio(storage, None) }
     fn edge_node_with_audio(storage: Arc<Storage>, audio: Option<Arc<dyn crate::audio::EdgeAudioSource>>) -> EdgeFixture {
         configure_listener(&storage);
+        let store = PeerStateStore::new(storage.clone());
+        let mut config = store.hostConfig().unwrap().unwrap();
+        config.token.clear();
+        store.saveHostConfig(&config).unwrap();
         let id = operit_store::CoreNodeIdentityStore::CoreNodeIdentityStore::new(storage.clone())
             .initialize()
             .unwrap()
@@ -489,7 +495,7 @@ mod core_edge {
             traffic: Mutex::default(),
         });
         let host = host(storage.clone());
-        let peers = HostRuntimePeerService::new(
+        let peers = crate::peer::createPeerService(
             host.clone(),
             &router,
             operit_link::protocol::LinkDeviceInfo {
@@ -497,6 +503,7 @@ mod core_edge {
                 model: "ESP32-2432S028".into(),
             pairingIncarnation: None,
         },
+            operit_node_runtime::HostRuntimePeerService::PeerRuntimeLimits::default(),
         )
         .unwrap();
         let service = NodeSpaceService::new(storage.clone(), peers.clone()).unwrap();
@@ -558,11 +565,9 @@ mod core_edge {
         target_storage: &Arc<Storage>,
         target_id: String,
     ) {
-        let address = PeerStateStore::new(target_storage.clone())
-            .hostConfig()
-            .unwrap()
-            .unwrap()
-            .bindAddress;
+        let config = PeerStateStore::new(target_storage.clone()).hostConfig().unwrap().unwrap();
+        let token = if config.token.is_empty() { None } else { Some(config.token.as_str()) };
+        let address = config.bindAddress.clone();
         let pending = source
             .startPairing(
                 PeerEndpoint {
@@ -570,7 +575,7 @@ mod core_edge {
                     address,
                 },
                 PeerTransport::Tcp,
-                Some("test-token"),
+                token,
             )
             .await
             .unwrap();
@@ -598,6 +603,41 @@ mod core_edge {
             .unwrap();
         assert!(target.pairingPrompts().unwrap().is_empty());
     }
+    #[tokio::test]
+    async fn edge_code_only_pairing_keeps_core_token_policy_and_space_approval() {
+        let core = core_node();
+        let edge = edge_node(Arc::new(Storage::default()));
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            start(&core, &edge).await;
+            let core_config = PeerStateStore::new(core.storage.clone()).hostConfig().unwrap().unwrap();
+            let edge_config = PeerStateStore::new(edge.storage.clone()).hostConfig().unwrap().unwrap();
+            // Discovery disabled means the Core receiver does not waive its
+            // token even for this loopback test. Edge selects its own policy.
+            assert!(!core_config.discoveryEnabled && !edge_config.discoveryEnabled);
+            assert!(!core_config.token.is_empty());
+            assert!(edge_config.token.is_empty());
+            let rejected = edge.peers.startPairing(PeerEndpoint {
+                nodeId: core.router.localNodeId(), address: core_config.bindAddress,
+            }, PeerTransport::Tcp, None).await.unwrap_err();
+            assert!(rejected.message.contains("Token required for non-LAN pairing"));
+            assert!(core.peers.pairingPrompts().unwrap().is_empty());
+
+            // The helper checks wrong-code rejection before confirming with
+            // the Edge's code. It supplies no token for this receiver.
+            pair(&core.peers, &edge.peers, &edge.storage, edge.service.localNodeId()).await;
+            assert_eq!(core.peers.pairedPeers().unwrap().len(), 1);
+            assert_eq!(edge.peers.pairedPeers().unwrap().len(), 1);
+            assert_ne!(operit_store::CoreSpaceStore::CoreSpaceStore::new(core.storage.clone()).space().unwrap().spaceId, edge.service.spaceStore().space().unwrap().spaceId);
+            assert_eq!(edge.service.spaceChannelScope(&core.router.localNodeId()).unwrap(), None);
+            let request = core.service.requestDeviceSpaceJoin(edge.service.localNodeId()).await.unwrap();
+            assert_eq!(request.status, SpaceJoinStatus::Pending);
+            assert!(!edge.service.spaceStore().space().unwrap().members.contains(&core.router.localNodeId()));
+        }).await;
+        core.peers.stop().await.unwrap();
+        edge.peers.stop().await.unwrap();
+        outcome.unwrap();
+    }
+
     fn assert_no_replica(core: &CoreFixture, edge: &EdgeFixture) {
         assert!(
             core.application.0.lock().unwrap().is_empty(),
@@ -706,7 +746,7 @@ mod core_edge {
             for (origin, space, expected) in [
                 (
                     "forged-origin".to_string(),
-                    core.service.deviceSpace().unwrap().spaceId,
+                    operit_store::CoreSpaceStore::CoreSpaceStore::new(core.storage.clone()).space().unwrap().spaceId,
                     "PEER_DIRECT_CALL_REQUIRED",
                 ),
                 (
@@ -1133,7 +1173,7 @@ mod core_edge {
             core.sync.synchronizeOnce().await.unwrap();
             assert!(!core.storage.list("runtime/sync").unwrap().is_empty());
             assert_no_replica(&core, &edge);
-            let space_id = core.service.deviceSpace().unwrap().spaceId;
+            let space_id = operit_store::CoreSpaceStore::CoreSpaceStore::new(core.storage.clone()).space().unwrap().spaceId;
             for method in [
                 "syncClock",
                 "syncOperationsSince",

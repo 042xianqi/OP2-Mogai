@@ -192,6 +192,9 @@ impl RuntimePeerService for Peers {
     async fn removePairedPeer(&self, _: &str) -> Result<(), CoreLinkError> {
         panic!("unused")
     }
+    fn forgetPairingRecords(&self, _: &[String]) -> Result<(), CoreLinkError> {
+        panic!("unused")
+    }
 }
 async fn until(condition: impl Fn() -> bool) {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
