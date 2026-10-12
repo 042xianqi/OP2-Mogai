@@ -316,7 +316,8 @@ static void scene(void) {
     else if(detail)icon_node("page_back","",page()==13?"chat":(page()==14||page()==16||page()==0||page()==3)?"space_settings":"settings",0,0,44,42,true,ICON_BACK);
     else icon_node("sidebar_toggle","","sidebar",0,0,44,42,menuEnabled,ICON_MENU);
     if(page()!=15) node("title",page_title(),NULL,44,6,142,30,true,1);
-    if(page()==15) node("pair_input",ui.pair_input[0]?ui.pair_input:"输入Core六位配对码",NULL,48,3,270,36,true,2);
+    // The large digit font needs 36 pixels plus the text inset to avoid clipping.
+    if(page()==15) node("pair_input",ui.pair_input[0]?ui.pair_input:"输入Core六位配对码",NULL,48,1,270,40,true,ui.pair_input[0]?2:1);
     else if(page()==6)icon_node("plugins_test_all","","edge_plugins_test_all",276,0,44,42,ui.connected&&!ui.plugins_loading&&!ui.plugins_testing,ICON_BOLT);
     else if(page()==13)icon_node("edge_new","新建","edge_new",216,0,104,42,ui.connected&&!ui.sending&&!ui.speech_phase,ICON_CHAT);
     else node("link_status",ui.connected ? "已连接" : ui.paired ? "已配对 / 离线" : "未配对",NULL,188,6,130,30,true,1);

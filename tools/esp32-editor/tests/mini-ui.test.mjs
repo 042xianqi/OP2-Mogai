@@ -519,6 +519,37 @@ test('list handles deletion, invalid IDs, offline, approvals, and send scratch w
   f.call('chat_send_result',['number','string'],[1,'']);assert.equal(f.tap('conversation_0'),1,'a late send receipt may not corrupt a list ID');
 });
 
+test('pairing keypad paints entered digits and restores its empty hint after deletion',options,async()=>{
+  const f=await fixture(),{call,tap,frame,inspect}=f;openSpace(f);
+  tap('space_pair');
+  call('set_device_space_state',['number','string','string','string','string','number'],
+    [2,'选择 Core','Core','','',0]);
+  tap('space_peer_0');
+  call('set_device_space_state',['number','string','string','string','string','number'],
+    [3,'请输入对端显示的六位配对码','','','',0]);
+  assert.equal(inspect().page,'PairCodeEntry');
+  // Inspect the actual input pixels: state-only checks miss clipped glyphs.
+  const inputPixels=()=>{
+    const pixels=frame(),rows=[];
+    for(let y=0;y<42;y++)rows.push(pixels.subarray((y*320+48)*2,(y*320+318)*2));
+    return Buffer.concat(rows);
+  };
+  const empty=inputPixels();
+  assert(new Set(Array.from({length:empty.length/2},(_,i)=>empty.readUInt16LE(i*2))).size>1,
+    'the empty input hint must be painted');
+  let previous=empty;
+  for(const digit of '001234'){
+    tap('pair_digit_'+digit);const current=inputPixels();
+    assert.notDeepEqual(current,previous,'each entered digit must visibly update the input');
+    previous=current;
+  }
+  assert.equal(inspect().nodes.find(n=>n.id==='pair_input').text,'001234');
+  tap('pair_digit_9');assert.deepEqual(inputPixels(),previous,'a seventh digit is ignored');
+  tap('pair_digit_delete');assert.notDeepEqual(inputPixels(),previous,'deleting must visibly update the input');
+  for(let i=0;i<5;i++)tap('pair_digit_delete');
+  assert.deepEqual(inputPixels(),empty,'deleting all digits restores the painted empty hint');
+});
+
 test('device space discovery and numeric keypad forward exact bounded pairing actions',options,async()=>{
   const f=await fixture(),{call,tap,inspect,actions}=f;openSpace(f);
   assert.equal(tap('space_pair'),1);assert.equal(inspect().page,'PairDiscovery');
