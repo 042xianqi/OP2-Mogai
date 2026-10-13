@@ -506,15 +506,43 @@ impl GeminiProvider {
         Ok((contents_array, system_instruction, token_count))
     }
 
-    /// Builds Gemini content parts from text and registered image links.
+    /// Builds Gemini content parts from text and registered image and media links.
     fn build_parts_array(&self, text: &str) -> Vec<Value> {
-        if !MediaLinkParser::has_image_links(text) {
+        let has_images = MediaLinkParser::has_image_links(text);
+        let has_media = MediaLinkParser::has_media_links(text);
+        if !has_images && !has_media {
             return vec![json!({"text": text})];
         }
 
-        let image_links = MediaLinkParser::extract_image_links(text);
-        let text_without_links = MediaLinkParser::remove_image_links(text).trim().to_string();
+        let media_links = if has_media {
+            MediaLinkParser::extract_media_links(text)
+        } else {
+            Vec::new()
+        };
+        let image_links = if has_images {
+            MediaLinkParser::extract_image_links(text)
+        } else {
+            Vec::new()
+        };
+
+        let mut text_without_links = text.to_string();
+        if has_images {
+            text_without_links = MediaLinkParser::remove_image_links(&text_without_links);
+        }
+        if has_media {
+            text_without_links = MediaLinkParser::remove_media_links(&text_without_links);
+        }
+        let text_without_links = text_without_links.trim().to_string();
+
         let mut parts = Vec::new();
+        for link in media_links {
+            parts.push(json!({
+                "inline_data": {
+                    "mime_type": link.mime_type,
+                    "data": link.base64_data,
+                },
+            }));
+        }
         for link in image_links {
             parts.push(json!({
                 "inline_data": {
@@ -851,25 +879,24 @@ impl GeminiProvider {
                 retryCount = newRetryCount;
                 continue;
             }
-            match self.process_streaming_response(response).await {
+            let error = match self.process_streaming_response(response).await {
                 Ok(responseStream) => return Ok(responseStream),
-                Err(error) => {
-                    let errorText = retry_error_text(&error);
-                    if !request.enable_retry {
-                        return Err(error);
-                    }
-                    let newRetryCount = retryCount + 1;
-                    if newRetryCount > maxRetries {
-                        return Err(error);
-                    }
-                    if let Some(on_non_fatal_error) = request.on_non_fatal_error.as_ref() {
-                        on_non_fatal_error(retry_message(&errorText, newRetryCount));
-                    }
-                    delay_retry_ms(newRetryCount).await;
-                    retryCount = newRetryCount;
-                    continue;
-                }
+                Err(error) => error,
+            };
+            let errorText = retry_error_text(&error);
+            if !request.enable_retry {
+                return Err(error);
             }
+            let newRetryCount = retryCount + 1;
+            if newRetryCount > maxRetries {
+                return Err(error);
+            }
+            if let Some(on_non_fatal_error) = request.on_non_fatal_error.as_ref() {
+                on_non_fatal_error(retry_message(&errorText, newRetryCount));
+            }
+            delay_retry_ms(newRetryCount).await;
+            retryCount = newRetryCount;
+            continue;
         }
     }
 
@@ -1155,47 +1182,9 @@ impl AIService for GeminiProvider {
         self.set_cancelled(false);
         self.reset_token_counts();
         if request.stream {
-            let event_channel = empty_revisable_event_channel();
-            let streamEventChannel = event_channel.clone();
-            let mut ownedProvider = Some(self.clone());
-            let mut ownedRequest = Some(request);
-            let coldStream = FnStream::new(move |emit| {
-                let request = ownedRequest
-                    .take()
-                    .expect("GeminiProvider stream must only be collected once");
-                let mut provider = ownedProvider
-                    .take()
-                    .expect("GeminiProvider stream must only be collected once");
-                let eventChannel = streamEventChannel.clone();
-                Box::pin(async move {
-                    if let Ok(mut responseStream) = provider.send_streaming_message(request).await {
-                        responseStream.collect(emit).await;
-                    }
-                    eventChannel.close();
-                })
-            });
-            return Ok(Box::new(with_event_channel(coldStream, event_channel)));
+            return self.send_streaming_message(request).await;
         }
-        let event_channel = empty_revisable_event_channel();
-        let streamEventChannel = event_channel.clone();
-        let mut ownedProvider = Some(self.clone());
-        let mut ownedRequest = Some(request);
-        let coldStream = FnStream::new(move |emit| {
-            let request = ownedRequest
-                .take()
-                .expect("GeminiProvider non-stream request must only be collected once");
-            let mut provider = ownedProvider
-                .take()
-                .expect("GeminiProvider non-stream request must only be collected once");
-            let eventChannel = streamEventChannel.clone();
-            Box::pin(async move {
-                if let Ok(mut responseStream) = provider.send_non_streaming_message(request).await {
-                    responseStream.collect(emit).await;
-                }
-                eventChannel.close();
-            })
-        });
-        Ok(Box::new(with_event_channel(coldStream, event_channel)))
+        self.send_non_streaming_message(request).await
     }
 
     async fn calculate_input_tokens(
