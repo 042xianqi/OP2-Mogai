@@ -46,26 +46,48 @@ export interface EdgeAudioInputOptions {
 }
 
 /**
- * Accesses hardware actions and streaming microphone input on an explicit Edge.
+ * Streaming audio is received by the calling Core; generic ports use DeviceEdge.
  */
-export interface DeviceEdge {
+export namespace Edge {
+  /**
+   * Cancels the Core receiver first, then requests Edge stop. Safe to repeat.
+   */
+  function closeAudioInput(streamId: string): Promise<BooleanResultData>;
   /**
    * Lists input capabilities. Missing microphone Host rejects explicitly.
    */
-  static listAudioInputs(nodeId: string): Promise<EdgeAudioInputsResultData>;
+  function listAudioInputs(nodeId: string): Promise<EdgeAudioInputsResultData>;
   /**
    * Reserves a receiver on the calling Core and starts one Edge recording.
    */
-  static openAudioInput(nodeId: string, options: EdgeAudioInputOptions): Promise<EdgeAudioStreamResultData>;
+  function openAudioInput(nodeId: string, options: EdgeAudioInputOptions): Promise<EdgeAudioStreamResultData>;
   /**
    * Waits at most five seconds; pending means continue reading. Terminal errors
    * are distinct from clean EOF. Always close the stream in a finally block.
    */
-  static readAudioInput(streamId: string): Promise<EdgeAudioReadResultData>;
+  function readAudioInput(streamId: string): Promise<EdgeAudioReadResultData>;
+}
+
+/**
+ * Calls only firmware-declared native plugin actions on an explicit node.
+ */
+export interface DeviceEdge {
   /**
-   * Cancels the Core receiver first, then requests Edge stop. Safe to repeat.
+   * Lists microphones on this selected Edge; PCM remains on the calling Core.
    */
-  static closeAudioInput(streamId: string): Promise<BooleanResultData>;
+  listAudioInputs(): Promise<EdgeAudioInputsResultData>;
+  /**
+   * Opens capture on this Edge and reserves the caller Core's bounded receiver.
+   */
+  openAudioInput(options: EdgeAudioInputOptions): Promise<EdgeAudioStreamResultData>;
+  /**
+   * Reads a caller-owned stream; a pending block is distinct from clean EOF.
+   */
+  readAudioInput(streamId: string): Promise<EdgeAudioReadResultData>;
+  /**
+   * Closes the caller-owned receiver and stops capture. Safe to repeat.
+   */
+  closeAudioInput(streamId: string): Promise<BooleanResultData>;
   /**
    * Executes a declared action through authenticated node routing without adding application-level retries.
    */

@@ -36,6 +36,12 @@ Tools.device = __operitToolPkgApi.method().since("2.0.0", function(nodeId, optio
         }};
     }
     target.Edge = port("edge_execute");
+    // The ingress queue belongs to this Core, even when capture is on an Edge.
+    // Do not forward these controls to a remote Core's generic tool registry.
+    target.Edge.listAudioInputs = function() { return __operitCanonicalTools.Edge.listAudioInputs(nodeId); };
+    target.Edge.openAudioInput = function(options) { return __operitCanonicalTools.Edge.openAudioInput(nodeId, options); };
+    target.Edge.readAudioInput = function(streamId) { return __operitCanonicalTools.Edge.readAudioInput(streamId); };
+    target.Edge.closeAudioInput = function(streamId) { return __operitCanonicalTools.Edge.closeAudioInput(streamId); };
     target.Io = port("io_execute");
     target.call = function(name, params) {
         if (typeof name !== "string" || !name.trim()) return Promise.reject(new TypeError("Tool name is required"));
@@ -49,3 +55,6 @@ Tools.device = __operitToolPkgApi.method().since("2.0.0", function(nodeId, optio
     };
     return target;
 }).build("Tools.device");
+
+// The generated audio helpers are internal; hardware is exposed on device views.
+delete Tools.Edge;

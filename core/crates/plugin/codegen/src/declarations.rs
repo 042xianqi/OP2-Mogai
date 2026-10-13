@@ -1454,6 +1454,7 @@ fn infer_declaration(item: ItemRef<'_>, ts_file: &str) -> Option<(Vec<String>, S
     }
     if let ItemRef::Trait(_) = item {
         let namespace = match rust_name.as_str() {
+            "EdgeHost" => Some(vec!["Edge".to_string()]),
             "FilesHost" => Some(vec!["Files".to_string()]),
             "NetHost" => Some(vec!["Net".to_string()]),
             "NetFutureHost" => Some(vec!["Net".to_string()]),

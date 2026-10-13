@@ -38,13 +38,14 @@ export async function transcribeEdge<T>(
   options: EdgeAudioInputOptions,
   stt: StreamingStt<T>,
 ): Promise<T> {
-  const stream = await Tools.Edge.openAudioInput(nodeId, options);
+  const edge = Tools.device(nodeId).Edge;
+  const stream = await edge.openAudioInput(options);
   let sequence = 0, sampleOffset = 0;
   let failed = false;
   try {
     await stt.start(stream.format);
     while (true) {
-      const block = await Tools.Edge.readAudioInput(stream.streamId);
+      const block = await edge.readAudioInput(stream.streamId);
       if (block.pending) continue;
       if (block.sequence !== sequence || block.sampleOffset !== sampleOffset) {
         throw new Error("Audio stream order mismatch");
@@ -63,7 +64,7 @@ export async function transcribeEdge<T>(
     try { await stt.abort(error); } catch { /* Preserve the audio/STT failure. */ }
     throw error;
   } finally {
-    try { await Tools.Edge.closeAudioInput(stream.streamId); }
+    try { await edge.closeAudioInput(stream.streamId); }
     catch (closeError) { if (!failed) throw closeError; }
   }
 }

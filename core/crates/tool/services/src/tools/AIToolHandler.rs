@@ -1270,11 +1270,14 @@ impl JsExecutionHost for AIToolHandler {
             }
             let host = self.clone();
             let tool = crate::tools::DeviceTools::tool_from_request(&request);
+            let context = ToolInvocationContext::capture(host.clone());
             let preflight = Box::pin(async move {
-                match host.checkToolInterception(&tool).await? {
-                    AIToolHookDecision::Block(reason) => Err(reason),
-                    _ => Ok(()),
-                }
+                context.scope(async {
+                    match host.checkToolInterception(&tool).await? {
+                        AIToolHookDecision::Block(reason) => Err(reason),
+                        _ => Ok(()),
+                    }
+                }).await
             });
             return self.runtimeSupport().executeDeviceTool(request, Some(preflight));
         }

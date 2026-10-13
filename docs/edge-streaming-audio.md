@@ -7,10 +7,10 @@
 
 | 方法 | 返回 | 行为 |
 | --- | --- | --- |
-| `Tools.Edge.listAudioInputs(nodeId)` | `{nodeId, inputs}` | 查询指定 Edge 的输入 ID 和支持格式 |
-| `Tools.Edge.openAudioInput(nodeId, options)` | `{nodeId, streamId, format, maxDurationMs}` | Core 登记接收会话，Edge 开始采集并打开上传 Push |
-| `Tools.Edge.readAudioInput(streamId)` | 音频块或终态 | 单次最长等待 5 秒；同一流只能有一个读取者 |
-| `Tools.Edge.closeAudioInput(streamId)` | `{value: true}` | 先撤销 Core 接收会话，再请求 Edge 停止；可重复调用 |
+| `Tools.device(nodeId).Edge.listAudioInputs()` | `{nodeId, inputs}` | 查询指定 Edge 的输入 ID 和支持格式 |
+| `Tools.device(nodeId).Edge.openAudioInput(options)` | `{nodeId, streamId, format, maxDurationMs}` | Core 登记接收会话，Edge 开始采集并打开上传 Push |
+| `Tools.device(nodeId).Edge.readAudioInput(streamId)` | 音频块或终态 | 单次最长等待 5 秒；同一流只能有一个读取者 |
+| `Tools.device(nodeId).Edge.closeAudioInput(streamId)` | `{value: true}` | 先撤销 Core 接收会话，再请求 Edge 停止；可重复调用 |
 
 `options` 包含必填的 `inputId`、可选 `format` 和 `maxDurationMs`。
 默认格式是 `{encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1}`，
@@ -30,14 +30,14 @@
 关闭后的 `streamId` 不能再读取或重新上传，关闭本身可重复调用。
 
 ```ts
-const stream = await Tools.Edge.openAudioInput(nodeId, {
+const stream = await Tools.device(nodeId).Edge.openAudioInput({
   inputId: "mic0",
   maxDurationMs: 20000,
 });
 try {
   await recognizer.start(stream.format);
   while (true) {
-    const block = await Tools.Edge.readAudioInput(stream.streamId);
+    const block = await Tools.device(nodeId).Edge.readAudioInput(stream.streamId);
     if (block.pending) continue;
     if (block.done) {
       if (block.error) throw new Error(block.error);
@@ -46,7 +46,7 @@ try {
     await recognizer.write(decodePcm(block.dataBase64, block.byteLength));
   }
 } finally {
-  await Tools.Edge.closeAudioInput(stream.streamId);
+  await Tools.device(nodeId).Edge.closeAudioInput(stream.streamId);
 }
 ```
 
@@ -59,7 +59,7 @@ try {
 ## 路由与接收生命周期
 
 Core 运行时拥有独立 `EdgeAudioRegistry`，每次打开分配随机会话 ID，登记指定
-Edge 和格式。`CoreEdgeToolRuntime` 把接收端固定为执行插件的 Core，插件不能
+Edge 和格式。`CoreDeviceToolRuntime` 把接收端固定为执行插件的 Core，插件不能
 指定别的接收端。Edge 控制适配器校验请求的 Space 和请求 Core 来源。
 
 Edge 从共享 `NodeServices` 取得捕获了准入代次的 `CoreLinkSpacePushClient`，

@@ -34,7 +34,7 @@ pub struct EdgeAudioInputOptions {
     pub maxDurationMs: Option<u32>,
 }
 
-/// Accesses hardware actions and streaming microphone input on an explicit Edge.
+/// Streaming audio is received by the calling Core; generic ports use DeviceEdge.
 pub trait EdgeHost: Send + Sync {
     /// Lists input capabilities. Missing microphone Host rejects explicitly.
     fn listAudioInputs(&self, nodeId: String) -> JsFuture<EdgeAudioInputsResultData> {
@@ -62,6 +62,15 @@ pub trait EdgeHost: Send + Sync {
 
 /// Calls only firmware-declared native plugin actions on an explicit node.
 pub trait DeviceEdge: Send + Sync {
+    /// Lists microphones on this selected Edge; PCM remains on the calling Core.
+    fn listAudioInputs(&self) -> JsFuture<EdgeAudioInputsResultData>;
+    /// Opens capture on this Edge and reserves the caller Core's bounded receiver.
+    fn openAudioInput(&self, options: EdgeAudioInputOptions) -> JsFuture<EdgeAudioStreamResultData>;
+    /// Reads a caller-owned stream; a pending block is distinct from clean EOF.
+    fn readAudioInput(&self, streamId: String) -> JsFuture<EdgeAudioReadResultData>;
+    /// Closes the caller-owned receiver and stops capture. Safe to repeat.
+    fn closeAudioInput(&self, streamId: String) -> JsFuture<BooleanResultData>;
+
     /// Executes a declared action through authenticated node routing without adding application-level retries.
     fn execute(
         &self,

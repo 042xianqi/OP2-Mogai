@@ -187,6 +187,8 @@ pub(super) struct MultiplexedChannel {
     /// Signals that this channel's reader has stopped, for the accept path that
     /// closes the connection as soon as its serve call returns.
     stopped: tokio::sync::Notify,
+    /// Cancels inbound sessions when the authenticated carrier ends.
+    dispatchStopped: tokio::sync::Notify,
 }
 
 /// Keeps one leased multiplexed channel alive until its operation is released.
@@ -239,6 +241,7 @@ impl MultiplexedChannel {
             activeLeases: AtomicUsize::new(0),
             inboundRequests,
             stopped: tokio::sync::Notify::new(),
+            dispatchStopped: tokio::sync::Notify::new(),
         });
         let reader = multiplexed.clone();
         scheduler.scheduleHostRuntimeAsyncTask("peer-multiplexed-reader", Box::new(move || Box::pin(async move {
@@ -350,6 +353,8 @@ impl MultiplexedChannel {
         let drained = std::mem::take(&mut *pending);
         for (_, sender) in drained { let _ = sender.send(Err(error.clone())); }
         self.watches.lock().await.clear();
+        self.inboundRequests.lock().unwrap().take();
+        self.dispatchStopped.notify_one();
     }
 
     /// Returns the terminal channel error or a new local error.
@@ -389,24 +394,32 @@ impl MultiplexedChannel {
     /// Answers the peer's calls while this reader keeps the other direction
     /// flowing, and flushes the watch events this side owes it.
     async fn dispatchLoop(self: Arc<Self>, mut side: super::dispatch::InboundSide, mut requests: mpsc::UnboundedReceiver<CoreLinkRequest>) {
-        enum Item { Request(CoreLinkRequest), Event(CoreLinkResponse) }
-        loop {
-            let item = if side.hasWatches() {
-                tokio::select! {
-                    request = requests.recv() => request.map(Item::Request),
-                    event = side.nextWatchEvent() => event.map(Item::Event),
+        // Dropping InboundSide also terminates its open Watch/Push sessions.
+        // A dispatcher may be awaiting a backpressured Push item when the reader
+        // ends, so closing only the request queue is not sufficient.
+        tokio::select! {
+            _ = self.dispatchStopped.notified() => {},
+            _ = async {
+                enum Item { Request(CoreLinkRequest), Event(CoreLinkResponse) }
+                loop {
+                    let item = if side.hasWatches() {
+                        tokio::select! {
+                            request = requests.recv() => request.map(Item::Request),
+                            event = side.nextWatchEvent() => event.map(Item::Event),
+                        }
+                    } else { requests.recv().await.map(Item::Request) };
+                    let Some(item) = item else { return; };
+                    let channel = self.channel.channel();
+                    // Every business entry re-confirms the channel's authorization: a
+                    // revocation must not be bypassed by a connection that is already open.
+                    if let Err(error) = side.validate(&channel) { self.fail(error).await; return; }
+                    let response = match item {
+                        Item::Event(event) => event,
+                        Item::Request(request) => side.answer(&channel, request).await,
+                    };
+                    if let Err(error) = self.channel.send(PeerMessage::Response(response)).await { self.fail(error).await; return; }
                 }
-            } else { requests.recv().await.map(Item::Request) };
-            let Some(item) = item else { return; };
-            let channel = self.channel.channel();
-            // Every business entry re-confirms the channel's authorization: a
-            // revocation must not be bypassed by a connection that is already open.
-            if let Err(error) = side.validate(&channel) { self.fail(error).await; return; }
-            let response = match item {
-                Item::Event(event) => event,
-                Item::Request(request) => side.answer(&channel, request).await,
-            };
-            if let Err(error) = self.channel.send(PeerMessage::Response(response)).await { self.fail(error).await; return; }
+            } => {},
         }
     }
 

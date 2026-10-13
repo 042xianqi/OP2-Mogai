@@ -230,7 +230,7 @@ impl AsyncToolExecutor for EdgeAudioToolExecutor {
             boundary: ToolBoundary::None,
         })
     }
-    fn invokeAndStreamAsync<'a>(&'a mut self, tool: &'a AITool) -> ToolInvocationFuture<'a> {
+    fn invokeAndStreamAsync<'a>(&'a mut self, tool: &'a AITool, _context: &'a crate::ToolExecutionManager::ToolInvocationContext) -> ToolInvocationFuture<'a> {
         Box::pin(async move {
             vec![match self.execute(tool).await {
                 Ok(result) => ToolResult {

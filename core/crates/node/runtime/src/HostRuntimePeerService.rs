@@ -1416,6 +1416,7 @@ mod dial_route_tests {
         let storage = Arc::new(Storage::default());
         let _ = operit_store::CoreSpaceStore::CoreSpaceStore::newNodeLocal(storage.clone()).initialize();
         HostRuntimePeerService { state: Arc::new(State {
+            pairingPolicy: PeerPairingPolicy::LocalCodeOrRemoteToken,
             limits: PeerRuntimeLimits::default(),
             host: Arc::new(HostManager { runtimeStorageHost: Some(storage.clone()), ..HostManager::default() }),
             link: HostPeerLink::default(),

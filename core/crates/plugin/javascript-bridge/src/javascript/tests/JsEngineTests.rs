@@ -4421,15 +4421,15 @@ async fn edge_audio_sdk_forwards_options_stream_identity_and_pcm_result() {
     let engine = newTestJsEngine(host.clone());
     let output = engine.execute_script_function(r#"
         exports.audio = async function() {
-            const inputs = await Tools.Edge.listAudioInputs('edge-mic');
-            const stream = await Tools.Edge.openAudioInput('edge-mic', {
+            const inputs = await Tools.device('edge-mic').Edge.listAudioInputs();
+            const stream = await Tools.device('edge-mic').Edge.openAudioInput({
                 inputId:inputs.inputs[0].inputId,
                 format:{encoding:'pcm_s16le',sampleRateHz:16000,channels:1}, maxDurationMs:20000
             });
             try {
-                const block = await Tools.Edge.readAudioInput(stream.streamId);
+                const block = await Tools.device('edge-mic').Edge.readAudioInput(stream.streamId);
                 return {streamId:stream.streamId,pcm:block.dataBase64,bytes:block.byteLength};
-            } finally { await Tools.Edge.closeAudioInput(stream.streamId); }
+            } finally { await Tools.device('edge-mic').Edge.closeAudioInput(stream.streamId); }
         };
     "#, "audio", &testParams(), &BTreeMap::new(), None, true, 2000, None).await.unwrap().unwrap();
     assert_eq!(serde_json::from_str::<Value>(&output).unwrap(), serde_json::json!({"streamId":"test-stream","pcm":"AID/fw==","bytes":4}));
@@ -4439,6 +4439,32 @@ async fn edge_audio_sdk_forwards_options_stream_identity_and_pcm_result() {
     assert_eq!(calls[1],serde_json::json!({"tool":"edge_open_audio_input","params":{"node_id":"edge-mic","input_id":"mic0","format":{"encoding":"pcm_s16le","sampleRateHz":16000,"channels":1},"max_duration_ms":20000}}));
     assert_eq!(calls[2],serde_json::json!({"tool":"edge_read_audio_input","params":{"stream_id":"test-stream"}}));
     assert_eq!(calls[3],serde_json::json!({"tool":"edge_close_audio_input","params":{"stream_id":"test-stream"}}));
+    drop(calls);
+    engine.destroy();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn device_audio_sdk_keeps_receiver_calls_on_the_calling_core() {
+    let host = Arc::new(TestPluginConfigExecutionHost::default());
+    let engine = newTestJsEngine(host.clone());
+    let mut params = testParams();
+    params.insert("__operit_toolpkg_api_version".into(), Value::String("2.0.0".into()));
+    let output = engine.execute_script_function(r#"
+        exports.audio = async function() {
+            const edge = Tools.device('edge-mic').Edge;
+            const inputs = await edge.listAudioInputs();
+            const stream = await edge.openAudioInput({inputId: inputs.inputs[0].inputId});
+            try { return (await edge.readAudioInput(stream.streamId)).dataBase64; }
+            finally { await edge.closeAudioInput(stream.streamId); }
+        };
+    "#, "audio", &params, &BTreeMap::new(), None, true, 5, None).await.unwrap().unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&output).unwrap(), serde_json::json!("AID/fw=="));
+    let calls = host.edgePortCalls.lock().unwrap();
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[0]["params"]["node_id"], "edge-mic");
+    assert_eq!(calls[1]["params"]["input_id"], "mic0");
+    assert_eq!(calls[2]["params"]["stream_id"], "test-stream");
+    assert_eq!(calls[3]["params"]["stream_id"], "test-stream");
     drop(calls);
     engine.destroy();
 }

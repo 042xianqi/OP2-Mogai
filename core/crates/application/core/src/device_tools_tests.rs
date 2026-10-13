@@ -181,7 +181,7 @@ async fn device_tools_runtime_executes_permissions_hooks_binary_cancellation_and
     handler.registerAsyncTool(
         "delayed_probe".into(),
         Box::new(AsyncFnToolExecutor {
-            invoke: Arc::new(move |tool| {
+            invoke: Arc::new(move |tool, _context| {
                 let started = started.clone();
                 let dropped = dropped.clone();
                 Box::pin(async move {
@@ -398,4 +398,16 @@ fn uuid_suffix() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos()
+}
+
+/// Audio controls reuse the device router and may not dispatch arbitrary calls.
+#[tokio::test(flavor = "current_thread")]
+async fn device_audio_dispatch_rejects_non_audio_targets_and_methods() {
+    let runtime = CoreDeviceToolRuntime::new(
+        Weak::new(), Arc::new(NativeHostRuntimeTaskSchedulerHost::new()));
+    for (target, method) in [("edge.plugins", "invoke"), ("edge.audio", "arbitrary")] {
+        let request = CoreCallRequest::new("audio-reject", target, method, CoreValue::Null);
+        let result = runtime.execute_audio("edge-mic".into(), request).await;
+        assert!(result.unwrap_err().contains("Only declared Edge audio"));
+    }
 }

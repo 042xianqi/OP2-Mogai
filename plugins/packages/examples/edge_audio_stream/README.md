@@ -6,7 +6,7 @@ local recognizer or cloud provider. The transport keeps using the existing
 admitted TCP/serial PeerLink and its Link Push messages.
 
 ```ts
-const { inputs } = await Tools.Edge.listAudioInputs(nodeId);
+const { inputs } = await Tools.device(nodeId).Edge.listAudioInputs();
 if (!inputs.length) throw new Error("No microphone input");
 const transcript = await transcribeEdge(nodeId, {
   inputId: inputs[0].inputId,

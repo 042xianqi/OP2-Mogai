@@ -403,7 +403,7 @@ test(process.env.OPERIT_SIM_TEST_DEVICE_SPACE_ONLY === '1'
     // Execute the public APIs from a real Core JavaScript package, not just
     // through CLI built-in tool calls or a mocked JS execution host.
     const fixture = path.join(directory, 'edge_ports_fixture.js');
-    const fixtureMetadata = {name:'edge_ports_fixture', description:'Isolated hardware SDK integration test',
+    const fixtureMetadata = {name:'edge_ports_fixture', apiVersion:'2.0.0', description:'Isolated hardware SDK integration test',
       enabledByDefault:true, tools:[{name:'probe', description:'Read a declared Edge native action',
         parameters:[{name:'node_id',description:'Explicit Edge node',type:'string',required:true}]}]};
     await writeFile(fixture, `/* METADATA
@@ -421,6 +421,7 @@ ${JSON.stringify(fixtureMetadata)}
       };
     `);
     await core.command(['core','package','import',fixture]);
+    await core.command(['core','package','enable','edge_ports_fixture']);
     try {
       const probe = await core.command(['core','package','exec','edge_ports_fixture:probe',JSON.stringify({node_id:node})]);
       assert.equal(probe.success,true);
@@ -443,7 +444,7 @@ ${JSON.stringify(fixtureMetadata)}
     }}).outputText;
     if (process.env.OPERIT_SIM_SPEECH_ONLY !== '1') {
       const audioFixture = path.join(directory, 'edge_audio_fixture.js');
-      const audioMetadata = {name:'edge_audio_fixture', description:'Isolated streaming audio SDK integration test',
+      const audioMetadata = {name:'edge_audio_fixture', apiVersion:'2.0.0', description:'Isolated streaming audio SDK integration test',
         enabledByDefault:true, tools:[{name:'capture', description:'Consume streamed PCM via the public SDK',
           parameters:[{name:'node_id',description:'Admitted Edge',type:'string',required:true},
             {name:'stop_early',description:'Close after the first block',type:'boolean',required:false}]}]};
@@ -452,16 +453,16 @@ ${JSON.stringify(audioMetadata)}
 */
 ${adapterJs}
       exports.capture = async function(params) {
-        const devices = await Tools.Edge.listAudioInputs(params.node_id);
+        const devices = await Tools.device(params.node_id).Edge.listAudioInputs();
         if (!devices.inputs.some(input => input.inputId === 'sim-pcm')) throw Error('Simulator microphone missing');
         const started = Date.now(); let blocks=0, byteLength=0, checksum=0, firstMs=0, aborted=false;
         if (params.stop_early) {
-          const stream = await Tools.Edge.openAudioInput(params.node_id, {inputId:'sim-pcm',maxDurationMs:20000});
+          const stream = await Tools.device(params.node_id).Edge.openAudioInput({inputId:'sim-pcm',maxDurationMs:20000});
           try {
-            const block = await Tools.Edge.readAudioInput(stream.streamId);
+            const block = await Tools.device(params.node_id).Edge.readAudioInput(stream.streamId);
             if (block.done || block.pending || block.byteLength !== 640) throw Error('Expected a live PCM block');
             return {early:true, byteLength:block.byteLength};
-          } finally { await Tools.Edge.closeAudioInput(stream.streamId); }
+          } finally { await Tools.device(params.node_id).Edge.closeAudioInput(stream.streamId); }
         }
         try {
           return await transcribeEdge(params.node_id, {inputId:'sim-pcm',maxDurationMs:20000}, {
@@ -477,6 +478,7 @@ ${adapterJs}
         } catch(error) { return {error:String(error.message||error),aborted,blocks,byteLength}; }
       };`);
       await core.command(['core','package','import',audioFixture]);
+      await core.command(['core','package','enable','edge_audio_fixture']);
       const capture = async stopEarly => {
         const reply = await core.command(['core','package','exec','edge_audio_fixture:capture',JSON.stringify({node_id:node,stop_early:stopEarly})]);
         assert.equal(reply.success,true,JSON.stringify(reply));

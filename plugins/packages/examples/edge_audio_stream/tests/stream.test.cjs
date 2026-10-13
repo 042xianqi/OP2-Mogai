@@ -6,11 +6,11 @@ afterEach(() => { delete global.Tools; });
 const format = { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 };
 function setup(blocks) {
   const events = [];
-  global.Tools = { Edge: {
-    async openAudioInput(node, options) { events.push(["open", node, options]); return { streamId: "stream", format }; },
+  global.Tools = { device(node) { return { Edge: {
+    async openAudioInput(options) { events.push(["open", node, options]); return { streamId: "stream", format }; },
     async readAudioInput(id) { assert.equal(id, "stream"); return blocks.shift(); },
     async closeAudioInput(id) { events.push(["close", id]); return { value: true }; },
-  } };
+  } }; } };
   return events;
 }
 function block(bytes, sequence = 0, sampleOffset = 0) {
