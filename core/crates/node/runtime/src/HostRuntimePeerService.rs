@@ -247,6 +247,15 @@ impl HostRuntimePeerService {
         }
         Ok(())
     }
+    /// Credential cleanup shared by upstream local unpair and confirmed renewal.
+    /// The caller holds mutation, so cancellation cannot interleave with writes.
+    fn forgetPairingRecordsLocked(&self, nodeIds: &[String]) -> Result<(), CoreLinkError> {
+        for nodeId in nodeIds {
+            self.state.store.removePairedPeer(nodeId).map_err(error)?;
+            self.removeSpaceChannels(nodeId)?;
+        }
+        Ok(())
+    }
     async fn raw(&self, target: PeerEndpoint, transport: PeerTransport) -> Result<Arc<dyn PeerConnection>, CoreLinkError> {
         self.state.link.connect(self.state.host.clone(), PeerEndpoint { nodeId: self.state.nodeId.clone(), address: String::new() }, target, transport).await.map_err(error)
     }
@@ -675,13 +684,17 @@ impl HostRuntimePeerService {
                 crypto::verify(&pending.root, id.as_bytes(), code.as_bytes(), &proof)?;
                 let record = StoredInbound { deviceId: hello.nodeId.clone(), deviceInfo: hello.info.clone(),
                     pairingServiceVersion: PAIRING_SERVICE_VERSION, sessionSecret: BASE64.encode(&pending.root) };
-                // Only a verified fresh code can replace this device's old
-                // credentials (both directions), grants and pending consent.
-                // Membership/policy are not changed. Cross-file writes are not
-                // atomic: on any failure close old sessions and report failure.
-                replacing = true;
-                self.state.store.removePairedPeer(&hello.nodeId).map_err(error)?;
-                self.removeSpaceChannels(&hello.nodeId)?;
+                // A first pairing follows the upstream confirmation path.
+                // Only a retained pairing needs revocation, after its new code
+                // is verified. Reuse the same cleanup as explicit local unpair.
+                match self.ensureDeviceUnpaired(&hello.nodeId) {
+                    Ok(()) => {},
+                    Err(e) if e.code == "PEER_ALREADY_PAIRED" => {
+                        replacing = true;
+                        self.forgetPairingRecordsLocked(std::slice::from_ref(&hello.nodeId))?;
+                    }
+                    Err(e) => return Err(e),
+                }
                 self.state.store.putRecord(RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH, &id, &record).map_err(error)?;
                 self.state.store.deleteRecord(RUNTIME_LINK_ACCESS_PENDING_PAIRINGS_PATH, &id).map_err(error)?;
                 Ok(CoreValue::Null)
@@ -690,11 +703,11 @@ impl HostRuntimePeerService {
                 // The confirmation channel is intentionally not tracked yet;
                 // disconnect only old business channels before acknowledging.
                 self.disconnectPeer(&hello.nodeId).await?;
-                if result.is_ok() {
-                    // A verified confirmation also proves this peer is online.
-                    self.state.active.lock().unwrap().insert(hello.nodeId.clone());
-                    self.changed();
-                }
+            }
+            if result.is_ok() {
+                // A verified confirmation also proves this peer is online.
+                self.state.active.lock().unwrap().insert(hello.nodeId.clone());
+                self.changed();
             }
             channel.send(PeerMessage::Response(CoreLinkResponse::Call(CoreCallResponse { requestId: request.requestId, result }))).await?;
             return Ok(());
@@ -1081,10 +1094,7 @@ impl RuntimePeerService for HostRuntimePeerService {
         if nodeIds.is_empty() { return Ok(()); }
         {
             let _guard = self.state.mutation.lock().unwrap();
-            for nodeId in nodeIds {
-                self.state.store.removePairedPeer(nodeId).map_err(error)?;
-                self.removeSpaceChannels(nodeId)?;
-            }
+            self.forgetPairingRecordsLocked(nodeIds)?;
         }
         self.changed();
         Ok(())

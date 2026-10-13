@@ -170,7 +170,9 @@ Starting, cancelling, expiring or failing a code challenge never replaces the
 receiver's old credential. Only successful proof of the new six-digit code
 replaces the retained device's inbound/outbound credentials, invalidates scoped
 return grants and old pending consent, and disconnects old business sessions.
-The replacement uses the existing Link handshake and storage schema. It does
-not import membership or bypass Space approval/revocation checks. Cross-file
+New pairings use the upstream confirmation path. A confirmed replacement uses
+the same credential and scoped-grant cleanup as the upstream local unpair API,
+then stores its credential through the existing handshake and storage schema.
+It does not import membership or bypass Space approval/revocation checks. Cross-file
 persistence is not atomic: write failures are reported and old sessions closed;
 the user may need to restart the code-confirmed pairing after a storage error.

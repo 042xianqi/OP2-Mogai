@@ -638,6 +638,90 @@ mod core_edge {
         outcome.unwrap();
     }
 
+    /// Fresh devices use upstream confirmation, without revoking other attempts.
+    #[tokio::test]
+    async fn first_pairing_preserves_other_pending_confirmation_attempts() {
+        let _guard = TEST_LOCK.lock().await;
+        for core_initiates in [true, false] {
+            let core = core_node();
+            let edge = fresh_edge();
+            let result = tokio::time::timeout(Duration::from_secs(20), async {
+                start(&core, &edge).await;
+                let (source, target, target_id, storage) = if core_initiates {
+                    (&core.peers, &edge.peers, edge.service.localNodeId(), &edge.storage)
+                } else {
+                    (&edge.peers, &core.peers, core.router.localNodeId(), &core.storage)
+                };
+                let config = PeerStateStore::new(storage.clone()).hostConfig().unwrap().unwrap();
+                let token = if config.token.is_empty() { None } else { Some(config.token.as_str()) };
+                let endpoint = PeerEndpoint { nodeId: target_id, address: config.bindAddress };
+                let first = source.startPairing(endpoint.clone(), PeerTransport::Tcp, token).await.unwrap();
+                let second = source.startPairing(endpoint, PeerTransport::Tcp, token).await.unwrap();
+                let prompts = target.pairingPrompts().unwrap();
+                assert_eq!(prompts.len(), 2);
+                let code = &prompts.iter().find(|p| p.pairingId == first.pairingId).unwrap().confirmationCode;
+                source.finishPairing(&first.pairingId, code).await.unwrap();
+                let retained = target.pairingPrompts().unwrap();
+                assert_eq!(retained.len(), 1, "a first pairing must not run credential revocation");
+                assert_eq!(retained[0].pairingId, second.pairingId);
+                source.cancelPairing(&second.pairingId).await.unwrap();
+                assert_eq!(source.pairedPeers().unwrap().len(), 1);
+                assert_eq!(target.pairedPeers().unwrap().len(), 1);
+            }).await;
+            core.peers.stop().await.unwrap();
+            edge.peers.stop().await.unwrap();
+            result.unwrap();
+        }
+    }
+
+    /// Edge removal follows the same upstream control ledger and pairing generation.
+    #[tokio::test]
+    async fn upstream_control_removal_retires_edge_pairing_before_fresh_pairing() {
+        let _guard = TEST_LOCK.lock().await;
+        let core = core_node();
+        let edge = fresh_edge();
+        let result = tokio::time::timeout(Duration::from_secs(20), async {
+            start(&core, &edge).await;
+            let core_id = core.router.localNodeId();
+            let edge_id = edge.service.localNodeId();
+            let identity = PeerStateStore::new(edge.storage.clone());
+            let previous_generation = identity.pairingIncarnation().unwrap();
+            pair(&edge.peers, &core.peers, &core.storage, core_id.clone()).await;
+            let request = edge.service.requestDeviceSpaceJoin(core_id.clone()).await.unwrap();
+            core.service.decideDeviceSpaceJoin(request.requestId.clone(), request.assignmentVersion, true).await.unwrap();
+            assert_eq!(edge.service.refreshDeviceSpaceJoin(request.requestId).await.unwrap().status, SpaceJoinStatus::Joined);
+            let former_space = core.service.deviceSpace().unwrap().spaceId;
+            assert_eq!(edge.service.spaceStore().space().unwrap().spaceId, former_space);
+
+            // Deliver the upstream authority log at its authenticated receiver
+            // boundary. Notification transport is best effort; receipt, replay,
+            // pairing cleanup and generation renewal share the upstream handler.
+            let control = operit_store::NetworkControlStore::NetworkControlStore::new(core.storage.clone()).unwrap();
+            control.removeMember(edge_id.clone()).unwrap();
+            let operations = control.currentSpaceOperations().unwrap();
+            operit_node_runtime::NodeSpaceService::acceptSpaceControlCall(
+                edge.service.as_ref(), &core_id,
+                CoreCallRequest::new("remove-edge", NODE_SPACE_CONTROL_TARGET, "exchange",
+                    toCoreValue(operations).unwrap()),
+            ).unwrap();
+            core.peers.removePairedPeer(&edge_id).await.unwrap();
+            assert!(core.peers.pairedPeers().unwrap().is_empty());
+            assert!(edge.peers.pairedPeers().unwrap().is_empty());
+            assert_ne!(edge.service.spaceStore().space().unwrap().spaceId, former_space);
+            let next_generation = identity.pairingIncarnation().unwrap();
+            assert!(next_generation.is_some());
+            assert_ne!(next_generation, previous_generation);
+
+            pair(&core.peers, &edge.peers, &edge.storage, edge_id.clone()).await;
+            assert_eq!(core.peers.pairedPeers().unwrap()[0].pairingIncarnation, next_generation);
+            assert_eq!(edge.service.spaceChannelScope(&core_id).unwrap(), None);
+            assert_eq!(core.service.requestDeviceSpaceJoin(edge_id).await.unwrap().status, SpaceJoinStatus::Pending);
+        }).await;
+        core.peers.stop().await.unwrap();
+        edge.peers.stop().await.unwrap();
+        result.unwrap();
+    }
+
     #[tokio::test]
     async fn one_sided_unpair_allows_code_verified_replacement_without_space_admission() {
         const RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH: &str = "runtime/link_access/inbound_sessions.preferences.json";
