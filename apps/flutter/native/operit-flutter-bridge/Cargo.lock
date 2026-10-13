@@ -2302,6 +2302,7 @@ name = "operit-host-native-common"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "mdns-sd",
  "operit-host-api",
  "operit-host-native-filesystem",
@@ -2463,6 +2464,7 @@ name = "operit-link"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "operit-host-api",
  "rmp-serde",
  "serde",
