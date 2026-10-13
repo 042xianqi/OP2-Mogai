@@ -80,6 +80,13 @@ fn memory(id: i64) -> (String, String, Value) {
     })).unwrap()
 }
 
+/// Creates one document memory so imported chunks can resolve their exact parent UUID.
+fn document(id: i64) -> (String, String, Value) {
+    let (collection, key, mut value) = memory(id);
+    value["record"]["isDocumentNode"] = json!(true);
+    (collection, key, value)
+}
+
 /// Exercises actual bounded commits, exact identities, durable reopen, and once-only source adoption.
 #[test]
 fn relational_owner_metadata_preserves_integer_counters_and_real_search_weights() {
@@ -325,6 +332,46 @@ fn imports_pages_and_reopens_without_replacing_completed_data() {
             .unwrap(),
         b"# Actual source profile\n"
     );
+}
+
+/// Keeps resolvable relationships and drops references to a legacy memory that was deleted without cleanup.
+#[test]
+fn drops_relationships_whose_legacy_target_was_deleted() {
+    let fixture = Fixture::new();
+    let mut source = data();
+    source.records.push(memory(1));
+    source.records.push(memory(2));
+    let link = |id: i64, target: i64| {
+        ownerRecord("links", "character:legacy", json!({
+            "id":id,"sourceMemoryId":1,"targetMemoryId":target,"type_":"related","weight":0.5,"description":"link"
+        })).unwrap()
+    };
+    source.records.push(link(1, 2));
+    source.records.push(link(2, 99));
+    fixture.writer().import("operit2-v27", source).unwrap();
+    let links = fixture.writer().list("links").unwrap();
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0]["value"]["record"]["targetMemoryId"], "2");
+    assert_eq!(fixture.writer().list("memories").unwrap().len(), 2);
+}
+
+/// Keeps chunks of imported documents and drops chunks whose legacy document was deleted.
+#[test]
+fn drops_chunks_whose_legacy_document_was_deleted() {
+    let fixture = Fixture::new();
+    let mut source = data();
+    source.records.push(document(1));
+    let chunk = |id: i64, uuid: &str| {
+        ownerRecord("chunks", "character:legacy", json!({
+            "id":id,"memoryUuid":uuid,"chunkIndex":0,"content":"chunk"
+        })).unwrap()
+    };
+    source.records.push(chunk(1, "uuid-1"));
+    source.records.push(chunk(2, "uuid-99"));
+    fixture.writer().import("operit2-v27", source).unwrap();
+    let chunks = fixture.writer().list("chunks").unwrap();
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0]["value"]["record"]["memoryUuid"], "uuid-1");
 }
 
 /// Confirms verified resources and records survive deletion of legacy owners and preference files.
@@ -581,18 +628,24 @@ fn migrates_automatic_candidate_cutoff_to_the_actual_source_revision() {
 fn selected_candidate_requires_its_exact_user_message_revision() {
     let messages = vec![(100, 4, "user".to_string()), (200, 7, "ai".to_string())];
     let mut record = candidate("selected_user_message", 100);
-    migrateCandidateTrigger(&mut record, &messages).unwrap();
+    assert_eq!(
+        migrateCandidateTrigger(&mut record, &messages).unwrap(),
+        CandidateSourceState::Migrated
+    );
     assert_eq!(record["triggerMessageTimestamp"], 100);
     assert_eq!(record["triggerVariantIndex"], 4);
     let mut missing = candidate("selected_user_message", 150);
     let original = missing.clone();
-    assert!(migrateCandidateTrigger(&mut missing, &messages).is_err());
+    assert_eq!(
+        migrateCandidateTrigger(&mut missing, &messages).unwrap(),
+        CandidateSourceState::Unresolvable
+    );
     assert_eq!(missing, original);
 }
 
-/// Rejects invalid histories without creating fictional messages or versions during migration.
+/// Reports queue records whose released history no longer resolves while malformed source types stay errors.
 #[test]
-fn invalid_candidate_sources_remain_errors() {
+fn unresolvable_candidate_sources_are_reported_while_unknown_types_stay_errors() {
     for (source_type, messages) in [
         ("reply_finalized_auto", vec![]),
         ("reply_finalized_auto", vec![(200, 0, "ai".to_string())]),
@@ -603,13 +656,19 @@ fn invalid_candidate_sources_remain_errors() {
         ("reply_finalized_auto", vec![(100, 0, "user".to_string())]),
         ("reply_finalized_auto", vec![(100, -1, "ai".to_string())]),
         ("selected_user_message", vec![(150, 0, "ai".to_string())]),
-        ("unknown", vec![(100, 0, "ai".to_string())]),
     ] {
         let mut record = candidate(source_type, 150);
         let original = record.clone();
-        assert!(migrateCandidateTrigger(&mut record, &messages).is_err());
+        assert_eq!(
+            migrateCandidateTrigger(&mut record, &messages).unwrap(),
+            CandidateSourceState::Unresolvable
+        );
         assert_eq!(record, original);
     }
+    let mut unknown = candidate("unknown", 150);
+    let original = unknown.clone();
+    assert!(migrateCandidateTrigger(&mut unknown, &vec![(100, 0, "ai".to_string())]).is_err());
+    assert_eq!(unknown, original);
 }
 
 /// Reads released optional fields and profiles without materializing or changing the source files.
