@@ -18,6 +18,7 @@ use operit_store::RuntimeStorageHost::{
 use operit_store::RuntimeStorePaths::RuntimeStorePaths;
 use operit_store::SqliteStore::{SqliteRowGet, SqliteStore, SqliteValue};
 use operit_store::SyncOperationStore::SyncOperationStore;
+use operit_util::AppLogger::AppLogger;
 use operit_util::RuntimeStorageLayout::RUNTIME_SYNC_DIR_PATH;
 use operit_util::RuntimeStorageLayout::USER_PREFERENCES_PATH;
 use operit_util::RuntimeStorageLayout::{
@@ -344,9 +345,19 @@ impl CharacterPluginWriter {
 
     /// Writes an explicit migration with a durable in-progress marker and a final completion marker.
     /// Restarting an interrupted migration repeats source records; a completed migration never runs twice.
-    pub fn import(&self, source: &str, data: CharacterMigrationData) -> Result<(), String> {
+    pub fn import(&self, source: &str, mut data: CharacterMigrationData) -> Result<(), String> {
         if self.get("imports", source)?.is_some() {
             return Ok(());
+        }
+        let dropped = dropUnresolvableRecords(&mut data);
+        if dropped != DroppedLegacyRecords::default() {
+            AppLogger::w(
+                "CharacterPluginMigration",
+                &format!(
+                    "source={source} dropped {} relationships and {} document chunks whose legacy owner was deleted without a reference cleanup",
+                    dropped.relationships, dropped.documentChunks
+                ),
+            );
         }
         validateMigrationData(&data)?;
         let theme_targets = data
@@ -599,6 +610,74 @@ fn validateResourcePath(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Counts the legacy records an import dropped because their owning record is absent from the same snapshot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DroppedLegacyRecords {
+    pub relationships: usize,
+    pub documentChunks: usize,
+}
+
+/// Drops relationships and document chunks whose owning record is absent from the same snapshot.
+/// The retired Core deleted memories without clearing their references, and the plugin storage rejects
+/// any record with an unresolvable endpoint, so only resolvable records can be imported.
+/// Records with malformed fields stay for validateMigrationData to report precisely.
+pub fn dropUnresolvableRecords(data: &mut CharacterMigrationData) -> DroppedLegacyRecords {
+    let mut dropped = DroppedLegacyRecords::default();
+    let mut memories = BTreeSet::new();
+    let mut documents = BTreeSet::new();
+    for (collection, _, envelope) in &data.records {
+        if collection != "memories" {
+            continue;
+        }
+        let Ok(owner) = requiredString(envelope, "ownerKey") else {
+            continue;
+        };
+        let record = &envelope["record"];
+        if let Ok(id) = requiredString(record, "id") {
+            memories.insert((owner.to_string(), id.to_string()));
+        }
+        if record["isDocumentNode"] == true {
+            if let Ok(uuid) = requiredString(record, "uuid") {
+                documents.insert((owner.to_string(), uuid.to_string()));
+            }
+        }
+    }
+    data.records.retain(|(collection, _, envelope)| {
+        let Ok(owner) = requiredString(envelope, "ownerKey") else {
+            return true;
+        };
+        let record = &envelope["record"];
+        let endpoint = |field: &str| {
+            requiredString(record, field).map(|value| (owner.to_string(), value.to_string()))
+        };
+        match collection.as_str() {
+            "links" => {
+                let (Ok(source), Ok(target)) =
+                    (endpoint("sourceMemoryId"), endpoint("targetMemoryId"))
+                else {
+                    return true;
+                };
+                if memories.contains(&source) && memories.contains(&target) {
+                    true
+                } else {
+                    dropped.relationships += 1;
+                    false
+                }
+            }
+            "chunks" => match endpoint("memoryUuid") {
+                Ok(memory) if documents.contains(&memory) => true,
+                Ok(_) => {
+                    dropped.documentChunks += 1;
+                    false
+                }
+                Err(_) => true,
+            },
+            _ => true,
+        }
+    });
+    dropped
+}
+
 /// Checks domain references before any migration write or source deletion.
 fn validateMigrationData(data: &CharacterMigrationData) -> Result<(), String> {
     let cards = data
@@ -798,20 +877,35 @@ pub fn ownerMetadata(owner: &str, settings: MemorySettings, search: MemorySearch
         "failedWindows":0,"currentChatTitle":"","lastError":""}})
 }
 
+/// Reports whether a released queue record still resolves against the current chat history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CandidateSourceState {
+    /// The record now carries the plugin's exact source message revision.
+    Migrated,
+    /// The source message no longer exists, so this pending extraction can never run.
+    Unresolvable,
+}
+
 /// Converts a released automatic history cutoff or selected-user timestamp into its actual message revision.
+/// A source chat that lost the message leaves the record unresolvable instead of inventing a revision.
 pub fn migrateCandidateTrigger(
     record: &mut Value,
     messages: &[(i64, i64, String)],
-) -> Result<(), String> {
+) -> Result<CandidateSourceState, String> {
     let candidate: MemoryAutoSaveCandidate =
         serde_json::from_value(record.clone()).map_err(|error| error.to_string())?;
     let timestamp = match candidate.sourceType.as_str() {
-        MemoryAutoSaveCandidate::SOURCE_TYPE_REPLY_FINALIZED_AUTO => messages
-            .iter()
-            .filter(|message| message.0 <= candidate.triggerMessageTimestamp)
-            .map(|message| message.0)
-            .max()
-            .ok_or("Legacy automatic candidate history is empty")?,
+        MemoryAutoSaveCandidate::SOURCE_TYPE_REPLY_FINALIZED_AUTO => {
+            let Some(timestamp) = messages
+                .iter()
+                .filter(|message| message.0 <= candidate.triggerMessageTimestamp)
+                .map(|message| message.0)
+                .max()
+            else {
+                return Ok(CandidateSourceState::Unresolvable);
+            };
+            timestamp
+        }
         MemoryAutoSaveCandidate::SOURCE_TYPE_SELECTED_USER_MESSAGE => {
             candidate.triggerMessageTimestamp
         }
@@ -822,10 +916,7 @@ pub fn migrateCandidateTrigger(
         .filter(|message| message.0 == timestamp)
         .collect::<Vec<_>>();
     if sources.len() != 1 {
-        return Err(format!(
-            "Legacy candidate source is missing or ambiguous: candidate={} sourceType={}",
-            candidate.id, candidate.sourceType
-        ));
+        return Ok(CandidateSourceState::Unresolvable);
     }
     let source = sources[0];
     let valid_sender = match candidate.sourceType.as_str() {
@@ -836,18 +927,18 @@ pub fn migrateCandidateTrigger(
         _ => unreachable!("candidate source type was checked above"),
     };
     if !valid_sender || source.1 < 0 || source.1 > i64::from(i32::MAX) {
-        return Err(format!(
-            "Invalid legacy candidate message revision: {}",
-            candidate.id
-        ));
+        return Ok(CandidateSourceState::Unresolvable);
     }
     record["triggerMessageTimestamp"] = json!(source.0);
     record["triggerVariantIndex"] = json!(source.1);
-    Ok(())
+    Ok(CandidateSourceState::Migrated)
 }
 
 /// Reads the bounded source revisions from Core SQLite before converting a released queue record.
-fn migrateStoredCandidateTrigger(database: &SqliteStore, record: &mut Value) -> Result<(), String> {
+fn migrateStoredCandidateTrigger(
+    database: &SqliteStore,
+    record: &mut Value,
+) -> Result<CandidateSourceState, String> {
     let rows = database.queryRows(
         "SELECT timestamp, selectedVariantIndex, sender FROM messages WHERE chatId=?1 AND timestamp<=?2 ORDER BY timestamp DESC LIMIT 2",
         vec![
@@ -1365,6 +1456,7 @@ pub fn migrateLegacyCharacters(paths: RuntimeStorePaths) -> Result<(), String> {
             let (memory_settings, search) = readLegacyMemorySettings(storage.clone(), &owner)?;
             data.owners
                 .push(ownerMetadata(&owner, memory_settings, search));
+            let mut dropped_candidates = 0usize;
             for (collection, entity, path) in [
                 ("memories", "Memory", format!("{root}/Memory.sqlite")),
                 ("chunks", "DocumentChunk", format!("{root}/Memory.sqlite")),
@@ -1380,7 +1472,15 @@ pub fn migrateLegacyCharacters(paths: RuntimeStorePaths) -> Result<(), String> {
                         let database =
                             operit_store::db::AppDatabase::AppDatabase::getDatabase(paths.clone())
                                 .map_err(|error| error.to_string())?;
-                        migrateStoredCandidateTrigger(database.store(), &mut record)?;
+                        // The retired app deleted chats without clearing their queued extractions,
+                        // and the plugin requires a resolvable source revision, so stale queue
+                        // records are dropped rather than failing the whole migration.
+                        if migrateStoredCandidateTrigger(database.store(), &mut record)?
+                            == CandidateSourceState::Unresolvable
+                        {
+                            dropped_candidates += 1;
+                            continue;
+                        }
                     }
                     if collection == "memories" {
                         for field in ["documentPath", "chunkIndexFilePath"] {
@@ -1411,6 +1511,14 @@ pub fn migrateLegacyCharacters(paths: RuntimeStorePaths) -> Result<(), String> {
                     }
                     data.records.push(ownerRecord(collection, &owner, record)?);
                 }
+            }
+            if dropped_candidates > 0 {
+                AppLogger::w(
+                    "CharacterPluginMigration",
+                    &format!(
+                        "owner={owner} dropped {dropped_candidates} queued memory extractions whose source chat history no longer exists"
+                    ),
+                );
             }
             let bytes = readLegacyUserMarkdown(storage.as_ref(), &owner)?;
             data.documents.insert(owner, bytes);
