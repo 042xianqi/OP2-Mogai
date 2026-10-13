@@ -84,7 +84,7 @@ async fn real_tcp_single_pairing_admission_enables_scoped_return_channel() {
                     nodeId: "tcp-ios".into(),
                     address,
                 },
-                PeerTransport::Tcp,
+                Some(PeerTransport::Tcp),
                 Some("test-token"),
             )
             .await
@@ -397,7 +397,7 @@ async fn real_tcp_space_remove_deletes_pairing_and_allows_repairing() {
                     nodeId: "remove-ios".into(),
                     address: address.clone(),
                 },
-                PeerTransport::Tcp,
+                Some(PeerTransport::Tcp),
                 Some("test-token"),
             )
             .await
@@ -450,7 +450,7 @@ async fn real_tcp_space_remove_deletes_pairing_and_allows_repairing() {
                     nodeId: "remove-ios".into(),
                     address,
                 },
-                PeerTransport::Tcp,
+                Some(PeerTransport::Tcp),
                 Some("test-token"),
             )
             .await
@@ -565,7 +565,7 @@ async fn real_tcp_listener_gate_reports_revocation_to_dialer() {
                     nodeId: "gate-ios".into(),
                     address,
                 },
-                PeerTransport::Tcp,
+                Some(PeerTransport::Tcp),
                 Some("test-token"),
             )
             .await
@@ -701,10 +701,10 @@ async fn outbound_only_hosts_pair_over_http_and_websocket() {
             assert!(promptFlow.value().is_empty());
             assert!(clientPromptFlow.value().is_empty());
             assert!(client.discoverPeers(1).await.is_err());
-            assert!(client.startPairing(serverRouter.localNodeId(), endpoint.clone(), transport,
+            assert!(client.startPairing(serverRouter.localNodeId(), endpoint.clone(), Some(transport),
                 Some("wrong-token".into())).await.is_err());
             assert!(server.pairingPrompts().unwrap().is_empty());
-            let pairing = client.startPairing(serverRouter.localNodeId(), endpoint.clone(), transport,
+            let pairing = client.startPairing(serverRouter.localNodeId(), endpoint.clone(), Some(transport),
                 Some("required-test-token".into())).await.unwrap();
             let prompts = server.pairingPrompts().unwrap();
             assert_eq!(prompts.len(), 1);
@@ -726,11 +726,11 @@ async fn outbound_only_hosts_pair_over_http_and_websocket() {
             assert!(serverPeer.pairedPeers().unwrap()[0].inbound);
             for nodeId in [serverRouter.localNodeId(), String::new()] {
                 let duplicate = clientPeer.startPairing(PeerEndpoint { nodeId, address: endpoint.clone() },
-                    transport, Some("required-test-token")).await.unwrap_err();
+                    Some(transport), Some("required-test-token")).await.unwrap_err();
                 assert_eq!(duplicate.code, "PEER_ALREADY_PAIRED");
             }
             let reverse = serverPeer.startPairing(PeerEndpoint { nodeId: clientRouter.localNodeId(), address: endpoint.clone() },
-                transport, Some("required-test-token")).await.unwrap_err();
+                Some(transport), Some("required-test-token")).await.unwrap_err();
             assert_eq!(reverse.code, "PEER_ALREADY_PAIRED");
             assert!(server.pairingPrompts().unwrap().is_empty());
             let clientStore = PeerStateStore::new(clientRouter.localCore.runtimeStorageHost());

@@ -113,7 +113,7 @@ async fn paired_edge_requires_explicit_approval_and_restores_space() {
         b_peer.startListening(&[PeerTransport::Tcp]).await.unwrap();
         let address = PeerStateStore::new(b_store.clone()).hostConfig().unwrap().unwrap().bindAddress;
         let b_id = b_space.localNodeId(); let a_id = a_space.localNodeId();
-        let pairing = a_peer.startPairing(PeerEndpoint { nodeId: b_id.clone(), address }, PeerTransport::Tcp, Some("test-token")).await.unwrap();
+        let pairing = a_peer.startPairing(PeerEndpoint { nodeId: b_id.clone(), address }, Some(PeerTransport::Tcp), Some("test-token")).await.unwrap();
         let code = b_peer.pairingPrompts().unwrap()[0].confirmationCode.clone();
         a_peer.finishPairing(&pairing.pairingId, &code).await.unwrap();
         print_size("paired", &b_store);
@@ -163,7 +163,7 @@ async fn failed_local_cancellation_preserves_pending_request_and_can_retry() {
     let address = PeerStateStore::new(gatewayStorage).hostConfig().unwrap().unwrap().bindAddress;
     let pairing = applicantPeer.startPairing(PeerEndpoint {
         nodeId: gateway.localNodeId(), address,
-    }, PeerTransport::Tcp, Some("test-token")).await.unwrap();
+    }, Some(PeerTransport::Tcp), Some("test-token")).await.unwrap();
     let code = gatewayPeer.pairingPrompts().unwrap()[0].confirmationCode.clone();
     applicantPeer.finishPairing(&pairing.pairingId, &code).await.unwrap();
     let request = applicant.requestDeviceSpaceJoin(gateway.localNodeId()).await.unwrap();
@@ -225,7 +225,7 @@ async fn approval_retry_recovers_each_partial_write_without_duplicate_admission(
             let gateway_id = gateway.localNodeId();
             let applicant_id = applicant.localNodeId();
             let address = PeerStateStore::new(storage.clone()).hostConfig().unwrap().unwrap().bindAddress;
-            let pairing = applicant_peer.startPairing(PeerEndpoint { nodeId: gateway_id.clone(), address }, PeerTransport::Tcp, Some("test-token")).await.unwrap();
+            let pairing = applicant_peer.startPairing(PeerEndpoint { nodeId: gateway_id.clone(), address }, Some(PeerTransport::Tcp), Some("test-token")).await.unwrap();
             let code = gateway_peer.pairingPrompts().unwrap()[0].confirmationCode.clone();
             applicant_peer.finishPairing(&pairing.pairingId, &code).await.unwrap();
             // Real hardware contains earlier declined/expired applications.
@@ -571,7 +571,7 @@ mod core_edge {
                     nodeId: target_id,
                     address,
                 },
-                PeerTransport::Tcp,
+                Some(PeerTransport::Tcp),
                 Some("test-token"),
             )
             .await

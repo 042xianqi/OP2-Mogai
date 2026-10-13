@@ -39,10 +39,12 @@ pub trait RuntimePeerService: Send + Sync {
     /// 通过标准 Call 请求配对；runtime 校验响应及请求关联，保存待确认状态。
     /// target 中的节点标识只是寻址信息，不是身份已获验证的证据。
     /// 连接的取消与释放由 runtime 管理；不为 HTTP、WS、TCP、串口分别编写配对流程。
+    /// transport 为 None 时按地址自动判定载体：URL scheme 直接映射，
+    /// 裸 `ip:port` 用一次性探测连接分类。
     async fn startPairing(
         &self,
         target: PeerEndpoint,
-        transport: PeerTransport,
+        transport: Option<PeerTransport>,
         token: Option<&str>,
     ) -> Result<PendingPairing, CoreLinkError>;
 

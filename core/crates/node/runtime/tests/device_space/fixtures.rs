@@ -73,7 +73,7 @@ impl RuntimePeerService for ApprovalMeshPeer {
     async fn startPairing(
         &self,
         _: PeerEndpoint,
-        _: PeerTransport,
+        _: Option<PeerTransport>,
         _: Option<&str>,
     ) -> Result<PendingPairing, CoreLinkError> {
         unreachable!()

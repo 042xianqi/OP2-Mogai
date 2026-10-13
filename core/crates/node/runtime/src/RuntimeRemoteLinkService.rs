@@ -165,7 +165,7 @@ impl RuntimeRemoteLinkService {
         self.nodeServices()?.peers().discoverPeers(timeoutMs).await.map_err(|error| error.to_string())
     }
     pub async fn startPairing(&self, nodeId: String, address: String,
-        transport: operit_peer_link::PeerTransport, token: Option<String>,
+        transport: Option<operit_peer_link::PeerTransport>, token: Option<String>,
     ) -> Result<crate::NodeServices::PendingPairing, String> {
         self.nodeServices()?.peers().startPairing(crate::NodeServices::PeerEndpoint { nodeId, address },
             transport, token.as_deref()).await.map_err(|error| error.to_string())

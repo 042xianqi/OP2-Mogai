@@ -130,7 +130,7 @@ mod tests {
         async fn startPairing(
             &self,
             target: PeerEndpoint,
-            transport: PeerTransport,
+            transport: Option<PeerTransport>,
             token: Option<&str>,
         ) -> Result<PendingPairing, CoreLinkError> {
             // LAN discovery may intentionally start without a user-supplied token.
@@ -304,7 +304,7 @@ mod tests {
                         nodeId: "board".into(),
                         address: "endpoint".into(),
                     },
-                    transport,
+                    Some(transport),
                     None,
                 )
                 .await
@@ -329,11 +329,11 @@ mod tests {
             address: "endpoint".into(),
         };
         services.peers()
-            .startPairing(endpoint.clone(), PeerTransport::Tcp, None)
+            .startPairing(endpoint.clone(), Some(PeerTransport::Tcp), None)
             .await
             .unwrap();
         services.peers()
-            .startPairing(endpoint, PeerTransport::Tcp, Some("secret-token"))
+            .startPairing(endpoint, Some(PeerTransport::Tcp), Some("secret-token"))
             .await
             .unwrap();
         services.peers().removePairedPeer("board").await.unwrap();

@@ -2241,6 +2241,13 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeTcpAddressHint => 'host:端口，例如 192.168.1.10:37195';
 
   @override
+  String get settingsRuntimeTransportAuto => '自动（推荐）';
+
+  @override
+  String get settingsRuntimeTransportAutoHint =>
+      '输入 IP:端口，自动识别 HTTP/WebSocket/TCP 协议';
+
+  @override
   String settingsRuntimeConnectionFailed(String error) {
     return '设备连接失败：$error';
   }
