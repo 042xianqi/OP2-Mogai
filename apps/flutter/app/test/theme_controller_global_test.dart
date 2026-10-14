@@ -58,7 +58,7 @@ void main() {
 
   test('an unavailable selected package reports an error and retains selection', () async {
     final bridge = _NodeThemeBridge()..selection = <String, Object?>{
-      'schemaVersion': 1, 'themeId': 'com.example.missing', 'version': '1.0.0',
+      'schemaVersion': 1, 'themeId': 'com.example.missing:default', 'version': '1.0.0',
       'archiveSha256': List<String>.filled(64, 'a').join(),
     };
     final theme = controller(bridge);
@@ -66,16 +66,16 @@ void main() {
     addTearDown(bridge.close);
     await theme.start();
     expect(theme.themeLoadError.toString(), contains('等待 Space 同步'));
-    expect(theme.selection?.themeId, 'com.example.missing');
+    expect(theme.selection?.themeId, 'com.example.missing:default');
     expect(theme.packageVisualsLocked, isTrue);
     expect(bridge.calls, isNot(contains('applyTheme')));
     expect(bridge.calls, isNot(contains('selectPersonalThemeAppearance')));
   });
 
-  test('deleteLibraryTheme unselects active package when requested and calls deleteTheme', () async {
+  test('deleting another template from the active ToolPkg requires explicit unselection', () async {
     final digest = List<String>.filled(64, 'b').join();
     final bridge = _NodeThemeBridge()..selection = <String, Object?>{
-      'schemaVersion': 1, 'themeId': 'com.example.active', 'version': '1.0.0',
+      'schemaVersion': 1, 'themeId': 'com.example.active:night', 'version': '1.0.0',
       'archiveSha256': digest,
     };
     final theme = controller(bridge);
@@ -84,13 +84,13 @@ void main() {
     await theme.start();
     await expectLater(
       () => theme.deleteLibraryTheme(
-        themeId: 'com.example.active',
+        themeId: 'com.example.active:day',
         archiveSha256: digest,
       ),
       throwsA(isA<StateError>()),
     );
     await theme.deleteLibraryTheme(
-      themeId: 'com.example.active',
+      themeId: 'com.example.active:day',
       archiveSha256: digest,
       unselectIfActive: true,
     );
@@ -138,7 +138,7 @@ class _NodeThemeBridge extends OperitRuntimeBridge {
         return encodeCoreLink(<Object?>[0, state]);
       case 'deleteTheme':
         return encodeCoreLink(<Object?>[0, null]);
-      case 'readThemePackage':
+      case 'readToolPkgForThemeTemplate':
         throw StateError('等待 Space 同步主题包');
       default:
         throw UnsupportedError('Unexpected theme call: ${request.target}/${request.methodName}');

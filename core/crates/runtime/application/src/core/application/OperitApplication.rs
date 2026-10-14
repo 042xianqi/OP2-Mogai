@@ -36,9 +36,7 @@ use operit_store::ThemeLibraryStore::{
     ThemeInstallReceipt, ThemeLibraryEntry, ThemeLibraryItem, ThemeLibraryStore, ThemeNodeState,
     ThemeSelection,
 };
-use operit_theme_contract::{
-    validate_theme_package, validate_theme_package_with_expectation, ThemeValidationReceipt,
-};
+use operit_plugin_theme::ThemeValidationReceipt;
 use operit_store::RuntimeStorageHost::{
     defaultRuntimeStorageHost, setDefaultHostSecretStore, setDefaultRuntimeSqliteHost,
     setDefaultRuntimeStorageHost,
@@ -1248,8 +1246,8 @@ impl OperitApplication {
     pub fn inspectThemeArchive(
         &self,
         archiveBytes: Vec<u8>,
-    ) -> Result<ThemeValidationReceipt, String> {
-        Ok(self.validateThemeArchive(&archiveBytes)?.receipt().clone())
+    ) -> Result<Vec<ThemeValidationReceipt>, String> {
+        Ok(operit_plugin_sdk::toolpkg::ToolPkgParser::ToolPkgArchiveParser::readThemeTemplates(&archiveBytes)?.into_iter().map(|template| template.receipt().clone()).collect())
     }
 
     /// Builds an in-memory preview payload. This phase does not write the
@@ -1258,8 +1256,9 @@ impl OperitApplication {
     pub fn previewThemeArchive(
         &self,
         archiveBytes: Vec<u8>,
+        themeId: String,
     ) -> Result<ThemePreviewReceipt, String> {
-        let package = self.validateThemeArchive(&archiveBytes)?;
+        let package = self.validateThemeArchive(&archiveBytes, &themeId)?;
         let themeJson = String::from_utf8(package.theme().canonical_bytes())
             .map_err(|error| error.to_string())?;
         let assets = package
@@ -1279,29 +1278,24 @@ impl OperitApplication {
             .collect::<Result<Vec<_>, String>>()?;
         Ok(ThemePreviewReceipt {
             validation: package.receipt().clone(),
-            theme_id: package.manifest().theme_id.clone(),
-            version: package.manifest().version.clone(),
+            theme_id: package.metadata().theme_id.clone(),
+            version: package.metadata().version.clone(),
             theme_json: themeJson,
             assets,
         })
     }
 
-    /// Commits a validated package to the Space-owned theme library. Import
-    /// does not change the current CoreNode selection.
+    /// Imports ordinary ToolPkg bytes after checking the confirmed download identity.
     #[allow(non_snake_case)]
-    pub fn importThemeArchive(
-        &self,
-        archiveBytes: Vec<u8>,
-        expectedArchiveBytes: usize,
-        expectedArchiveSha256: String,
-    ) -> Result<ThemeInstallReceipt, String> {
-        let package = validate_theme_package_with_expectation(
-            &archiveBytes, crate::CORE_VERSION, expectedArchiveBytes, &expectedArchiveSha256,
-        ).map_err(|error| error.to_string())?;
-        let storage = self.hostManager.runtimeStorageHost.clone().ok_or_else(|| {
-            "RuntimeStorageHost is not registered for theme library storage".to_string()
-        })?;
-        ThemeLibraryStore::new(storage).importValidated(&package)
+    pub fn importToolPkgArchive(
+        &self, archiveBytes: Vec<u8>, expectedArchiveBytes: usize, expectedArchiveSha256: String,
+    ) -> Result<bool, String> {
+        if archiveBytes.len() != expectedArchiveBytes || operit_plugin_theme::sha256_hex(&archiveBytes) != expectedArchiveSha256 {
+            return Err("ToolPkg differs from the confirmed byte count or SHA-256".to_string());
+        }
+        let manager = self.packageManager();
+        let mut manager = manager.lock().map_err(|error| error.to_string())?;
+        manager.importToolPkgBytes(archiveBytes)
     }
 
     /// Applies a package already present in the Space library to this
@@ -1317,7 +1311,7 @@ impl OperitApplication {
         })?;
         let store = ThemeLibraryStore::new(storage);
         let entry = store.theme(&themeId, &archiveSha256)?;
-        let package = self.validateThemeArchive(&store.packageBytes(&entry)?)?;
+        let package = self.validateThemeArchive(&store.packageBytes(&entry)?, &themeId)?;
         store.applyValidated(&package)
     }
 
@@ -1333,7 +1327,15 @@ impl OperitApplication {
         themeId: String,
         archiveSha256: String,
     ) -> Result<(), String> {
-        self.themeLibraryStore()?.deleteTheme(&themeId, &archiveSha256)
+        let store = self.themeLibraryStore()?;
+        store.ensureThemeRemovable(&themeId, &archiveSha256)?;
+        let entry = store.theme(&themeId, &archiveSha256)?;
+        let manager = self.packageManager();
+        let mut manager = manager.lock().map_err(|error| error.to_string())?;
+        if !manager.deletePackage(&entry.package_id) {
+            return Err("Failed to uninstall ToolPkg".to_string());
+        }
+        Ok(())
     }
 
     #[allow(non_snake_case)]
@@ -1379,7 +1381,7 @@ impl OperitApplication {
     /// Reads the sealed package for a committed library entry. The caller must
     /// validate the returned bytes before handing assets to a renderer.
     #[allow(non_snake_case)]
-    pub fn readThemePackage(
+    pub fn readToolPkgForThemeTemplate(
         &self,
         themeId: String,
         archiveSha256: String,
@@ -1404,8 +1406,11 @@ impl OperitApplication {
     fn validateThemeArchive(
         &self,
         archiveBytes: &[u8],
-    ) -> Result<operit_theme_contract::ValidatedThemePackage, String> {
-        validate_theme_package(archiveBytes, crate::CORE_VERSION).map_err(|error| error.to_string())
+        themeId: &str,
+    ) -> Result<operit_plugin_theme::ValidatedThemeTemplate, String> {
+        operit_plugin_sdk::toolpkg::ToolPkgParser::ToolPkgArchiveParser::readThemeTemplates(archiveBytes)?
+            .into_iter().find(|template| template.metadata().theme_id == themeId)
+            .ok_or_else(|| "Selected theme template is not declared by this ToolPkg".to_string())
     }
 
     /// Creates the persistent sync operation store owned by this application instance.

@@ -6,7 +6,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:operit_theme/operit_theme.dart';
+import 'package:operit_ui/operit_ui.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../core/bridge/ProxyCoreRuntimeBridge.dart';
@@ -583,6 +583,8 @@ class OperitThemeController {
           _suppressThemeAnimation = true;
           try {
             await setThemeMode(nextMode);
+            // Paint the target theme before revealing it through the circle.
+            await WidgetsBinding.instance.endOfFrame;
           } finally {
             _suppressThemeAnimation = false;
           }
@@ -807,9 +809,8 @@ class OperitThemeController {
   Future<List<core_proxy.ThemeLibraryItem>> listThemeLibrary() =>
       _clients.application.listThemeLibrary();
 
-  /// Deletes a theme package from the Space library. When [unselectIfActive]
-  /// is true and this node currently selects the target package, switches this
-  /// node to personal appearance first before deleting the package.
+  /// Uninstalls the ordinary ToolPkg contributing this template. An explicit
+  /// request to unselect also covers other active templates owned by that package.
   Future<void> deleteLibraryTheme({
     required String themeId,
     required String archiveSha256,
@@ -817,11 +818,10 @@ class OperitThemeController {
   }) async {
     final current = _selection;
     final isActive = current != null &&
-        current.themeId == themeId &&
-        current.archiveSha256 == archiveSha256;
+        current.themeId.split(':').first == themeId.split(':').first;
     if (isActive) {
       if (!unselectIfActive) {
-        throw StateError('请先切回本节点个人外观后再删除当前生效的主题包');
+        throw StateError('请先切回本节点个人外观后再卸载提供当前模板的 ToolPkg');
       }
       await selectPersonalAppearance();
     }

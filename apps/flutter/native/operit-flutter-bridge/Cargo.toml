@@ -68,7 +68,7 @@ tokio = { version = "1", default-features = false, features = ["macros", "sync"]
 [patch.crates-io]
 quickjs-wasm-rs = { path = "../../../../core/vendor/quickjs-wasm-rs" }
 
-[profile.dev.package.operit-theme-contract]
+[profile.dev.package.operit-plugin-theme]
 opt-level = 2
 
 [profile.dev.package.image]

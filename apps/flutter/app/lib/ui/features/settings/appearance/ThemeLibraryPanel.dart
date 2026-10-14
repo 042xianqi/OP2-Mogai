@@ -4,7 +4,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:operit_theme/operit_theme.dart';
+import 'package:operit_ui/operit_ui.dart';
 
 import '../../../../core/proxy/generated/CoreProxyModels.g.dart' as core_proxy;
 import '../../../common/components/OperitDialog.dart';
@@ -100,8 +100,20 @@ class _ThemeLibraryPanelState extends State<ThemeLibraryPanel> {
     });
   }
 
-  Future<void> _import() => _run('正在读取并校验 .optheme 主题包…', () async {
-    final input = await widget.controller.library.inspectPickedArchive();
+  /// Selects a declared theme template without classifying its owning ToolPkg.
+  Future<String?> _selectTemplate(List<core_proxy.ThemeValidationReceipt> templates) => showDialog<String>(
+    context: context,
+    builder: (context) => SimpleDialog(
+      title: const Text('选择 ToolPkg 中的主题模板'),
+      children: templates.map((template) => SimpleDialogOption(
+        onPressed: () => Navigator.of(context).pop(template.themeId),
+        child: Text(template.themeId),
+      )).toList(),
+    ),
+  );
+
+  Future<void> _import() => _run('正在读取并校验 .toolpkg ToolPkg…', () async {
+    final input = await widget.controller.library.inspectPickedArchive(selectTemplate: _selectTemplate);
     if (input == null || !mounted) return;
     final choice = await showDialog<_ImportDialogChoice>(
       context: context,
@@ -112,8 +124,8 @@ class _ThemeLibraryPanelState extends State<ThemeLibraryPanel> {
     }
     setState(() {
       _busyMessage = choice == _ImportDialogChoice.importAndApply
-          ? '正在导入主题包并应用到本节点…'
-          : '正在将主题包写入 Space 主题库…';
+          ? '正在导入ToolPkg并应用到本节点…'
+          : '正在将ToolPkg写入 ToolPkg 模板列表…';
     });
     final receipt = await widget.controller.library.importArchive(input);
     if (!mounted) return;
@@ -128,8 +140,8 @@ class _ThemeLibraryPanelState extends State<ThemeLibraryPanel> {
     }
     setState(() {
       _result = receipt.status == core_proxy.ThemeInstallStatus.alreadyPresent
-          ? '主题包「${receipt.entry.displayName} v${receipt.entry.version}」已在库中；本节点当前主题未改变。'
-          : '已导入「${receipt.entry.displayName} v${receipt.entry.version}」至 Space 主题库；本节点当前主题未改变。';
+          ? 'ToolPkg「${receipt.entry.displayName} v${receipt.entry.version}」已在库中；本节点当前主题未改变。'
+          : '已导入「${receipt.entry.displayName} v${receipt.entry.version}」至 ToolPkg 模板列表；本节点当前主题未改变。';
     });
   });
 
@@ -191,8 +203,7 @@ class _ThemeLibraryPanelState extends State<ThemeLibraryPanel> {
   Future<void> _delete(core_proxy.ThemeLibraryItem item) async {
     final selected = widget.controller.selection;
     final isActive =
-        selected?.themeId == item.themeId &&
-        selected?.archiveSha256 == item.archiveSha256;
+        selected != null && selected.themeId.split(':').first == item.themeId.split(':').first;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => _ThemeDeleteConfirmDialog(
@@ -204,7 +215,7 @@ class _ThemeLibraryPanelState extends State<ThemeLibraryPanel> {
     final label = item.entry != null
         ? '${item.entry!.displayName} v${item.entry!.version}'
         : item.themeId;
-    await _run('正在从 Space 主题库删除「$label」…', () async {
+    await _run('正在从 ToolPkg 模板列表删除「$label」…', () async {
       await widget.controller.deleteLibraryTheme(
         themeId: item.themeId,
         archiveSha256: item.archiveSha256,
@@ -213,8 +224,8 @@ class _ThemeLibraryPanelState extends State<ThemeLibraryPanel> {
       if (!mounted) return;
       setState(() {
         _result = isActive
-            ? '已切回个人外观，并从 Space 主题库删除「$label」。'
-            : '已从 Space 主题库删除「$label」。';
+            ? '已切回个人外观，并从 ToolPkg 模板列表删除「$label」。'
+            : '已从 ToolPkg 模板列表删除「$label」。';
       });
     });
   }
@@ -239,8 +250,8 @@ class _ThemeLibraryPanelState extends State<ThemeLibraryPanel> {
           ),
         ],
         child: const Text(
-          '这会解除本节点当前绑定的主题包，并恢复您在本节点配置的个人自定义外观。\n\n'
-          'Space 主题库中已导入的主题包会被完整保留，随时可再次应用。',
+          '这会解除本节点当前绑定的ToolPkg，并恢复您在本节点配置的个人自定义外观。\n\n'
+          'ToolPkg 模板列表中已导入的ToolPkg会被完整保留，随时可再次应用。',
         ),
       ),
     );
@@ -255,7 +266,7 @@ class _ThemeLibraryPanelState extends State<ThemeLibraryPanel> {
   Future<void> _showDetails(core_proxy.ThemeLibraryItem item) async {
     await showDialog<void>(
       context: context,
-      builder: (_) => _ThemePackageDetailsDialog(
+      builder: (_) => _ThemeTemplateDetailsDialog(
         item: item,
         onCopy: _copyToClipboard,
       ),
@@ -293,8 +304,7 @@ class _ThemeLibraryPanelState extends State<ThemeLibraryPanel> {
           entry.displayName,
           entry.version,
           entry.authorName,
-          entry.license,
-          ...entry.platforms,
+          entry.license == null ? '无协议引用' : entry.license!,
         ],
         if (item.message != null) item.message!,
       ].join(' ').toLowerCase();
@@ -460,7 +470,7 @@ class _ThemeLibraryPanelState extends State<ThemeLibraryPanel> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Space 主题库读取失败',
+                      'ToolPkg 模板列表读取失败',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w700,
                         color: colorScheme.onErrorContainer,
@@ -511,7 +521,7 @@ class _ThemeLibraryPanelState extends State<ThemeLibraryPanel> {
                   child: CircularProgressIndicator(strokeWidth: 2.5),
                 ),
                 SizedBox(height: 12),
-                Text('正在加载 Space 主题库…'),
+                Text('正在加载 ToolPkg 模板列表…'),
               ],
             ),
           ),
@@ -547,14 +557,14 @@ class _ThemeLibraryPanelState extends State<ThemeLibraryPanel> {
               ),
               const SizedBox(height: 10),
               Text(
-                '没有符合当前筛选或搜索条件的主题包',
+                '没有符合当前筛选或搜索条件的ToolPkg',
                 style: Theme.of(context).textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.w700,
                 ),
               ),
               const SizedBox(height: 6),
               Text(
-                '共 ${rawItems.length} 个已入库主题包被当前过滤条件隐藏。',
+                '共 ${rawItems.length} 个已入库ToolPkg被当前过滤条件隐藏。',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: colorScheme.onSurfaceVariant,
                 ),
@@ -578,7 +588,7 @@ class _ThemeLibraryPanelState extends State<ThemeLibraryPanel> {
       builder: (context, constraints) {
         final cards = <Widget>[
           for (final item in visibleItems)
-            _ThemePackageCard(
+            _ThemeTemplateCard(
               key: ValueKey<String>('${item.themeId}@${item.archiveSha256}'),
               library: widget.controller.library,
               item: item,
@@ -710,9 +720,9 @@ class _ThemeBackgroundThumbnailState extends State<_ThemeBackgroundThumbnail> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final radius = BorderRadius.circular(12);
     final resolvedSync =
-        widget.library.hasResolvedBackgroundImage(widget.archiveSha256);
+        widget.library.hasResolvedBackgroundImage(widget.themeId, widget.archiveSha256);
     final cachedBytes =
-        widget.library.cachedBackgroundImageBytes(widget.archiveSha256);
+        widget.library.cachedBackgroundImageBytes(widget.themeId, widget.archiveSha256);
 
     Widget buildSurface(Uint8List? bytes, {required bool loading}) {
       return SizedBox(
@@ -1132,7 +1142,7 @@ class _NodeThemeOverviewCard extends StatelessWidget {
                         ],
                       ] else
                         Text(
-                          '主题包存储于 Space，应用状态仅归属当前 CoreNode，不绑定角色卡或群组。',
+                          'ToolPkg存储于 Space，应用状态仅归属当前 CoreNode，不绑定角色卡或群组。',
                           style: textTheme.bodySmall?.copyWith(
                             color: colorScheme.onSurfaceVariant,
                           ),
@@ -1161,7 +1171,7 @@ class _NodeThemeOverviewCard extends StatelessWidget {
                         ),
                         _MetaBadge(
                           icon: Icons.balance_rounded,
-                          label: activeEntry!.license,
+                          label: activeEntry!.license == null ? '无协议引用' : activeEntry!.license!,
                         ),
                         _MetaBadge(
                           icon: Icons.folder_zip_outlined,
@@ -1199,7 +1209,7 @@ class _NodeThemeOverviewCard extends StatelessWidget {
                         style: SettingsControlStyles.sectionTextButton(),
                         onPressed: busy ? null : onImport,
                         icon: const Icon(Icons.add_box_outlined, size: 16),
-                        label: const Text('导入 .optheme'),
+                        label: const Text('导入 .toolpkg'),
                       ),
                       FilledButton.tonalIcon(
                         style: SettingsControlStyles.sectionTextButton(),
@@ -1250,7 +1260,7 @@ class _NodeThemeOverviewCard extends StatelessWidget {
                 onPressed: busy ? null : onImport,
                 icon: const Icon(Icons.add_box_outlined, size: 15),
                 label: const Text(
-                  '导入 .optheme',
+                  '导入 .toolpkg',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -1419,7 +1429,7 @@ class _OperationStatusBanner extends StatelessWidget {
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  busyMessage ?? '正在处理主题包操作…',
+                  busyMessage ?? '正在处理ToolPkg操作…',
                   style: textTheme.bodyMedium?.copyWith(
                     fontWeight: FontWeight.w600,
                     color: colorScheme.onSurface,
@@ -1751,7 +1761,7 @@ class _ThemeLibraryToolbar extends StatelessWidget {
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        'Space 主题库',
+                        'ToolPkg 模板列表',
                         style: SettingsControlStyles.sectionTitleTextStyle(
                           context,
                         ),
@@ -1791,7 +1801,7 @@ class _ThemeLibraryToolbar extends StatelessWidget {
                       color: colorScheme.primary,
                     ),
                     Text(
-                      'Space 主题库',
+                      'ToolPkg 模板列表',
                       style: SettingsControlStyles.sectionTitleTextStyle(
                         context,
                       ),
@@ -1819,8 +1829,8 @@ class _ThemeLibraryToolbar extends StatelessWidget {
   }
 }
 
-class _ThemePackageCard extends StatelessWidget {
-  const _ThemePackageCard({
+class _ThemeTemplateCard extends StatelessWidget {
+  const _ThemeTemplateCard({
     super.key,
     required this.library,
     required this.item,
@@ -1967,7 +1977,7 @@ class _ThemePackageCard extends StatelessWidget {
                         ),
                         _MetaBadge(
                           icon: Icons.balance_rounded,
-                          label: entry.license,
+                          label: entry.license == null ? '无协议引用' : entry.license!,
                         ),
                         _MetaBadge(
                           icon: Icons.folder_zip_outlined,
@@ -2052,7 +2062,7 @@ class _ThemePackageCard extends StatelessWidget {
                       const SizedBox(width: 2),
                       IconButton(
                         visualDensity: VisualDensity.compact,
-                        tooltip: '删除主题包',
+                        tooltip: '删除ToolPkg',
                         onPressed: busy ? null : onDelete,
                         icon: Icon(
                           Icons.delete_outline_rounded,
@@ -2146,7 +2156,7 @@ class _ThemePackageCard extends StatelessWidget {
                             ),
                             _MetaBadge(
                               icon: Icons.balance_rounded,
-                              label: entry.license,
+                              label: entry.license == null ? '无协议引用' : entry.license!,
                             ),
                             _MetaBadge(
                               icon: Icons.folder_zip_outlined,
@@ -2157,10 +2167,6 @@ class _ThemePackageCard extends StatelessWidget {
                               label: _summarizeValidatedFiles(
                                 entry.validation.files,
                               ),
-                            ),
-                            _MetaBadge(
-                              icon: Icons.devices_outlined,
-                              label: _formatPlatforms(entry.platforms),
                             ),
                           ],
                         ),
@@ -2274,8 +2280,8 @@ class _ThemePackageCard extends StatelessWidget {
       child: SelectableText(
         item.message ??
             (waiting
-                ? '正在等待 Space 同步完整主题包字节，同步完成后可预览与应用。'
-                : '该主题包条目校验失败，已禁止预览与应用，可将其从主题库删除。'),
+                ? '正在等待 Space 同步完整ToolPkg字节，同步完成后可预览与应用。'
+                : '该ToolPkg条目校验失败，已禁止预览与应用，可将其从主题库删除。'),
         style: textTheme.bodySmall?.copyWith(
           color: waiting
               ? colorScheme.onTertiaryContainer
@@ -2366,7 +2372,7 @@ class _EmptyThemeLibraryCard extends StatelessWidget {
             ),
             const SizedBox(height: 14),
             Text(
-              'Space 主题库暂无主题包',
+              'ToolPkg 模板列表暂无ToolPkg',
               style: textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w800,
               ),
@@ -2375,8 +2381,8 @@ class _EmptyThemeLibraryCard extends StatelessWidget {
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 480),
               child: Text(
-                '您可以导入由 Operit Theme Studio 导出的 .optheme 主题包。'
-                '每个主题包均经过 L0–L4 结构、哈希与媒体资产严格校验，支持独立沙箱预览与按节点启用。',
+                '您可以导入由 Operit Theme Studio 导出的 .toolpkg ToolPkg。'
+                '每个ToolPkg均经过 L0–L4 结构、哈希与媒体资产严格校验，支持独立沙箱预览与按节点启用。',
                 textAlign: TextAlign.center,
                 style: textTheme.bodySmall?.copyWith(
                   color: colorScheme.onSurfaceVariant,
@@ -2387,7 +2393,7 @@ class _EmptyThemeLibraryCard extends StatelessWidget {
             FilledButton.icon(
               onPressed: busy ? null : onImport,
               icon: const Icon(Icons.add_box_outlined, size: 18),
-              label: const Text('导入第一个 .optheme 主题包'),
+              label: const Text('导入第一个 .toolpkg ToolPkg'),
             ),
           ],
         ),
@@ -2408,7 +2414,7 @@ class _ThemeImportConfirmDialog extends StatelessWidget {
     final validation = input.validation;
 
     return OperitDialogScaffold(
-      title: '导入主题包预检通过',
+      title: '导入ToolPkg预检通过',
       icon: const Icon(Icons.verified_outlined),
       maxWidth: 520,
       showCloseButton: true,
@@ -2466,7 +2472,7 @@ class _ThemeImportConfirmDialog extends StatelessWidget {
                 ),
               ),
               child: Text(
-                '• 选择「仅导入到库」：只将主题包存入 Space 主题库，不改变本节点当前主题。\n'
+                '• 选择「仅导入到库」：只将ToolPkg存入 ToolPkg 模板列表，不改变本节点当前主题。\n'
                 '• 选择「导入并立即应用」：入库后立即将该主题应用到当前节点。',
                 style: textTheme.bodySmall?.copyWith(
                   color: colorScheme.onSurfaceVariant,
@@ -2489,7 +2495,7 @@ class _ThemeApplyConfirmDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return OperitDialogScaffold(
-      title: '应用主题包到本节点',
+      title: '应用ToolPkg到本节点',
       icon: const Icon(Icons.check_circle_outline_rounded),
       maxWidth: 500,
       showCloseButton: true,
@@ -2507,7 +2513,8 @@ class _ThemeApplyConfirmDialog extends StatelessWidget {
       child: _DialogKeyValueCard(
         rows: <(String, String)>[
           ('主题名称', '${entry.displayName} v${entry.version}'),
-          ('主题包 ID', entry.themeId),
+          ('ToolPkg ID', entry.packageId),
+          ('模板 ID', entry.templateId),
           ('创作者 / 协议', '${entry.authorName} · ${entry.license}'),
           (
             '包体积',
@@ -2536,7 +2543,7 @@ class _ThemeDeleteConfirmDialog extends StatelessWidget {
     final entry = item.entry;
 
     return OperitDialogScaffold(
-      title: '从 Space 主题库删除主题包',
+      title: '卸载模板所属的 ToolPkg',
       icon: Icon(Icons.delete_outline_rounded, color: colorScheme.error),
       maxWidth: 500,
       showCloseButton: true,
@@ -2580,7 +2587,7 @@ class _ThemeDeleteConfirmDialog extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      '该主题包当前正在本节点启用中。确认删除将先自动把本节点切回「个人自定义外观」，再从 Space 主题库彻底移除此主题包。',
+                      '该ToolPkg当前正在本节点启用中。确认删除将先自动把本节点切回「个人自定义外观」，再从 ToolPkg 模板列表彻底移除此ToolPkg。',
                       style: textTheme.bodySmall?.copyWith(
                         color: colorScheme.onErrorContainer,
                         fontWeight: FontWeight.w600,
@@ -2592,11 +2599,13 @@ class _ThemeDeleteConfirmDialog extends StatelessWidget {
             ),
             const SizedBox(height: 12),
           ],
+          const Text('卸载会同时移除这个 ToolPkg 提供的所有主题模板、脚本和其他能力。'),
+          const SizedBox(height: 12),
           _DialogKeyValueCard(
             rows: <(String, String)>[
               if (entry != null)
                 ('主题名称', '${entry.displayName} v${entry.version}'),
-              ('主题包 ID', item.themeId),
+              ('模板身份', item.themeId),
               if (entry != null)
                 ('创作者 / 协议', '${entry.authorName} · ${entry.license}'),
               ('SHA-256', item.archiveSha256),
@@ -2608,8 +2617,8 @@ class _ThemeDeleteConfirmDialog extends StatelessWidget {
   }
 }
 
-class _ThemePackageDetailsDialog extends StatelessWidget {
-  const _ThemePackageDetailsDialog({
+class _ThemeTemplateDetailsDialog extends StatelessWidget {
+  const _ThemeTemplateDetailsDialog({
     required this.item,
     required this.onCopy,
   });
@@ -2653,13 +2662,12 @@ class _ThemePackageDetailsDialog extends StatelessWidget {
           children: <Widget>[
             _DialogKeyValueCard(
               rows: <(String, String)>[
-                ('主题包 ID', item.themeId),
+                ('模板身份', item.themeId),
                 if (entry != null) ...<(String, String)>[
                   ('显示名称', entry.displayName),
                   ('版本号', entry.version),
                   ('创作者', entry.authorName),
-                  ('开源许可证', entry.license),
-                  ('支持平台', _formatPlatforms(entry.platforms)),
+                  ('ToolPkg 协议引用', entry.license == null ? '无协议引用' : entry.license!),
                   (
                     '归档体积 / 展开体积',
                     '${_formatBytes(entry.archiveBytes)} / ${_formatBytes(entry.expandedBytes)}',
@@ -2833,8 +2841,8 @@ class ThemeLibraryRecoveryScreen extends StatelessWidget {
                         const SizedBox(width: 10),
                         Expanded(
                           child: SelectableText(
-                            '本节点当前选择的主题包无法加载，应用内容已进入安全恢复模式（不会自动篡改您的主题选择）。\n'
-                            '您可以重新校验、导入修复后的主题包，或显式切回「本节点个人外观」。\n'
+                            '本节点当前选择的ToolPkg无法加载，应用内容已进入安全恢复模式（不会自动篡改您的主题选择）。\n'
+                            '您可以重新校验、导入修复后的ToolPkg，或显式切回「本节点个人外观」。\n'
                             '原因：${controller.themeLoadError}',
                             style: TextStyle(
                               color: colorScheme.onErrorContainer,
@@ -3231,11 +3239,7 @@ String _summarizeValidatedFiles(List<core_proxy.ThemeFileValidation> files) {
   return parts.join(' · ');
 }
 
-String _formatPlatforms(List<String> platforms) {
-  if (platforms.isEmpty) return '全平台';
-  if (platforms.length >= 6) return '全平台 (${platforms.length})';
-  return platforms.join(' / ');
-}
+
 
 IconData _iconForFilePath(String path) {
   if (path.endsWith('.json')) return Icons.data_object_rounded;

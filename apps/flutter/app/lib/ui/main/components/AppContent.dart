@@ -4,7 +4,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:operit_theme/operit_theme.dart';
+import 'package:operit_ui/operit_ui.dart';
 
 import '../../common/components/RetainedPage.dart';
 import '../MainLayoutController.dart';

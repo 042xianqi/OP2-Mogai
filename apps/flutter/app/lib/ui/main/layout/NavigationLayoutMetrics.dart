@@ -1,7 +1,7 @@
 // ignore_for_file: file_names
 
 import 'package:flutter/widgets.dart';
-import 'package:operit_theme/operit_theme.dart';
+import 'package:operit_ui/operit_ui.dart';
 
 const double navigationTabletBreakpoint = themeTabletBreakpoint;
 

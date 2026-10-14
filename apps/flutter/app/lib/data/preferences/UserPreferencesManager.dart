@@ -4,12 +4,12 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
-import 'package:operit_theme/operit_theme.dart';
+import 'package:operit_ui/operit_ui.dart';
 
 import '../../core/bridge/ProxyCoreRuntimeBridge.dart';
 import '../../core/proxy/generated/CoreProxyClients.g.dart';
 
-export 'package:operit_theme/operit_theme.dart' show ThemePreferenceSnapshot;
+export 'package:operit_ui/operit_ui.dart' show ThemePreferenceSnapshot;
 
 class LongPastedTextInputSettings {
   /// Creates the global settings for converting long pasted text to attachments.

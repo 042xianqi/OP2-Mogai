@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:operit2/data/preferences/UserPreferencesManager.dart';
-import 'package:operit_theme/operit_theme.dart' as shared_theme;
+import 'package:operit_ui/operit_ui.dart' as shared_theme;
 
 /// Verifies that a theme snapshot remains identical after window transport.
 void main() {

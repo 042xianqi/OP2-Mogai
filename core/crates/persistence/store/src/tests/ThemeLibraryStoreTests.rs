@@ -60,13 +60,14 @@ fn setup() -> (Arc<MemoryStorage>, ThemeLibraryStore) {
     (storage, store)
 }
 
+/// Stores a native JSON selection whose package has not reached this node.
 fn selectMissing(storage: &Arc<MemoryStorage>) -> ThemeSelection {
     let selection = ThemeSelection {
-        schema_version: 1, theme_id: "com.example.missing".into(),
+        schema_version: 1, theme_id: "com.example.missing:default".into(),
         version: "1.0.0".into(), archive_sha256: "a".repeat(64),
     };
     selectionStore(storage.clone()).edit(|preferences|
-        preferences.set(&stringPreferencesKey(THEME_SELECTION_KEY), serde_json::to_string(&selection).unwrap())).unwrap();
+        preferences.set(&stringPreferencesKey(THEME_SELECTION_KEY), serde_json::to_value(&selection).unwrap())).unwrap();
     selection
 }
 
@@ -80,6 +81,37 @@ fn nodeAppearanceDoesNotReadOrMigrateRolePreferences() {
     assert_eq!(appearance["themeMode"], "system");
     assert_eq!(storage.readBytes("runtime/config/preferences/user_preferences.preferences.json").unwrap(), legacy);
     assert!(storage.files.lock().unwrap().keys().all(|path| !path.contains("migration")));
+}
+
+/// Verifies native JSON persistence while the public appearance transport remains JSON text.
+#[test]
+fn themeStatePersistsNativeJsonObjects() {
+    let (storage, store) = setup();
+    let selected = selectMissing(&storage);
+    store.updateAppearance(BTreeMap::from([("fontScale".into(), "1.2".into())])).unwrap();
+    let persisted: serde_json::Value = serde_json::from_slice(
+        &storage.readBytes(RUNTIME_THEME_NODE_SELECTION_PATH).unwrap(),
+    ).unwrap();
+    assert_eq!(persisted[THEME_SELECTION_KEY], serde_json::to_value(&selected).unwrap());
+    assert!(persisted[PRIVATE_APPEARANCE_KEY].is_object());
+    assert_eq!(persisted[PRIVATE_APPEARANCE_KEY]["fontScale"], 1.2);
+    let state = store.nodeState().unwrap();
+    assert_eq!(state.selection, Some(selected));
+    let appearance: serde_json::Value = serde_json::from_str(&state.private_appearance_json.unwrap()).unwrap();
+    assert_eq!(appearance, persisted[PRIVATE_APPEARANCE_KEY]);
+}
+
+/// Rejects malformed stored appearance without changing the committed state.
+#[test]
+fn invalidStoredAppearanceIsRejectedWithoutMutation() {
+    let (storage, store) = setup();
+    selectionStore(storage.clone()).edit(|preferences| {
+        preferences.set(&stringPreferencesKey(PRIVATE_APPEARANCE_KEY), true);
+    }).unwrap();
+    let before = storage.readBytes(RUNTIME_THEME_NODE_SELECTION_PATH).unwrap();
+    assert!(store.nodeState().is_err());
+    assert!(store.initializeAppearance(r#"{"themeMode":"light"}"#).is_err());
+    assert_eq!(storage.readBytes(RUNTIME_THEME_NODE_SELECTION_PATH).unwrap(), before);
 }
 
 #[test]
@@ -121,49 +153,69 @@ fn packageVisualsAreImmutableWhileNodeSettingsRemainEditable() {
     assert_eq!(appearance["bubbleShowAvatar"], false);
 }
 
+/// Keeps an explicitly selected missing ToolPkg visible in node state without fabricating library entries.
 #[test]
-fn invalidLibraryItemDoesNotHideAnIndependentlyWaitingItem() {
-    let (storage, store) = setup();
-    storage.writeBytes(&format!("{}/com.example.bad/{}/entry.json", RUNTIME_THEME_LIBRARY_DIR_PATH, "b".repeat(64)), b"{}").unwrap();
-    storage.writeBytes(&format!("{}/com.example.waiting/{}/pending.json", RUNTIME_THEME_LIBRARY_DIR_PATH, "c".repeat(64)), b"{}").unwrap();
-    let items = store.listLibrary().unwrap();
-    assert_eq!(items.len(), 2);
-    assert_eq!(items[0].availability, ThemeLibraryAvailability::Invalid);
-    assert_eq!(items[1].availability, ThemeLibraryAvailability::WaitingForSync);
-    assert!(items[0].message.is_some());
-}
-
-#[test]
-fn unfinishedTransactionIsNotReadableAsAnAppliedPackage() {
-    let (storage, store) = setup();
-    let digest = "d".repeat(64);
-    storage.writeBytes(&format!("{}/com.example.pending/{digest}/pending.json", RUNTIME_THEME_LIBRARY_DIR_PATH), b"{}").unwrap();
-    assert!(store.theme("com.example.pending", &digest).unwrap_err().contains("transaction is unfinished"));
-    assert_eq!(store.listLibrary().unwrap()[0].availability, ThemeLibraryAvailability::WaitingForSync);
-}
-
-#[test]
-fn deleteThemeRemovesUnselectedEntryAndRejectsSelectedEntry() {
+fn missingToolPkgDoesNotCreateAnIndependentThemeArchiveStore() {
     let (storage, store) = setup();
     let selected = selectMissing(&storage);
-    storage.writeBytes(
-        &format!("{}/{}/{}/entry.json", RUNTIME_THEME_LIBRARY_DIR_PATH, selected.theme_id, selected.archive_sha256),
-        b"{}",
-    ).unwrap();
-    assert!(store.deleteTheme(&selected.theme_id, &selected.archive_sha256).is_err());
+    assert!(store.listLibrary().unwrap().is_empty());
+    assert!(store.theme(&selected.theme_id, &selected.archive_sha256).is_err());
+    assert_eq!(store.nodeState().unwrap().selection, Some(selected));
+    assert!(storage.files.lock().unwrap().keys().all(|path| !path.starts_with("runtime/themes/")));
+}
 
-    let other_digest = "e".repeat(64);
-    storage.writeBytes(
-        &format!("{}/com.example.removable/{other_digest}/entry.json", RUNTIME_THEME_LIBRARY_DIR_PATH),
-        b"{}",
-    ).unwrap();
-    storage.writeBytes(
-        &format!("{}/com.example.removable/{other_digest}/package.optheme", RUNTIME_THEME_LIBRARY_DIR_PATH),
-        b"zip",
-    ).unwrap();
-    assert_eq!(store.listLibrary().unwrap().len(), 2);
-    store.deleteTheme("com.example.removable", &other_digest).unwrap();
-    let remaining = store.listLibrary().unwrap();
-    assert_eq!(remaining.len(), 1);
-    assert_eq!(remaining[0].theme_id, selected.theme_id);
+/// Rejects removal of the selected ToolPkg before any shared catalog mutation.
+#[test]
+fn selectedToolPkgCannotBeRemovedThroughTheThemePage() {
+    let (storage, store) = setup();
+    let selected = selectMissing(&storage);
+    assert!(store.ensureThemeRemovable(&selected.theme_id, &selected.archive_sha256).is_err());
+    assert_eq!(store.nodeState().unwrap().selection, Some(selected));
+}
+
+/// Builds a real declarative theme ToolPkg fixture without platform or application-version metadata.
+fn toolpkgWithTheme(id: &str) -> Vec<u8> {
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(1280, 800, image::Rgba([40, 60, 80, 255]))
+        .write_to(&mut png, image::ImageFormat::Png).unwrap();
+    operit_plugin_theme::export_toolpkg_from_theme(&operit_plugin_theme::ThemeExportDraft {
+        toolpkg_id: id.into(), version: "custom-version".into(), display_name: "Example".into(),
+        author_name: "Author".into(), theme_json: b"{}".to_vec(), preview_png: png.into_inner(),
+        agreement_text: "Custom usage agreement".into(), description: None, assets: Vec::new(),
+    }).unwrap()
+}
+
+/// Stores one archive in the ordinary package extension catalog for the given owner scope.
+fn registerToolPkg(storage: &Arc<MemoryStorage>, id: &str, bytes: &[u8]) {
+    let store = ExtensionStore::new(storage.clone());
+    storage.writeBytes(&format!("{}/{id}.toolpkg", ExtensionStore::root("package", "device").unwrap()), bytes).unwrap();
+    store.registerDevice("package", id, &format!("{id}.toolpkg"), serde_json::json!({
+        "builtin": false, "members": [id], "enabledNames": [], "disabledNames": [],
+        "subpackageStates": {}, "order": 0, "installationId": "a".repeat(32),
+    })).unwrap();
+}
+
+/// Resolves themes from installed ToolPkgs and follows package scope moves and package removal.
+#[test]
+fn themes_follow_shared_toolpkg_installation_scope_and_uninstall() {
+    let (storage, store) = setup();
+    let id = "dev.operit.installed";
+    let bytes = toolpkgWithTheme(id);
+    let digest = sha256_hex(&bytes);
+    registerToolPkg(&storage, id, &bytes);
+    let before = store.theme(&format!("{id}:default"), &digest).unwrap();
+    assert_eq!(store.packageBytes(&before).unwrap(), bytes);
+    assert!(before.package_path.starts_with("runtime/extensions/device/packages/"));
+    let extensions = ExtensionStore::new(storage.clone());
+    extensions.moveScope("package", id, "space").unwrap();
+    let moved = store.theme(&format!("{id}:default"), &digest).unwrap();
+    assert!(moved.package_path.starts_with("runtime/extensions/space/packages/"));
+    assert_eq!(store.packageBytes(&moved).unwrap(), bytes);
+    store.applyValidated(&operit_plugin_theme::validate_toolpkg_theme_templates(&bytes).map(|mut templates| templates.remove(0)).unwrap()).unwrap();
+    assert!(store.ensureThemeRemovable(&format!("{id}:default"), &digest).is_err());
+    store.selectPersonalAppearance().unwrap();
+    store.ensureThemeRemovable(&format!("{id}:default"), &digest).unwrap();
+    extensions.delete("package", id).unwrap();
+    assert!(store.listLibrary().unwrap().is_empty());
+    assert!(storage.files.lock().unwrap().keys().all(|path| !path.starts_with("runtime/themes/")));
 }

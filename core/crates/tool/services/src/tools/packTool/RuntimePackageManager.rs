@@ -3841,6 +3841,35 @@ impl RuntimePackageManager {
         })
     }
 
+    /// Imports ordinary ToolPkg bytes through the shared package loader and extension catalog.
+    #[allow(non_snake_case)]
+    pub fn importToolPkgBytes(&mut self, bytes: Vec<u8>) -> Result<bool, String> {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).map_err(|error| error.to_string())?;
+        let index = ToolPkgArchiveParser::buildZipEntryIndex(&mut archive);
+        let preview = ToolPkgArchiveParser::readToolPkgManifestPreview(&mut archive, &index)
+            .ok_or("ToolPkg manifest is missing or invalid")?;
+        let id = preview.manifest.toolpkgId;
+        if id.is_empty() || id.split('.').any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))) {
+            return Err("ToolPkg id is not a safe package identifier".to_string());
+        }
+        let records = ExtensionStore::default().records("package")?;
+        if let Some(record) = records.into_iter().find(|record| record.id == id) {
+            let source = format!("{}/{}", ExtensionStore::root("package", &record.scope)?, record.sourceName);
+            let installed = operit_store::RuntimeStorageHost::defaultRuntimeStorageHost().readBytes(&source)
+                .map_err(|error| error.to_string())?;
+            if installed == bytes { return Ok(true); }
+            return Err(format!("ToolPkg '{id}' is already installed; update it through package management ({source})"));
+        }
+        let directory = self.storePaths.toolpkg_cache_dir().join(format!(".toolpkg-import-{}", sha256Hex(&bytes)));
+        self.fileSystemHost.makeDirectory(&hostPath(&directory), true).map_err(|error| error.to_string())?;
+        let path = directory.join(format!("{id}.toolpkg"));
+        self.fileSystemHost.writeFileBytes(&hostPath(&path), &bytes).map_err(|error| error.to_string())?;
+        let imported = self.addPackageFileFromExternalStorageResult(&hostPath(&path));
+        self.fileSystemHost.deleteFile(&hostPath(&directory), true).map_err(|error| error.to_string())?;
+        imported?;
+        Ok(false)
+    }
+
     /// Imports one marketplace artifact from bytes after validating its declared digest.
     #[allow(non_snake_case)]
     pub fn addMarketArtifactBytes(
@@ -4068,24 +4097,8 @@ impl RuntimePackageManager {
                     "market_toolpkg",
                 ),
             };
-        match ToolPkgProtection::toolPkgArchiveContainsProtectedEntries(&rawArchive) {
-            Ok(true) => {}
-            Ok(false) => {
-                return self.recordAndReturnPackageError(
-                    filePath,
-                    "market_import_failed",
-                    "Market ToolPkg archive does not contain protected entries",
-                    "market_toolpkg",
-                )
-            }
-            Err(error) => {
-                return self.recordAndReturnPackageError(
-                    filePath,
-                    "market_import_failed",
-                    &format!("Error installing market ToolPkg: {error}"),
-                    "market_toolpkg",
-                )
-            }
+        if let Err(error) = ToolPkgProtection::validateMarketToolPkgArchive(&rawArchive) {
+            return self.recordAndReturnPackageError(filePath, "market_import_failed", &error, "market_toolpkg");
         }
         let installationId = match self.marketToolPkgInstallationId() {
             Ok(value) => value,

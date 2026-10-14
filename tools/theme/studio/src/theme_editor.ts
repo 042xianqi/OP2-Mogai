@@ -1,5 +1,5 @@
-import themeSchema from "../../../../core/crates/theme/contract/schema/theme-v1.schema.json";
-import fixture from "../../../../apps/flutter/packages/operit_theme/assets/fixtures/theme-v1.json";
+import themeSchema from "../../../../core/crates/plugin/theme/schema/theme-v1.schema.json";
+import fixture from "../../../../apps/flutter/packages/operit_ui/assets/fixtures/theme-v1.json";
 import { closeStudioColorPopover, openStudioColorPopover } from "./color_popover";
 import {
   PALETTE_SEED_PRESETS,
@@ -30,7 +30,7 @@ export const THEME_INSPECTOR_TARGETS: Readonly<Record<string, ThemeInspectorTarg
     title: "画布背景",
     badge: "Canvas Backdrop",
     description: "控制 Flutter 根画布的背景贴图、契合方式、不透明度与高斯模糊。",
-    sections: [{ label: "背景图层参数", path: ["background"], open: true }],
+    sections: [{ label: "图片", path: ["background"], open: true }],
   },
   "navigation.sidebar": {
     id: "navigation.sidebar",
@@ -38,7 +38,7 @@ export const THEME_INSPECTOR_TARGETS: Readonly<Record<string, ThemeInspectorTarg
     badge: "Navigation Rail",
     description: "侧边会话树与底部工具栏的 Material 表面色彩及毛玻璃穿透状态。",
     sections: [
-      { label: "表面穿透与玻璃化", path: ["surfaces"], open: true },
+      { label: "透明表面", path: ["surfaces"], open: true },
     ],
   },
   "chat.topBar": {
@@ -47,7 +47,7 @@ export const THEME_INSPECTOR_TARGETS: Readonly<Record<string, ThemeInspectorTarg
     badge: "Top App Bar",
     description: "会话标题栏与右侧工具区的表面透明度及主题色阶。",
     sections: [
-      { label: "表面穿透与玻璃化", path: ["surfaces"], open: true },
+      { label: "透明表面", path: ["surfaces"], open: true },
     ],
   },
   "chat.userMessage": {
@@ -56,9 +56,9 @@ export const THEME_INSPECTOR_TARGETS: Readonly<Record<string, ThemeInspectorTarg
     badge: "User Message · Right",
     description: "定制右侧用户消息的气泡填充色、文字色、圆角、边距、PNG/SVG 九宫格贴图与字体。",
     sections: [
-      { label: "用户气泡表面与九宫格贴图", path: ["chat", "user"], open: true },
+      { label: "气泡", path: ["chat", "user"], open: true },
       {
-        label: "对话范式、头像与阅读宽度",
+        label: "布局",
         path: ["chat"],
         paths: [
           ["chat", "style"],
@@ -70,7 +70,7 @@ export const THEME_INSPECTOR_TARGETS: Readonly<Record<string, ThemeInspectorTarg
         open: true,
       },
       {
-        label: "消息与全局字体绑定",
+        label: "字体",
         path: ["typography"],
         paths: [
           ["typography", "user"],
@@ -86,9 +86,9 @@ export const THEME_INSPECTOR_TARGETS: Readonly<Record<string, ThemeInspectorTarg
     badge: "Assistant Message · Left",
     description: "定制左侧 AI 回复消息的气泡填充色、文字色、圆角、边距、PNG/SVG 九宫格贴图与字体。",
     sections: [
-      { label: "AI 气泡表面与九宫格贴图", path: ["chat", "ai"], open: true },
+      { label: "气泡", path: ["chat", "ai"], open: true },
       {
-        label: "对话范式、头像与阅读宽度",
+        label: "布局",
         path: ["chat"],
         paths: [
           ["chat", "style"],
@@ -100,7 +100,7 @@ export const THEME_INSPECTOR_TARGETS: Readonly<Record<string, ThemeInspectorTarg
         open: true,
       },
       {
-        label: "消息与全局字体绑定",
+        label: "字体",
         path: ["typography"],
         paths: [
           ["typography", "ai"],
@@ -116,24 +116,24 @@ export const THEME_INSPECTOR_TARGETS: Readonly<Record<string, ThemeInspectorTarg
     badge: "Chat Composer",
     description: "底部输入容器的形态、九宫格贴图、右侧 5 个动作按钮贴图与尺寸调节。",
     sections: [
-      { label: "输入框造型、贴图与右侧动作图标", path: ["input"], open: true },
-      { label: "表面穿透与玻璃化", path: ["surfaces"], open: true },
-      { label: "全局基准字体", path: ["typography", "global"], open: false },
+      { label: "外观", path: ["input"], open: true },
+      { label: "透明表面", path: ["surfaces"], open: true },
+      { label: "全局字体", path: ["typography", "global"], open: false },
     ],
   },
   typography: {
     id: "typography",
-    title: "字体与排版体系",
+    title: "字体",
     badge: "Typography",
-    description: "配置全局基准字体及用户/AI 消息专属 TTF 字体映射。",
-    sections: [{ label: "字体绑定参数", path: ["typography"], open: true }],
+    description: "配置全局字体及用户/AI 消息专属 TTF 字体映射。",
+    sections: [{ label: "字体", path: ["typography"], open: true }],
   },
   palette: {
     id: "palette",
-    title: "Material 3 双模调色板",
+    title: "调色板",
     badge: "M3 Color System",
     description: "亮色与暗色各 46 个语义色彩角色，支持从主色或背景图一键生成。",
-    sections: [{ label: "双模语义调色板", path: ["palette"], open: true }],
+    sections: [{ label: "颜色", path: ["palette"], open: true }],
   },
 };
 
@@ -234,9 +234,9 @@ const INPUT_ACTION_KEY_SET = new Set<string>(
 );
 
 const FIELD_META: Readonly<Record<string, FieldMeta>> = {
-  "background.asset": { label: "背景图像资源", hint: "支持 PNG / JPEG / 静态 SVG，留空则使用纯色表面" },
+  "background.asset": { label: "背景图片", hint: "支持 PNG / JPEG / 静态 SVG，留空则使用纯色表面" },
   "background.fit": {
-    label: "画面填充方式",
+    label: "填充",
     enumLabels: {
       cover: "裁切铺满 Cover",
       contain: "完整包含 Contain",
@@ -248,7 +248,7 @@ const FIELD_META: Readonly<Record<string, FieldMeta>> = {
     },
   },
   "background.alignment": {
-    label: "对齐锚点",
+    label: "对齐",
     enumLabels: {
       center: "正中 Center",
       topLeft: "左上 TopLeft",
@@ -261,55 +261,55 @@ const FIELD_META: Readonly<Record<string, FieldMeta>> = {
       bottomRight: "右下 BottomRight",
     },
   },
-  "background.opacity": { label: "背景图不透明度", hint: "0 为完全透明，1 为原始不透明度" },
-  "background.blur": { label: "背景高斯模糊", hint: "对背景图层施加实时模糊滤镜" },
-  "background.blur.enabled": { label: "启用高斯模糊" },
+  "background.opacity": { label: "不透明度", hint: "0 为完全透明，1 为原始不透明度" },
+  "background.blur": { label: "模糊", hint: "对背景图层施加实时模糊滤镜" },
+  "background.blur.enabled": { label: "启用模糊" },
   "background.blur.radius": { label: "模糊半径", unit: "px" },
-  "surfaces.transparent": { label: "全局透明玻璃表面", hint: "开启后顶栏、侧栏与输入框透出底层画布背景" },
+  "surfaces.transparent": { label: "全局透明表面", hint: "开启后顶栏、侧栏与输入框透出底层画布背景" },
   "chat.style": {
-    label: "对话呈现范式",
+    label: "布局",
     enumLabels: {
       bubble: "经典气泡 Bubble",
       cursor: "极简流式 Cursor",
     },
   },
-  "chat.wideLayout": { label: "宽屏阅读布局", hint: "扩展对话流最大内容宽度（700px → 1040px）" },
-  "chat.showAvatar": { label: "显示角色头像", hint: "在用户与 AI 消息旁展示头像徽章" },
+  "chat.wideLayout": { label: "宽屏", hint: "扩展对话流最大内容宽度（700px → 1040px）" },
+  "chat.showAvatar": { label: "头像", hint: "在用户与 AI 消息旁展示头像徽章" },
   "chat.avatarShape": {
-    label: "头像外框形态",
+    label: "头像形状",
     enumLabels: {
       circle: "正圆 Circle",
       square: "圆角方形 Square",
     },
   },
-  "chat.avatarCornerRadius": { label: "方形头像圆角", unit: "px" },
+  "chat.avatarCornerRadius": { label: "头像圆角", unit: "px" },
   "chat.cursorUserColor": { label: "Cursor 模式用户消息底色", hint: "仅在极简流式 Cursor 模式下覆盖用户提问卡片底色" },
   "chat.user": { label: "用户消息气泡 (右侧)", hint: "定制用户发送消息的色彩、贴图与内边距" },
   "chat.ai": { label: "AI 消息气泡 (左侧)", hint: "定制助手回复消息的色彩、贴图与内边距" },
-  "chat.user.color": { label: "用户气泡填充色" },
-  "chat.user.textColor": { label: "用户气泡文字色" },
-  "chat.user.roundedCorners": { label: "启用气泡圆角 (16px)" },
-  "chat.user.padding": { label: "用户气泡水平内边距" },
+  "chat.user.color": { label: "背景" },
+  "chat.user.textColor": { label: "文字" },
+  "chat.user.roundedCorners": { label: "圆角" },
+  "chat.user.padding": { label: "内边距" },
   "chat.user.padding.left": { label: "左内边距", unit: "px" },
   "chat.user.padding.right": { label: "右内边距", unit: "px" },
   "chat.user.image": { label: "用户气泡背景贴图 / 九宫格", hint: "支持 PNG/JPEG/SVG 贴图与九宫格可拉伸区域定义" },
-  "chat.ai.color": { label: "AI 气泡填充色" },
-  "chat.ai.textColor": { label: "AI 气泡文字色" },
-  "chat.ai.roundedCorners": { label: "启用气泡圆角 (16px)" },
-  "chat.ai.padding": { label: "AI 气泡水平内边距" },
+  "chat.ai.color": { label: "背景" },
+  "chat.ai.textColor": { label: "文字" },
+  "chat.ai.roundedCorners": { label: "圆角" },
+  "chat.ai.padding": { label: "内边距" },
   "chat.ai.padding.left": { label: "左内边距", unit: "px" },
   "chat.ai.padding.right": { label: "右内边距", unit: "px" },
   "chat.ai.image": { label: "AI 气泡背景贴图 / 九宫格", hint: "支持 PNG/JPEG/SVG 贴图与九宫格可拉伸区域定义" },
   "input.style": {
-    label: "底部输入框造型",
+    label: "形状",
     enumLabels: {
       agent: "Agent 胶囊工作台",
       classic: "经典通栏输入框",
     },
   },
-  "input.floating": { label: "悬浮阴影抬升", hint: "为输入框赋予独立悬浮层级与底部留白" },
-  "input.color": { label: "输入框背景填充色", hint: "覆盖底部输入容器底色（留空则随调色板自动派生）" },
-  "input.roundedCorners": { label: "启用输入框圆角 (22px)", hint: "像素风或直角边框贴图建议关闭此项以完整展示四角" },
+  "input.floating": { label: "悬浮", hint: "为输入框赋予独立悬浮层级与底部留白" },
+  "input.color": { label: "背景", hint: "覆盖底部输入容器底色（留空则随调色板自动派生）" },
+  "input.roundedCorners": { label: "圆角", hint: "像素风或直角边框贴图建议关闭此项以完整展示四角" },
   "input.image": { label: "输入框背景贴图 / 九宫格", hint: "支持 PNG/JPEG/SVG 无损贴图与九宫格可拉伸区域定义" },
   "input.settingsAsset": { label: "设置按钮素材 (⚙️)", hint: "替换输入框右侧「设置」按钮图标" },
   "input.settingsAssetSize": { label: "设置按钮素材尺寸", unit: "px" },
@@ -376,7 +376,7 @@ function isBorderToken(token: string): boolean {
 
 export const COMPONENT_DUAL_PRESETS: ReadonlyArray<ComponentDualPreset> = [
   {
-    label: "⚡ 纯白 / 纯黑高对比",
+    label: "黑白",
     applyRole: token => {
       if (token === "error") return { light: "#BA1A1AFF", dark: "#FFB4ABFF" };
       if (isOnAccentToken(token)) return { light: "#FFFFFFFF", dark: "#000000FF" };
@@ -388,7 +388,7 @@ export const COMPONENT_DUAL_PRESETS: ReadonlyArray<ComponentDualPreset> = [
     },
   },
   {
-    label: "⚡ 柔白 / 暗夜深灰",
+    label: "灰阶",
     applyRole: token => {
       if (token === "error") return { light: "#BA1A1AFF", dark: "#FFB4ABFF" };
       if (isOnAccentToken(token)) return { light: "#FFFFFFFF", dark: "#002E5AFF" };
@@ -400,7 +400,7 @@ export const COMPONENT_DUAL_PRESETS: ReadonlyArray<ComponentDualPreset> = [
     },
   },
   {
-    label: "⚡ 暖白羊皮纸 / 曜石黑",
+    label: "暖灰",
     applyRole: token => {
       if (token === "error") return { light: "#BA1A1AFF", dark: "#FFB4ABFF" };
       if (isOnAccentToken(token)) return { light: "#FFFDF9FF", dark: "#291805FF" };
@@ -412,7 +412,7 @@ export const COMPONENT_DUAL_PRESETS: ReadonlyArray<ComponentDualPreset> = [
     },
   },
   {
-    label: "⚡ 冰川浅蓝 / 深海夜色",
+    label: "蓝色",
     applyRole: token => {
       if (token === "error") return { light: "#BA1A1AFF", dark: "#FFB4ABFF" };
       if (isOnAccentToken(token)) return { light: "#FFFFFFFF", dark: "#042F2EFF" };
@@ -449,197 +449,192 @@ export const COMPONENT_COLOR_MAP: Readonly<
   >
 > = {
   "navigation.sidebar": {
-    title: "🧭 导航侧栏 · 明暗双套色彩声明",
-    subtitle: "独立控制左侧会话抽屉在「☀️ 亮色」与「🌙 暗色」下的文字、图标与选中背景（与输入框/正文完全解耦）",
+    title: "侧栏",
+    subtitle: "独立控制左侧会话抽屉在「☀️ 亮色」与「🌙 暗色」下的文字、图标与选中背景；表面配色角色同时用于其他组件",
     roles: [
       {
-        token: "onSecondaryFixed",
-        partLabel: "品牌主标题与分组标题文字",
+        token: "onSurface",
+        partLabel: "标题",
         usageHint: "左上角 Operit 标题、角色卡分组名称文字颜色",
       },
       {
-        token: "onSecondaryFixedVariant",
-        partLabel: "会话列表文字与常规图标",
+        token: "onSurfaceVariant",
+        partLabel: "文字与图标",
         usageHint: "未选中会话标题、搜索按钮、底部「包管理 / 设置」文字与图标颜色",
       },
       {
         token: "secondaryContainer",
-        partLabel: "当前选中会话行高亮背景",
+        partLabel: "选中背景",
         usageHint: "正在查看的会话胶囊（如 New Chat）的高亮衬底色",
       },
       {
         token: "onSecondaryContainer",
-        partLabel: "当前选中会话行文字与图标",
+        partLabel: "选中文字",
         usageHint: "选中会话行内的标题文字、拖拽手柄与更多图标颜色",
       },
       {
-        token: "surfaceContainerLow",
-        partLabel: "侧边栏整体底板背景",
-        usageHint: "侧边栏根容器底色（开启透明玻璃表面时按低透明度叠色）",
+        token: "surface",
+        partLabel: "背景",
+        usageHint: "侧边栏根容器底色（开启透明表面时按低透明度叠色）",
       },
       {
-        token: "secondaryFixed",
-        partLabel: "「+ 新建对话」与底部按钮底色",
+        token: "surfaceContainerLow",
+        partLabel: "按钮背景",
         usageHint: "顶部新建对话按钮栏、底部包管理/设置/亮暗切换按钮背景色",
       },
       {
-        token: "secondary",
-        partLabel: "会话激活竖条与强调色",
+        token: "primary",
+        partLabel: "强调色",
         usageHint: "选中会话左侧竖向指示条、顶部开关高亮强调色",
       },
       {
         token: "outlineVariant",
-        partLabel: "会话树引导线与按钮边框",
+        partLabel: "分隔线",
         usageHint: "分组下的竖向树状连接线、底部按钮细边框颜色",
       },
     ],
   },
   "chat.topBar": {
-    title: "📌 对话顶部栏 · 明暗双套色彩声明",
+    title: "顶栏",
     subtitle: "独立控制顶部会话标题栏在「☀️ 亮色」与「🌙 暗色」下的标题文字、折叠按钮与背景",
     roles: [
       {
-        token: "onTertiaryFixed",
-        partLabel: "顶栏主副标题文字与左右图标",
+        token: "onSurface",
+        partLabel: "标题与图标",
         usageHint: "会话标题（1 - New Chat）、左侧收起侧栏图标、右侧工作区图标颜色",
       },
       {
-        token: "surfaceBright",
-        partLabel: "顶栏背景底色",
+        token: "surface",
+        partLabel: "背景",
         usageHint: "未开启透明玻璃或无背景图时的顶部栏纯色背景",
       },
       {
-        token: "onTertiaryFixedVariant",
-        partLabel: "顶栏次要状态文字与辅助图标",
+        token: "onSurface",
+        partLabel: "辅助文字",
         usageHint: "顶栏辅助徽章与次级图标颜色",
-      },
-      {
-        token: "tertiaryFixedDim",
-        partLabel: "顶栏底部分割线与描边",
-        usageHint: "顶栏边界描边与细分割线颜色",
       },
     ],
   },
   "chat.userMessage": {
-    title: "💬 用户消息气泡 · 明暗双套色彩声明",
+    title: "用户消息",
     subtitle: "独立为「☀️ 亮色」与「🌙 暗色」声明右侧用户消息的文字色与背景色",
     roles: [
       {
         token: "onPrimaryContainer",
-        partLabel: "用户消息正文文字颜色",
+        partLabel: "文字",
         usageHint: "右侧用户气泡内的聊天文本颜色",
       },
       {
         token: "primaryContainer",
-        partLabel: "用户消息气泡默认背景色",
-        usageHint: "未使用九宫格贴图时的用户气泡填充色",
+        partLabel: "背景",
+        usageHint: "未使用九宫格贴图时的背景",
       },
       {
         token: "primary",
-        partLabel: "用户头像徽章与强调色",
+        partLabel: "头像背景",
         usageHint: "右侧用户头像圆框/方框主题强调色",
       },
       {
         token: "onPrimary",
-        partLabel: "用户头像徽章内图标/文字色",
+        partLabel: "头像图标",
         usageHint: "用户头像内部默认人像图标颜色",
       },
     ],
   },
   "chat.aiMessage": {
-    title: "🤖 AI 消息气泡 · 明暗双套色彩声明",
+    title: "AI 消息",
     subtitle: "独立为「☀️ 亮色」与「🌙 暗色」声明左侧 AI 回复消息的文字色与气泡底色",
     roles: [
       {
         token: "onSurface",
-        partLabel: "AI 回复正文主文字颜色",
+        partLabel: "文字",
         usageHint: "左侧 AI 气泡与流式回复的正文文字颜色",
       },
       {
         token: "surfaceContainerHighest",
-        partLabel: "AI 气泡默认背景底色",
+        partLabel: "背景",
         usageHint: "未使用九宫格贴图时的 AI 气泡底色",
       },
       {
         token: "onSurfaceVariant",
-        partLabel: "AI 次要文字与思考栏文字色",
+        partLabel: "辅助文字",
         usageHint: "代码块标题栏、引用文本、工具调用说明等次要文字颜色",
       },
       {
         token: "tertiaryContainer",
-        partLabel: "AI 头像徽章与工具卡片底色",
+        partLabel: "头像与卡片",
         usageHint: "左侧 AI 机器人头像底色与辅助状态卡片底色",
       },
       {
         token: "onTertiaryContainer",
-        partLabel: "AI 头像徽章内图标与卡片文字色",
+        partLabel: "图标与卡片文字",
         usageHint: "左侧 AI 头像内部图标与工具卡片文字颜色",
       },
     ],
   },
   "chat.composer": {
-    title: "⌨️ 消息输入框 · 明暗双套色彩声明",
-    subtitle: "独立控制底部输入容器在「☀️ 亮色」与「🌙 暗色」下的提示词、输入文字、胶囊底色与按钮色（与侧栏完全解耦）",
+    title: "输入框",
+    subtitle: "独立控制底部输入容器在「☀️ 亮色」与「🌙 暗色」下的提示词、输入文字、胶囊底色与按钮色；表面配色角色同时用于其他组件",
     roles: [
       {
-        token: "onPrimaryFixed",
-        partLabel: "输入正文与模型名称文字色",
-        usageHint: "输入框内正在键入的文字、左下角模型名称（如 gpt-6-luna）颜色",
+        token: "onSurface",
+        partLabel: "文字",
+        usageHint: "模型名称颜色；输入文字继承全局文字主题",
       },
       {
-        token: "onPrimaryFixedVariant",
-        partLabel: "占位提示词与默认动作图标色",
+        token: "onSurfaceVariant",
+        partLabel: "提示与图标",
         usageHint: "「向 Operit 提问」提示词、展开图标、默认设置/附件图标颜色",
       },
       {
         token: "surfaceContainer",
-        partLabel: "Agent 胶囊输入框默认底色",
+        partLabel: "Agent 背景",
         usageHint: "Agent 胶囊工作台样式下的输入框背景色（未使用贴图时生效）",
       },
       {
-        token: "surfaceContainerHigh",
-        partLabel: "经典通栏输入框默认底色",
+        token: "surface",
+        partLabel: "经典背景",
         usageHint: "经典通栏样式下的输入框背景色",
       },
       {
-        token: "primaryFixed",
-        partLabel: "模型选择胶囊与附件圆钮底色",
-        usageHint: "左下角模型选择芯片、经典模式附件圆形按钮背景色",
+        token: "surfaceContainerHighest",
+        partLabel: "附件与模型按钮",
+        usageHint: "经典模式附件圆形按钮背景色；模型选择芯片使用透明背景",
       },
       {
-        token: "surfaceTint",
-        partLabel: "主按钮（语音 / 发送）默认圆钮底色",
+        token: "primary",
+        partLabel: "发送按钮",
         usageHint: "最右侧主动作按钮在未替换自定义 SVG/PNG 时的圆形背景色",
       },
       {
-        token: "onTertiary",
-        partLabel: "主按钮（语音 / 发送）内部图标色",
+        token: "onPrimary",
+        partLabel: "发送图标",
         usageHint: "最右侧主动作按钮内部麦克风/发送箭头颜色",
       },
       {
         token: "error",
-        partLabel: "停止生成按钮状态底色",
+        partLabel: "停止按钮",
         usageHint: "模型输出中时最右侧停止按钮的背景色",
       },
     ],
   },
   background: {
-    title: "🖼️ 画布背景 · 明暗双套色彩声明",
+    title: "背景颜色",
     subtitle: "独立控制根画布在无背景图或半透明背景图下的「☀️ 亮色」与「🌙 暗色」衬底表面色",
     roles: [
       {
         token: "surface",
-        partLabel: "根画布主表面背景色",
-        usageHint: "对话区与整体窗口的基准底色（背景图不透明度 < 1 时混合透出）",
+        partLabel: "背景",
+        usageHint: "对话区与整体窗口的基准底色（不透明度 < 1 时混合透出）",
       },
       {
         token: "surfaceContainerLowest",
-        partLabel: "最深层海拔衬底色",
+        partLabel: "底层背景",
         usageHint: "底层容器与深色衬底表面",
       },
       {
         token: "surfaceDim",
-        partLabel: "暗调表面衬底色",
+        partLabel: "次级背景",
         usageHint: "次级背景衬底表面色",
       },
     ],
@@ -764,28 +759,10 @@ const PALETTE_TOKEN_LABELS: Readonly<Record<string, string>> = {
   surfaceTint: "表面叠色 SurfaceTint",
 };
 
-const DARK_DECOUPLED_DEFAULTS: Readonly<Record<string, { legacy: string; next: string }>> = {
-  onPrimaryFixed: { legacy: "#001D36FF", next: "#E1E2E8FF" },
-  onPrimaryFixedVariant: { legacy: "#194975FF", next: "#C3C6CFFF" },
-  primaryFixed: { legacy: "#D1E4FFFF", next: "#282A2FFF" },
-  onSecondaryFixed: { legacy: "#101C2BFF", next: "#E1E2E8FF" },
-  onSecondaryFixedVariant: { legacy: "#3B4858FF", next: "#C3C6CFFF" },
-  secondaryFixed: { legacy: "#D7E3F8FF", next: "#282A2FFF" },
-  onTertiaryFixed: { legacy: "#251431FF", next: "#E1E2E8FF" },
-  onTertiaryFixedVariant: { legacy: "#523F5FFF", next: "#C3C6CFFF" },
-  tertiaryFixedDim: { legacy: "#D6BEE4FF", next: "#43474EFF" },
-};
-
 export function defaultTheme(): JsonObject {
   const theme = structuredClone(fixture) as JsonObject;
   const chat = theme.chat as JsonObject;
   chat.style = "bubble";
-  const darkPalette = (theme.palette as JsonObject | undefined)?.dark as JsonObject | undefined;
-  if (darkPalette != null && typeof darkPalette === "object") {
-    for (const [token, spec] of Object.entries(DARK_DECOUPLED_DEFAULTS)) {
-      darkPalette[token] = spec.next;
-    }
-  }
   return theme;
 }
 
@@ -858,11 +835,6 @@ function sanitizeThemeForContract(theme: JsonObject): JsonObject {
   const palette = (clone.palette ?? {}) as JsonObject;
   const lightPalette = (palette.light ?? {}) as JsonObject;
   const darkPalette = (palette.dark ?? {}) as JsonObject;
-  for (const [token, spec] of Object.entries(DARK_DECOUPLED_DEFAULTS)) {
-    if (typeof darkPalette[token] === "string" && darkPalette[token].toUpperCase() === spec.legacy) {
-      darkPalette[token] = spec.next;
-    }
-  }
 
   const migrateSingleColorToDual = (container: JsonObject | undefined, key: string, lightToken: string) => {
     if (!container || typeof container !== "object") return;
@@ -942,13 +914,13 @@ function metaForPath(path: string[]): FieldMeta {
     };
   }
   if (joined.endsWith(".image.crop")) {
-    return { label: "四周留白裁切比例 (Crop 0 ~ 0.45)", hint: "裁掉源图四周多余透明边缘的比例" };
+    return { label: "裁切", hint: "裁掉源图四周多余透明边缘的比例" };
   }
   if (joined.endsWith(".image.slice")) {
-    return { label: "中心可拉伸区间 (Slice 0.05 ~ 0.95)", hint: "定义水平 X 与垂直 Y 的中心拉伸区比例" };
+    return { label: "拉伸区域", hint: "定义水平 X 与垂直 Y 的中心拉伸区比例" };
   }
   if (joined.endsWith(".image.scale")) {
-    return { label: "边框像素倍率 (Scale)", hint: "控制九宫格四角与边框的渲染缩放倍率 (0.5 ~ 4.0)", unit: "×" };
+    return { label: "缩放", hint: "控制九宫格四角与边框的渲染缩放倍率 (0.5 ~ 4.0)", unit: "×" };
   }
   const sliceLabels: Record<string, string> = {
     xStart: "水平起点 X-Start",
@@ -1172,7 +1144,7 @@ export class ThemeVisualEditor {
     this.changed();
   }
 
-  private createResetButton(path: string[], label = "↺ 重置"): HTMLButtonElement {
+  private createResetButton(path: string[], label = "重置"): HTMLButtonElement {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "section-reset-btn";
@@ -1186,6 +1158,7 @@ export class ThemeVisualEditor {
     return btn;
   }
 
+  /** Render the selected section without repeating technical metadata. */
   private render(): void {
     const scrollParent = this.root.closest<HTMLElement>(".editor.panel") ?? this.root.parentElement;
     const savedScrollTop = scrollParent?.scrollTop ?? 0;
@@ -1205,7 +1178,7 @@ export class ThemeVisualEditor {
       const clearBtn = document.createElement("button");
       clearBtn.type = "button";
       clearBtn.className = "inspector-back-btn";
-      clearBtn.textContent = "← 全部图层";
+      clearBtn.textContent = "全部";
       clearBtn.onclick = () => {
         if (this.onClearInspector) {
           this.onClearInspector();
@@ -1220,8 +1193,17 @@ export class ThemeVisualEditor {
       title.textContent = this.inspector.title;
       const description = document.createElement("p");
       description.textContent = this.inspector.description;
-      heading.append(topRow, title, description);
+      heading.append(topRow, title);
+      heading.title = this.inspector.description;
       this.root.append(heading);
+
+      if (this.inspector.id === "palette") {
+        heading.append(this.createResetButton(["palette"]));
+        this.root.append(this.renderPaletteStudio());
+        if (scrollParent) scrollParent.scrollTop = savedScrollTop;
+        this.onExternalDomSync?.();
+        return;
+      }
 
       for (const section of this.inspector.sections) {
         const stateKey = `inspector:${this.inspector.id ?? ""}:${section.path.join(".")}`;
@@ -1240,7 +1222,7 @@ export class ThemeVisualEditor {
         const summaryPath = document.createElement("code");
         summaryPath.className = "summary-path";
         summaryPath.textContent = section.path.join(".");
-        summaryRight.append(this.createResetButton(section.path), summaryPath);
+        summaryRight.append(this.createResetButton(section.path));
         summary.append(summaryTitle, summaryRight);
 
         if (section.paths != null && section.paths.length > 0) {
@@ -1272,42 +1254,42 @@ export class ThemeVisualEditor {
 
     const groups: Array<{ title: string; subtitle: string; tag: string; path: string[]; open: boolean }> = [
       {
-        title: "背景与氛围图层",
+        title: "背景",
         subtitle: "画布底图、填充方式、不透明度与高斯模糊",
         tag: "background",
         path: ["background"],
         open: true,
       },
       {
-        title: "对话与气泡表面",
+        title: "消息",
         subtitle: "气泡/Cursor 范式、头像几何、左右气泡九宫格贴图",
         tag: "chat",
         path: ["chat"],
         open: true,
       },
       {
-        title: "底部消息输入框",
+        title: "输入框",
         subtitle: "输入框造型、九宫格贴图与右侧 5 状态动作图标",
         tag: "input",
         path: ["input"],
         open: true,
       },
       {
-        title: "透明玻璃表面",
+        title: "透明表面",
         subtitle: "顶栏、导航侧栏与输入框的全局毛玻璃穿透联动",
         tag: "surfaces",
         path: ["surfaces"],
         open: true,
       },
       {
-        title: "字体与排版体系",
-        subtitle: "全局基准字体与用户/AI 消息专属 TTF 字体映射",
+        title: "字体",
+        subtitle: "全局字体与用户/AI 消息专属 TTF 字体映射",
         tag: "typography",
         path: ["typography"],
         open: true,
       },
       {
-        title: "Material 3 双模调色板",
+        title: "调色板",
         subtitle: "亮/暗各 46 个语义色彩角色，支持从主色或背景图一键生成",
         tag: "palette",
         path: ["palette"],
@@ -1332,14 +1314,14 @@ export class ThemeVisualEditor {
       const summaryNote = document.createElement("span");
       summaryNote.className = "summary-subtitle";
       summaryNote.textContent = group.subtitle;
-      summaryLeft.append(summaryTitle, summaryNote);
+      summaryLeft.append(summaryTitle);
 
       const summaryRight = document.createElement("div");
       summaryRight.className = "summary-right-cluster";
       const summaryCode = document.createElement("code");
       summaryCode.className = "summary-path";
       summaryCode.textContent = group.tag;
-      summaryRight.append(this.createResetButton(group.path), summaryCode);
+      summaryRight.append(this.createResetButton(group.path));
       summary.append(summaryLeft, summaryRight);
 
       const body = this.renderSectionBody(resolved(schema.properties![group.path[0]]), group.path);
@@ -1432,7 +1414,7 @@ export class ThemeVisualEditor {
     const resetBtn = document.createElement("button");
     resetBtn.type = "button";
     resetBtn.className = "section-reset-btn";
-    resetBtn.textContent = "↺ 默认色";
+    resetBtn.textContent = "重置";
     resetBtn.onclick = () => {
       const def = defaultTheme();
       for (const role of spec.roles) {
@@ -1538,6 +1520,7 @@ export class ThemeVisualEditor {
     return bar;
   }
 
+  /** Render paired color controls with optional presets. */
   public renderComponentDualModeCard(targetId: string, isStageHud = false, onCloseHud?: () => void): HTMLElement {
     const spec = COMPONENT_COLOR_MAP[targetId];
     const card = document.createElement("div");
@@ -1556,7 +1539,8 @@ export class ThemeVisualEditor {
     h4.textContent = spec.title;
     const sub = document.createElement("p");
     sub.textContent = spec.subtitle;
-    titleBlock.append(h4, sub);
+    titleBlock.append(h4);
+    titleBlock.title = spec.subtitle;
 
     const headerRight = document.createElement("div");
     headerRight.className = "dual-color-header-actions";
@@ -1564,7 +1548,7 @@ export class ThemeVisualEditor {
     const resetBtn = document.createElement("button");
     resetBtn.type = "button";
     resetBtn.className = "section-reset-btn";
-    resetBtn.textContent = "↺ 恢复此部件默认色";
+    resetBtn.textContent = "重置";
     resetBtn.onclick = () => {
       const def = defaultTheme();
       for (const role of spec.roles) {
@@ -1613,7 +1597,12 @@ export class ThemeVisualEditor {
       };
       schemeBar.append(chip);
     }
-    card.append(schemeBar);
+    const presets = document.createElement("details");
+    presets.className = "color-presets";
+    const presetsSummary = document.createElement("summary");
+    presetsSummary.textContent = "预设";
+    presets.append(presetsSummary, schemeBar);
+    card.append(presets);
 
     // Check if any single-mode fixed color override is currently active on this component
     const activeOverrides = (spec.overrides ?? []).filter(ov => objectValue(this.theme, ov.path) != null);
@@ -1622,13 +1611,11 @@ export class ThemeVisualEditor {
       banner.className = "dual-color-override-banner";
       const msg = document.createElement("div");
       msg.className = "dual-color-override-text";
-      msg.innerHTML = `
-        <strong>⚠️ 当前启用了单色固定覆盖（${activeOverrides.map(o => o.label).join("、")}）</strong>
-        <span>单色覆盖会让亮色与暗色模式强制使用同一个颜色。点击右侧按钮可解除单色锁定，让下方「☀️ 亮色 / 🌙 暗色」双套独立配色立即生效。</span>`;
+      msg.textContent = "当前使用固定颜色";
       const unlockBtn = document.createElement("button");
       unlockBtn.type = "button";
       unlockBtn.className = "unlock-dual-color-btn";
-      unlockBtn.textContent = "🔓 启用明暗双套独立配色";
+      unlockBtn.textContent = "分开设置";
       unlockBtn.onclick = () => {
         for (const ov of activeOverrides) {
           const curVal = objectValue(this.theme, ov.path);
@@ -1647,9 +1634,9 @@ export class ThemeVisualEditor {
     const colHeader = document.createElement("div");
     colHeader.className = "dual-color-table-head";
     colHeader.innerHTML = `
-      <span class="dual-col-role">界面受控部位 (点击色块自动切预览)</span>
-      <span class="dual-col-mode light-col-head">☀️ 亮色声明 (Light)</span>
-      <span class="dual-col-mode dark-col-head">🌙 暗色声明 (Dark)</span>`;
+      <span class="dual-col-role">颜色</span>
+      <span class="dual-col-mode light-col-head">浅色</span>
+      <span class="dual-col-mode dark-col-head">深色</span>`;
     card.append(colHeader);
 
     const list = document.createElement("div");
@@ -1661,6 +1648,7 @@ export class ThemeVisualEditor {
     return card;
   }
 
+  /** Render one color role with accessible light and dark controls. */
   private renderDualModeTokenRow(role: ComponentColorRoleSpec): HTMLElement {
     const row = document.createElement("div");
     row.className = "dual-color-row";
@@ -1675,12 +1663,13 @@ export class ThemeVisualEditor {
     const tokenCode = document.createElement("code");
     tokenCode.className = "field-key";
     tokenCode.textContent = role.token;
-    titleLine.append(labelSpan, tokenCode);
+    titleLine.append(labelSpan);
+    labelSpan.title = `${role.token}: ${role.usageHint}`;
 
     const hintEl = document.createElement("small");
     hintEl.className = "dual-color-usage-hint";
     hintEl.textContent = role.usageHint;
-    info.append(titleLine, hintEl);
+    info.append(titleLine);
 
     const lightTrigger = this.buildDualModeTriggerPill("light", role);
     const darkTrigger = this.buildDualModeTriggerPill("dark", role);
@@ -1754,7 +1743,8 @@ export class ThemeVisualEditor {
     btn.className = `dual-color-trigger dual-trigger-${mode}`;
     btn.dataset.dualToken = role.token;
     btn.dataset.dualMode = mode;
-    btn.title = `点击打开取色面板 · ${role.partLabel} (${mode === "light" ? "☀️ 亮色" : "🌙 暗色"})`;
+    btn.title = `${role.partLabel} · ${mode === "light" ? "浅色" : "深色"}`;
+    btn.setAttribute("aria-label", btn.title);
 
     const modeIcon = document.createElement("span");
     modeIcon.className = "dual-trigger-mode";
@@ -1776,21 +1766,13 @@ export class ThemeVisualEditor {
     return btn;
   }
 
+  /** Render seed controls and component colors without redundant section headings. */
   private renderPaletteStudio(): HTMLElement {
     const wrapper = document.createElement("div");
     wrapper.className = "palette-studio";
 
-    // Smart Palette Generator Card
     const genCard = document.createElement("div");
     genCard.className = "palette-generator-card";
-
-    const genTop = document.createElement("div");
-    genTop.className = "palette-generator-top";
-    genTop.innerHTML = `
-      <div>
-        <h5>✨ 智能 M3 双模调色板生成</h5>
-        <p>选取一个主题主色或从当前背景图自动取色，一键生成和谐的亮色 + 暗色共 92 个语义色彩角色。</p>
-      </div>`;
 
     const genControls = document.createElement("div");
     genControls.className = "palette-generator-controls";
@@ -1799,8 +1781,10 @@ export class ThemeVisualEditor {
     seedPickerWrap.className = "seed-picker-pill";
     const seedColorInput = document.createElement("input");
     seedColorInput.type = "color";
+    seedColorInput.setAttribute("aria-label", "主色");
     seedColorInput.value = this.seedColorHex;
     const seedHexLabel = document.createElement("code");
+    seedHexLabel.className = "seed-hex-label";
     seedHexLabel.textContent = this.seedColorHex;
     seedColorInput.oninput = () => {
       this.seedColorHex = seedColorInput.value.toUpperCase();
@@ -1811,7 +1795,8 @@ export class ThemeVisualEditor {
     const applySeedBtn = document.createElement("button");
     applySeedBtn.type = "button";
     applySeedBtn.className = "secondary-compact-btn accent-btn";
-    applySeedBtn.textContent = "✨ 从主色生成双模色板";
+    applySeedBtn.textContent = "应用主色";
+    applySeedBtn.title = "用主色重新生成浅色与深色配色";
     applySeedBtn.onclick = () => {
       const generated = generateDualModePaletteFromSeed(this.seedColorHex);
       setValue(this.theme, ["palette", "light"], generated.light);
@@ -1829,10 +1814,10 @@ export class ThemeVisualEditor {
     const extractBgBtn = document.createElement("button");
     extractBgBtn.type = "button";
     extractBgBtn.className = "secondary-compact-btn";
-    extractBgBtn.textContent = "🖼️ 从背景图取色生成";
+    extractBgBtn.textContent = "从图片取色";
     extractBgBtn.disabled = bgPreviewUrl == null;
     extractBgBtn.title =
-      bgPreviewUrl == null ? "请先在「背景与氛围图层」上传并绑定背景图" : "从当前背景图提取代表色并生成亮/暗双模色板";
+      bgPreviewUrl == null ? "请先在「背景」上传并绑定背景图" : "从当前背景图提取代表色并生成亮/暗双模色板";
     extractBgBtn.onclick = async () => {
       if (!bgPreviewUrl) return;
       try {
@@ -1847,7 +1832,7 @@ export class ThemeVisualEditor {
         this.changed();
       } finally {
         extractBgBtn.disabled = false;
-        extractBgBtn.textContent = "🖼️ 从背景图取色生成";
+        extractBgBtn.textContent = "从图片取色";
       }
     };
 
@@ -1862,9 +1847,11 @@ export class ThemeVisualEditor {
       const dot = document.createElement("span");
       dot.className = "seed-preset-dot";
       dot.style.background = preset.seedHex;
-      const txt = document.createElement("span");
-      txt.textContent = preset.label;
-      chip.append(dot, txt);
+      chip.title = `${preset.label} · ${preset.seedHex}`;
+      chip.setAttribute("aria-label", `应用${preset.label}主色`);
+      chip.setAttribute("aria-pressed", String(this.seedColorHex.toUpperCase() === preset.seedHex.toUpperCase()));
+      dot.setAttribute("aria-hidden", "true");
+      chip.append(dot);
       chip.onclick = () => {
         this.seedColorHex = preset.seedHex;
         const generated = generateDualModePaletteFromSeed(preset.seedHex);
@@ -1876,7 +1863,7 @@ export class ThemeVisualEditor {
       presetRow.append(chip);
     }
 
-    genCard.append(genTop, genControls, presetRow);
+    genCard.append(genControls, presetRow);
     wrapper.append(genCard);
 
     const ribbon = document.createElement("div");
@@ -1905,8 +1892,8 @@ export class ThemeVisualEditor {
     const modeTabs = document.createElement("div");
     modeTabs.className = "palette-mode-tabs";
     const modes: Array<{ id: "light" | "dark"; label: string }> = [
-      { id: "light", label: "☀️ 亮色色板 Light (46)" },
-      { id: "dark", label: "🌙 暗色色板 Dark (46)" },
+      { id: "light", label: "浅色" },
+      { id: "dark", label: "深色" },
     ];
     for (const item of modes) {
       const btn = document.createElement("button");
@@ -1941,7 +1928,7 @@ export class ThemeVisualEditor {
     const rawSummary = document.createElement("summary");
     rawSummary.innerHTML = `
       <div class="summary-heading">
-        <span class="summary-title">高级：完整 46 项 Material 3 底层语义色阶表</span>
+        <span class="summary-title">全部颜色</span>
         <span class="summary-subtitle">包含 Fixed、Inverse、SurfaceContainer 各海拔与 Scrim/Shadow 全部原始字段</span>
       </div>
       <code class="summary-path">46 × 2</code>`;
@@ -2216,17 +2203,13 @@ export class ThemeVisualEditor {
         const subCode = document.createElement("code");
         subCode.textContent = path.slice(1).join(".");
         if (path[0] === "chat" && (name === "user" || name === "ai")) {
-          rightWrap.append(this.createResetButton(path, "↺ 重置"), subCode);
+          rightWrap.append(this.createResetButton(path, "重置"), subCode);
         } else {
           rightWrap.append(subCode);
         }
         subTitleRow.append(subTitle, rightWrap);
         subHeader.append(subTitleRow);
-        if (meta.hint) {
-          const subHint = document.createElement("p");
-          subHint.textContent = meta.hint;
-          subHeader.append(subHint);
-        }
+        if (meta.hint) subHeader.title = meta.hint;
         container.append(subHeader);
       }
 
@@ -2354,7 +2337,7 @@ export class ThemeVisualEditor {
             : null;
         const miniThumb = document.createElement("div");
         miniThumb.className = `asset-inline-thumb${previewUrl ? " has-image" : ""}`;
-        if (previewUrl) {
+        if (previewUrl && typeof value === "string") {
           const img = document.createElement("img");
           img.src = previewUrl;
           img.alt = value;
@@ -2580,6 +2563,7 @@ export class ThemeVisualEditor {
     return this.buildFieldLabel(meta.label, name, meta.hint, input);
   }
 
+  /** Label a control and expose additional context on hover. */
   private buildFieldLabel(
     title: string,
     keyName: string,
@@ -2601,15 +2585,11 @@ export class ThemeVisualEditor {
     const keyTag = document.createElement("code");
     keyTag.className = "field-key";
     keyTag.textContent = keyName;
-    titleRow.append(caption, keyTag);
+    titleRow.append(caption);
+    caption.title = hint ? `${keyName}: ${hint}` : keyName;
+    control.setAttribute("aria-label", title);
     head.append(titleRow);
 
-    if (hint) {
-      const hintEl = document.createElement("small");
-      hintEl.className = "field-hint";
-      hintEl.textContent = hint;
-      head.append(hintEl);
-    }
 
     wrapper.append(head, control);
     return wrapper;

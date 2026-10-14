@@ -14,7 +14,7 @@ import sys
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
-PACKAGE = ROOT / "apps/flutter/packages/operit_theme"
+PACKAGE = ROOT / "apps/flutter/packages/operit_ui"
 FONTTOOLS_VERSION = "4.61.1"
 FONTTOOLS_URL = (
     "https://files.pythonhosted.org/packages/c7/4e/"

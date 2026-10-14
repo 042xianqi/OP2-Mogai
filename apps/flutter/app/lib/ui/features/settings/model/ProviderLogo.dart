@@ -2,7 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:operit_theme/operit_theme.dart';
+import 'package:operit_ui/operit_ui.dart';
 
 /// Maps provider type IDs to their bundled brand logo assets.
 const Map<String, String> providerLogoAssets = <String, String>{

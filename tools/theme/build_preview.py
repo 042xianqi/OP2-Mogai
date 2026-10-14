@@ -15,7 +15,7 @@ import subprocess
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
-PREVIEW = ROOT / "apps/flutter/theme_preview"
+PREVIEW = ROOT / "tools/theme/preview"
 
 
 def run(*args: str, cwd: Path = ROOT) -> None:
@@ -54,10 +54,10 @@ def main() -> None:
         raise FileExistsError(f"Refusing to reuse a renderer release directory: {destination}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     fixture_sources = sorted([
-        *(ROOT / "apps/flutter/packages/operit_theme/lib/src").rglob("*.dart"),
-        ROOT / "apps/flutter/theme_preview/lib/main.dart",
-        ROOT / "apps/flutter/theme_preview/lib/protocol/theme_studio_message_port.dart",
-        ROOT / "apps/flutter/theme_preview/lib/protocol/theme_contract_client.dart",
+        *(ROOT / "apps/flutter/packages/operit_ui/lib/src").rglob("*.dart"),
+        ROOT / "tools/theme/preview/lib/main.dart",
+        ROOT / "tools/theme/preview/lib/protocol/theme_studio_message_port.dart",
+        ROOT / "tools/theme/preview/lib/protocol/theme_contract_client.dart",
     ], key=lambda item: item.relative_to(ROOT).as_posix())
     fixture_hasher = hashlib.sha256()
     for source in fixture_sources:
@@ -68,16 +68,16 @@ def main() -> None:
     fixture_source_sha256 = fixture_hasher.hexdigest()
     machine = json.loads(output(str(flutter), "--version", "--machine", cwd=PREVIEW))
     workspace = json.loads(output("cargo", "metadata", "--manifest-path", "core/Cargo.toml", "--no-deps", "--format-version", "1", "--locked"))
-    run("cargo", "build", "--manifest-path", "core/Cargo.toml", "-p", "operit-theme-contract",
+    run("cargo", "build", "--manifest-path", "core/Cargo.toml", "-p", "operit-plugin-theme",
         "--features", "wasm", "--target", "wasm32-unknown-unknown", "--release", "--locked")
-    wasm = Path(workspace["target_directory"]) / "wasm32-unknown-unknown/release/operit_theme_contract.wasm"
+    wasm = Path(workspace["target_directory"]) / "wasm32-unknown-unknown/release/operit_plugin_theme.wasm"
     run(str(flutter), "pub", "get", "--enforce-lockfile", cwd=PREVIEW)
     run(str(flutter), "build", "web", "--release", "--no-pub", "--output=" + str(destination),
         "--base-href=" + base_prefix + "/theme-preview/" + release_id + "/",
         "--dart-define=OPERIT_THEME_RENDERER_RELEASE_ID=" + release_id,
         "--dart-define=OPERIT_THEME_FIXTURE_SOURCE_SHA256=" + fixture_source_sha256, cwd=PREVIEW)
-    run(str(bindgen), str(wasm), "--target", "web", "--out-name", "operit_theme_contract",
-        "--out-dir", str(destination / "contract"))
+    run(str(bindgen), str(wasm), "--target", "web", "--out-name", "operit_plugin_theme",
+        "--out-dir", str(destination / "validator"))
     files = []
     for path in sorted(destination.rglob("*")):
         if not path.is_file() or path.name == "renderer-release.json":

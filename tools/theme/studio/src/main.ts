@@ -9,18 +9,15 @@ import {
 } from "../../studio_message_port.ts";
 import { StudioContractBridge } from "../../studio_contract_bridge.ts";
 import { loadDraft, saveDraft, type SavedAsset } from "./draft_store";
-import { parseImportedThemeFile } from "./optheme_import";
+import { parseImportedThemeFile, updateToolPkgTheme, type ImportedToolPkgSource, type ToolPkgThemeDeclaration } from "./toolpkg_import";
 import { COMPONENT_COLOR_MAP, THEME_INSPECTOR_TARGETS, ThemeVisualEditor, defaultTheme } from "./theme_editor";
 
-const PLATFORM_IDS = ["android", "ios", "windows", "macos", "linux", "ohos", "web"] as const;
 const SHA256 = /^[a-f0-9]{64}$/;
 const METADATA_IDS = [
   "theme-id",
   "version",
   "display-name",
   "author",
-  "license",
-  "min-app-version",
   "description",
   "theme-license-text",
 ] as const;
@@ -40,9 +37,6 @@ type EvidenceTabId = "receipt" | "messages" | "renderer";
 type AssetRow = {
   id: number;
   path: string;
-  license: string;
-  licensePath: string;
-  licenseText: string;
   file: File | null;
   bytes: Uint8Array | null;
   sha256: string | null;
@@ -78,7 +72,7 @@ const LAYER_CHIPS: ReadonlyArray<{ id: string | null; label: string; shortKey: s
   { id: "chat.aiMessage", label: "AI 气泡", shortKey: "AI" },
   { id: "chat.composer", label: "输入框", shortKey: "INPUT" },
   { id: "typography", label: "字体排版", shortKey: "FONT" },
-  { id: "palette", label: "M3 调色板", shortKey: "PAL" },
+  { id: "palette", label: "配色", shortKey: "PAL" },
 ];
 
 class ThemeStudioApp {
@@ -111,7 +105,7 @@ class ThemeStudioApp {
   private readonly zoomButton = document.createElement("button");
   private readonly hudToggleButton = document.createElement("button");
   private readonly stageColorHud = document.createElement("div");
-  private stageHudOpen = true;
+  private stageHudOpen = false;
   private autoInspectMode = true;
   private readonly viewportSelect = document.createElement("select");
   private readonly conversationToggle = document.createElement("input");
@@ -135,6 +129,7 @@ class ThemeStudioApp {
   private latestAssets: ThemePreviewAsset[] = [];
   private previewPng: Uint8Array | null = null;
   private nextAssetId = 1;
+  private importedToolPkg: ImportedToolPkgSource | undefined;
   private busy = false;
   private iframeRendering = false;
   private generation = 0;
@@ -144,7 +139,7 @@ class ThemeStudioApp {
   private originalPixels = false;
   private inspectEnabled = false;
   private inspectAfterRender = true;
-  private selectedInspectTargetId: string | null = null;
+  private selectedInspectTargetId: string | null = "background";
   private activeDockTab: DockTabId = "inspector";
   private activeEvidenceTab: EvidenceTabId = "receipt";
   private assetUploadTarget: string[] | null = null;
@@ -191,10 +186,7 @@ class ThemeStudioApp {
     this.root.innerHTML = `
       <header class="studio-header">
         <div class="brand-cluster">
-          <div class="brand-emblem" aria-hidden="true">
-            <span class="emblem-core"></span>
-            <span class="emblem-ring"></span>
-          </div>
+          
           <div class="brand-copy">
             <div class="brand-title-row">
               <h1>Theme Studio</h1>
@@ -210,8 +202,8 @@ class ThemeStudioApp {
           <output id="status"></output>
         </div>
         <div class="status-ribbon-right">
-          <span id="live-theme-badge" class="live-theme-badge">.optheme / v1</span>
-          <span class="format">theme-v1</span>
+          <span id="live-theme-badge" class="live-theme-badge">ToolPkg</span>
+          
           <span id="connection-state" class="state">starting</span>
         </div>
       </div>
@@ -228,19 +220,19 @@ class ThemeStudioApp {
           <details class="log-panel evidence-drawer">
             <summary class="evidence-summary">
               <div class="evidence-summary-left">
-                <span class="eyebrow">CONTRACT EVIDENCE</span>
-                <span class="evidence-summary-title">渲染回执与协议诊断</span>
+                
+                <span class="evidence-summary-title">诊断</span>
               </div>
               <div class="evidence-summary-right">
                 <div class="stage-meta-slot"></div>
-                <span class="evidence-summary-hint">展开 ▾</span>
+                
               </div>
             </summary>
             <div class="evidence-drawer-body">
               <div class="evidence-tabs" role="tablist">
-                <button type="button" class="evidence-tab active" data-evidence-tab="receipt">渲染回执 Receipt</button>
-                <button type="button" class="evidence-tab" data-evidence-tab="messages">MessagePort 协议流</button>
-                <button type="button" class="evidence-tab" data-evidence-tab="renderer">Renderer 固件信息</button>
+                <button type="button" class="evidence-tab active" data-evidence-tab="receipt">渲染记录</button>
+                <button type="button" class="evidence-tab" data-evidence-tab="messages">消息</button>
+                <button type="button" class="evidence-tab" data-evidence-tab="renderer">构建信息</button>
               </div>
               <div class="evidence-panes">
                 <div class="evidence-pane active" data-evidence-pane="receipt">
@@ -294,6 +286,7 @@ class ThemeStudioApp {
     const stageShell = this.root.querySelector<HTMLElement>(".stage-frame-shell")!;
     new ResizeObserver(() => this.resizePreview()).observe(stageShell);
     this.bindActions();
+    this.selectInspectorLayer("background");
     this.bindGlobalShortcutsAndDrop();
     this.setStatus("正在读取本地 renderer 配置…");
     this.rendererConfigPromise = this.initialize();
@@ -416,9 +409,9 @@ class ThemeStudioApp {
       const file = event.dataTransfer?.files?.[0];
       if (!file) return;
       const lower = file.name.toLowerCase();
-      if (lower.endsWith(".optheme") || lower.endsWith(".zip") || lower.endsWith(".json")) {
+      if (lower.endsWith(".toolpkg") || lower.endsWith(".json")) {
         event.preventDefault();
-        void this.importThemeArchiveFile(file);
+        void this.importToolPkgTemplateFile(file);
       }
     });
   }
@@ -426,11 +419,11 @@ class ThemeStudioApp {
   private buildEditor(form: HTMLElement, visualHost: HTMLElement): void {
     this.dockTabBar.className = "dock-tab-bar";
     const tabs: Array<{ id: DockTabId; label: string; badge?: HTMLElement }> = [
-      { id: "inspector", label: "视觉检视" },
-      { id: "assets", label: "静态素材", badge: this.assetCountBadge },
-      { id: "manifest", label: "包清单" },
-      { id: "json", label: "JSON 源码" },
-      { id: "all", label: "全览" },
+      { id: "inspector", label: "设计" },
+      { id: "assets", label: "素材", badge: this.assetCountBadge },
+      { id: "manifest", label: "信息" },
+      { id: "json", label: "JSON" },
+      
     ];
     this.assetCountBadge.className = "dock-tab-count";
     this.assetCountBadge.textContent = "0";
@@ -468,10 +461,10 @@ class ThemeStudioApp {
     assets.innerHTML = `
       <div class="section-heading">
         <div class="section-heading-top">
-          <h3>静态素材与字体仓库</h3>
+          <h3>素材</h3>
           <span class="section-pill">PNG · JPEG · SVG · TTF</span>
         </div>
-        <p>路径与 theme.json 自动同步。每个被引用的素材均经过 Rust L4 结构校验并绑定独立 SPDX 许可证。</p>
+        
       </div>`;
     const assetToolbar = document.createElement("div");
     assetToolbar.className = "asset-toolbar-row";
@@ -486,10 +479,10 @@ class ThemeStudioApp {
     metadata.innerHTML = `
       <div class="section-heading">
         <div class="section-heading-top">
-          <h3>署名、兼容性与许可证</h3>
+          <h3>ToolPkg 信息</h3>
           <span class="section-pill">manifest.json</span>
         </div>
-        <p>这些元数据写入主题包清单。许可证原文为必填契约字段。</p>
+        
       </div>`;
     const metaGrid = document.createElement("div");
     metaGrid.className = "metadata-grid";
@@ -501,45 +494,19 @@ class ThemeStudioApp {
     displayNameField.value = "Custom Studio Theme";
     const authorField = this.input("author", "Creator Name");
     authorField.value = "Operit Creator";
-    const licenseField = this.input("license", "MIT");
-    licenseField.value = "MIT";
-    const minAppField = this.input("min-app-version", "2.0.0-preview.13");
-    minAppField.value = "2.0.0-preview.13";
     metaGrid.append(
-      this.labeled("主题包 ID", themeIdField),
+      this.labeled("ToolPkg ID（toolpkg_id）", themeIdField),
       this.labeled("语义化版本", versionField),
-      this.labeled("主题显示名称", displayNameField),
+      this.labeled("ToolPkg 显示名称", displayNameField),
       this.labeled("创作者署名", authorField),
-      this.labeled("主题许可证 SPDX", licenseField),
-      this.labeled("最低 Operit2 版本", minAppField),
     );
     metadata.append(
       metaGrid,
-      this.labeled("主题简介（可选）", this.textarea("description", "简要介绍主题的视觉风格与适用场景", 2)),
+      this.labeled("ToolPkg 简介（可选）", this.textarea("description", "简要介绍主题的视觉风格与适用场景", 2)),
     );
-    const licTextArea = this.textarea("theme-license-text", "粘贴或编写主题包的完整许可证文本", 5);
-    licTextArea.value = "MIT License\n\nCopyright (c) Operit Creator\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this theme package...";
-    metadata.append(this.labeled("主题许可证全文（写入 licenses/theme.txt）", licTextArea));
+    const licTextArea = this.textarea("theme-license-text", "粘贴或编写 ToolPkg 的完整许可证文本", 5);
+    metadata.append(this.labeled("ToolPkg 协议文本（manifest.license 引用 licenses/theme.txt）", licTextArea));
 
-    const platformSet = document.createElement("fieldset");
-    platformSet.className = "platforms";
-    const legend = document.createElement("legend");
-    legend.textContent = "目标平台支持矩阵";
-    platformSet.append(legend);
-    for (const platform of PLATFORM_IDS) {
-      const label = document.createElement("label");
-      label.className = "platform-chip";
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.value = platform;
-      checkbox.checked = true;
-      checkbox.onchange = () => this.invalidate();
-      const span = document.createElement("span");
-      span.textContent = platform;
-      label.append(checkbox, span);
-      platformSet.append(label);
-    }
-    metadata.append(platformSet);
     form.append(metadata);
 
     const advanced = document.createElement("details");
@@ -549,8 +516,8 @@ class ThemeStudioApp {
     const summary = document.createElement("summary");
     summary.innerHTML = `
       <div class="summary-heading">
-        <span class="summary-title">高级 theme.json 源码视图</span>
-        <span class="summary-subtitle">与视觉检视器双向实时绑定，支持直接粘贴或检视规范化 JSON</span>
+        <span class="summary-title">JSON</span>
+        
       </div>
       <code class="summary-path">theme.json</code>`;
     this.themeJson.id = "theme-json";
@@ -606,25 +573,25 @@ class ThemeStudioApp {
     this.redoButton.disabled = true;
 
     this.resetDefaultButton.className = "ghost-btn";
-    this.resetDefaultButton.textContent = "↺ 默认主题";
+    this.resetDefaultButton.textContent = "重置";
     this.resetDefaultButton.title = "将当前主题视觉参数恢复为官方默认主题";
 
     this.importButton.className = "secondary";
-    this.importButton.textContent = "📂 导入 .optheme";
-    this.importButton.title = "导入已有 .optheme 主题包或 theme.json 继续编辑（也支持直接拖入窗口）";
+    this.importButton.textContent = "导入";
+    this.importButton.title = "读取 ToolPkg 中的 theme 声明或主题 JSON 为草稿；导出生成新的 ToolPkg，不改写原包的其他能力";
 
     this.saveButton.className = "ghost-btn save-status-btn";
     this.saveButton.dataset.saveState = "saved";
-    this.saveButton.textContent = "✓ 已自动保存";
-    this.saveButton.title = "所有颜色与参数修改均自动原子写入本机 IndexedDB；点击可立即强制保存快照";
+    this.saveButton.textContent = "已保存";
+    this.saveButton.title = "修改自动保存在本机；点击立即保存";
     this.loadButton.className = "ghost-btn";
-    this.loadButton.textContent = "读取草稿";
+    this.loadButton.textContent = "草稿";
 
     this.renderButton.className = "secondary";
-    this.renderButton.textContent = "校验 + 预览";
+    this.renderButton.textContent = "刷新";
 
     this.exportButton.className = "primary";
-    this.exportButton.textContent = "导出 .optheme";
+    this.exportButton.textContent = "导出 ToolPkg";
     this.exportButton.disabled = true;
 
     actions.append(
@@ -701,7 +668,7 @@ class ThemeStudioApp {
       const text = document.createElement("span");
       text.className = "layer-chip-label";
       text.textContent = item.label;
-      chip.append(tag, text);
+      chip.append(text);
       chip.onclick = () => this.selectInspectorLayer(item.id);
       this.layerChipBar.append(chip);
     }
@@ -820,7 +787,6 @@ class ThemeStudioApp {
       btn.onclick = event => {
         event.preventDefault();
         event.stopPropagation();
-        this.stageHudOpen = true;
         this.selectInspectorLayer(zone.id);
       };
       this.previewInspectOverlay.append(btn);
@@ -886,9 +852,6 @@ class ThemeStudioApp {
 
   private selectInspectorLayer(targetId: string | null): void {
     this.selectedInspectTargetId = targetId;
-    if (targetId != null && Object.hasOwn(COMPONENT_COLOR_MAP, targetId)) {
-      this.stageHudOpen = true;
-    }
     this.visualEditor.setInspectorTarget(targetId == null ? null : THEME_INSPECTOR_TARGETS[targetId] ?? null);
     this.renderStageColorHud();
 
@@ -934,7 +897,8 @@ class ThemeStudioApp {
     const name = this.value("display-name") || "未命名主题";
     const id = this.value("theme-id") || "org.example.theme";
     const ver = this.value("version") || "0.1.0";
-    this.liveThemeBadge.textContent = `${name} · ${id}@${ver}`;
+    this.liveThemeBadge.textContent = name;
+    this.liveThemeBadge.title = `${id}@${ver}`;
   }
 
   private updateStageMetaStrip(): void {
@@ -965,12 +929,12 @@ class ThemeStudioApp {
 
     this.addAssetButton.type = "button";
     this.addAssetButton.className = "add-asset-cta";
-    this.addAssetButton.textContent = "+ 添加 PNG / JPEG / SVG / TTF";
+    this.addAssetButton.textContent = "添加素材";
     this.addAssetButton.onclick = () => this.addAsset();
 
     this.cleanUnusedButton.type = "button";
     this.cleanUnusedButton.className = "clean-unused-cta";
-    this.cleanUnusedButton.textContent = "🧹 清理未引用素材";
+    this.cleanUnusedButton.textContent = "清理未使用";
     this.cleanUnusedButton.onclick = () => this.cleanUnusedAssets();
 
     this.themeJson.oninput = () => this.invalidate("高级 JSON 已修改；请重新校验预览。");
@@ -986,8 +950,8 @@ class ThemeStudioApp {
 
     const previewActions = this.root.querySelector<HTMLElement>(".preview-actions")!;
     this.lightButton.type = this.darkButton.type = "button";
-    this.lightButton.textContent = "☀️ 亮色";
-    this.darkButton.textContent = "🌙 暗色";
+    this.lightButton.textContent = "浅色";
+    this.darkButton.textContent = "深色";
     this.lightButton.onclick = () => this.switchBrightness("light");
     this.darkButton.onclick = () => this.switchBrightness("dark");
     this.updateBrightnessButtons();
@@ -1021,11 +985,11 @@ class ThemeStudioApp {
 
     this.inspectButton.type = "button";
     this.inspectButton.id = "inspect-button";
-    this.inspectButton.textContent = "🎯 点选画布组件";
+    this.inspectButton.textContent = "点选";
 
     this.hudToggleButton.type = "button";
     this.hudToggleButton.className = "hud-toggle-btn";
-    this.hudToggleButton.textContent = "🎨 明暗配色";
+    this.hudToggleButton.textContent = "配色面板";
     this.hudToggleButton.title = "在右侧预览舞台打开当前选中组件的「☀️ 亮色 + 🌙 暗色」双套色彩声明面板";
     this.hudToggleButton.onclick = () => {
       this.stageHudOpen = !this.stageHudOpen;
@@ -1050,12 +1014,12 @@ class ThemeStudioApp {
     this.conversationToggle.setAttribute("aria-label", "显示正常对话");
     this.conversationToggle.onchange = () => this.toggleConversationScene();
     const conversationText = document.createElement("span");
-    conversationText.textContent = "正常对话";
+    conversationText.textContent = "对话";
     conversationToggleLabel.append(this.conversationToggle, conversationText);
 
     this.captureButton.type = this.downloadPreviewButton.type = "button";
     this.captureButton.id = "capture-button";
-    this.captureButton.textContent = "📸 捕获帧";
+    this.captureButton.textContent = "截图";
     this.captureButton.disabled = true;
     this.captureButton.onclick = () => void this.capturePreviewPng();
 
@@ -1087,41 +1051,80 @@ class ThemeStudioApp {
   private promptImportThemeFile(): void {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".optheme,.zip,.json,application/zip,application/json";
+    input.accept = ".toolpkg,.json,application/zip,application/json";
     input.onchange = () => {
       const file = input.files?.[0];
-      if (file) void this.importThemeArchiveFile(file);
+      if (file) void this.importToolPkgTemplateFile(file);
     };
     input.click();
   }
 
-  private async importThemeArchiveFile(file: File): Promise<void> {
+  /** Requires an explicit selection when a ToolPkg declares multiple themes. */
+  private selectToolPkgTheme(themes: readonly ToolPkgThemeDeclaration[]): Promise<string> {
+    const dialog = document.createElement("dialog");
+    const form = document.createElement("form");
+    form.method = "dialog";
+    const heading = document.createElement("h3");
+    heading.textContent = "选择 ToolPkg 中要编辑的 theme 声明";
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", "Theme 声明");
+    for (const theme of themes) {
+      const option = document.createElement("option");
+      option.value = theme.id;
+      option.textContent = `${theme.id} — ${theme.path}`;
+      select.append(option);
+    }
+    const cancel = document.createElement("button");
+    cancel.value = "cancel";
+    cancel.textContent = "取消";
+    const confirm = document.createElement("button");
+    confirm.className = "primary";
+    confirm.value = "confirm";
+    confirm.textContent = "编辑所选声明";
+    form.append(heading, select, cancel, confirm);
+    dialog.append(form);
+    return new Promise((resolve, reject) => {
+      dialog.addEventListener("close", () => {
+        const confirmed = dialog.returnValue === "confirm";
+        const selectedId = select.value;
+        dialog.remove();
+        if (confirmed) resolve(selectedId);
+        else reject(new Error("已取消选择 theme 声明"));
+      }, { once: true });
+      this.root.append(dialog);
+      dialog.showModal();
+    });
+  }
+
+  /** Imports a selected ToolPkg theme declaration or a visual JSON draft. */
+  private async importToolPkgTemplateFile(file: File): Promise<void> {
     try {
       this.setStatus(`正在解析导入文件 ${file.name}…`, "warning");
-      const bundle = await parseImportedThemeFile(file);
+      const bundle = await parseImportedThemeFile(file, async (themes) => this.selectToolPkgTheme(themes));
+      this.importedToolPkg = bundle.source;
 
       if (bundle.metadata != null) {
-        const setField = (id: string, val: string) => {
+        /** Clears absent optional metadata instead of retaining values from an earlier draft. */
+        const setField = (id: string, val: string | undefined) => {
           const el = this.root.querySelector<HTMLInputElement | HTMLTextAreaElement>(`#${id}`);
-          if (el) el.value = val;
+          if (el == null) throw new Error(`Missing metadata field: ${id}`);
+          el.value = "";
+          if (val !== undefined) el.value = val;
         };
         setField("theme-id", bundle.metadata.themeId);
         setField("version", bundle.metadata.version);
         setField("display-name", bundle.metadata.displayName);
         setField("author", bundle.metadata.authorName);
-        setField("license", bundle.metadata.license);
-        setField("min-app-version", bundle.metadata.minAppVersion);
         setField("description", bundle.metadata.description);
-        if (bundle.metadata.themeLicenseText) {
-          setField("theme-license-text", bundle.metadata.themeLicenseText);
-        }
+        setField("theme-license-text", bundle.metadata.themeLicenseText);
         this.updateLiveThemeBadge();
       }
 
-      if (bundle.kind === "optheme") {
+      if (bundle.kind === "toolpkg") {
         this.rows.splice(0, this.rows.length);
         this.nextAssetId = 1;
-        for (const item of bundle.assets) {
+        const referenced = referencedAssetPaths(bundle.themeJson);
+        for (const item of bundle.assets.filter(asset => referenced.has(asset.path))) {
           const detected = sniffAssetFormat(item.bytes, item.path);
           const cleanBytes =
             detected != null ? sanitizeImageBytesLossless(item.bytes, detected.extension) : item.bytes;
@@ -1130,9 +1133,9 @@ class ThemeStudioApp {
           this.rows.push({
             id: this.nextAssetId++,
             path: item.path,
-            license: item.license,
-            licensePath: item.licensePath,
-            licenseText: item.licenseText,
+
+
+
             file: null,
             bytes: cleanBytes,
             sha256: sha,
@@ -1148,8 +1151,8 @@ class ThemeStudioApp {
       this.renderAssetRows();
       await this.saveLocalDraft();
       this.setStatus(
-        bundle.kind === "optheme"
-          ? `已导入主题包 ${file.name}（含 ${bundle.assets.length} 个静态素材）；正在渲染预览…`
+        bundle.kind === "toolpkg"
+          ? `已读取 ToolPkg ${file.name} 的 theme 声明（含 ${this.rows.length} 个引用素材）；导出将生成新的 ToolPkg。正在渲染预览…`
           : `已导入主题声明 ${file.name}；正在渲染预览…`,
         "ok",
       );
@@ -1430,7 +1433,7 @@ class ThemeStudioApp {
         this.receipt.textContent = JSON.stringify(message.receipt, null, 2);
         this.updateStageMetaStrip();
         this.setStatus(
-          `revision ${message.revision} 校验与 1:1 渲染就绪；可直接点击「导出 .optheme」。`,
+          `预览已更新`,
           "ok",
         );
         if (this.inspectAfterRender || this.autoInspectMode) {
@@ -1457,14 +1460,11 @@ class ThemeStudioApp {
           break;
         }
         this.selectedInspectTargetId = message.targetId;
-        if (Object.hasOwn(COMPONENT_COLOR_MAP, message.targetId)) {
-          this.stageHudOpen = true;
-        }
         this.SwitchToInspectorOnSelection(message.targetId);
         this.renderStageColorHud();
         this.updateInspectControls();
         this.setStatus(
-          `已点选画布组件「${THEME_INSPECTOR_TARGETS[message.targetId]?.title ?? message.targetId}」；预览区下方已展开明暗双套色彩声明，左侧已定位部件参数。`,
+          `已点选画布组件「${THEME_INSPECTOR_TARGETS[message.targetId]?.title ?? message.targetId}」，可在左侧编辑。`,
           "ok",
         );
         break;
@@ -1541,7 +1541,7 @@ class ThemeStudioApp {
     this.inspectButton.disabled = !rendered || this.busy;
     this.inspectButton.classList.toggle("selected", this.inspectEnabled);
     this.inspectButton.setAttribute("aria-checked", String(this.inspectEnabled));
-    this.inspectButton.textContent = this.inspectEnabled ? "🎯 点选:开" : "🎯 点选组件";
+    this.inspectButton.textContent = "点选";
     this.captureButton.disabled = !rendered || this.busy;
     this.hudToggleButton.classList.toggle("selected", this.stageHudOpen);
     // Allow toggling conversation scene even if inspect mode is active (toggleConversationScene handles it seamlessly)
@@ -1577,7 +1577,7 @@ class ThemeStudioApp {
       this.previewPng = null;
       this.downloadPreviewButton.disabled = true;
       this.exportButton.disabled = true;
-      this.captureButton.textContent = "📸 捕获帧";
+      this.captureButton.textContent = "截图";
       this.setConnectionState("rendering scene");
       this.renderLayerChips();
       this.updateStageMetaStrip();
@@ -1705,93 +1705,32 @@ class ThemeStudioApp {
       const config = this.rendererConfig;
       if (config == null) throw new Error("renderer release 不可用");
 
-      const allowedSpdx = new Set([
-        "MIT",
-        "Apache-2.0",
-        "AGPL-3.0-only",
-        "AGPL-3.0-or-later",
-        "CC0-1.0",
-        "CC-BY-4.0",
-        "CC-BY-SA-4.0",
-        "OFL-1.1",
-      ]);
-
       const rawThemeId = this.value("theme-id");
-      const validThemeId = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){2,}$/.test(rawThemeId)
-        ? rawThemeId
-        : "org.operit.custom-theme";
+      if (!/^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){2,}$/.test(rawThemeId)) throw new Error("ToolPkg ID 格式不正确");
+      const validThemeId = rawThemeId;
       const rawVersion = this.value("version");
-      const validVersion = rawVersion.length >= 5 ? rawVersion : "1.0.0";
-      const validDisplayName = this.value("display-name") || "Custom Studio Theme";
-      const validAuthor = this.value("author") || "Operit Creator";
-      const rawLicense = this.value("license");
-      const validLicense = allowedSpdx.has(rawLicense) ? rawLicense : "MIT";
-      const rawMinApp = this.value("min-app-version");
-      const validMinApp = rawMinApp.length >= 5 ? rawMinApp : "2.0.0-preview.13";
-      const validThemeLicenseText =
-        this.value("theme-license-text") ||
-        `${validLicense} License\n\nCopyright (c) ${validAuthor}\n\nLicensed under ${validLicense}.`;
-
-      const referenced = referencedAssetPaths(this.themeJson.value);
-      const usedLicensePaths = new Set<string>(["licenses/theme.txt"]);
-      const assetLicenses = this.rows
-        .filter(row => row.bytes != null && referenced.has(row.path))
-        .map((row, idx) => {
-          const defaultSpdx = row.path.endsWith(".ttf") ? "OFL-1.1" : "CC0-1.0";
-          const spdx = allowedSpdx.has(row.license.trim()) ? row.license.trim() : defaultSpdx;
-          let cleanLicPath = row.licensePath.trim().toLowerCase();
-          if (!/^licenses\/([a-z0-9_-]+\/)?[a-z0-9_-]+\.txt$/.test(cleanLicPath) || usedLicensePaths.has(cleanLicPath)) {
-            const stem =
-              row.path
-                .split("/")
-                .at(-1)
-                ?.replace(/\.[^.]+$/, "")
-                .toLowerCase()
-                .replace(/[^a-z0-9_-]+/g, "-")
-                .replace(/^[-_]+|[-_]+$/g, "") || `asset-${idx + 1}`;
-            cleanLicPath = `licenses/${stem}-${row.id}.txt`;
-          }
-          usedLicensePaths.add(cleanLicPath);
-          const customNote = row.license.trim() && !allowedSpdx.has(row.license.trim()) ? `${row.license.trim()}\n` : "";
-          const textBody =
-            row.licenseText.trim() ||
-            `${customNote}Asset: ${row.path}\nLicensed under ${spdx}.`;
-          return {
-            path: row.path,
-            license: spdx,
-            licensePath: cleanLicPath,
-            licenseText: textBody,
-          };
-        });
-
+      const validVersion = rawVersion;
+      const validDisplayName = this.value("display-name");
+      const validAuthor = this.value("author");
+      const validThemeLicenseText = this.value("theme-license-text");
       const metadata = {
-        themeId: validThemeId,
+        toolpkgId: validThemeId,
         version: validVersion,
         displayName: validDisplayName,
         authorName: validAuthor,
-        license: validLicense,
-        minAppVersion: validMinApp,
-        platforms: [...PLATFORM_IDS],
-        themeLicenseText: validThemeLicenseText,
+
+        agreementText: validThemeLicenseText,
         description: this.value("description") || null,
-        maxAppVersion: null,
-        createdWith: config.sourceDirty
-          ? null
-          : {
-              studioVersion: "development",
-              rendererCommit: config.rendererCommit,
-              flutterRevision: config.flutterRevision,
-              fixtureVersion: config.fixtureVersion,
-            },
-        assetLicenses,
+
       };
 
-      const bytes = await exportWithContract(bridge, {
+      const authored = await exportWithContract(bridge, {
         metadataJson: new TextEncoder().encode(JSON.stringify(metadata)),
         themeJson: new TextEncoder().encode(this.themeJson.value),
         previewPng: preview,
         assets: this.latestAssets,
       });
+      const bytes = this.importedToolPkg == null ? authored : await updateToolPkgTheme(this.importedToolPkg, authored);
       const rendered = this.channel?.receipt;
       if (
         generation !== this.generation ||
@@ -1800,7 +1739,7 @@ class ThemeStudioApp {
       ) {
         throw new Error("导出期间当前 Flutter 帧或草稿发生变化");
       }
-      download(bytes, `${metadata.themeId}-${metadata.version}.optheme`);
+      download(bytes, `${metadata.toolpkgId}-${metadata.version}.toolpkg`);
       const versionInput = this.root.querySelector<HTMLInputElement>("#version");
       if (versionInput) {
         const match = /^(\d+\.\d+\.)(\d+)(.*)$/.exec(metadata.version);
@@ -1810,7 +1749,7 @@ class ThemeStudioApp {
         }
       }
       this.setStatus(
-        `已成功导出 ${metadata.themeId}-${metadata.version}.optheme（${bytes.byteLength.toLocaleString()} bytes）；已通过 Rust L0–L4 自检，可直接导入客户端。`,
+        `已成功导出 ${metadata.toolpkgId}-${metadata.version}.toolpkg（${bytes.byteLength.toLocaleString()} bytes）；已通过 模板资源校验，可直接导入客户端。`,
         "ok",
       );
     } catch (error) {
@@ -1825,9 +1764,9 @@ class ThemeStudioApp {
     const row: AssetRow = {
       id,
       path: `assets/images/asset-${id}.png`,
-      license: "CC0-1.0",
-      licensePath: `licenses/asset-${id}.txt`,
-      licenseText: "Licensed under CC0-1.0.",
+
+
+
       file: null,
       bytes: null,
       sha256: null,
@@ -1856,9 +1795,9 @@ class ThemeStudioApp {
       const row: AssetRow = {
         id,
         path: "",
-        license: defaultSpdx,
-        licensePath: `licenses/asset-${id}.txt`,
-        licenseText: `Licensed under ${defaultSpdx}.`,
+
+
+
         file: null,
         bytes: null,
         sha256: null,
@@ -1964,34 +1903,9 @@ class ThemeStudioApp {
 
       const path = this.input(`asset-path-${row.id}`, "assets/images/name.png");
       path.value = row.path;
-      const license = this.input(`asset-license-${row.id}`, "CC0-1.0");
-      license.value = row.license;
-      const licensePath = this.input(`asset-license-path-${row.id}`, "licenses/name.txt");
-      licensePath.value = row.licensePath;
       const file = document.createElement("input");
       file.type = "file";
       file.accept = ".png,.jpg,.jpeg,.svg,.ttf,image/png,image/jpeg,image/svg+xml,font/ttf";
-      const licenseText = this.textarea(`asset-license-text-${row.id}`, "完整素材许可证原文", 2);
-      licenseText.value = row.licenseText;
-
-      const spdxPresets = document.createElement("div");
-      spdxPresets.className = "spdx-preset-bar";
-      for (const preset of ["MIT", "CC0-1.0", "CC-BY-4.0", "OFL-1.1"]) {
-        const chip = document.createElement("button");
-        chip.type = "button";
-        chip.className = "spdx-chip";
-        chip.textContent = preset;
-        chip.onclick = () => {
-          license.value = preset;
-          row.license = preset;
-          if (!licenseText.value.trim()) {
-            licenseText.value = `Licensed under ${preset}.`;
-            row.licenseText = licenseText.value;
-          }
-          this.invalidate();
-        };
-        spdxPresets.append(chip);
-      }
 
       path.oninput = () => {
         const prev = row.path;
@@ -2008,18 +1922,6 @@ class ThemeStudioApp {
         this.invalidate("素材路径已修改；请重新校验。");
         this.schedulePreview();
       };
-      license.oninput = () => {
-        row.license = license.value.trim();
-        this.invalidate();
-      };
-      licensePath.oninput = () => {
-        row.licensePath = licensePath.value.trim();
-        this.invalidate();
-      };
-      licenseText.oninput = () => {
-        row.licenseText = licenseText.value;
-        this.invalidate();
-      };
       file.onchange = () => void this.readAsset(row, file.files?.[0] ?? null);
 
       const grid = document.createElement("div");
@@ -2027,10 +1929,8 @@ class ThemeStudioApp {
       grid.append(
         this.labeled("包内路径", path),
         this.labeled("替换文件", file),
-        this.labeled("SPDX 协议", license),
-        this.labeled("许可证路径", licensePath),
       );
-      card.append(cardHeader, grid, spdxPresets, this.labeled("素材许可证全文", licenseText));
+      card.append(cardHeader, grid);
       this.assetList.append(card);
     }
   }
@@ -2083,13 +1983,6 @@ class ThemeStudioApp {
       row.path = this.uniqueAssetPath(detected.kind, stem, detected.extension, row);
     }
     row.mediaType = detected.mediaType;
-    row.licensePath = `licenses/${stem}.txt`;
-    if (!row.license.trim()) {
-      row.license = detected.kind === "fonts" ? "OFL-1.1" : "CC0-1.0";
-    }
-    if (!row.licenseText.trim()) {
-      row.licenseText = `Asset: ${row.path}\nLicensed under ${row.license}.`;
-    }
 
     this.refreshEditorAssets();
     if (target !== undefined) {
@@ -2113,9 +2006,9 @@ class ThemeStudioApp {
   private setSaveButtonState(state: "dirty" | "saving" | "saved"): void {
     this.saveButton.dataset.saveState = state;
     if (state === "dirty" || state === "saving") {
-      this.saveButton.textContent = "● 保存变更…";
+      this.saveButton.textContent = "保存中";
     } else {
-      this.saveButton.textContent = "✓ 已自动保存";
+      this.saveButton.textContent = "已保存";
     }
   }
 
@@ -2132,14 +2025,18 @@ class ThemeStudioApp {
     try {
       await saveDraft({
         themeJson: this.themeJson.value,
+        toolpkg: this.importedToolPkg == null ? undefined : {
+          bytes: new Blob([Uint8Array.from(this.importedToolPkg.bytes).buffer]),
+          templateId: this.importedToolPkg.template.id,
+        },
         metadata: Object.fromEntries(METADATA_IDS.map(id => [id, this.value(id)])),
         assets: this.rows
           .filter(row => row.bytes != null && row.sha256 != null && row.mediaType != null)
           .map(row => ({
             path: row.path,
-            license: row.license,
-            licensePath: row.licensePath,
-            licenseText: row.licenseText,
+
+
+
             mediaType: row.mediaType!,
             sha256: row.sha256!,
             bytes: new Blob([Uint8Array.from(row.bytes!).buffer]),
@@ -2160,6 +2057,11 @@ class ThemeStudioApp {
     try {
       const draft = await loadDraft();
       if (draft == null) return;
+      if (draft.toolpkg == null) this.importedToolPkg = undefined;
+      else {
+        const bundle = await parseImportedThemeFile(new File([draft.toolpkg.bytes], "saved.toolpkg"), async () => draft.toolpkg!.templateId);
+        this.importedToolPkg = bundle.source;
+      }
       this.visualEditor.setJson(draft.themeJson, false);
       this.themeJson.value = this.visualEditor.json;
       for (const id of METADATA_IDS) {
@@ -2281,7 +2183,7 @@ class ThemeStudioApp {
     this.generation += 1;
     this.updateInspectControls();
     this.updateStageMetaStrip();
-    this.captureButton.textContent = "📸 捕获帧";
+    this.captureButton.textContent = "截图";
     this.setConnectionState("draft changed");
     this.setStatus(message, "warning");
   }
@@ -2308,8 +2210,10 @@ class ThemeStudioApp {
     return this.root.querySelector<HTMLInputElement | HTMLTextAreaElement>(`#${id}`)?.value.trim() ?? "";
   }
 
+  /** Show concise progress and retain full error details for inspection. */
   private setStatus(value: string, tone: "ok" | "error" | "warning" | "" = ""): void {
-    this.status.textContent = value;
+    this.status.textContent = tone === "error" || tone === "warning" ? value : tone === "ok" ? "预览已更新" : "更新中…";
+    this.status.title = value;
     this.status.dataset.tone = tone;
     const ribbon = this.root.querySelector<HTMLElement>(".status-ribbon");
     if (ribbon) ribbon.dataset.tone = tone;
@@ -2326,12 +2230,14 @@ class ThemeStudioApp {
           : "ready";
   }
 
+  /** Fit the preview within the actual padded stage area. */
   private resizePreview(): void {
     const shell = this.root.querySelector<HTMLElement>(".stage-frame-shell");
     const viewport = this.root.querySelector<HTMLElement>(".preview-viewport");
     if (shell == null || viewport == null) return;
-    const availW = Math.max(80, shell.clientWidth - 18);
-    const availH = Math.max(80, shell.clientHeight - 18);
+    const style = getComputedStyle(shell);
+    const availW = Math.max(80, shell.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+    const availH = Math.max(80, shell.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom));
     const fitScale = Math.min(1, availW / this.viewport.width, availH / this.viewport.height);
     const scale = this.originalPixels ? 1 : Math.max(0.15, fitScale);
     const scaledW = Math.floor(this.viewport.width * scale);

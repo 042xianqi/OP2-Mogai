@@ -246,7 +246,7 @@ class StudioColorPopover {
         dot.className = "cpop-mode-dot";
         dot.style.background = rgbaCssFromHex8(hexForM);
         const txt = document.createElement("span");
-        txt.textContent = m === "light" ? "☀️ 亮色声明" : "🌙 暗色声明";
+        txt.textContent = m === "light" ? "浅色" : "深色";
         btn.append(dot, txt);
         btn.onclick = () => {
           this.currentMode = m;
@@ -337,7 +337,7 @@ class StudioColorPopover {
 
     const accentTitle = document.createElement("div");
     accentTitle.className = "cpop-preset-label";
-    accentTitle.textContent = "精选主题色";
+    accentTitle.textContent = "常用颜色";
     const accentGrid = document.createElement("div");
     accentGrid.className = "cpop-swatch-grid";
 

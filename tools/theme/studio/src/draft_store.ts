@@ -1,9 +1,6 @@
 /** One local-only draft. No theme bytes are uploaded to a server. */
 export interface SavedAsset {
   path: string;
-  license: string;
-  licensePath: string;
-  licenseText: string;
   mediaType: "image/png" | "image/jpeg" | "image/svg+xml" | "font/ttf";
   sha256: string;
   bytes: Blob;
@@ -12,8 +9,10 @@ export interface SavedDraft {
   themeJson: string;
   metadata: Record<string, string>;
   assets: SavedAsset[];
+  toolpkg?: { bytes: Blob; templateId: string };
 }
 
+/** Opens the local draft database without sending package bytes to a server. */
 function open(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open("operit2-theme-studio-v1", 1);
@@ -23,6 +22,7 @@ function open(): Promise<IDBDatabase> {
   });
 }
 
+/** Completes one IndexedDB draft operation and closes its connection. */
 async function transact<T>(mode: IDBTransactionMode, operation: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   const database = await open();
   try {
@@ -39,9 +39,11 @@ async function transact<T>(mode: IDBTransactionMode, operation: (store: IDBObjec
   }
 }
 
+/** Reads the current local visual draft and its original ToolPkg context. */
 export async function loadDraft(): Promise<SavedDraft | undefined> {
   return transact<SavedDraft | undefined>("readonly", store => store.get("current"));
 }
+/** Saves visual changes and original package context in one local transaction. */
 export async function saveDraft(draft: SavedDraft): Promise<void> {
   await transact<IDBValidKey>("readwrite", store => store.put(draft, "current"));
 }

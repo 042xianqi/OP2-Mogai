@@ -34,7 +34,7 @@ pub struct CoreProxyRegisteredRoots {
     providers_src: PathBuf,
     host_api_src: PathBuf,
     javascript_bridge_src: PathBuf,
-    theme_contract_src: PathBuf,
+    plugin_theme_src: PathBuf,
 }
 
 impl CoreProxyRegisteredRoots {
@@ -54,7 +54,7 @@ impl CoreProxyRegisteredRoots {
             providers_src: proxy_manifest_dir.join("../../provider/services/src"),
             host_api_src: proxy_manifest_dir.join("../../foundation/host-api/src"),
             javascript_bridge_src: proxy_manifest_dir.join("../../plugin/javascript-bridge/src"),
-            theme_contract_src: proxy_manifest_dir.join("../../theme/contract/src"),
+            plugin_theme_src: proxy_manifest_dir.join("../../plugin/theme/src"),
             proxy_manifest_dir,
         }
     }
@@ -110,7 +110,7 @@ pub fn scan_core_proxy(config: CoreProxyScanConfig) -> CoreProxyScanOutput {
     let provider_root = SourceRoot::new(roots.providers_src, "operit_providers");
     let host_api_root = SourceRoot::new(roots.host_api_src, "operit_host_api");
     let javascript_bridge_root = SourceRoot::new(roots.javascript_bridge_src, "operit_js_bridge");
-    let theme_contract_root = SourceRoot::new(roots.theme_contract_src, "operit_theme_contract");
+    let plugin_theme_root = SourceRoot::new(roots.plugin_theme_src, "operit_plugin_theme");
     let restricted_source_roots = vec![
         runtime_root.clone(),
         model_root.clone(),
@@ -121,7 +121,7 @@ pub fn scan_core_proxy(config: CoreProxyScanConfig) -> CoreProxyScanOutput {
         tools_root.clone(),
         provider_root.clone(),
         javascript_bridge_root.clone(),
-        theme_contract_root.clone(),
+        plugin_theme_root.clone(),
     ];
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH")
         .expect("Cargo must provide CARGO_CFG_TARGET_ARCH to the proxy generator");
@@ -141,7 +141,7 @@ pub fn scan_core_proxy(config: CoreProxyScanConfig) -> CoreProxyScanOutput {
         host_api_root,
         server_root.clone(),
         peer_link_root,
-        theme_contract_root,
+        plugin_theme_root,
     ];
     for source_root in &source_roots {
         emit_source_tree_rerun_if_changed(source_root.as_path());

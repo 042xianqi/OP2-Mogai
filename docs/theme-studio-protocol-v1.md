@@ -5,7 +5,7 @@
 ## 1. 信任边界
 
 - 主题作者只提供声明式 JSON、PNG/JPEG、受限静态 SVG 和静态 TrueType（`.ttf`）字节，不含任何可执行脚本。
-- TypeScript 通道（`tools/theme/studio_message_port.ts`）、预览 JS Worker（`theme_contract_worker.js`）、Dart 预览壳（`apps/flutter/theme_preview`）与 `wasm-bindgen` 胶水均为受信任的应用代码。
+- TypeScript 通道（`tools/theme/studio_message_port.ts`）、预览 JS Worker（`theme_contract_worker.js`）、Dart 预览壳（`tools/theme/preview`）与 `wasm-bindgen` 胶水均为受信任的应用代码。
 - 父页声称的 `themeSha256` 或素材 SHA-256 仅用于一致性比对，**不授予媒体解析权限**。
 - 预览核在自身同源 Rust/WASM Worker 中独立执行闭合 JSON Schema/语义校验以及与客户端导入完全一致的 L4 图片/SVG/字体/九宫格像素检查；校验通过后才允许调用 Flutter 图片解码与 `FontLoader`。
 - SVG 仅支持标准命名空间下的路径、基本图形、分组、渐变和本地 clip/paint 引用；最大 1 MiB、512 个元素、32 层深、4096×4096 且不超过 16,777,216 像素。拒绝 DTD/实体、脚本、事件属性、CSS/style、外链、`foreignObject`、滤镜、动画、嵌入式文档和未知属性。Flutter 使用共享解码器按固有尺寸栅格化，气泡与输入框继续使用同一九宫格绘制器。
@@ -64,27 +64,29 @@ reserve revision → preview-owned Rust/WASM validation
 
 - Studio 发送 `operit.theme.preview.capture.v1`（要求当前未处于 Inspector 高亮描边状态，且 `revision` / `viewport` / `showConversation` 与当前 `rendered.v1` 回执完全一致）。
 - 预览核调用 Flutter `RepaintBoundary.toImage(pixelRatio: 1)` 截取真实渲染帧，通过 `operit.theme.preview.captured.v1` 返回 `pngBytes` 与 `pngSha256`。
-- 当创作者在 Studio 中点击「导出 `.optheme`」时，若当前处于暗色、非 1280×800 视口、空白会话或存在未重新渲染的草稿改动，Studio 会自动切换至 **亮色 + 1280×800 桌面视口 + 正常对话场景** 完成真实帧渲染与 `preview.png` 捕获，再调用 Rust/WASM `exportThemePackage` 生成确定性 Stored ZIP 归档。
+- 当创作者在 Studio 中点击「导出 `.toolpkg`」时，若当前处于暗色、非 1280×800 视口、空白会话或存在未重新渲染的草稿改动，Studio 会自动切换至 **亮色 + 1280×800 桌面视口 + 正常对话场景** 完成真实帧渲染与 `preview.png` 捕获，再调用 Rust/WASM `exportToolPkgFromTheme` 生成确定性 Stored ZIP 归档。
 
 ## 4. Rust/WASM 二进制 ABI
 
-`core/crates/theme/contract/src/wasm.rs` 导出以下绑定：
+`core/crates/plugin/theme/src/wasm.rs` 导出以下绑定：
 
 - `normalizeThemeDraft(themeJson: &[u8]) -> String`：校验并展开编辑态草稿默认值，返回 `canonicalThemeJson` 与 `themeSha256`。
 - `validateThemePreviewDraft(themeJson: &[u8], directoryJson: &[u8], payload: &[u8]) -> String`：接收闭合资产目录与连续二进制缓冲区，执行完整契约与 L4 媒体校验，返回规范化 JSON 与 `ThemePreviewValidationReceipt`。
-- `exportThemePackage(metadataJson: &[u8], themeJson: &[u8], previewPng: &[u8], directoryJson: &[u8], payload: &[u8]) -> Result<Vec<u8>, JsValue>`：生成固定顺序、固定 DOS 时间戳与权限的 Stored ZIP（`.optheme`），并在返回前立刻用导入校验器（`validate_theme_package`）对生成字节执行完整自检。
+- `exportToolPkgFromTheme(metadataJson: &[u8], themeJson: &[u8], previewPng: &[u8], directoryJson: &[u8], payload: &[u8]) -> Result<Vec<u8>, JsValue>`：生成固定顺序、固定 DOS 时间戳与权限的 Stored ZIP（`.toolpkg`），并在返回前立刻用导入校验器（`validate_toolpkg_theme_templates`）对生成字节执行完整自检。
 
 ## 5. 构建与验证命令
 
 生成不可变预览核版本（需显式传入与应用一致的 Flutter SDK 与匹配 `core/Cargo.lock` 的 `wasm-bindgen` CLI）：
 
 ```powershell
-..venvScriptspython.exe tools/theme/build_preview.py --renderer-release-id <release-id> --flutter-sdk <flutter-sdk-root> --wasm-bindgen <wasm-bindgen-cli-path>
+.venv/Scripts/python.exe tools/theme/build_preview.py --renderer-release-id <release-id> --flutter-sdk <flutter-sdk-root> --wasm-bindgen <wasm-bindgen-cli-path>
 ```
 
 协议与契约测试入口：
 
 ```powershell
-cargo test --manifest-path core/Cargo.toml -p operit-theme-contract
+cargo test --manifest-path core/Cargo.toml -p operit-plugin-theme
 node --experimental-strip-types --test tools/theme/studio_message_port.test.ts
 ```
+
+编辑既有 ToolPkg 时，Studio 将所选模板的渲染结果写回对应声明，保留其他脚本、资源和模板；原包及所选模板 ID 随本地草稿一起保存在 IndexedDB。

@@ -13,7 +13,7 @@ members = [
     "crates/plugin/sdk-ipc-bridge",
     "crates/plugin/codegen",
     "crates/plugin/javascript-bridge",
-    "crates/theme/contract",
+    "crates/plugin/theme",
     "crates/runtime/application",
     "crates/node/route-macros",
     "crates/node/runtime",
@@ -64,7 +64,7 @@ tar = "0.4"
 lmdb = { package = "lmdb-rkv", version = "0.14" }
 wasmi = { version = "2.0.0-beta.7", default-features = false, features = ["stable", "std", "validate", "auto-dispatch"] }
 
-[profile.dev.package.operit-theme-contract]
+[profile.dev.package.operit-plugin-theme]
 opt-level = 2
 
 [profile.dev.package.image]

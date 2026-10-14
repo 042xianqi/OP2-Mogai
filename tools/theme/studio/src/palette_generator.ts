@@ -10,12 +10,12 @@ export interface PalettePreset {
 }
 
 export const PALETTE_SEED_PRESETS: ReadonlyArray<PalettePreset> = [
-  { id: "ocean", label: "蔚蓝海岸", seedHex: "#36618E" },
-  { id: "emerald", label: "翡翠林境", seedHex: "#1E6F50" },
-  { id: "amber", label: "流金琥珀", seedHex: "#8B5CF6" },
-  { id: "sunset", label: "落日暖砂", seedHex: "#C2593F" },
-  { id: "sakura", label: "绯樱薄雾", seedHex: "#B84A72" },
-  { id: "graphite", label: "极简钛灰", seedHex: "#475569" },
+  { id: "ocean", label: "蓝色", seedHex: "#36618E" },
+  { id: "emerald", label: "绿色", seedHex: "#1E6F50" },
+  { id: "amber", label: "紫色", seedHex: "#8B5CF6" },
+  { id: "sunset", label: "橙色", seedHex: "#C2593F" },
+  { id: "sakura", label: "粉色", seedHex: "#B84A72" },
+  { id: "graphite", label: "灰色", seedHex: "#475569" },
 ];
 
 function clamp(v: number, min: number, max: number): number {

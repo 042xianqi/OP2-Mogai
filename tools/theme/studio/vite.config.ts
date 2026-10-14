@@ -16,7 +16,7 @@ const releasePrefix = `${basePrefix}/theme-preview/${releaseId}/`;
 const requiredFiles = [
   "index.html", "flutter_bootstrap.js", "main.dart.js",
   "theme_contract_client.js", "theme_contract_worker.js",
-  "contract/operit_theme_contract.js", "contract/operit_theme_contract_bg.wasm",
+  "validator/operit_plugin_theme.js", "validator/operit_plugin_theme_bg.wasm",
 ];
 function setIsolationHeaders(res: import("node:http").ServerResponse): void {
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
