@@ -266,13 +266,11 @@ class _AddDeviceDialogState extends State<_AddDeviceDialog> {
       if (peer == null) {
         result = await _RemotePairDialog.show(context, clients: widget.clients);
       } else {
-        // LAN 候选不携带 token；免 token 准入由 runtime/Host 实际来源判断。
         final pending = await widget.clients.server.runtimeRemoteLinkService
             .startPairing(
               address: peer.address,
               nodeId: peer.nodeId,
               transport: peerEndpointTransport(peer.address),
-              token: null,
             );
         if (!mounted) {
           await widget.clients.server.runtimeRemoteLinkService.cancelPairing(
@@ -626,7 +624,6 @@ class _RemotePairDialog extends StatefulWidget {
 
 class _RemotePairDialogState extends State<_RemotePairDialog> {
   final TextEditingController _baseUrlController = TextEditingController();
-  final TextEditingController _tokenController = TextEditingController();
   final TextEditingController _codeController = TextEditingController();
   generated.PeerTransport _transport = generated.PeerTransport.http;
   generated.PendingPairing? _pairing;
@@ -637,21 +634,14 @@ class _RemotePairDialogState extends State<_RemotePairDialog> {
   @override
   void dispose() {
     _baseUrlController.dispose();
-    _tokenController.dispose();
     _codeController.dispose();
     super.dispose();
   }
 
-  /// Starts manual pairing from an explicit address.
-  ///
-  /// The token stays optional: the receiving core decides by the actual
-  /// source address whether one is required, so same-LAN addresses pair
-  /// without it and remote addresses fail with the core's token-required
-  /// error until the user fills the field in.
+  /// Starts manual pairing from an explicit address using code confirmation.
   Future<void> _start() async {
     final l10n = AppLocalizations.of(context)!;
     final baseUrl = _baseUrlController.text.trim();
-    final token = _tokenController.text.trim();
     if (baseUrl.isEmpty) {
       setState(() {
         _error = '${l10n.settingsRuntimeBaseUrl}: ${l10n.required}';
@@ -664,12 +654,7 @@ class _RemotePairDialogState extends State<_RemotePairDialog> {
     });
     try {
       final pairing = await widget.clients.server.runtimeRemoteLinkService
-          .startPairing(
-            address: baseUrl,
-            nodeId: '',
-            token: token.isEmpty ? null : token,
-            transport: _transport,
-          );
+          .startPairing(address: baseUrl, nodeId: '', transport: _transport);
       if (mounted) {
         setState(() => _pairing = pairing);
       }
@@ -742,18 +727,6 @@ class _RemotePairDialogState extends State<_RemotePairDialog> {
                 helperText: _transport == generated.PeerTransport.tcp
                     ? l10n.settingsRuntimeTcpAddressHint
                     : null,
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _tokenController,
-              enabled: pairing == null,
-              obscureText: true,
-              decoration: InputDecoration(
-                labelText: l10n.settingsRuntimePairToken,
-                helperText: l10n.settingsRuntimePairTokenHint,
                 border: const OutlineInputBorder(),
                 isDense: true,
               ),
