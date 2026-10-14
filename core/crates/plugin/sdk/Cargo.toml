@@ -10,6 +10,7 @@ repository = "https://github.com/AAswordman/Operit2"
 documentation = "https://docs.rs/operit-plugin-sdk"
 
 [dependencies]
+operit-plugin-theme = { path = "../theme" }
 chacha20poly1305 = "0.10"
 chrono.workspace = true
 json5.workspace = true
@@ -34,3 +35,6 @@ wasmi.workspace = true
 [build-dependencies]
 serde_json.workspace = true
 operit-plugin-sdk-codegen = { version = "=2.0.0-preview.15", path = "../codegen" }
+
+[dev-dependencies]
+image.workspace = true

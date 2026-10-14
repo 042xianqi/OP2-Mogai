@@ -34,6 +34,7 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+image.workspace = true
 operit-host-native-storage = { path = "../../../../hosts/common/operit-host-native-storage" }
 rusqlite.workspace = true
 

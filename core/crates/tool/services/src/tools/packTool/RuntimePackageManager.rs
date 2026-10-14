@@ -3841,6 +3841,22 @@ impl RuntimePackageManager {
         })
     }
 
+    /// Reads an archive from its registered ToolPkg source through the existing host abstractions.
+    #[allow(non_snake_case)]
+    pub fn readToolPkgArchiveBytes(&self, packageName: &str) -> Result<Vec<u8>, String> {
+        let runtime = self.getToolPkgContainerRuntime(packageName)
+            .ok_or("ToolPkg is not registered")?;
+        match runtime.sourceType {
+            ToolPkgSourceType::ASSET => RuntimeToolPkgAssetSource {
+                runtimeSupport: self.toolHandler.runtimeDependencies().shared_runtime_support(),
+            }.toolPkgAssetBytes(&runtime.sourcePath)
+                .ok_or_else(|| "Registered ToolPkg asset is missing".to_string()),
+            ToolPkgSourceType::EXTERNAL | ToolPkgSourceType::MARKET => self.fileSystemHost
+                .readFileBytes(&runtime.sourcePath).map_err(|error| error.to_string()),
+        }
+    }
+
+
     /// Imports one marketplace artifact from bytes after validating its declared digest.
     #[allow(non_snake_case)]
     pub fn addMarketArtifactBytes(
@@ -4068,24 +4084,8 @@ impl RuntimePackageManager {
                     "market_toolpkg",
                 ),
             };
-        match ToolPkgProtection::toolPkgArchiveContainsProtectedEntries(&rawArchive) {
-            Ok(true) => {}
-            Ok(false) => {
-                return self.recordAndReturnPackageError(
-                    filePath,
-                    "market_import_failed",
-                    "Market ToolPkg archive does not contain protected entries",
-                    "market_toolpkg",
-                )
-            }
-            Err(error) => {
-                return self.recordAndReturnPackageError(
-                    filePath,
-                    "market_import_failed",
-                    &format!("Error installing market ToolPkg: {error}"),
-                    "market_toolpkg",
-                )
-            }
+        if let Err(error) = ToolPkgProtection::validateMarketToolPkgArchive(&rawArchive) {
+            return self.recordAndReturnPackageError(filePath, "market_import_failed", &error, "market_toolpkg");
         }
         let installationId = match self.marketToolPkgInstallationId() {
             Ok(value) => value,

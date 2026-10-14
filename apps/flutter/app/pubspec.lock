@@ -752,6 +752,13 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
+  operit_ui:
+    dependency: "direct main"
+    description:
+      path: "../packages/operit_ui"
+      relative: true
+    source: path
+    version: "0.1.0"
   package_config:
     dependency: transitive
     description:

@@ -135,6 +135,7 @@ impl ExtensionStore {
         Ok(())
     }
 
+    /// Imports legacy visibility and package state through their declared storage schemas.
     fn initialSettings(&self, kind: &str, id: &str, mut settings: Value) -> Result<Value, String> {
         use operit_util::RuntimeStorageLayout::{
             PACKAGE_MANAGER_PREFERENCES_PATH, SKILL_VISIBILITY_PREFERENCES_PATH,
@@ -147,9 +148,34 @@ impl ExtensionStore {
         if !self.storage.exists(path).map_err(|e| e.to_string())? {
             return Ok(settings);
         }
-        let prefs = PreferencesDataStore::newWithStorage(self.storage.clone(), path)
-            .data()
-            .map_err(|e| e.to_string())?;
+        let store = PreferencesDataStore::newWithStorage(self.storage.clone(), path);
+        let store = if kind == "package" {
+            store.withSchema(2, |version, preferences| match version {
+                0 => Ok(()),
+                1 => {
+                    for name in ["imported_packages", "disabled_packages", "toolpkg_order"] {
+                        let key = stringPreferencesKey(name);
+                        if let Some(encoded) = preferences.getTyped::<String>(&key)? {
+                            let names: Vec<String> = serde_json::from_str(&encoded)?;
+                            preferences.set(&key, serde_json::to_value(names)?);
+                        }
+                    }
+                    let key = stringPreferencesKey("toolpkg_subpackage_states");
+                    if let Some(encoded) = preferences.getTyped::<String>(&key)? {
+                        let states: BTreeMap<String, bool> = serde_json::from_str(&encoded)?;
+                        preferences.set(&key, serde_json::to_value(states)?);
+                    }
+                    Ok(())
+                }
+                from => Err(crate::PreferencesDataStore::PreferencesDataStoreError::MissingMigration {
+                    from,
+                    to: from + 1,
+                }),
+            })
+        } else {
+            store
+        };
+        let prefs = store.data().map_err(|e| e.to_string())?;
         if kind == "skill" {
             let hash = format!("{:x}", Sha256::digest(id.trim().as_bytes()));
             let legacy: String = id

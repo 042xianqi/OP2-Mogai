@@ -691,3 +691,56 @@ fn retired_device_package_keeps_data_and_requires_archived_source() {
     assert_eq!(host.readBytes(&config).unwrap(), b"configuration");
     assert_eq!(host.readBytes(&data).unwrap(), b"business-data");
 }
+
+/// Migrates the legacy package-manager strings before importing extension settings.
+#[test]
+fn legacy_package_preferences_migrate_to_native_json_before_registration() {
+    let storage = host();
+    let path = operit_util::RuntimeStorageLayout::PACKAGE_MANAGER_PREFERENCES_PATH;
+    storage.writeBytes(path, &serde_json::to_vec(&json!({
+        "imported_packages": "[\"demo\",\"demo.tools\",\"other\"]",
+        "disabled_packages": "[\"demo.disabled\",\"other.disabled\"]",
+        "toolpkg_order": "[\"other\",\"demo\"]",
+        "toolpkg_subpackage_states": "{\"demo.tools\":true,\"demo.disabled\":false,\"other.tools\":true}",
+        "unrelated": "preserve me"
+    })).unwrap()).unwrap();
+    let store = ExtensionStore::new(storage.clone());
+    register_package_owner(&store, "demo", &["demo", "demo.tools", "demo.disabled"]);
+    let record = store.record("package", "demo").unwrap();
+    assert_eq!(record.settings["enabledNames"], json!(["demo", "demo.tools"]));
+    assert_eq!(record.settings["disabledNames"], json!(["demo.disabled"]));
+    assert_eq!(record.settings["order"], json!(1));
+    assert_eq!(record.settings["subpackageStates"], json!({"demo.tools": true, "demo.disabled": false}));
+    let prefs = PreferencesDataStore::newWithStorage(storage.clone(), path).data().unwrap();
+    assert_eq!(prefs.getTyped::<Vec<String>>(&stringPreferencesKey("imported_packages")).unwrap().unwrap(), vec!["demo", "demo.tools", "other"]);
+    assert_eq!(prefs.getTyped::<BTreeMap<String, bool>>(&stringPreferencesKey("toolpkg_subpackage_states")).unwrap().unwrap()["demo.disabled"], false);
+    assert_eq!(prefs.getTyped::<String>(&stringPreferencesKey("unrelated")).unwrap().unwrap(), "preserve me");
+    let migrated = storage.readBytes(path).unwrap();
+    register_package_owner(&store, "other", &["other", "other.tools", "other.disabled"]);
+    assert_eq!(storage.readBytes(path).unwrap(), migrated);
+    assert_eq!(store.record("package", "other").unwrap().settings["enabledNames"], json!(["other"]));
+}
+
+/// Rejects malformed legacy package state without registering a partial installation.
+#[test]
+fn malformed_legacy_package_preferences_do_not_register_or_overwrite_data() {
+    for (key, encoded) in [
+        ("imported_packages", "["),
+        ("disabled_packages", "[1]"),
+        ("toolpkg_order", "{}"),
+        ("toolpkg_subpackage_states", "{\"demo\":1}"),
+    ] {
+        let storage = host();
+        let path = operit_util::RuntimeStorageLayout::PACKAGE_MANAGER_PREFERENCES_PATH;
+        let original = serde_json::to_vec(&json!({key: encoded})).unwrap();
+        storage.writeBytes(path, &original).unwrap();
+        let store = ExtensionStore::new(storage.clone());
+        assert!(store.registerDevice("package", "demo", "demo.toolpkg", json!({
+            "members": ["demo"], "enabledNames": [], "disabledNames": [],
+            "subpackageStates": {}, "order": 0, "builtin": false,
+            "installationId": "00000000000000000000000000000000"
+        })).is_err());
+        assert!(store.records("package").unwrap().is_empty());
+        assert_eq!(storage.readBytes(path).unwrap(), original);
+    }
+}
