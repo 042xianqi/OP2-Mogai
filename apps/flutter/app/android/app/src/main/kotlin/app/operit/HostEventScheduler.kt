@@ -220,20 +220,31 @@ object AndroidHostEventScheduler {
      * Persists one firing that was consumed but never handed to Core, so the loss stays
      * visible after this process dies ([UndeliveredHostEventFire] is the record).
      * Retention only: no alarm is re-armed and no retry is scheduled. The oldest records
-     * are dropped past [retainedUndeliveredCap] so a failing device cannot grow forever.
+     * are dropped past [retainedUndeliveredCap] so a failing device cannot grow forever;
+     * each drop gets its own log line (a silently dropped record would hide a failure).
+     *
+     * Runs under the same [lock] as [consumeFire]: the receiver thread (start-core /
+     * submit failures) and the background executor (delivery failures) can retain at the
+     * same time, and read-modify-write without the lock would lose records.
      */
     internal fun retainUndelivered(context: Context, fire: UndeliveredHostEventFire) {
-        val preferences = context.applicationContext
-            .getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
-        val values = JSONArray(preferences.getString(undeliveredFiresKey, "[]") ?: "[]")
-        values.put(fire.toJson())
-        while (values.length() > retainedUndeliveredCap) {
-            values.remove(0)
+        synchronized(lock) {
+            val preferences = context.applicationContext
+                .getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
+            val values = JSONArray(preferences.getString(undeliveredFiresKey, "[]") ?: "[]")
+            values.put(fire.toJson())
+            while (values.length() > retainedUndeliveredCap) {
+                values.remove(0)
+                Log.w(
+                    logTag,
+                    "Undelivered host event records at cap ($retainedUndeliveredCap); dropping the oldest record",
+                )
+            }
+            val committed = preferences.edit()
+                .putString(undeliveredFiresKey, values.toString())
+                .commit()
+            check(committed) { "failed to persist undelivered host event ${fire.scheduleId}" }
         }
-        val committed = preferences.edit()
-            .putString(undeliveredFiresKey, values.toString())
-            .commit()
-        check(committed) { "failed to persist undelivered host event ${fire.scheduleId}" }
     }
 
     /** Registers one wakeup alarm with Android's system AlarmManager. */
