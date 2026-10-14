@@ -2323,6 +2323,13 @@ class AppLocalizationsEn extends AppLocalizations {
       'host:port, for example 192.168.1.10:37195';
 
   @override
+  String get settingsRuntimeTransportAuto => 'Auto (recommended)';
+
+  @override
+  String get settingsRuntimeTransportAutoHint =>
+      'Enter host:port; the carrier (HTTP/WebSocket/TCP) is detected automatically';
+
+  @override
   String settingsRuntimeConnectionFailed(String error) {
     return 'Device connection failed: $error';
   }

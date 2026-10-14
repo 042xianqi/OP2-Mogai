@@ -1129,6 +1129,8 @@
   "settingsRuntimeFinishPairing": "Finish connection",
   "settingsRuntimeBaseUrl": "Device address",
   "settingsRuntimeTcpAddressHint": "host:port, for example 192.168.1.10:37195",
+  "settingsRuntimeTransportAuto": "Auto (recommended)",
+  "settingsRuntimeTransportAutoHint": "Enter host:port; the carrier (HTTP/WebSocket/TCP) is detected automatically",
   "settingsRuntimeConnectionFailed": "Device connection failed: {error}",
   "@settingsRuntimeConnectionFailed": {
     "placeholders": {

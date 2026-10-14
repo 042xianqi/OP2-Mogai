@@ -4223,6 +4223,18 @@ abstract class AppLocalizations {
   /// **'host:port, for example 192.168.1.10:37195'**
   String get settingsRuntimeTcpAddressHint;
 
+  /// No description provided for @settingsRuntimeTransportAuto.
+  ///
+  /// In en, this message translates to:
+  /// **'Auto (recommended)'**
+  String get settingsRuntimeTransportAuto;
+
+  /// No description provided for @settingsRuntimeTransportAutoHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter host:port; the carrier (HTTP/WebSocket/TCP) is detected automatically'**
+  String get settingsRuntimeTransportAutoHint;
+
   /// No description provided for @settingsRuntimeConnectionFailed.
   ///
   /// In en, this message translates to:

@@ -3384,7 +3384,7 @@ impl OperitTui {
         let expectedNode = wizard.expectedNode.clone().unwrap_or_default();
         match self
             .networkControl
-            .startPairing(expectedNode, address, transport)
+            .startPairing(expectedNode, address, Some(transport))
             .await
         {
             Ok(pending) => {

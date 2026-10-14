@@ -58,6 +58,38 @@ fn endpointWithHost(endpoint: &str, host: &str) -> Option<String> {
     Some(format!("{prefix}{host}:{port}{suffix}"))
 }
 
+/// Resolves the pairing carrier when the caller left it open: an explicit URL
+/// scheme implies its carrier, a bare `ip:port` is classified by one throwaway
+/// probe connection (see `operit_peer_link::detectTransport`).
+async fn resolvePairingTransport(
+    host: &std::sync::Arc<operit_host_api::HostManager::HostManager>,
+    address: &str,
+) -> Result<PeerTransport, String> {
+    if let Some((scheme, _)) = address.split_once("://") {
+        return match scheme {
+            "http" => Ok(PeerTransport::Http),
+            "ws" => Ok(PeerTransport::WebSocket),
+            "tcp" => Ok(PeerTransport::Tcp),
+            other => Err(format!("unsupported link address scheme: {other}")),
+        };
+    }
+    let socket = address.split('/').next().unwrap_or(address);
+    operit_peer_link::detectTransport(host.clone(), socket).await
+}
+
+/// Upgrades a bare socket address to the carrier's URL form; explicit URLs and
+/// non-network carriers (serial, bluetooth) pass through unchanged.
+fn pairingAddressFor(address: &str, transport: PeerTransport) -> String {
+    if address.contains("://") {
+        return address.to_string();
+    }
+    match transport {
+        PeerTransport::Http => format!("http://{address}/link"),
+        PeerTransport::WebSocket => format!("ws://{address}/link"),
+        _ => address.to_string(),
+    }
+}
+
 /// Last transport/session failure only; no credentials or message contents.
 pub fn peerSessionDiagnostic() -> Option<String> { duplex::diagnostic() }
 
@@ -741,12 +773,21 @@ impl RuntimePeerService for HostRuntimePeerService {
         Ok(discoveredPeers(records, &self.state.nodeId, &pairedNodeIds))
     }
     /// Checks the known identity and the handshake result before creating a pairing transaction.
-    /// Starts code-confirmed pairing over the shared transport handshake.
-    async fn startPairing(&self, target: PeerEndpoint, transport: PeerTransport) -> Result<PendingPairing, CoreLinkError> {
+    async fn startPairing(&self, target: PeerEndpoint, transport: Option<PeerTransport>) -> Result<PendingPairing, CoreLinkError> {
         if !target.nodeId.is_empty() {
             let _guard = self.state.mutation.lock().unwrap();
             self.ensureDeviceUnpaired(&target.nodeId)?;
         }
+        // A bare `ip:port` input pairs without a user-picked carrier: classify
+        // the endpoint once, then normalize the address for the winner so the
+        // pending record stores the same endpoint a later reconnect would dial.
+        let transport = match transport {
+            Some(transport) => transport,
+            None => resolvePairingTransport(&self.state.host, &target.address)
+                .await
+                .map_err(error)?,
+        };
+        let target = PeerEndpoint { address: pairingAddressFor(&target.address, transport), ..target };
         // Opening a USB-UART can reset an ESP32 through the carrier's modem
         // control lines. Retry the serial handshake after that boot window;
         // network transports keep the original single-attempt behavior.
