@@ -9,10 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:operit_ui/operit_ui.dart';
 import 'package:video_player/video_player.dart';
 
-import '../../core/bridge/ProxyCoreRuntimeBridge.dart';
 import '../../core/errors/UnhandledErrorReporter.dart';
-import '../../core/proxy/generated/CoreProxyClients.g.dart';
-import '../../core/proxy/generated/CoreProxyModels.g.dart' as core_proxy;
 import '../../core/runtime/RuntimeBootstrapManager.dart';
 import '../../data/preferences/UserPreferencesManager.dart';
 import '../../l10n/generated/app_localizations.dart';
@@ -25,9 +22,8 @@ import '../features/startup/PluginLoadingOverlay.dart';
 import '../../core/host/browser/RuntimeBrowserOwnerHost.dart';
 import '../features/chat/components/workspace/browser/automation/WorkspaceWebVisitHost.dart';
 import 'OperitThemeAssets.dart';
+import 'ThemeAppearanceErrorScreen.dart';
 import 'ThemeCircularRevealHost.dart';
-import 'ThemeLibraryService.dart';
-import '../features/settings/appearance/ThemeLibraryPanel.dart';
 
 class OperitTheme extends StatefulWidget {
   /// Creates one themed Flutter application root.
@@ -98,8 +94,7 @@ class _OperitThemeState extends State<OperitTheme> {
     _controller.setInitialThemePreferenceSnapshot(
       widget.initialThemePreferenceSnapshot,
     );
-    // The 78-field first-frame transport cannot express a package's full
-    // palette/resources. Each engine reads and prepares the CoreNode choice.
+    // Each engine prepares its synchronized appearance before mounting the app.
     _runtimeUiReady = false;
     if (_runtimeManager.runtimeConfigured) {
       unawaited(_startRuntimeUi());
@@ -252,80 +247,96 @@ class _OperitThemeState extends State<OperitTheme> {
   Widget build(BuildContext context) {
     final runtimeConfigured = _runtimeManager.runtimeConfigured;
     final runtimeReady = runtimeConfigured && _runtimeUiReady;
-    final activeThemeReady = runtimeReady && !_controller.themeIsPreparing &&
+    final activeThemeReady =
+        runtimeReady &&
+        !_controller.themeIsPreparing &&
         _controller.themeLoadError == null;
-    // Bootstrap/recovery chrome is not an applied theme. App content stays
-    // blocked on selection errors; no selection is replaced automatically.
-    final themeSnapshot = activeThemeReady
-        ? _controller.themePreferenceSnapshot
-        : UserPreferencesManager.defaultThemePreferenceSnapshot;
+    final showUnconfiguredApp =
+        !runtimeConfigured &&
+        (widget.unconfiguredChildEnabled || _preserveUnconfiguredChild);
+    final retainApplication =
+        _controller.hasLoadedTheme ||
+        showUnconfiguredApp ||
+        _preserveUnconfiguredChild;
     final themeMode = runtimeReady
         ? _controller.themeMode
         : widget.initialThemeMode ??
               widget.initialThemePreferenceSnapshot.themeMode;
-    final Widget appChild;
-    if (_preserveUnconfiguredChild && !runtimeReady) {
-      appChild = Stack(
-        fit: StackFit.expand,
-        children: <Widget>[
-          widget.child,
-          if (runtimeConfigured && !runtimeReady)
-            RuntimeBootstrapScreen(
-              message: _runtimeStartupMessage,
-              errorText: _runtimeStartupError?.toString(),
-            ),
-        ],
-      );
-    } else if (!runtimeConfigured) {
-      appChild = widget.unconfiguredChildEnabled
-          ? widget.child
-          : const RuntimeBootstrapScreen(message: '请先在主窗口配置运行时目录和工作区目录');
-    } else if (!runtimeReady) {
-      appChild = RuntimeBootstrapScreen(
-        message: _runtimeStartupMessage,
-        errorText: _runtimeStartupError?.toString(),
-      );
-    } else {
-      // Keep chat/navigation state mounted across a theme preparation barrier.
-      // Offstage content is not painted or interactive and retains its own
-      // validated asset resolver; recovery chrome cannot reinterpret its paths.
-      appChild = Stack(fit: StackFit.expand, children: <Widget>[
-        Offstage(
-          offstage: !activeThemeReady,
-          child: TickerMode(
-            enabled: activeThemeReady,
-            child: ExcludeFocus(
-              excluding: !activeThemeReady,
-              child: ThemeAssetScope(
-                resolver: _controller.preparedVisual == null
-                    ? _themeAssets : _controller.preparedVisual!.resources,
-                child: widget.child,
-              ),
-            ),
-          ),
-        ),
-        if (_controller.themeLoadError != null)
-          ThemeLibraryRecoveryScreen(controller: _controller),
-        if (_controller.themeIsPreparing && _controller.themeLoadError == null)
-          const RuntimeBootstrapScreen(message: '正在校验并准备本节点主题资源'),
-      ]);
-    }
     return _OperitThemeScope(
       controller: _controller,
-      child: ThemeAssetScope(
-        resolver: _controller.preparedVisual == null
-            ? _themeAssets : _controller.preparedVisual!.resources,
-        child: _OperitMaterialApp(
-          themeMode: themeMode,
-          themePreferenceSnapshot: themeSnapshot,
-          preparedVisual: activeThemeReady ? _controller.preparedVisual : null,
-          hostInteractionHostsEnabled:
-              activeThemeReady && widget.hostInteractionHostsEnabled,
-          zoom: _zoom,
-          zoomShortcutsEnabled: runtimeReady && _runtimeStartCompleted,
-          onZoomChanged: _changeZoom,
-          child: appChild,
-        ),
+      child: Stack(
+        alignment: Alignment.topLeft,
+        fit: StackFit.expand,
+        children: <Widget>[
+          if (retainApplication)
+            Offstage(
+              key: const ValueKey('appearance-application'),
+              offstage: !activeThemeReady && !showUnconfiguredApp,
+              child: TickerMode(
+                enabled: activeThemeReady || showUnconfiguredApp,
+                child: ExcludeFocus(
+                  excluding: !activeThemeReady && !showUnconfiguredApp,
+                  child: ThemeAssetScope(
+                    resolver: _themeAssets,
+                    child: _OperitMaterialApp(
+                      themeMode: themeMode,
+                      themePreferenceSnapshot:
+                          _controller.themePreferenceSnapshot,
+                      hostInteractionHostsEnabled:
+                          activeThemeReady &&
+                          widget.hostInteractionHostsEnabled,
+                      zoom: _zoom,
+                      zoomShortcutsEnabled:
+                          runtimeReady && _runtimeStartCompleted,
+                      onZoomChanged: _changeZoom,
+                      child: widget.child,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          if (!activeThemeReady && !showUnconfiguredApp)
+            ThemeRenderRoot(
+              key: const ValueKey('appearance-status'),
+              title: 'Operit2',
+              themePreferenceSnapshot: _controller.themePreferenceSnapshot,
+              lightColorScheme: _seedColorScheme(
+                Brightness.light,
+                _controller.themePreferenceSnapshot,
+              ),
+              darkColorScheme: _seedColorScheme(
+                Brightness.dark,
+                _controller.themePreferenceSnapshot,
+              ),
+              // Startup and repair use system typography while font assets are being prepared.
+              fontFamily: _defaultFontFamily,
+              fontFamilyFallback: _defaultFontFamilyFallback,
+              themeMode: themeMode,
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              builder: (context, child) =>
+                  AnnotatedRegion<SystemUiOverlayStyle>(
+                    value: operitSystemUiOverlayStyle(
+                      Theme.of(context).colorScheme,
+                    ),
+                    child: child!,
+                  ),
+              home: runtimeReady && _controller.themeLoadError != null
+                  ? ThemeAppearanceErrorScreen(
+                      error: _controller.themeLoadError!,
+                      onRetry: _controller.reloadTheme,
+                      onReset: _controller.restoreDefaultAppearance,
+                    )
+                  : RuntimeBootstrapScreen(
+                      message: runtimeReady
+                          ? '正在读取外观设置'
+                          : !runtimeConfigured
+                          ? '请先在主窗口配置运行时目录和工作区目录'
+                          : _runtimeStartupMessage,
+                      errorText: _runtimeStartupError?.toString(),
+                    ),
+            ),
+        ],
       ),
     );
   }
@@ -335,7 +346,6 @@ class _OperitMaterialApp extends StatelessWidget {
   const _OperitMaterialApp({
     required this.themeMode,
     required this.themePreferenceSnapshot,
-    required this.preparedVisual,
     required this.hostInteractionHostsEnabled,
     required this.zoom,
     required this.zoomShortcutsEnabled,
@@ -345,7 +355,6 @@ class _OperitMaterialApp extends StatelessWidget {
 
   final ThemeMode themeMode;
   final ThemePreferenceSnapshot themePreferenceSnapshot;
-  final PreparedThemeVisual? preparedVisual;
   final bool hostInteractionHostsEnabled;
   final double zoom;
   final bool zoomShortcutsEnabled;
@@ -355,20 +364,21 @@ class _OperitMaterialApp extends StatelessWidget {
   /// Builds the themed application and process-wide host overlays.
   @override
   Widget build(BuildContext context) {
-    final visual = preparedVisual;
-    final lightColorScheme = visual == null
-        ? _seedColorScheme(Brightness.light, themePreferenceSnapshot)
-        : visual.spec.colorScheme(Brightness.light);
-    final darkColorScheme = visual == null
-        ? _seedColorScheme(Brightness.dark, themePreferenceSnapshot)
-        : visual.spec.colorScheme(Brightness.dark);
+    final lightColorScheme = _seedColorScheme(
+      Brightness.light,
+      themePreferenceSnapshot,
+    );
+    final darkColorScheme = _seedColorScheme(
+      Brightness.dark,
+      themePreferenceSnapshot,
+    );
     return ThemeRenderRoot(
       title: 'Operit2',
       themePreferenceSnapshot: themePreferenceSnapshot,
       lightColorScheme: lightColorScheme,
       darkColorScheme: darkColorScheme,
-      fontFamily: visual == null ? _fontFamily(themePreferenceSnapshot) : visual.resources.sans.family,
-      fontFamilyFallback: visual == null ? _fontFamilyFallback(themePreferenceSnapshot) : const <String>[],
+      fontFamily: _fontFamily(themePreferenceSnapshot),
+      fontFamilyFallback: _fontFamilyFallback(themePreferenceSnapshot),
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
       themeMode: themeMode,
@@ -416,85 +426,24 @@ class _OperitMaterialApp extends StatelessWidget {
   }
 }
 
-/// Isolated client preview: real chat widgets see a private theme scope. It has
-/// no start/subscription, persistence callback or selection write.
-class OperitThemePreview extends StatelessWidget {
-  const OperitThemePreview({
-    super.key, required this.visual, required this.settings, required this.child,
-  });
-
-  final PreparedThemeVisual visual;
-  final ThemePreferenceSnapshot settings;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final snapshot = visual.snapshot(settings);
-    _loadedCustomFontFamilies.addAll(_preparedFontFamilies(visual));
-    final controller = OperitThemeController(onChanged: () {});
-    controller.setInitialThemePreferenceSnapshot(snapshot);
-    return _OperitThemeScope(
-      controller: controller,
-      child: ThemeAssetScope(
-        resolver: visual.resources,
-        child: ThemeRenderRoot(
-          title: 'Operit2 · 独立主题预览',
-          themePreferenceSnapshot: snapshot,
-          lightColorScheme: visual.spec.colorScheme(Brightness.light),
-          darkColorScheme: visual.spec.colorScheme(Brightness.dark),
-          fontFamily: visual.resources.sans.family,
-          fontFamilyFallback: const <String>[],
-          themeMode: settings.themeMode,
-          themeAnimationDuration: Duration.zero,
-          localizationsDelegates: AppLocalizations.localizationsDelegates,
-          supportedLocales: AppLocalizations.supportedLocales,
-          builder: (context, child) => OperitThemeBackground(
-            themePreferenceSnapshot: snapshot, child: child!,
-          ),
-          home: child,
-        ),
-      ),
-    );
-  }
-}
-
-Map<String, String> _preparedFontFamilies(PreparedThemeVisual visual) => <String, String>{
-  for (final font in <PreparedThemeFont>[
-    visual.resources.sans, visual.resources.mono, visual.resources.user, visual.resources.ai,
-  ]) font.family: font.family,
-};
-
+/// Observes and edits the ordinary synchronized appearance configuration.
 class OperitThemeController {
   /// Creates the controller that owns the effective application theme.
   OperitThemeController({
     required VoidCallback onChanged,
     Future<void> Function(ThemeMode)? saveStartupThemeMode,
     UserPreferencesManager preferencesManager = const UserPreferencesManager(),
-    GeneratedCoreProxyClients clients = const GeneratedCoreProxyClients(
-      ProxyCoreRuntimeBridge(),
-    ),
   }) : _onChanged = onChanged,
        _saveStartupThemeMode =
            saveStartupThemeMode ?? _saveStartupThemeModeDefault,
-       _preferencesManager = preferencesManager,
-       _clients = clients;
+       _preferencesManager = preferencesManager;
 
   final VoidCallback _onChanged;
   final Future<void> Function(ThemeMode) _saveStartupThemeMode;
   final UserPreferencesManager _preferencesManager;
-  final GeneratedCoreProxyClients _clients;
-  StreamSubscription<core_proxy.ThemeNodeState>? _nodeThemeSubscription;
-  late final ThemeLibraryService library = ThemeLibraryService(_clients);
+  StreamSubscription<Map<String, Object?>>? _appearanceSubscription;
   ThemePreferenceSnapshot _themePreferenceSnapshot =
       UserPreferencesManager.defaultThemePreferenceSnapshot;
-  ThemePreferenceSnapshot _personalSnapshot =
-      UserPreferencesManager.defaultThemePreferenceSnapshot;
-  core_proxy.ThemeSelection? _selection;
-  PreparedThemeVisual? _preparedVisual;
-  (String, String, String)? _preparedIdentity;
-  PreparedThemeVisual? _stagedVisual;
-  (String, String, String)? _stagedIdentity;
-  bool _applyingSelection = false;
   Object? _themeLoadError;
   bool _themeIsPreparing = false;
   bool _hasLoadedState = false;
@@ -503,12 +452,13 @@ class OperitThemeController {
   bool _suppressThemeAnimation = false;
 
   ThemeMode get themeMode => _themePreferenceSnapshot.themeMode;
-  ThemePreferenceSnapshot get themePreferenceSnapshot => _themePreferenceSnapshot;
-  core_proxy.ThemeSelection? get selection => _selection;
-  PreparedThemeVisual? get preparedVisual => _preparedVisual;
+  ThemePreferenceSnapshot get themePreferenceSnapshot =>
+      _themePreferenceSnapshot;
   Object? get themeLoadError => _themeLoadError;
   bool get themeIsPreparing => _themeIsPreparing;
-  bool get packageVisualsLocked => _selection != null;
+
+  /// Reports whether a complete appearance has finished resource preparation.
+  bool get hasLoadedTheme => _hasLoadedState;
   bool get suppressThemeAnimation => _suppressThemeAnimation;
 
   /// Applies the known first-frame theme state before asynchronous startup.
@@ -516,22 +466,18 @@ class OperitThemeController {
     _themePreferenceSnapshot = snapshot;
   }
 
-  /// Initializes fresh node-global settings and observes this CoreNode only.
-  /// Internal-test role preferences are intentionally neither read nor migrated.
+  /// Observes the existing shared appearance owner without retaining a template selection.
   Future<void> start() async {
     final lifecycle = ++_lifecycleRevision;
-    await _nodeThemeSubscription?.cancel();
-    _nodeThemeSubscription = null;
-    await _clients.application.initializeNodeThemeAppearance(
-      snapshotJson: jsonEncode(UserPreferencesManager.defaultThemePreferenceSnapshot.toJson()),
-    );
+    await _appearanceSubscription?.cancel();
+    _appearanceSubscription = null;
     if (lifecycle != _lifecycleRevision) return;
     await _reloadThemePreferenceSnapshot();
     if (lifecycle != _lifecycleRevision) return;
-    _nodeThemeSubscription = _clients.application.nodeThemeStateFlow().listen(
-      (state) {
-        if (_applyingSelection) return;
-        unawaited(_acceptNodeState(state));
+    _appearanceSubscription = _preferencesManager.preferencesFlow().listen(
+      (_) {
+        if (lifecycle != _lifecycleRevision) return;
+        unawaited(_reloadThemePreferenceSnapshot());
       },
       onError: (Object error, StackTrace stack) {
         if (lifecycle != _lifecycleRevision) return;
@@ -543,22 +489,13 @@ class OperitThemeController {
     );
   }
 
+  /// Releases the ordinary appearance observer when this controller leaves its runtime.
   void dispose() {
     _lifecycleRevision++;
     _themePreferenceRevision++;
-    unawaited(_nodeThemeSubscription?.cancel());
-    _nodeThemeSubscription = null;
-    _stagedVisual?.dispose();
-    _stagedVisual = null;
-    _stagedIdentity = null;
-    _applyingSelection = false;
-    _preparedVisual?.dispose();
-    _preparedVisual = null;
-    _preparedIdentity = null;
-    _selection = null;
+    unawaited(_appearanceSubscription?.cancel());
+    _appearanceSubscription = null;
     _themePreferenceSnapshot =
-        UserPreferencesManager.defaultThemePreferenceSnapshot;
-    _personalSnapshot =
         UserPreferencesManager.defaultThemePreferenceSnapshot;
     _hasLoadedState = false;
   }
@@ -598,9 +535,7 @@ class OperitThemeController {
     if (_themePreferenceSnapshot.themeMode == themeMode) {
       return;
     }
-    await _preferencesManager.saveThemeSettings(
-      themeMode: themeMode,
-    );
+    await _preferencesManager.saveThemeSettings(themeMode: themeMode);
     await _reloadThemePreferenceSnapshot();
   }
 
@@ -610,7 +545,7 @@ class OperitThemeController {
     double? backgroundBlurRadius,
     double? fontScale,
   }) {
-    // Allow live slider preview for opacity, blur and fontScale even when a package is active.
+    // Keep slider previews local until their explicit save operation.
     final snapshot = _themePreferenceSnapshotWith(
       _themePreferenceSnapshot,
       backgroundImageOpacity: backgroundImageOpacity,
@@ -621,7 +556,7 @@ class OperitThemeController {
     _onChanged();
   }
 
-  /// Persists a partial node-global theme update.
+  /// Persists a partial update through synchronized Space appearance preferences.
   Future<void> saveThemeSettings({
     String? inputStyle,
     String? chatStyle,
@@ -790,190 +725,74 @@ class OperitThemeController {
   }
 
   Future<void> resetMessageColorSettings() async {
-    await _preferencesManager.saveNodeThemeSettings(<String, Object?>{
-      'cursorUserBubbleColor': null, 'bubbleUserBubbleColor': null,
-      'bubbleAiBubbleColor': null, 'bubbleUserTextColor': null, 'bubbleAiTextColor': null,
+    await _preferencesManager.saveAppearanceFields(<String, Object?>{
+      'cursorUserBubbleColor': null,
+      'bubbleUserBubbleColor': null,
+      'bubbleAiBubbleColor': null,
+      'bubbleUserTextColor': null,
+      'bubbleAiTextColor': null,
     });
     await _reloadThemePreferenceSnapshot();
   }
 
-  /// Resets personal appearance only; never removes a package selection.
+  /// Resets appearance using the existing named configuration owner.
   Future<void> resetThemeSettings() async {
-    if (packageVisualsLocked) throw StateError('Select personal appearance before resetting visuals');
-    await _preferencesManager.saveNodeThemeSettings(
-      UserPreferencesManager.defaultThemePreferenceSnapshot.toJson(),
-    );
+    await _preferencesManager.resetThemeSettings();
     await _reloadThemePreferenceSnapshot();
   }
 
-  Future<List<core_proxy.ThemeLibraryItem>> listThemeLibrary() =>
-      _clients.application.listThemeLibrary();
-
-  /// Uninstalls the ordinary ToolPkg contributing this template. An explicit
-  /// request to unselect also covers other active templates owned by that package.
-  Future<void> deleteLibraryTheme({
-    required String themeId,
-    required String archiveSha256,
-    bool unselectIfActive = false,
-  }) async {
-    final current = _selection;
-    final isActive = current != null &&
-        current.themeId.split(':').first == themeId.split(':').first;
-    if (isActive) {
-      if (!unselectIfActive) {
-        throw StateError('请先切回本节点个人外观后再卸载提供当前模板的 ToolPkg');
-      }
-      await selectPersonalAppearance();
-    }
-    await library.deleteTheme(themeId, archiveSha256);
-  }
-
-  Future<core_proxy.ThemeInstallReceipt> applyLibraryTheme(core_proxy.ThemeLibraryEntry entry) async {
-    // Preflight happens before the CoreNode selection write. Preview owns a
-    // different prepared instance and can never submit a selection itself.
-    final prepared = await library.prepare(entry.themeId, entry.archiveSha256, expectedVersion: entry.version);
-    final targetIdentity = (entry.themeId, entry.version, entry.archiveSha256);
-    _stagedVisual?.dispose();
-    _stagedVisual = prepared;
-    _stagedIdentity = targetIdentity;
-    _applyingSelection = true;
-    try {
-      final packageDefaults = prepared.spec
-          .toSnapshot(_personalSnapshot, preserveUserSettings: false)
-          .toJson();
-      await _preferencesManager.saveNodeThemeSettings(<String, Object?>{
-        for (final key in kUserConfigurableThemeFields)
-          key: packageDefaults[key],
-      });
-      final receipt = await _clients.application.applyTheme(
-        themeId: entry.themeId, archiveSha256: entry.archiveSha256,
-      );
-      final next = receipt.selection;
-      if (receipt.status != core_proxy.ThemeInstallStatus.applied || next == null ||
-          next.themeId != entry.themeId || next.version != entry.version ||
-          next.archiveSha256 != entry.archiveSha256) {
-        throw StateError('Theme application receipt differs from the explicit selection');
-      }
-      await _reloadThemePreferenceSnapshot();
-      return receipt;
-    } finally {
-      _applyingSelection = false;
-      if (identical(_stagedVisual, prepared)) {
-        _stagedVisual = null;
-        _stagedIdentity = null;
-        if (!identical(_preparedVisual, prepared)) {
-          prepared.dispose();
-        }
-      }
-    }
-  }
-
-  Future<void> selectPersonalAppearance() async {
-    _applyingSelection = true;
-    try {
-      await _prepareCustomFonts(_personalSnapshot);
-      await _clients.application.selectPersonalThemeAppearance();
-      await _reloadThemePreferenceSnapshot();
-    } finally {
-      _applyingSelection = false;
-    }
-  }
-
-  Future<void> reloadTheme() => _reloadThemePreferenceSnapshot(revalidatePackage: true);
-
-  Future<void> saveNodeThemeSettings(Map<String, Object?> updates) async {
-    await _preferencesManager.saveNodeThemeSettings(updates);
+  /// Replaces appearance only after an explicit reset action from the error screen.
+  Future<void> restoreDefaultAppearance() async {
+    await _preferencesManager.restoreDefaultAppearance();
     await _reloadThemePreferenceSnapshot();
   }
 
-  Future<void> _reloadThemePreferenceSnapshot({bool revalidatePackage = false}) async {
+  /// Re-reads the ordinary committed appearance and its font resources.
+  Future<void> reloadTheme() => _reloadThemePreferenceSnapshot();
+
+  /// Saves ordinary appearance through its synchronized preference owner.
+  Future<void> saveAppearanceFields(Map<String, Object?> updates) async {
+    await _preferencesManager.saveAppearanceFields(updates);
+    await _reloadThemePreferenceSnapshot();
+  }
+
+  /// Loads an independent appearance configuration without looking up its creation source.
+  Future<void> _reloadThemePreferenceSnapshot() async {
     final lifecycle = _lifecycleRevision;
     final revision = ++_themePreferenceRevision;
-    final state = await _clients.application.nodeThemeState();
-    if (lifecycle != _lifecycleRevision || revision != _themePreferenceRevision) return;
-    await _acceptNodeState(state, requestLifecycle: lifecycle, requestRevision: revision,
-      revalidatePackage: revalidatePackage);
-  }
 
-  Future<void> _acceptNodeState(core_proxy.ThemeNodeState state, {
-    int? requestLifecycle, int? requestRevision, bool revalidatePackage = false,
-  }) async {
-    final lifecycle = requestLifecycle ?? _lifecycleRevision;
-    final revision = requestRevision ?? ++_themePreferenceRevision;
-    bool current() => lifecycle == _lifecycleRevision && revision == _themePreferenceRevision;
-    if (!current()) return;
-    PreparedThemeVisual? candidate;
-    final selectedIdentity = state.selection == null ? null :
-        (state.selection!.themeId, state.selection!.version, state.selection!.archiveSha256);
-    final hasStaged = !revalidatePackage &&
-        selectedIdentity != null &&
-        _stagedIdentity == selectedIdentity &&
-        _stagedVisual != null;
-    _themeIsPreparing = !hasStaged &&
-        (revalidatePackage ||
-            !_hasLoadedState ||
-            _themeLoadError != null ||
-            (selectedIdentity != null && selectedIdentity != _preparedIdentity));
-    // Mode/scale/visibility edits reuse prepared package resources and preserve
-    // the live app subtree. A new or failed visual identity uses the barrier.
-    if (_themeIsPreparing) _onChanged();
+    /// Checks that asynchronous work still belongs to the current preference revision.
+    bool current() =>
+        lifecycle == _lifecycleRevision && revision == _themePreferenceRevision;
+    if (!_hasLoadedState) _themeIsPreparing = true;
     try {
-      final source = state.privateAppearanceJson;
-      if (state.schemaVersion != 1 || source == null) {
-        throw StateError('Node-global appearance state is not initialized');
-      }
-      final personal = ThemePreferenceSnapshot.fromJson(jsonDecode(source) as Map<String, dynamic>);
-      final selected = state.selection;
-      final ThemePreferenceSnapshot snapshot;
-      final Map<String, String> families;
-      (String, String, String)? identity;
-      if (selected == null) {
-        snapshot = personal;
-        families = await _prepareCustomFonts(personal);
-      } else {
-        identity = (selected.themeId, selected.version, selected.archiveSha256);
-        if (!revalidatePackage && _stagedIdentity == identity && _stagedVisual != null) {
-          candidate = _stagedVisual;
-          _stagedVisual = null;
-          _stagedIdentity = null;
-        } else if (!revalidatePackage && _preparedIdentity == identity && _preparedVisual != null) {
-          candidate = _preparedVisual;
-        } else {
-          candidate = await library.prepare(selected.themeId, selected.archiveSha256, expectedVersion: selected.version);
+      final snapshot = await _preferencesManager
+          .resolveThemePreferenceSnapshot();
+      if (!current()) return;
+      final palette = snapshot.themePaletteJson;
+      if (palette != null) {
+        final colors = jsonDecode(palette) as Map<String, dynamic>;
+        for (final brightness in Brightness.values) {
+          ThemeVisualSpecV1.colorSchemeFromPalette(colors, brightness);
         }
-        final prepared = candidate!;
-        snapshot = prepared.snapshot(personal, preserveUserSettings: true);
-        families = _preparedFontFamilies(prepared);
       }
+      final families = await _prepareCustomFonts(snapshot);
       if (!current()) return;
       await _saveStartupThemeMode(snapshot.themeMode);
       if (!current()) return;
       _loadedCustomFontFamilies.addAll(families);
-      final previous = _preparedVisual;
-      _personalSnapshot = personal;
-      _selection = state.selection;
-      _preparedVisual = candidate;
-      candidate = null;
-      _preparedIdentity = identity;
       _themePreferenceSnapshot = snapshot;
       _themeLoadError = null;
       _themeIsPreparing = false;
       _hasLoadedState = true;
       _onChanged();
-      if (previous != null && !identical(previous, _preparedVisual)) {
-        WidgetsBinding.instance.addPostFrameCallback((_) => previous.dispose());
-      }
     } catch (error) {
       if (!current()) return;
-      _selection = state.selection;
       _themeLoadError = error;
       _themeIsPreparing = false;
       _onChanged();
-    } finally {
-      if (candidate != null && !identical(candidate, _preparedVisual)) candidate.dispose();
     }
   }
-
 }
 
 /// Persists the first-frame theme mode through the existing bootstrap host.
@@ -1000,6 +819,7 @@ ThemePreferenceSnapshot _themePreferenceSnapshotWith(
 }) {
   return ThemePreferenceSnapshot(
     themeMode: snapshot.themeMode,
+    themePaletteJson: snapshot.themePaletteJson,
     useCustomColors: snapshot.useCustomColors,
     customPrimaryColor: snapshot.customPrimaryColor,
     customSecondaryColor: snapshot.customSecondaryColor,
@@ -1314,7 +1134,8 @@ List<String> operitMessageFontFamilyFallback(
       : !isUser && themePreferenceSnapshot.bubbleAiUseCustomFont
       ? themePreferenceSnapshot.bubbleAiCustomFontPath
       : themePreferenceSnapshot.customFontPath;
-  if (path != null && _loadedCustomFontFamilies[path] == path) return const <String>[];
+  if (path != null && _loadedCustomFontFamilies[path] == path)
+    return const <String>[];
   if (isUser && themePreferenceSnapshot.bubbleUserUseCustomFont) {
     return _fontFamilyFallbackForSettings(
       fontType: themePreferenceSnapshot.bubbleUserFontType,
@@ -1366,7 +1187,8 @@ List<String> _fontFamilyFallback(
   ThemePreferenceSnapshot themePreferenceSnapshot,
 ) {
   final path = themePreferenceSnapshot.customFontPath;
-  if (path != null && _loadedCustomFontFamilies[path] == path) return const <String>[];
+  if (path != null && _loadedCustomFontFamilies[path] == path)
+    return const <String>[];
   return _fontFamilyFallbackForSettings(
     fontType: themePreferenceSnapshot.fontType,
     systemFontName: themePreferenceSnapshot.systemFontName,
@@ -1468,6 +1290,13 @@ ColorScheme _seedColorScheme(
   Brightness brightness,
   ThemePreferenceSnapshot themePreferenceSnapshot,
 ) {
+  final palette = themePreferenceSnapshot.themePaletteJson;
+  if (palette != null) {
+    return ThemeVisualSpecV1.colorSchemeFromPalette(
+      jsonDecode(palette) as Map<String, dynamic>,
+      brightness,
+    );
+  }
   final seedColor =
       themePreferenceSnapshot.useCustomColors &&
           themePreferenceSnapshot.customPrimaryColor != null

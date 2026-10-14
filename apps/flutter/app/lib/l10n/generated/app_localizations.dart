@@ -4622,30 +4622,6 @@ abstract class AppLocalizations {
   /// **'Failed to turn off access: {error}'**
   String settingsWebAccessStopFailed(String error);
 
-  /// No description provided for @settingsAppearanceThemeLibraryTab.
-  ///
-  /// In en, this message translates to:
-  /// **'Theme library'**
-  String get settingsAppearanceThemeLibraryTab;
-
-  /// No description provided for @settingsAppearancePersonalThemeSummary.
-  ///
-  /// In en, this message translates to:
-  /// **'Global theme · Personal appearance on this node'**
-  String get settingsAppearancePersonalThemeSummary;
-
-  /// No description provided for @settingsAppearancePackageThemeSummary.
-  ///
-  /// In en, this message translates to:
-  /// **'Global theme · Theme package · Visual settings are read-only'**
-  String get settingsAppearancePackageThemeSummary;
-
-  /// No description provided for @settingsAppearancePackageVisualsReadOnly.
-  ///
-  /// In en, this message translates to:
-  /// **'A theme package\'s colors, background, bubbles, fonts and input style are read-only. Explicitly select personal appearance in the theme library before editing.'**
-  String get settingsAppearancePackageVisualsReadOnly;
-
   /// No description provided for @settingsAppearanceThemeSection.
   ///
   /// In en, this message translates to:
@@ -7357,6 +7333,90 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Devices holding this role fall back to the default user identity.'**
   String get settingsRuntimeControlDeleteRoleMessage;
+
+  /// No description provided for @settingsAppearanceThemeConfigSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Create from'**
+  String get settingsAppearanceThemeConfigSource;
+
+  /// No description provided for @settingsAppearanceThemeConfigFromDefaults.
+  ///
+  /// In en, this message translates to:
+  /// **'Default appearance'**
+  String get settingsAppearanceThemeConfigFromDefaults;
+
+  /// No description provided for @settingsAppearanceThemeConfigFromCurrent.
+  ///
+  /// In en, this message translates to:
+  /// **'Current appearance'**
+  String get settingsAppearanceThemeConfigFromCurrent;
+
+  /// No description provided for @settingsAppearanceThemeConfigInherit.
+  ///
+  /// In en, this message translates to:
+  /// **'Inherit: {name}'**
+  String settingsAppearanceThemeConfigInherit(String name);
+
+  /// No description provided for @settingsAppearanceThemeConfigFromTemplate.
+  ///
+  /// In en, this message translates to:
+  /// **'Template: {name}'**
+  String settingsAppearanceThemeConfigFromTemplate(String name);
+
+  /// No description provided for @settingsAppearanceThemeConfigDefaultsHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Start with the app defaults'**
+  String get settingsAppearanceThemeConfigDefaultsHint;
+
+  /// No description provided for @settingsAppearanceThemeConfigCurrentHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy your current appearance'**
+  String get settingsAppearanceThemeConfigCurrentHint;
+
+  /// No description provided for @settingsAppearanceThemeConfigSavedSources.
+  ///
+  /// In en, this message translates to:
+  /// **'Inherit a saved configuration'**
+  String get settingsAppearanceThemeConfigSavedSources;
+
+  /// No description provided for @settingsAppearanceThemeConfigPluginSources.
+  ///
+  /// In en, this message translates to:
+  /// **'Use a plugin template'**
+  String get settingsAppearanceThemeConfigPluginSources;
+
+  /// No description provided for @settingsAppearanceThemeConfigSourceHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Templates come from installed plugins. New configurations can be edited independently and use existing appearance sync.'**
+  String get settingsAppearanceThemeConfigSourceHint;
+
+  /// No description provided for @settingsAppearanceLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Unable to load appearance'**
+  String get settingsAppearanceLoadFailed;
+
+  /// No description provided for @settingsAppearanceRepairHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Your saved appearance has not been replaced. Retry after repairing its resources, or reset appearance explicitly. Reset keeps your avatar and saved configurations and selects custom appearance.'**
+  String get settingsAppearanceRepairHint;
+
+  /// No description provided for @settingsAppearanceRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry'**
+  String get settingsAppearanceRetry;
+
+  /// No description provided for @settingsAppearanceResetAfterError.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset appearance'**
+  String get settingsAppearanceResetAfterError;
 }
 
 class _AppLocalizationsDelegate

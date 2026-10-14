@@ -45,3 +45,16 @@ pub fn validate_theme_preview_draft(
     };
     serde_json::to_string(&response).expect("contract response must serialize")
 }
+
+/// Checks the complete merged ToolPkg before Studio exposes its download.
+#[wasm_bindgen(js_name = validateAuthoredToolPkg)]
+pub fn validate_authored_toolpkg(archive_bytes: &[u8], manifest_path: &str) -> String {
+    let response = match crate::toolpkg::validate_authored_toolpkg_theme_templates(archive_bytes, manifest_path) {
+        Ok(templates) => serde_json::json!({
+            "ok": true,
+            "receipts": templates.iter().map(|template| template.receipt().clone()).collect::<Vec<_>>(),
+        }),
+        Err(error) => serde_json::json!({"ok": false, "errors": [error]}),
+    };
+    serde_json::to_string(&response).expect("ToolPkg validation response must serialize")
+}

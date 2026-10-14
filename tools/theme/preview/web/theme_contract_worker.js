@@ -4,6 +4,7 @@ import initialize, {
   normalizeThemeDraft,
   validateThemePreviewDraft,
   exportToolPkgFromTheme,
+  validateAuthoredToolPkg,
 } from "./validator/operit_plugin_theme.js";
 
 const descriptorResponse = await fetch(new URL("./renderer-release.json", import.meta.url));
@@ -49,6 +50,13 @@ self.onmessage = (event) => {
           bytes(request.previewPng, 4 * 1024 * 1024, "previewPng"),
           bytes(request.assetDirectory, 64 * 1024, "assetDirectory"),
           bytes(request.assetBytes, 128 * 1024 * 1024, "assetBytes"),
+        );
+        break;
+      case "validate-toolpkg":
+        if (typeof request.manifestPath !== "string") throw new Error("manifestPath must be text");
+        result = validateAuthoredToolPkg(
+          bytes(request.archiveBytes, 64 * 1024 * 1024, "archiveBytes"),
+          request.manifestPath,
         );
         break;
       default:

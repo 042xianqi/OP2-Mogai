@@ -2560,21 +2560,6 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get settingsAppearanceThemeLibraryTab => 'Theme library';
-
-  @override
-  String get settingsAppearancePersonalThemeSummary =>
-      'Global theme · Personal appearance on this node';
-
-  @override
-  String get settingsAppearancePackageThemeSummary =>
-      'Global theme · Theme package · Visual settings are read-only';
-
-  @override
-  String get settingsAppearancePackageVisualsReadOnly =>
-      'A theme package\'s colors, background, bubbles, fonts and input style are read-only. Explicitly select personal appearance in the theme library before editing.';
-
-  @override
   String get settingsAppearanceThemeSection => 'Theme';
 
   @override
@@ -4140,4 +4125,56 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get settingsRuntimeControlDeleteRoleMessage =>
       'Devices holding this role fall back to the default user identity.';
+
+  @override
+  String get settingsAppearanceThemeConfigSource => 'Create from';
+
+  @override
+  String get settingsAppearanceThemeConfigFromDefaults => 'Default appearance';
+
+  @override
+  String get settingsAppearanceThemeConfigFromCurrent => 'Current appearance';
+
+  @override
+  String settingsAppearanceThemeConfigInherit(String name) {
+    return 'Inherit: $name';
+  }
+
+  @override
+  String settingsAppearanceThemeConfigFromTemplate(String name) {
+    return 'Template: $name';
+  }
+
+  @override
+  String get settingsAppearanceThemeConfigDefaultsHint =>
+      'Start with the app defaults';
+
+  @override
+  String get settingsAppearanceThemeConfigCurrentHint =>
+      'Copy your current appearance';
+
+  @override
+  String get settingsAppearanceThemeConfigSavedSources =>
+      'Inherit a saved configuration';
+
+  @override
+  String get settingsAppearanceThemeConfigPluginSources =>
+      'Use a plugin template';
+
+  @override
+  String get settingsAppearanceThemeConfigSourceHint =>
+      'Templates come from installed plugins. New configurations can be edited independently and use existing appearance sync.';
+
+  @override
+  String get settingsAppearanceLoadFailed => 'Unable to load appearance';
+
+  @override
+  String get settingsAppearanceRepairHint =>
+      'Your saved appearance has not been replaced. Retry after repairing its resources, or reset appearance explicitly. Reset keeps your avatar and saved configurations and selects custom appearance.';
+
+  @override
+  String get settingsAppearanceRetry => 'Retry';
+
+  @override
+  String get settingsAppearanceResetAfterError => 'Reset appearance';
 }

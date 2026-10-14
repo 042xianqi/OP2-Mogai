@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:operit_ui/operit_ui.dart';
 
+/// Verifies the shared preview shell and its workspace navigation.
 void main() {
   testWidgets('Inspector hit target selects the corresponding chat component', (
     tester,
@@ -170,7 +171,37 @@ void main() {
 
       expect(find.byType(ThemeTopBarChrome), findsOneWidget);
       expect(find.byType(ThemeWorkspaceTopBarButton), findsOneWidget);
-      expect(find.byType(ThemeDrawerModeSwitch), findsOneWidget);
+      expect(find.text('角色卡'), findsNothing);
+      expect(find.byIcon(Icons.smart_toy_outlined), findsNothing);
+      expect(find.text('未绑定工作区'), findsOneWidget);
+      expect(find.text('主题工作台'), findsOneWidget);
+      expect(find.byIcon(Icons.work_outline), findsNWidgets(2));
+      expect(find.byType(ThemeUnifiedCreateBar), findsOneWidget);
+      final sections = tester.widgetList<ThemeHistorySectionHeader>(
+        find.byType(ThemeHistorySectionHeader),
+      );
+      expect(sections.map((section) => section.count), <int>[2, 6]);
+      expect(sections.every((section) => section.workspaceStyle), isTrue);
+      expect(
+        tester
+            .widgetList<ThemeHistoryGroupHeader>(
+              find.byType(ThemeHistoryGroupHeader),
+            )
+            .every((group) => group.workspaceStyle),
+        isTrue,
+      );
+      expect(
+        tester
+            .widgetList<ThemeConversationRow>(find.byType(ThemeConversationRow))
+            .every((row) => row.workspaceStyle),
+        isTrue,
+      );
+      expect(
+        tester
+            .widget<ThemeTopBarTitle>(find.byType(ThemeTopBarTitle))
+            .primaryText,
+        'Operit',
+      );
       expect(find.byType(ThemeHistorySectionHeader), findsNWidgets(2));
       expect(find.byType(ThemeHistoryGroupHeader), findsNWidgets(4));
       expect(find.byType(ThemeConversationRow), findsNWidgets(8));

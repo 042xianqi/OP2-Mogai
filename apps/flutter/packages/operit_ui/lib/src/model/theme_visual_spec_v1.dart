@@ -5,79 +5,26 @@ import 'package:flutter/material.dart';
 import 'theme_preference_defaults.dart';
 import 'theme_preference_snapshot.dart';
 
-/// Dart projection of a Rust-normalized v1 visual state, NOT a package validator.
-/// Callers must finish media validation and asset/font preparation separately.
-/// Appearance fields initialized from a theme package upon application and
-/// thereafter open to user customization on the active node.
-const List<String> kUserConfigurableThemeFields = <String>[
-  'bubbleShowAvatar',
-  'avatarShape',
-  'avatarCornerRadius',
-  'chatStyle',
-  'bubbleWideLayoutEnabled',
-  'inputStyle',
-  'chatInputFloating',
-  'inputBackgroundColor',
-  'inputRoundedCornersEnabled',
-  'inputImageRenderMode',
-  'inputImageCropLeft',
-  'inputImageCropTop',
-  'inputImageCropRight',
-  'inputImageCropBottom',
-  'inputImageRepeatStart',
-  'inputImageRepeatEnd',
-  'inputImageRepeatYStart',
-  'inputImageRepeatYEnd',
-  'inputImageScale',
-  'transparentSurfaceEnabled',
-  'backgroundImageOpacity',
-  'useBackgroundBlur',
-  'backgroundBlurRadius',
-  'bubbleUserRoundedCornersEnabled',
-  'bubbleAiRoundedCornersEnabled',
-  'bubbleUserContentPaddingLeft',
-  'bubbleUserContentPaddingRight',
-  'bubbleAiContentPaddingLeft',
-  'bubbleAiContentPaddingRight',
-  'cursorUserBubbleColor',
-  'bubbleUserBubbleColor',
-  'bubbleAiBubbleColor',
-  'bubbleUserTextColor',
-  'bubbleAiTextColor',
-  'bubbleUserImageRenderMode',
-  'bubbleUserImageCropLeft',
-  'bubbleUserImageCropTop',
-  'bubbleUserImageCropRight',
-  'bubbleUserImageCropBottom',
-  'bubbleUserImageRepeatStart',
-  'bubbleUserImageRepeatEnd',
-  'bubbleUserImageRepeatYStart',
-  'bubbleUserImageRepeatYEnd',
-  'bubbleUserImageScale',
-  'bubbleAiImageRenderMode',
-  'bubbleAiImageCropLeft',
-  'bubbleAiImageCropTop',
-  'bubbleAiImageCropRight',
-  'bubbleAiImageCropBottom',
-  'bubbleAiImageRepeatStart',
-  'bubbleAiImageRepeatEnd',
-  'bubbleAiImageRepeatYStart',
-  'bubbleAiImageRepeatYEnd',
-  'bubbleAiImageScale',
-];
-
+/// Projects a validated template into shared renderer inputs and editable appearance defaults.
 class ThemeVisualSpecV1 {
   ThemeVisualSpecV1.fromCheckedContract(Map<String, Object?> json)
-    : _json = jsonDecode(jsonEncode(json)) as Map<String, dynamic> {
-  }
+    : _json = jsonDecode(jsonEncode(json)) as Map<String, dynamic> {}
 
   final Map<String, Object?> _json;
 
   Map<String, dynamic> _section(String key) =>
       _json[key] as Map<String, dynamic>;
 
-  ColorScheme colorScheme(Brightness brightness) {
-    final colors = _section('palette')[brightness.name] as Map<String, dynamic>;
+  /// Projects the declared palette into the renderer's complete color scheme.
+  ColorScheme colorScheme(Brightness brightness) =>
+      colorSchemeFromPalette(_section('palette'), brightness);
+
+  /// Projects a saved configuration palette without depending on a ToolPkg.
+  static ColorScheme colorSchemeFromPalette(
+    Map<String, dynamic> palette,
+    Brightness brightness,
+  ) {
+    final colors = palette[brightness.name] as Map<String, dynamic>;
     Color color(String role) => Color(_argb(colors[role] as String));
     return ColorScheme(
       brightness: brightness,
@@ -138,13 +85,9 @@ class ThemeVisualSpecV1 {
     );
   }
 
-  /// Keeps node/user mode, scaling, avatars and information visibility untouched.
-  /// Explicit ColorSchemes and prepared font families remain renderer inputs;
-  /// this snapshot is not an instruction to derive a new seed palette.
-  ThemePreferenceSnapshot toSnapshot(
-    ThemePreferenceSnapshot userSettings, {
-    bool preserveUserSettings = false,
-  }) {
+  /// Projects editable template defaults while retaining user mode, scaling, avatars and visibility.
+  /// Complete palette data stays part of the independent appearance snapshot.
+  ThemePreferenceSnapshot toSnapshot(ThemePreferenceSnapshot userSettings) {
     final userJson = userSettings.toJson();
     final background = _section('background');
     final blur = background['blur'] as Map<String, dynamic>;
@@ -153,6 +96,7 @@ class ThemeVisualSpecV1 {
     final typography = _section('typography');
     final result = <String, Object?>{
       ...userJson,
+      'themePaletteJson': jsonEncode(_section('palette')),
       'useCustomColors': true,
       'customPrimaryColor': colorScheme(Brightness.light).primary.toARGB32(),
       'customSecondaryColor': colorScheme(
@@ -270,13 +214,6 @@ class ThemeVisualSpecV1 {
     _setFont(result, '', typography['global'] as String);
     _setFont(result, 'bubbleUser', typography['user'] as String?);
     _setFont(result, 'bubbleAi', typography['ai'] as String?);
-    if (preserveUserSettings) {
-      for (final key in kUserConfigurableThemeFields) {
-        if (userJson.containsKey(key)) {
-          result[key] = userJson[key];
-        }
-      }
-    }
     return ThemePreferenceSnapshot.fromJson(result);
   }
 

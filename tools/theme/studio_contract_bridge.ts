@@ -8,6 +8,7 @@ interface WorkerClient {
   normalizeDraft(themeJson: Uint8Array): Promise<string>;
   validatePreview(themeJson: Uint8Array, assets: readonly ThemePreviewAsset[]): Promise<string>;
   exportPackage(input: ThemeBinaryExportInput): Promise<Uint8Array>;
+  validatePackage(archiveBytes: Uint8Array, manifestPath: string): Promise<string>;
   close(): void;
 }
 
@@ -42,6 +43,12 @@ export class StudioContractBridge implements ThemeContractBridge {
 
   async exportPackage(input: ThemeBinaryExportInput): Promise<Uint8Array> {
     return (await this.client).exportPackage(input);
+  }
+
+  /** Requires every template in the final merged archive to pass the shared Rust validator. */
+  async validatePackage(archiveBytes: Uint8Array, manifestPath: string): Promise<void> {
+    const response = JSON.parse(await (await this.client).validatePackage(archiveBytes, manifestPath));
+    if (response.ok !== true) throw new Error(JSON.stringify(response.errors));
   }
 
   close(): void { void this.client.then(client => client.close()); }

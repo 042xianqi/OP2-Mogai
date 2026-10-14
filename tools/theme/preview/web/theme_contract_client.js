@@ -97,6 +97,13 @@ export class ThemeContractWorker {
     }));
   }
 
+  /** Validates the final archive through the same bounded worker as template export. */
+  validatePackage(archiveBytes, manifestPath) {
+    return this.call("validate-toolpkg", () => ({
+      archiveBytes: Uint8Array.from(archiveBytes), manifestPath,
+    }));
+  }
+
   close(error = new Error("theme contract worker was closed")) {
     if (this.closed) return;
     this.closed = true;

@@ -45,7 +45,7 @@ class ThemeClientScene extends StatelessWidget {
     this.onInspectTargetSelected = _ignoreInspectSelection,
   });
 
-  static const String fixtureVersion = 'client-shell-v6';
+  static const String fixtureVersion = 'client-shell-v7';
   static const double sidebarWidth = 280;
 
   final ThemePreferenceSnapshot snapshot;
@@ -124,6 +124,7 @@ class _PreviewSidebar extends StatelessWidget {
 
   final ThemeDrawerPalette appearance;
 
+  /// Builds the default workspace sidebar for the shared preview scene.
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
@@ -134,10 +135,6 @@ class _PreviewSidebar extends StatelessWidget {
           child: ThemeSidebarInfoCard(
             brandName: 'Operit',
             appearance: appearance,
-            trailing: ThemeDrawerModeSwitch(
-              workspaceSelected: false,
-              onToggle: () {},
-            ),
           ),
         ),
         const SizedBox(height: 12),
@@ -165,8 +162,8 @@ class _PreviewSidebar extends StatelessWidget {
           child: ListView(
             padding: const EdgeInsets.only(bottom: 14),
             children: <Widget>[
-              _PreviewCharacterHeader(
-                label: '1',
+              _PreviewWorkspaceHeader(
+                label: '未绑定工作区',
                 count: 2,
                 appearance: appearance,
               ),
@@ -177,18 +174,18 @@ class _PreviewSidebar extends StatelessWidget {
                 appearance: appearance,
               ),
               _PreviewGroup(
-                label: '1111',
+                label: '主题设计',
                 items: const <String>['打招呼'],
                 selectedIndex: -1,
                 appearance: appearance,
               ),
-              _PreviewCharacterHeader(
-                label: 'Operit',
-                count: 9,
+              _PreviewWorkspaceHeader(
+                label: '主题工作台',
+                count: 6,
                 appearance: appearance,
               ),
               _PreviewGroup(
-                label: '1111',
+                label: '开发任务',
                 items: const <String>['New Chat', '测试工具调用'],
                 selectedIndex: -1,
                 appearance: appearance,
@@ -242,8 +239,10 @@ class _PreviewSidebar extends StatelessWidget {
   }
 }
 
-class _PreviewCharacterHeader extends StatelessWidget {
-  const _PreviewCharacterHeader({
+/// Displays a workspace and its complete sample conversation count.
+class _PreviewWorkspaceHeader extends StatelessWidget {
+  /// Creates a workspace section matching the default client navigation.
+  const _PreviewWorkspaceHeader({
     required this.label,
     required this.count,
     required this.appearance,
@@ -253,6 +252,7 @@ class _PreviewCharacterHeader extends StatelessWidget {
   final int count;
   final ThemeDrawerPalette appearance;
 
+  /// Renders the shared workspace header without a character avatar.
   @override
   Widget build(BuildContext context) {
     return ThemeHistorySectionHeader(
@@ -260,7 +260,7 @@ class _PreviewCharacterHeader extends StatelessWidget {
       count: count,
       expanded: true,
       appearance: appearance,
-      fallbackIcon: Icons.smart_toy_outlined,
+      workspaceStyle: true,
       onToggleExpanded: () {},
     );
   }
@@ -279,6 +279,7 @@ class _PreviewGroup extends StatelessWidget {
   final int selectedIndex;
   final ThemeDrawerPalette appearance;
 
+  /// Renders grouped conversations with the default workspace spacing.
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -287,7 +288,7 @@ class _PreviewGroup extends StatelessWidget {
         ThemeHistoryGroupHeader(
           label: label,
           pinned: false,
-          workspaceStyle: false,
+          workspaceStyle: true,
           expanded: true,
           appearance: appearance,
           showActions: false,
@@ -319,10 +320,12 @@ class _PreviewConversationItem extends StatelessWidget {
   final bool selected;
   final ThemeDrawerPalette appearance;
 
+  /// Builds a conversation row using the shared workspace appearance.
   @override
   Widget build(BuildContext context) {
     return ThemeConversationRow(
       title: title,
+      workspaceStyle: true,
       selected: selected,
       active: false,
       appearance: appearance,
@@ -366,6 +369,7 @@ class _PreviewChatSurface extends StatelessWidget {
   final String? aiFontFamily;
   final bool compact;
 
+  /// Displays the default application title and shared chat surface.
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -385,7 +389,7 @@ class _PreviewChatSurface extends StatelessWidget {
           onSelected: onInspectTargetSelected,
           child: ThemeTopBarChrome(
             title: ThemeTopBarTitle(
-              primaryText: '1',
+              primaryText: 'Operit',
               secondaryText: 'New Chat',
               contentColor: scheme.onSurface,
             ),

@@ -4,7 +4,7 @@ Standalone Flutter Web preview entry (`tools/theme/preview`) for Operit2 Theme S
 
 ## Overview
 
-The preview renders the shared `ThemeClientScene` (`client-shell-v6`), including the desktop sidebar, history row and group chrome, top bar, user/AI message bubbles, 9-slice bubble and input surfaces, and both Agent and Classic input styles (with custom action icon assets and sizes).
+The preview renders the shared `ThemeClientScene` (`client-shell-v7`), including the default workspace sidebar (unbound conversations and named workspaces), history row and group chrome, top bar, user/AI message bubbles, 9-slice bubble and input surfaces, and both Agent and Classic input styles (with custom action icon assets and sizes).
 
 In embedded Studio mode, incoming drafts and binary assets must pass the preview's own same-origin Rust/WASM worker (`web/theme_contract_worker.js`) before Flutter decodes images or registers fonts.
 

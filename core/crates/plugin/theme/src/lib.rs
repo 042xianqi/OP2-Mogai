@@ -15,7 +15,7 @@ mod schema;
 mod toolpkg;
 
 pub use toolpkg::{
-    toolpkg_manifest_value, validate_declared_theme_templates, validate_toolpkg_theme_template,
+    toolpkg_manifest_value, validate_authored_toolpkg_theme_templates, validate_declared_theme_templates, validate_toolpkg_theme_template,
     validate_toolpkg_theme_templates,
 };
 
@@ -312,6 +312,12 @@ pub fn parse_theme(bytes: &[u8]) -> Result<ThemeSpecV1, ThemeValidationError> {
     schema::normalize(&definition, &definition, &mut value);
     check_visual_relations(&value)?;
     finish_spec(value)
+}
+
+/// Validates a persisted palette against the same complete color contract used by templates.
+pub fn validate_palette(value: &Value) -> Result<(), ThemeValidationError> {
+    let definition = theme_schema_v1();
+    schema::validate(&definition, &definition["properties"]["palette"], value, "palette", true)
 }
 
 /// The only place where omitted authoring tokens receive versioned defaults.

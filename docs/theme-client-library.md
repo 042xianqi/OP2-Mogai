@@ -1,28 +1,15 @@
-# 客户端使用 ToolPkg 的 theme 模板
+# 从 ToolPkg 模板新建外观配置
 
-主题列表是已安装 ToolPkg 的模板能力视图。归档使用 `ExtensionStore` 的普通 `package` 记录及 `runtime/extensions/{device|space}/packages` 存储，主题没有独立的归档目录、安装事务或同步规则。
+客户端沿用原有外观设置和命名配置管理。页面只有配置选择、新建、重命名、删除，以及主题、背景、气泡、交互四个编辑分区。
 
-每个列表条目对应一个 `toolpkg_id:template_id` 身份，包含所属包 ID、模板 ID、包版本及归档摘要。同一包中的多个模板共享包字节；预览和背景缓存使用模板身份区分。
+新建时可以选择默认外观、当前外观、继承已有配置，或者使用已安装 ToolPkg 声明的模板。模板来源每次打开新建对话框时通过 `packageManager().getToolPkgContainerRuntimes()` 动态读取；安装、卸载、更新和 device / space 归属由普通插件管理系统负责。
 
-导入时 `inspectThemeArchive` 枚举模板回执，多个模板由用户明确选择。确认后 `importToolPkgArchive` 核对字节数与 SHA-256，再调用通用包管理流程安装整个 ToolPkg。导入保持本节点当前选择；用户可以继续明确应用某个模板。
+选择模板后，`previewToolPkgTheme(packageName, templateId)` 读取当前注册包，验证模板和媒体，返回规范化视觉 JSON 与资源。`ThemeTemplateService` 将模板图片和字体复制到既有 `runtime/data/user_assets/theme` 资源池，把包内相对引用替换为外观资源引用，再通过原有 `ThemeConfigManager.create` 和 `apply` 创建并选中独立配置。
 
-`previewThemeArchive` 接收包字节和明确的模板身份，只返回该模板的规范化视觉 JSON、资源和校验回执。`applyTheme` 从普通安装目录重新读取包、校验所选模板，再写入本节点的选择。包更新不会自动替换原先确认的归档摘要。
+创建不会修改继承来源或此前选中的命名配置。新配置的颜色、背景、字体、输入样式和气泡都可以继续编辑。完整明暗配色作为可选的 `themePaletteJson` 外观字段保存；用户重新选择配色时清除完整配色，使用原有种子配色逻辑。
 
-节点状态保存在 `runtime/config/preferences/theme_selection.preferences.json`，包括 `selection` 和 `privateAppearanceJson`。选择丢失或包未同步到达时保留节点选择并报告不可用，用户可以明确切换至个人外观。
+配置和复制后的资源沿用原有 Space 同步。后续渲染读取配置与外观资源，不再依赖来源插件是否安装，也不会随来源模板更新而改写配置。因此没有独立主题库、共享模板选择、只读锁定、主题专用卸载约束或模板恢复页面。
 
-卸载通过普通包管理系统删除整个 ToolPkg，因此同时移除该包贡献的脚本和所有模板。当前节点使用该包的任一模板时，主题页面拒绝直接卸载，要求先明确切换个人外观。
+普通 ToolPkg 的 `themes` 声明、模板校验、共享 Flutter 渲染，以及 Studio 编辑和导出继续保留。
 
-| Core 方法 | 返回值／用途 |
-| --- | --- |
-| `inspectThemeArchive(archiveBytes)` | `Vec<ThemeValidationReceipt>`：枚举包声明的模板 |
-| `importToolPkgArchive(archiveBytes, expectedArchiveBytes, expectedArchiveSha256)` | `bool`：通用安装；表示完全相同的包已存在 |
-| `previewThemeArchive(archiveBytes, themeId)` | `ThemePreviewReceipt`：所选模板的渲染载荷 |
-| `readToolPkgForThemeTemplate(themeId, archiveSha256)` | 普通 ToolPkg 原始字节 |
-| `listThemeLibrary()` | `Vec<ThemeLibraryItem>`：普通包贡献的模板列表 |
-| `listThemes()` | `Vec<ThemeLibraryEntry>`：可用模板 |
-| `applyTheme(themeId, archiveSha256)` | `ThemeInstallReceipt`：本节点应用结果 |
-| `deleteTheme(themeId, archiveSha256)` | 卸载模板所属的整个 ToolPkg |
-| `nodeThemeState()` / `nodeThemeStateFlow()` | 本节点外观状态及其订阅 |
-| `selectPersonalThemeAppearance()` | 清除节点模板选择，使用个人外观 |
-
-Flutter 通过 `ThemeLibraryService` 准备媒体，使用 `operit_ui` 的视觉模型、资源作用域和字体注册器渲染。Rust 的 Host API 负责读取包字节；客户端不添加平台专用文件系统或 HTTP 路径。
+外观资源或配色加载失败时，客户端展示明确错误及“重试”“重置外观”操作。重试读取原有值；重置只由用户点击触发，保留头像与已保存配置，并显式选中自定义外观。错误不会触发自动替换。应用旧版配置时清除其没有声明的新增外观字段，避免沿用此前模板的输入框样式。

@@ -112,13 +112,6 @@ pub const RUNTIME_USER_ASSETS: RuntimeStoragePathDefinition =
     RuntimeStoragePathDefinition::tree("runtime/data/user_assets", RuntimeStorageOwnership::Space);
 pub const RUNTIME_USER_ASSETS_DIR_PATH: &str = RUNTIME_USER_ASSETS.path;
 pub const RUNTIME_THEME_ASSETS_DIR_PATH: &str = "runtime/data/user_assets/theme";
-/// Stores the CoreNode selection and personal appearance, never package bytes.
-pub const RUNTIME_THEME_NODE_SELECTION: RuntimeStoragePathDefinition =
-    RuntimeStoragePathDefinition::exact(
-        "runtime/config/preferences/theme_selection.preferences.json",
-        RuntimeStorageOwnership::CoreNode,
-    );
-pub const RUNTIME_THEME_NODE_SELECTION_PATH: &str = RUNTIME_THEME_NODE_SELECTION.path;
 pub const RUNTIME_SPACE_MEMBERS: RuntimeStoragePathDefinition =
     RuntimeStoragePathDefinition::tree("runtime/space/members", RuntimeStorageOwnership::Space);
 pub const RUNTIME_SPACE_MEMBERS_DIR_PATH: &str = RUNTIME_SPACE_MEMBERS.path;
@@ -405,7 +398,6 @@ pub const RUNTIME_STORAGE_PATH_DEFINITIONS: &[RuntimeStoragePathDefinition] = &[
     DATA_MEMORY_CHARACTERS_USER_MARKDOWN,
     DATA_MEMORY_SHARED_USER_MARKDOWN,
     RUNTIME_USER_ASSETS,
-    RUNTIME_THEME_NODE_SELECTION,
     RUNTIME_SPACE_MEMBERS,
     RUNTIME_SPACE_TOPOLOGY,
     RUNTIME_SPACE_DEVICE_PROFILES,

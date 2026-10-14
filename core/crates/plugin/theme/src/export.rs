@@ -92,8 +92,7 @@ pub fn export_toolpkg_from_theme(
 }
 
 fn validate_export_metadata(draft: &ThemeExportDraft) -> Result<(), ThemeValidationError> {
-    if draft.author_name.is_empty()
-        || draft.display_name.is_empty()
+    if draft.toolpkg_id.trim().is_empty()
         || draft.agreement_text.len() > crate::MAX_LICENSE_BYTES
         || draft.assets.len() > crate::MAX_RESOURCES
         || draft.preview_png.is_empty()

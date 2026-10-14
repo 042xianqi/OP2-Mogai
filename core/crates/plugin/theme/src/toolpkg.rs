@@ -261,3 +261,18 @@ pub fn validate_toolpkg_theme_template(
             )
         })
 }
+
+/// Validates every template in Studio's final archive using its explicit rewritten manifest path.
+pub fn validate_authored_toolpkg_theme_templates(
+    bytes: &[u8], manifest_path: &str,
+) -> Result<Vec<ValidatedThemeTemplate>, ThemeValidationError> {
+    if bytes.len() > crate::MAX_ARCHIVE_BYTES {
+        return Err(ThemeValidationError::contract(manifest_path, "archive byte budget exceeded"));
+    }
+    package_path("", manifest_path)?;
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|error| ThemeValidationError::contract(manifest_path, error.to_string()))?;
+    let manifest_bytes = read_resource(&mut archive, manifest_path, MAX_MANIFEST_BYTES)?;
+    let value = crate::json::parse(&manifest_bytes, MAX_MANIFEST_BYTES, manifest_path)?;
+    validate_declared_theme_templates(bytes, manifest_path, &manifest_bytes, &value)
+}

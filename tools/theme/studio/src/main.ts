@@ -9,7 +9,7 @@ import {
 } from "../../studio_message_port.ts";
 import { StudioContractBridge } from "../../studio_contract_bridge.ts";
 import { loadDraft, saveDraft, type SavedAsset } from "./draft_store";
-import { parseImportedThemeFile, updateToolPkgTheme, type ImportedToolPkgSource, type ToolPkgThemeDeclaration } from "./toolpkg_import";
+import { parseImportedThemeFile, updateToolPkgTheme, validateToolPkgId, type ImportedToolPkgSource, type ToolPkgThemeDeclaration } from "./toolpkg_import";
 import { COMPONENT_COLOR_MAP, THEME_INSPECTOR_TARGETS, ThemeVisualEditor, defaultTheme } from "./theme_editor";
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -903,7 +903,7 @@ class ThemeStudioApp {
 
   private updateStageMetaStrip(): void {
     this.stageMetaStrip.className = "stage-meta-strip";
-    const fixtureTag = this.rendererConfig?.fixtureVersion ?? "client-shell-v6";
+    const fixtureTag = this.rendererConfig?.fixtureVersion ?? "client-shell-v7";
     const scaleTag = this.originalPixels ? "1:1 像素" : "自适应";
     const shaShort = this.currentThemeSha256 ? `#${this.currentThemeSha256.slice(0, 8)}` : "等待回执";
     this.stageMetaStrip.innerHTML = `
@@ -1705,14 +1705,14 @@ class ThemeStudioApp {
       const config = this.rendererConfig;
       if (config == null) throw new Error("renderer release 不可用");
 
-      const rawThemeId = this.value("theme-id");
-      if (!/^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){2,}$/.test(rawThemeId)) throw new Error("ToolPkg ID 格式不正确");
+      const rawThemeId = this.metadataValue("theme-id");
+      validateToolPkgId(rawThemeId);
       const validThemeId = rawThemeId;
-      const rawVersion = this.value("version");
+      const rawVersion = this.metadataValue("version");
       const validVersion = rawVersion;
-      const validDisplayName = this.value("display-name");
-      const validAuthor = this.value("author");
-      const validThemeLicenseText = this.value("theme-license-text");
+      const validDisplayName = this.metadataValue("display-name");
+      const validAuthor = this.metadataValue("author");
+      const validThemeLicenseText = this.metadataValue("theme-license-text");
       const metadata = {
         toolpkgId: validThemeId,
         version: validVersion,
@@ -1720,7 +1720,7 @@ class ThemeStudioApp {
         authorName: validAuthor,
 
         agreementText: validThemeLicenseText,
-        description: this.value("description") || null,
+        description: this.metadataValue("description") || null,
 
       };
 
@@ -1731,6 +1731,9 @@ class ThemeStudioApp {
         assets: this.latestAssets,
       });
       const bytes = this.importedToolPkg == null ? authored : await updateToolPkgTheme(this.importedToolPkg, authored);
+      if (this.importedToolPkg != null) {
+        await bridge.validatePackage(bytes, this.importedToolPkg.manifestPath);
+      }
       const rendered = this.channel?.receipt;
       if (
         generation !== this.generation ||
@@ -2029,7 +2032,7 @@ class ThemeStudioApp {
           bytes: new Blob([Uint8Array.from(this.importedToolPkg.bytes).buffer]),
           templateId: this.importedToolPkg.template.id,
         },
-        metadata: Object.fromEntries(METADATA_IDS.map(id => [id, this.value(id)])),
+        metadata: Object.fromEntries(METADATA_IDS.map(id => [id, this.metadataValue(id)])),
         assets: this.rows
           .filter(row => row.bytes != null && row.sha256 != null && row.mediaType != null)
           .map(row => ({
@@ -2204,6 +2207,13 @@ class ThemeStudioApp {
         sha256: row.sha256!,
         bytes: Uint8Array.from(row.bytes!),
       }));
+  }
+
+  /** Reads package metadata exactly as displayed, preserving agreement whitespace and original identity. */
+  private metadataValue(id: typeof METADATA_IDS[number]): string {
+    const field = this.root.querySelector<HTMLInputElement | HTMLTextAreaElement>(`#${id}`);
+    if (field == null) throw new Error(`Missing package metadata field: ${id}`);
+    return field.value;
   }
 
   private value(id: string): string {

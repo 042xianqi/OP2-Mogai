@@ -25,7 +25,8 @@ class PreparedThemeVisual {
     required ThemeFontRegistry fontRegistry,
   }) async {
     final sealedAssets = <String, Uint8List>{
-      for (final entry in assets.entries) entry.key: Uint8List.fromList(entry.value),
+      for (final entry in assets.entries)
+        entry.key: Uint8List.fromList(entry.value),
     };
     final sealedDigests = Map<String, String>.unmodifiable(assetSha256);
     for (final entry in sealedAssets.entries) {
@@ -43,13 +44,17 @@ class PreparedThemeVisual {
           validateThemeFontReference(reference);
           if (reference.startsWith('assets/')) {
             final digest = sealedDigests[reference];
-            if (digest == null) throw StateError('Font has no validation digest');
+            if (digest == null)
+              throw StateError('Font has no validation digest');
             return fontRegistry.prepare(
-              reference, resolver: resolver, expectedSha256: digest,
+              reference,
+              resolver: resolver,
+              expectedSha256: digest,
             );
           }
           return fontRegistry.prepare(
-            reference, resolver: builtinFonts,
+            reference,
+            resolver: builtinFonts,
             expectedSha256: builtinFonts.declaration(reference).sha256,
           );
         });
@@ -60,7 +65,10 @@ class PreparedThemeVisual {
     final user = prepareFont(references['user'] ?? globalReference);
     final ai = prepareFont(references['ai'] ?? globalReference);
     final resources = await ThemeProbeResources.prepare(
-      sans: global, mono: prepareFont(kCascadiaMonoFontId), user: user, ai: ai,
+      sans: global,
+      mono: prepareFont(kCascadiaMonoFontId),
+      user: user,
+      ai: ai,
       assets: sealedAssets,
       imageReferences: spec.imageAssetReferences,
     );
@@ -69,13 +77,8 @@ class PreparedThemeVisual {
 
   /// Internal transport keeps hash-qualified font handles, never package paths
   /// as global aliases. Two packages using the same path cannot contaminate fonts.
-  ThemePreferenceSnapshot snapshot(
-    ThemePreferenceSnapshot settings, {
-    bool preserveUserSettings = false,
-  }) {
-    final json = spec
-        .toSnapshot(settings, preserveUserSettings: preserveUserSettings)
-        .toJson();
+  ThemePreferenceSnapshot snapshot(ThemePreferenceSnapshot settings) {
+    final json = spec.toSnapshot(settings).toJson();
     void font(String prefix, PreparedThemeFont prepared) {
       String key(String suffix) => prefix.isEmpty
           ? '${suffix[0].toLowerCase()}${suffix.substring(1)}'
@@ -85,6 +88,7 @@ class PreparedThemeVisual {
       json[key('CustomFontPath')] = prepared.family;
       json[key('SystemFontName')] = null;
     }
+
     font('', resources.sans);
     font('bubbleUser', resources.user);
     font('bubbleAi', resources.ai);

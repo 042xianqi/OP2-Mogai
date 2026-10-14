@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseImportedThemeFile, updateToolPkgTheme } from "./toolpkg_import.ts";
+import { parseImportedThemeFile, updateToolPkgTheme, validateToolPkgId } from "./toolpkg_import.ts";
 
 const encoder = new TextEncoder();
 
@@ -197,4 +197,99 @@ test("reads and updates templates in a nested HJSON ToolPkg", async () => {
   assert.deepEqual(JSON.parse(parsed.themeJson), { palette: { seed: "#778899" } });
   assert.equal(parsed.source?.manifestPath, "bundle/manifest.hjson");
   assert.equal(new TextDecoder().decode(parsed.source?.entries.get("bundle/main.js")), resources["main.js"]);
+});
+
+/** Allows the same nonblank package IDs as the shared ToolPkg parser. */
+test("accepts ordinary ToolPkg IDs including underscores and short names", () => {
+  for (const id of ["com.operit.character_cards", "com.operit.context_limiter", "arbitrary_package", "my-tools"]) {
+    assert.doesNotThrow(() => validateToolPkgId(id));
+  }
+  for (const id of ["", " ", null, 12]) assert.throws(() => validateToolPkgId(id), /nonblank text/);
+});
+
+/** Preserves untouched locales, author entries and the existing agreement reference. */
+test("visual-only edits retain complete package metadata", async () => {
+  const metadata = manifest([night, day]);
+  metadata.toolpkg_id = "com.operit.character_cards";
+  metadata.display_name = { zh: "Chinese name", en: "English name" };
+  metadata.description = { values: { zh: "Chinese description", en: "English description" } };
+  metadata.author = ["Author A", "Author B"];
+  const source = (await parseImportedThemeFile(archiveFile(metadata, resources), async () => "night")).source!;
+  const authoredMetadata = {
+    toolpkg_id: metadata.toolpkg_id, version: metadata.version,
+    display_name: "Chinese name", description: "Chinese description", author: ["Author A, Author B"],
+    license: "licenses/agreement.txt",
+    themes: [{ id: "default", path: "theme.json", preview: "preview.png" }],
+  };
+  const authored = archiveFile(authoredMetadata, {
+    "theme.json": "{}", "preview.png": "edited", "licenses/agreement.txt": resources["licenses/agreement.txt"],
+  });
+  const updated = await updateToolPkgTheme(source, new Uint8Array(await authored.arrayBuffer()));
+  const output = await parseImportedThemeFile(new File([Uint8Array.from(updated).buffer], "updated.toolpkg"), async () => "night");
+  for (const key of ["toolpkg_id", "display_name", "description", "author", "license"]) {
+    assert.deepEqual(output.source!.manifest[key], metadata[key], key);
+  }
+});
+
+/** Changes only the editable translation when the user explicitly renames the package. */
+test("editing Chinese metadata retains the other translations", async () => {
+  const data = {toolpkg_id:"local_package",display_name:{values:{zh:"Old",en:"English"}},themes:[night]};
+  const original = (await parseImportedThemeFile(archiveFile(data, resources))).source!;
+  const authored = archiveFile({toolpkg_id:"local_package",display_name:"New",themes:[{id:"default",path:"theme.json",preview:"preview.png"}]}, {
+    "theme.json":"{}","preview.png":"edited",
+  });
+  const output = await parseImportedThemeFile(new File([Uint8Array.from(await updateToolPkgTheme(original, new Uint8Array(await authored.arrayBuffer()))).buffer], "updated.toolpkg"));
+  assert.deepEqual(output.source!.manifest.display_name, {values:{zh:"New",en:"English"}});
+});
+
+/** Keeps templates sharing definitions, previews and image bytes intact when editing one contribution. */
+test("isolates edited template bytes from shared resources and other package capabilities", async () => {
+  const sharedFiles = [{path:"assets/images/shared.png",sha256:"original digest"}];
+  const a = {id:"a",path:"templates/shared.json",preview:"templates/shared.png",files:sharedFiles};
+  const b = {...a,id:"b"};
+  const original = (await parseImportedThemeFile(archiveFile({toolpkg_id:"shared_package",themes:[a,b],resources:[{key:"cover",path:"templates/shared.png"}]}, {
+    "templates/shared.json":'{"background":{"asset":"assets/images/shared.png"}}',
+    "templates/shared.png":"original preview", "templates/assets/images/shared.png":"original image",
+  }), async () => "a")).source!;
+  const authored = archiveFile({toolpkg_id:"shared_package",themes:[{id:"default",path:"theme.json",preview:"preview.png",files:[{path:"assets/images/shared.png",sha256:"edited digest"}]}]}, {
+    "theme.json":'{"background":{"asset":"assets/images/shared.png"}}',"preview.png":"edited preview","assets/images/shared.png":"edited image",
+  });
+  const bytes = await updateToolPkgTheme(original, new Uint8Array(await authored.arrayBuffer()));
+  const file = new File([Uint8Array.from(bytes).buffer], "updated.toolpkg");
+  const other = await parseImportedThemeFile(file, async () => "b");
+  assert.deepEqual(other.source!.template, b);
+  assert.equal(new TextDecoder().decode(other.assets[0].bytes), "original image");
+  assert.equal(new TextDecoder().decode(other.source!.entries.get("templates/shared.png")), "original preview");
+  const edited = await parseImportedThemeFile(file, async () => "a");
+  assert.equal(new TextDecoder().decode(edited.assets[0].bytes), "edited image");
+  assert.notEqual(edited.source!.template.path, a.path);
+  assert.equal(new TextDecoder().decode(edited.source!.entries.get(edited.source!.template.preview)), "edited preview");
+});
+
+/** Does not turn absent optional metadata into form defaults during an otherwise visual-only edit. */
+test("preserves English-only metadata and absent optional package fields", async () => {
+  const data = {toolpkg_id:"simple_package",display_name:{en:"English only"},themes:[night]};
+  const source = (await parseImportedThemeFile(archiveFile(data, resources))).source!;
+  const authored = archiveFile({toolpkg_id:"simple_package",version:"",display_name:"",author:[""],themes:[{id:"default",path:"theme.json",preview:"preview.png"}]}, {
+    "theme.json":"{}","preview.png":"edited",
+  });
+  const output = await parseImportedThemeFile(new File([Uint8Array.from(await updateToolPkgTheme(source, new Uint8Array(await authored.arrayBuffer()))).buffer], "updated.toolpkg"));
+  assert.deepEqual(output.source!.manifest.display_name, data.display_name);
+  for (const key of ["author","version","description","license"]) {
+    assert.equal(Object.hasOwn(output.source!.manifest,key), false,key);
+  }
+});
+
+/** Keeps full agreement text and author spelling unchanged during metadata projection. */
+test("retains agreement whitespace and original author spelling", async () => {
+  const data = {toolpkg_id:"plain_package",author:[" Author A ","Author B"],license:"legal/original.txt",themes:[night]};
+  const agreement = "  Agreement title\n\nTerms\n";
+  const source = (await parseImportedThemeFile(archiveFile(data,{...resources,"legal/original.txt":agreement}))).source!;
+  const authored = archiveFile({toolpkg_id:"plain_package",author:[" Author A , Author B"],license:"licenses/agreement.txt",themes:[{id:"default",path:"theme.json",preview:"preview.png"}]},{
+    "theme.json":"{}","preview.png":"edited","licenses/agreement.txt":agreement,
+  });
+  const output = await parseImportedThemeFile(new File([Uint8Array.from(await updateToolPkgTheme(source,new Uint8Array(await authored.arrayBuffer()))).buffer],"updated.toolpkg"));
+  assert.equal(output.source!.manifest.license,data.license);
+  assert.deepEqual(output.source!.manifest.author,data.author);
+  assert.equal(output.metadata!.themeLicenseText,agreement);
 });

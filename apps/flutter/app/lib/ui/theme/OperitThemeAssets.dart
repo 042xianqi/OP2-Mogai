@@ -85,14 +85,12 @@ class ThemeAssetImage extends StatelessWidget {
   final String storagePath;
   final BoxFit fit;
 
-  static final ThemeAssetStore _runtimeFallbackStore = ThemeAssetStore();
+  static final ThemeAssetStore _runtimeStore = ThemeAssetStore();
 
   @override
   Widget build(BuildContext context) {
     final scoped = ThemeAssetScope.of(context);
-    final resolver = storagePath.startsWith('assets/')
-        ? scoped
-        : _runtimeFallbackStore;
+    final resolver = storagePath.startsWith('assets/') ? scoped : _runtimeStore;
     return ResolvedThemeImage(
       resolver: resolver,
       reference: storagePath,
@@ -138,6 +136,7 @@ String _themeAssetExtension(String fileName) {
     'jpg',
     'jpeg',
     'png',
+    'svg',
     'webp',
     'bmp',
     'gif',

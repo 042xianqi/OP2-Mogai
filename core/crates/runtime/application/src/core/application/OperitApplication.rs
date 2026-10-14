@@ -32,10 +32,6 @@ use operit_store::PreferencesDataStore::{PreferencesDataStore, PreferencesSynced
 use operit_store::RuntimeFileSyncStore::{
     RuntimeFileSyncReference, RuntimeFileSyncStore, RUNTIME_FILE_SYNC_DOMAIN,
 };
-use operit_store::ThemeLibraryStore::{
-    ThemeInstallReceipt, ThemeLibraryEntry, ThemeLibraryItem, ThemeLibraryStore, ThemeNodeState,
-    ThemeSelection,
-};
 use operit_plugin_theme::ThemeValidationReceipt;
 use operit_store::RuntimeStorageHost::{
     defaultRuntimeStorageHost, setDefaultHostSecretStore, setDefaultRuntimeSqliteHost,
@@ -1241,19 +1237,9 @@ impl OperitApplication {
             .readBlobChunk(&contentHash, offset, length)
     }
 
-    /// Runs the complete in-memory package validator without persistence.
+    /// Builds a validated creation payload without changing installed packages or appearance.
     #[allow(non_snake_case)]
-    pub fn inspectThemeArchive(
-        &self,
-        archiveBytes: Vec<u8>,
-    ) -> Result<Vec<ThemeValidationReceipt>, String> {
-        Ok(operit_plugin_sdk::toolpkg::ToolPkgParser::ToolPkgArchiveParser::readThemeTemplates(&archiveBytes)?.into_iter().map(|template| template.receipt().clone()).collect())
-    }
-
-    /// Builds an in-memory preview payload. This phase does not write the
-    /// archive, library metadata or CoreNode selection.
-    #[allow(non_snake_case)]
-    pub fn previewThemeArchive(
+    fn previewThemeArchive(
         &self,
         archiveBytes: Vec<u8>,
         themeId: String,
@@ -1285,123 +1271,27 @@ impl OperitApplication {
         })
     }
 
-    /// Imports ordinary ToolPkg bytes after checking the confirmed download identity.
+    /// Prepares a declared template from the current ToolPkg registry without persisting a selection.
     #[allow(non_snake_case)]
-    pub fn importToolPkgArchive(
-        &self, archiveBytes: Vec<u8>, expectedArchiveBytes: usize, expectedArchiveSha256: String,
-    ) -> Result<bool, String> {
-        if archiveBytes.len() != expectedArchiveBytes || operit_plugin_theme::sha256_hex(&archiveBytes) != expectedArchiveSha256 {
-            return Err("ToolPkg differs from the confirmed byte count or SHA-256".to_string());
-        }
-        let manager = self.packageManager();
-        let mut manager = manager.lock().map_err(|error| error.to_string())?;
-        manager.importToolPkgBytes(archiveBytes)
-    }
-
-    /// Applies a package already present in the Space library to this
-    /// CoreNode. It never changes another node's selection.
-    #[allow(non_snake_case)]
-    pub fn applyTheme(
+    pub fn previewToolPkgTheme(
         &self,
-        themeId: String,
-        archiveSha256: String,
-    ) -> Result<ThemeInstallReceipt, String> {
-        let storage = self.hostManager.runtimeStorageHost.clone().ok_or_else(|| {
-            "RuntimeStorageHost is not registered for theme selection".to_string()
-        })?;
-        let store = ThemeLibraryStore::new(storage);
-        let entry = store.theme(&themeId, &archiveSha256)?;
-        let package = self.validateThemeArchive(&store.packageBytes(&entry)?, &themeId)?;
-        store.applyValidated(&package)
+        packageName: String,
+        templateId: String,
+    ) -> Result<ThemePreviewReceipt, String> {
+        let bytes = {
+            let manager = self.packageManager();
+            let manager = manager.lock().map_err(|error| error.to_string())?;
+            let runtime = manager.getToolPkgContainerRuntime(&packageName)
+                .ok_or("ToolPkg is not registered")?;
+            if !runtime.themes.iter().any(|template| template.id == templateId) {
+                return Err("Theme template is not declared by this ToolPkg".to_string());
+            }
+            manager.readToolPkgArchiveBytes(&packageName)?
+        };
+        self.previewThemeArchive(bytes, format!("{packageName}:{templateId}"))
     }
 
-    #[allow(non_snake_case)]
-    pub fn listThemeLibrary(&self) -> Result<Vec<ThemeLibraryItem>, String> {
-        self.themeLibraryStore()?.listLibrary()
-    }
-
-    /// Removes a theme package from the Space-owned library when not active on this node.
-    #[allow(non_snake_case)]
-    pub fn deleteTheme(
-        &self,
-        themeId: String,
-        archiveSha256: String,
-    ) -> Result<(), String> {
-        let store = self.themeLibraryStore()?;
-        store.ensureThemeRemovable(&themeId, &archiveSha256)?;
-        let entry = store.theme(&themeId, &archiveSha256)?;
-        let manager = self.packageManager();
-        let mut manager = manager.lock().map_err(|error| error.to_string())?;
-        if !manager.deletePackage(&entry.package_id) {
-            return Err("Failed to uninstall ToolPkg".to_string());
-        }
-        Ok(())
-    }
-
-    #[allow(non_snake_case)]
-    pub fn nodeThemeState(&self) -> Result<ThemeNodeState, String> {
-        self.themeLibraryStore()?.nodeState()
-    }
-
-    #[allow(non_snake_case)]
-    pub fn nodeThemeStateFlow(&self) -> Result<Flow<ThemeNodeState>, String> {
-        Ok(self.themeLibraryStore()?.nodeStateFlow())
-    }
-
-    #[allow(non_snake_case)]
-    pub fn initializeNodeThemeAppearance(&self, snapshotJson: String) -> Result<ThemeNodeState, String> {
-        self.themeLibraryStore()?.initializeAppearance(&snapshotJson)
-    }
-
-    #[allow(non_snake_case)]
-    pub fn updateNodeThemeAppearance(&self, updates: BTreeMap<String, String>) -> Result<ThemeNodeState, String> {
-        self.themeLibraryStore()?.updateAppearance(updates)
-    }
-
-    #[allow(non_snake_case)]
-    pub fn selectPersonalThemeAppearance(&self) -> Result<ThemeNodeState, String> {
-        self.themeLibraryStore()?.selectPersonalAppearance()
-    }
-
-    #[allow(non_snake_case)]
-    fn themeLibraryStore(&self) -> Result<ThemeLibraryStore, String> {
-        let storage = self.hostManager.runtimeStorageHost.clone().ok_or_else(||
-            "RuntimeStorageHost is not registered for themes".to_string())?;
-        Ok(ThemeLibraryStore::new(storage))
-    }
-
-    #[allow(non_snake_case)]
-    pub fn listThemes(&self) -> Result<Vec<ThemeLibraryEntry>, String> {
-        let storage = self.hostManager.runtimeStorageHost.clone().ok_or_else(|| {
-            "RuntimeStorageHost is not registered for theme library storage".to_string()
-        })?;
-        ThemeLibraryStore::new(storage).listThemes()
-    }
-
-    /// Reads the sealed package for a committed library entry. The caller must
-    /// validate the returned bytes before handing assets to a renderer.
-    #[allow(non_snake_case)]
-    pub fn readToolPkgForThemeTemplate(
-        &self,
-        themeId: String,
-        archiveSha256: String,
-    ) -> Result<Vec<u8>, String> {
-        let storage = self.hostManager.runtimeStorageHost.clone().ok_or_else(|| {
-            "RuntimeStorageHost is not registered for theme library storage".to_string()
-        })?;
-        let store = ThemeLibraryStore::new(storage);
-        let entry = store.theme(&themeId, &archiveSha256)?;
-        store.packageBytes(&entry)
-    }
-
-    #[allow(non_snake_case)]
-    pub fn currentThemeSelection(&self) -> Result<Option<ThemeSelection>, String> {
-        let storage = self.hostManager.runtimeStorageHost.clone().ok_or_else(|| {
-            "RuntimeStorageHost is not registered for theme selection".to_string()
-        })?;
-        ThemeLibraryStore::new(storage).currentSelection()
-    }
-
+    /// Validates an explicitly declared template using the ordinary ToolPkg parser.
     #[allow(non_snake_case)]
     fn validateThemeArchive(
         &self,
@@ -1561,6 +1451,6 @@ mod theme_preview_wire_tests {
         let CoreValue::Map(fields) = value else {
             panic!("theme preview asset must convert to a CoreValue map");
         };
-        assert_eq!(fields.get("bytes"), Some(&CoreValue::Bytes(vec![0, 127, 255])));
+        assert_eq!(fields.get("bytes"), Some(&CoreValue::Bytes(vec![0, 127, 255].into())));
     }
 }

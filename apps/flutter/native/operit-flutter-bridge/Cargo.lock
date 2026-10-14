@@ -2788,8 +2788,6 @@ dependencies = [
  "js-sys",
  "operit-host-api",
  "operit-model",
- "operit-plugin-sdk",
- "operit-plugin-theme",
  "operit-util",
  "regex",
  "serde",

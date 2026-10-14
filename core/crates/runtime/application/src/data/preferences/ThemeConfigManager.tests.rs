@@ -908,3 +908,118 @@ fn api_schema_one_migration_preserves_declared_native_types() {
         Some(&json!("false"))
     );
 }
+
+/// Keeps new input appearance fields in ordinary preferences and active saved configurations.
+#[test]
+fn input_appearance_extensions_share_atomic_named_theme_commits() {
+    let fixture = StoreFixture::new();
+    let manager = fixture.manager();
+    let mut initial = snapshot();
+    initial.insert("inputBackgroundColor".into(), Value::Null);
+    initial.insert("inputSendAsset".into(), Value::Null);
+    initial.insert("inputSendAssetSize".into(), json!(26.0));
+    let saved = manager.create("Shared input appearance".into(), initial.clone()).unwrap();
+    manager.apply(saved.id.clone()).unwrap();
+    let before = fixture.writes();
+    manager.patchAppearance(initial.clone(), BTreeMap::from([
+        ("input_background_color".into(), json!(0xff123456u32)),
+        ("input_send_asset".into(), json!("host:///icons/send.svg")),
+        ("input_send_asset_size".into(), json!(30.0)),
+    ]), Vec::new()).unwrap();
+    assert_eq!(fixture.writes(), before + 1);
+    let preferences = fixture.preferences().data().unwrap();
+    assert_eq!(preferences.get(&stringPreferencesKey("input_send_asset")), Some(&json!("host:///icons/send.svg")));
+    let updated = manager.get(saved.id).unwrap();
+    assert_eq!(updated.snapshot["inputBackgroundColor"], json!(0xff123456u32));
+    assert_eq!(updated.snapshot["inputSendAssetSize"], json!(30.0));
+    validateThemePreferenceSnapshot(&snapshot()).unwrap();
+}
+
+/// Clears every extended template field when applying an original 78-field configuration.
+#[test]
+fn released_named_theme_clears_previous_template_input_preferences() {
+    use super::super::ThemePreferenceSnapshot::{EXTENDED_SNAPSHOT_FIELDS, FieldKind};
+    let fixture = StoreFixture::new();
+    let manager = fixture.manager();
+    let released = manager.create("Released appearance".into(), snapshot()).unwrap();
+    let visual: Value = serde_json::from_slice(&operit_plugin_theme::normalize_draft(b"{}").unwrap().canonical_bytes()).unwrap();
+    let mut extended_values = BTreeMap::new();
+    for field in EXTENDED_SNAPSHOT_FIELDS {
+        let value = match field.kind {
+            FieldKind::Boolean => json!(true),
+            FieldKind::OptionalString => json!("runtime/data/user_assets/theme/template.svg"),
+            FieldKind::OptionalColor => json!(0xff123456u32),
+            FieldKind::OptionalPalette => json!(serde_json::to_string(&visual["palette"]).unwrap()),
+            FieldKind::Enum(values) => json!(values[0]),
+            FieldKind::Number { min, .. } => json!(min),
+            FieldKind::OptionalEnum(values) => json!(values[0]),
+        };
+        extended_values.insert(field.preference_key.to_owned(), value);
+    }
+    fixture.preferences().edit(|preferences| {
+        for field in EXTENDED_SNAPSHOT_FIELDS {
+            preferences.set(&stringPreferencesKey(field.preference_key), extended_values[field.preference_key].clone());
+        }
+        preferences.set(&stringPreferencesKey("unrelated_setting"), json!("untouched"));
+    }).unwrap();
+    manager.apply(released.id).unwrap();
+    let preferences = fixture.preferences().data().unwrap();
+    for field in EXTENDED_SNAPSHOT_FIELDS {
+        assert!(preferences.get(&stringPreferencesKey(field.preference_key)).is_none(), "{}", field.preference_key);
+    }
+    assert_eq!(preferences.get(&stringPreferencesKey("unrelated_setting")), Some(&json!("untouched")));
+}
+
+/// Preserves copied complete palettes independently and clears them when applying a released seed configuration.
+#[test]
+fn copied_template_palette_survives_configuration_inheritance() {
+    let fixture = StoreFixture::new();
+    let manager = fixture.manager();
+    let draft = operit_plugin_theme::normalize_draft(b"{}").unwrap();
+    let visual: Value = serde_json::from_slice(&draft.canonical_bytes()).unwrap();
+    let palette = json!(serde_json::to_string(&visual["palette"]).unwrap());
+    let mut template = snapshot();
+    template.insert("themePaletteJson".into(), palette.clone());
+    let original = manager.create("Template copy".into(), template.clone()).unwrap();
+    manager.apply(original.id.clone()).unwrap();
+    let inherited = manager.create("Inherited copy".into(), manager.get(original.id.clone()).unwrap().snapshot).unwrap();
+    manager.apply(inherited.id).unwrap();
+    assert_eq!(manager.get(original.id).unwrap().snapshot, template);
+    assert_eq!(fixture.preferences().data().unwrap().get(&stringPreferencesKey("theme_palette_json")), Some(&palette));
+    let released = manager.create("Released appearance".into(), snapshot()).unwrap();
+    manager.apply(released.id).unwrap();
+    assert!(fixture.preferences().data().unwrap().get(&stringPreferencesKey("theme_palette_json")).is_none());
+}
+
+/// Rejects malformed copied palettes before any ordinary preference mutation.
+#[test]
+fn malformed_configuration_palette_is_rejected_without_writes() {
+    let fixture = StoreFixture::new();
+    let manager = fixture.manager();
+    let writes = fixture.writes();
+    for palette in ["not json", "{}", r#"{"light":{},"dark":{}}"#] {
+        let mut config = snapshot();
+        config.insert("themePaletteJson".into(), json!(palette));
+        assert!(manager.create("Invalid palette".into(), config).is_err());
+    }
+    assert_eq!(fixture.writes(), writes);
+}
+
+/// Explicit replacement repairs invalid ordinary appearance without modifying valid saved configurations.
+#[test]
+fn explicit_custom_appearance_repairs_invalid_preferences_and_preserves_catalog() {
+    let fixture = StoreFixture::new();
+    let manager = fixture.manager();
+    let saved = manager.create("Saved appearance".into(), snapshot()).unwrap();
+    manager.apply(saved.id.clone()).unwrap();
+    fixture.preferences().edit(|preferences| {
+        preferences.set(&stringPreferencesKey("font_scale"), json!("invalid"));
+    }).unwrap();
+    assert!(manager.list().is_err());
+    let writes = fixture.writes();
+    manager.useCustomAppearance(snapshot()).unwrap();
+    assert_eq!(fixture.writes(), writes + 1);
+    assert_eq!(manager.get(saved.id.clone()).unwrap(), saved);
+    assert!(manager.getActive().unwrap().is_none());
+    assert_eq!(fixture.preferences().data().unwrap().get(&stringPreferencesKey("font_scale")), Some(&snapshot()["fontScale"]));
+}

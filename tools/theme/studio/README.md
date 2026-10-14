@@ -4,7 +4,7 @@ Operit2 Theme Studio is the official web-based authoring workbench for editing a
 
 ## Architecture Highlights
 
-- **1:1 Shared Flutter Rendering (`client-shell-v6`)**: The right-hand stage embeds the standalone Flutter Web preview kernel (`tools/theme/preview`), which renders the exact same `operit_ui` widgets used by the native Operit2 client (desktop sidebar, conversation history, top bar, user/AI message bubbles, 9-slice surfaces, and Agent/Classic chat input).
+- **1:1 Shared Flutter Rendering (`client-shell-v7`)**: The right-hand stage embeds the standalone Flutter Web preview kernel (`tools/theme/preview`), which renders the exact same `operit_ui` widgets used by the native Operit2 client (desktop sidebar, conversation history, top bar, user/AI message bubbles, 9-slice surfaces, and Agent/Classic chat input).
 - **Single Rust/WASM Contract Authority**: Normalization, L0–L4 media validation (PNG/JPEG, restricted static SVG, static TrueType `.ttf`), and deterministic Stored-ZIP `.toolpkg` export are executed by `operit-plugin-theme` compiled to WebAssembly. Rust remains the validation and export authority; the browser extracts ZIP entries and reads ToolPkg declarations for editing.
 - **Declarative Template Export**: The editor creates a standard ToolPkg with a `themes` declaration. Its generated files are `manifest.json`, `theme.json`, `preview.png`, referenced media assets (`assets/images/*`, `assets/fonts/*`), and the agreement text referenced by `manifest.license`. ToolPkg itself can also declare scripts and other capabilities; the editor does not classify or reject packages by those capabilities.
 
@@ -56,3 +56,5 @@ npm run build
 The static bundle is emitted to `tools/theme/studio/dist/` with the verified preview kernel nested at `dist/theme-preview/<release-id>/`.
 
 For production, build the preview release with `--base-prefix /theme` before building Studio. [Deploy Web Experience](../../../.github/workflows/deploy-web-experience.yml) publishes the application and editor together from `main`, with Studio served at `web.operit.app/theme/`.
+
+Editing an existing ToolPkg stores the edited template in an immutable content-addressed directory, preserving resources shared by other capabilities. Unchanged manifest fields retain their original localized values, author arrays and agreement references. Explicit Chinese text edits update only that translation. Package IDs follow the ordinary nonblank ToolPkg rule. The final merged archive must pass the Rust validator for every declared template before download.

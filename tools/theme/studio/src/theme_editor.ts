@@ -455,7 +455,7 @@ export const COMPONENT_COLOR_MAP: Readonly<
       {
         token: "onSurface",
         partLabel: "标题",
-        usageHint: "左上角 Operit 标题、角色卡分组名称文字颜色",
+        usageHint: "左上角 Operit 标题、工作区与会话分组名称文字颜色",
       },
       {
         token: "onSurfaceVariant",
@@ -501,7 +501,7 @@ export const COMPONENT_COLOR_MAP: Readonly<
       {
         token: "onSurface",
         partLabel: "标题与图标",
-        usageHint: "会话标题（1 - New Chat）、左侧收起侧栏图标、右侧工作区图标颜色",
+        usageHint: "会话标题（Operit - New Chat）、左侧收起侧栏图标、右侧工作区图标颜色",
       },
       {
         token: "surface",

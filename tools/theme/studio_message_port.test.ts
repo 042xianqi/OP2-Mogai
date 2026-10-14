@@ -23,7 +23,7 @@ class FakeChannel {
 }
 
 const header = { protocolVersion: 1, nonce: "0123456789abcdef", rendererReleaseId: "test-release" };
-const fixtureVersion = "client-shell-v6";
+const fixtureVersion = "client-shell-v7";
 const themeJson = JSON.stringify({ typography: { global: "noto-sans-sc", user: null, ai: null } });
 const receipt = (revision: number, brightness: "light" | "dark" = "light", viewport: PreviewViewport = { width: 1280, height: 800 }, showConversation = false): ClientShellReceipt => ({
   scope: "client-shell", parityVerified: false, revision, fixtureVersion, showConversation, fixtureSourceSha256: "b".repeat(64),

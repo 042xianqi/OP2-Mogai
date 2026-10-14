@@ -93,7 +93,7 @@ function localRenderer(): Plugin {
           setIsolationHeaders(res);
           res.setHeader("Content-Type", "application/json; charset=utf-8");
           res.setHeader("Cache-Control", "no-store");
-          res.end(JSON.stringify({ ...state, rendererReleaseId: releaseId, fixtureVersion: "client-shell-v6", previewUrl: releasePrefix,
+          res.end(JSON.stringify({ ...state, rendererReleaseId: releaseId, fixtureVersion: "client-shell-v7", previewUrl: releasePrefix,
             workerUrl: `${releasePrefix}theme_contract_worker.js` }));
         }).catch(next);
         return;
@@ -156,7 +156,7 @@ function localRenderer(): Plugin {
       const staticConfig = {
         ...state,
         rendererReleaseId: releaseId,
-        fixtureVersion: "client-shell-v6",
+        fixtureVersion: "client-shell-v7",
         previewUrl: `./theme-preview/${releaseId}/`,
         workerUrl: `./theme-preview/${releaseId}/theme_contract_worker.js`,
       };

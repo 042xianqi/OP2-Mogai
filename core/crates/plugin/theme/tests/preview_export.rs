@@ -296,3 +296,58 @@ fn theme_export_rejects_removed_protocol_and_compatibility_fields() {
         );
     }
 }
+
+/// Validates rewritten nested manifests and preserves ordinary package identities without extra theme rules.
+#[test]
+fn final_archive_validation_accepts_nested_manifest_and_ordinary_id() {
+    use std::io::Read;
+    let mut meta = metadata();
+    meta["toolpkgId"] = json!("com.operit.character_cards");
+    meta["displayName"] = json!("");
+    meta["authorName"] = json!("");
+    let bytes = export_toolpkg_from_theme_transfer(
+        &serde_json::to_vec(&meta).unwrap(), b"{}", &png(1280,800), b"[]", b"",
+    ).unwrap();
+    let mut input = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for index in 0..input.len() {
+        let mut file = input.by_index(index).unwrap();
+        let mut data = Vec::new();
+        file.read_to_end(&mut data).unwrap();
+        let path = if file.name() == "manifest.json" { "bundle/manifest.hjson".to_owned() } else { format!("bundle/{}", file.name()) };
+        output.start_file(path, zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut output,&data).unwrap();
+    }
+    let archive = output.finish().unwrap().into_inner();
+    let templates = validate_authored_toolpkg_theme_templates(&archive,"bundle/manifest.hjson").unwrap();
+    assert_eq!(templates.len(),1);
+    assert_eq!(templates[0].metadata().package_id,"com.operit.character_cards");
+}
+
+/// Requires untouched contributions to remain valid before returning the merged archive to Studio.
+#[test]
+fn final_archive_validation_rejects_digest_damage_in_another_template() {
+    use std::io::Read;
+    let bytes = export_toolpkg_from_theme_transfer(
+        &serde_json::to_vec(&metadata()).unwrap(), b"{}", &png(1280,800), b"[]", b"",
+    ).unwrap();
+    let mut input = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for index in 0..input.len() {
+        let mut file = input.by_index(index).unwrap();
+        let mut data = Vec::new();
+        file.read_to_end(&mut data).unwrap();
+        if file.name() == "manifest.json" {
+            let mut manifest: serde_json::Value = serde_json::from_slice(&data).unwrap();
+            let mut other = manifest["themes"][0].clone();
+            other["id"] = json!("other");
+            other["files"][0]["sha256"] = json!("0".repeat(64));
+            manifest["themes"].as_array_mut().unwrap().push(other);
+            data = serde_json::to_vec(&manifest).unwrap();
+        }
+        output.start_file(file.name(),zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut output,&data).unwrap();
+    }
+    let archive = output.finish().unwrap().into_inner();
+    assert!(validate_authored_toolpkg_theme_templates(&archive,"manifest.json").is_err());
+}

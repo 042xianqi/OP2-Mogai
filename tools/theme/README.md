@@ -28,7 +28,7 @@ npm ci
 npm run dev
 ```
 
-Open <http://127.0.0.1:7474/>. Studio mounts the pinned `build/theme-preview/<rendererReleaseId>/` directory same-origin, renders live frames through the shared Flutter `operit_ui` widgets (`client-shell-v6`), and exports verified `.toolpkg` packages through the Rust/WASM contract worker.
+Open <http://127.0.0.1:7474/>. Studio mounts the pinned `build/theme-preview/<rendererReleaseId>/` directory same-origin, renders live frames through the shared Flutter `operit_ui` widgets (`client-shell-v7`), and exports verified `.toolpkg` packages through the Rust/WASM contract worker.
 
 ## Static Bundle & GitHub Pages Deployment
 

@@ -20,7 +20,7 @@ void main() {
 
   test('internal snapshot transport is unchanged and complete', () {
     const snapshot = ThemePreferenceDefaults.snapshot;
-    expect(snapshot.toJson(), hasLength(102));
+    expect(snapshot.toJson(), hasLength(103));
     expect(
       ThemePreferenceSnapshot.fromJson(snapshot.toJson()).toJson(),
       snapshot.toJson(),

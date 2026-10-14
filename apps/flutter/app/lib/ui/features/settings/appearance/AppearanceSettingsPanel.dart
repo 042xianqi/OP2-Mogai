@@ -17,13 +17,12 @@ import '../../../theme/OperitTheme.dart';
 import '../../../theme/OperitThemeAssets.dart';
 import '../components/SettingsControlStyles.dart';
 import 'ChatAppearancePreview.dart';
-import 'ThemeLibraryPanel.dart';
+import 'ThemeConfigurationControl.dart';
 
-enum _AppearanceSettingsTab { library, theme, background, bubbles, interaction }
+enum _AppearanceSettingsTab { theme, background, bubbles, interaction }
 
 const List<_AppearanceSettingsTab> _appearanceSettingsTabs =
     <_AppearanceSettingsTab>[
-      _AppearanceSettingsTab.library,
       _AppearanceSettingsTab.theme,
       _AppearanceSettingsTab.background,
       _AppearanceSettingsTab.bubbles,
@@ -43,11 +42,11 @@ class AppearanceSettingsPanel extends StatelessWidget {
       length: _appearanceSettingsTabs.length,
       child: Column(
         children: <Widget>[
-          _AppearanceHeaderBar(themeController: themeController),
+          const ThemeConfigurationControl(),
+          const _AppearanceHeaderBar(),
           Expanded(
             child: TabBarView(
               children: <Widget>[
-                ThemeLibraryPanel(controller: themeController),
                 _buildThemeTab(context, l10n, themeController, snapshot),
                 _buildBackgroundTab(context, l10n, themeController, snapshot),
                 _buildBubblesTab(context, l10n, themeController, snapshot),
@@ -92,10 +91,7 @@ class AppearanceSettingsPanel extends StatelessWidget {
             const SizedBox(height: 10),
             _AppearanceFieldBlock(
               label: l10n.settingsAppearanceMessageSurface,
-              badge: _messageSurfaceLabel(
-                l10n,
-                _surfaceFromSnapshot(snapshot),
-              ),
+              badge: _messageSurfaceLabel(l10n, _surfaceFromSnapshot(snapshot)),
               child: _MessageSurfaceSelector(
                 value: _surfaceFromSnapshot(snapshot),
                 onChanged: (value) {
@@ -105,10 +101,9 @@ class AppearanceSettingsPanel extends StatelessWidget {
             ),
           ],
         ),
-        if (!themeController.packageVisualsLocked)
-          _SectionCard(
-            title: l10n.settingsAppearanceColorSection,
-            icon: Icons.color_lens_outlined,
+        _SectionCard(
+          title: l10n.settingsAppearanceColorSection,
+          icon: Icons.color_lens_outlined,
           children: <Widget>[
             _BodyText(l10n.settingsAppearanceColorDescription),
             const SizedBox(height: 4),
@@ -126,11 +121,7 @@ class AppearanceSettingsPanel extends StatelessWidget {
               },
               onCustomTap: () {
                 unawaited(
-                  _showThemeColorDialog(
-                    context,
-                    themeController,
-                    snapshot,
-                  ),
+                  _showThemeColorDialog(context, themeController, snapshot),
                 );
               },
             ),
@@ -140,7 +131,7 @@ class AppearanceSettingsPanel extends StatelessWidget {
           title: l10n.settingsAppearanceTextSection,
           icon: Icons.text_fields_outlined,
           children: <Widget>[
-            if (!themeController.packageVisualsLocked) ...<Widget>[
+            ...<Widget>[
               _AppearanceFieldBlock(
                 label: l10n.settingsAppearanceFontFamily,
                 badge: _fontFamilyLabel(l10n, snapshot),
@@ -193,13 +184,17 @@ class AppearanceSettingsPanel extends StatelessWidget {
             SettingsSliderRow(
               icon: Icons.zoom_in_outlined,
               label: l10n.settingsAppearanceInterfaceScale,
-              value: ApplicationZoom.levels.indexOf(applicationZoom.zoom).toDouble(),
+              value: ApplicationZoom.levels
+                  .indexOf(applicationZoom.zoom)
+                  .toDouble(),
               min: 0,
               max: (ApplicationZoom.levels.length - 1).toDouble(),
               divisions: ApplicationZoom.levels.length - 1,
               valueText: '${(applicationZoom.zoom * 100).round()}%',
               onChanged: (value) {
-                applicationZoom.onZoomChanged(ApplicationZoom.levels[value.round()]);
+                applicationZoom.onZoomChanged(
+                  ApplicationZoom.levels[value.round()],
+                );
               },
             ),
             const SizedBox(height: 8),
@@ -215,9 +210,7 @@ class AppearanceSettingsPanel extends StatelessWidget {
                 themeController.previewThemeSettings(fontScale: value);
               },
               onChangeEnd: (value) {
-                unawaited(
-                  themeController.saveThemeSettings(fontScale: value),
-                );
+                unawaited(themeController.saveThemeSettings(fontScale: value));
               },
             ),
           ],
@@ -229,18 +222,17 @@ class AppearanceSettingsPanel extends StatelessWidget {
           children: <Widget>[
             _BodyText(l10n.settingsAppearanceLanguageDescription),
             const SizedBox(height: 8),
-            if (!themeController.packageVisualsLocked)
-              Align(
-                alignment: Alignment.centerRight,
-                child: OutlinedButton.icon(
-                  style: SettingsControlStyles.sectionTextButton(),
-                  onPressed: () {
-                    unawaited(themeController.resetThemeSettings());
-                  },
-                  icon: const Icon(Icons.restart_alt, size: 16),
-                  label: Text(l10n.settingsAppearanceResetTheme),
-                ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton.icon(
+                style: SettingsControlStyles.sectionTextButton(),
+                onPressed: () {
+                  unawaited(themeController.resetThemeSettings());
+                },
+                icon: const Icon(Icons.restart_alt, size: 16),
+                label: Text(l10n.settingsAppearanceResetTheme),
               ),
+            ),
           ],
         ),
       ],
@@ -264,10 +256,9 @@ class AppearanceSettingsPanel extends StatelessWidget {
         showInputPreview: false,
       ),
       children: <Widget>[
-        if (!themeController.packageVisualsLocked)
-          _SectionCard(
-            title: l10n.settingsAppearanceBackgroundSection,
-            icon: Icons.wallpaper_outlined,
+        _SectionCard(
+          title: l10n.settingsAppearanceBackgroundSection,
+          icon: Icons.wallpaper_outlined,
           children: <Widget>[
             _BodyText(l10n.settingsAppearanceBackgroundDescription),
             const SizedBox(height: 4),
@@ -287,7 +278,10 @@ class AppearanceSettingsPanel extends StatelessWidget {
                   ? Icons.movie_creation_outlined
                   : Icons.image_outlined,
               title: l10n.settingsAppearanceBackgroundImage,
-              subtitle: _backgroundImageLabel(l10n, snapshot.backgroundImageUri),
+              subtitle: _backgroundImageLabel(
+                l10n,
+                snapshot.backgroundImageUri,
+              ),
               actions: <Widget>[
                 FilledButton.tonalIcon(
                   style: SettingsControlStyles.sectionTextButton(),
@@ -464,10 +458,7 @@ class AppearanceSettingsPanel extends StatelessWidget {
             const SizedBox(height: 10),
             _AppearanceFieldBlock(
               label: l10n.settingsAppearanceMessageDensity,
-              badge: _messageDensityLabel(
-                l10n,
-                _densityFromSnapshot(snapshot),
-              ),
+              badge: _messageDensityLabel(l10n, _densityFromSnapshot(snapshot)),
               child: _MessageDensitySelector(
                 value: _densityFromSnapshot(snapshot),
                 onChanged: (value) {
@@ -533,20 +524,15 @@ class AppearanceSettingsPanel extends StatelessWidget {
               },
               onCustomTap: () {
                 unawaited(
-                  _showMessageColorDialog(
-                    context,
-                    themeController,
-                    snapshot,
-                  ),
+                  _showMessageColorDialog(context, themeController, snapshot),
                 );
               },
             ),
           ],
         ),
-        if (!themeController.packageVisualsLocked)
-          _SectionCard(
-            title: l10n.settingsAppearanceBubbleFontSection,
-            icon: Icons.font_download_outlined,
+        _SectionCard(
+          title: l10n.settingsAppearanceBubbleFontSection,
+          icon: Icons.font_download_outlined,
           children: <Widget>[
             _CompactAssetTile(
               icon: Icons.person_outline,
@@ -608,21 +594,20 @@ class AppearanceSettingsPanel extends StatelessWidget {
                 snapshot.bubbleUserUseImage,
               ),
               actions: <Widget>[
-                if (!themeController.packageVisualsLocked)
-                  FilledButton.tonalIcon(
-                    style: SettingsControlStyles.sectionTextButton(),
-                    onPressed: () {
-                      unawaited(
-                        _pickBubbleImage(
-                          themeController,
-                          snapshot: snapshot,
-                          isUser: true,
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.image_outlined, size: 16),
-                    label: Text(l10n.settingsAppearanceChooseUserBubbleImage),
-                  ),
+                FilledButton.tonalIcon(
+                  style: SettingsControlStyles.sectionTextButton(),
+                  onPressed: () {
+                    unawaited(
+                      _pickBubbleImage(
+                        themeController,
+                        snapshot: snapshot,
+                        isUser: true,
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.image_outlined, size: 16),
+                  label: Text(l10n.settingsAppearanceChooseUserBubbleImage),
+                ),
                 if (userImageActive) ...<Widget>[
                   OutlinedButton.icon(
                     style: SettingsControlStyles.sectionTextButton(),
@@ -639,19 +624,18 @@ class AppearanceSettingsPanel extends StatelessWidget {
                     icon: const Icon(Icons.tune_outlined, size: 16),
                     label: Text(l10n.settingsAppearanceBubbleImageAdjustUser),
                   ),
-                  if (!themeController.packageVisualsLocked)
-                    SettingsEntityIconButton(
-                      tooltip: l10n.settingsAppearanceClearUserBubbleImage,
-                      icon: Icons.layers_clear_outlined,
-                      onPressed: () {
-                        unawaited(
-                          themeController.saveThemeSettings(
-                            bubbleUserUseImage: false,
-                            bubbleUserImageUri: '',
-                          ),
-                        );
-                      },
-                    ),
+                  SettingsEntityIconButton(
+                    tooltip: l10n.settingsAppearanceClearUserBubbleImage,
+                    icon: Icons.layers_clear_outlined,
+                    onPressed: () {
+                      unawaited(
+                        themeController.saveThemeSettings(
+                          bubbleUserUseImage: false,
+                          bubbleUserImageUri: '',
+                        ),
+                      );
+                    },
+                  ),
                 ],
               ],
               bottom: userImageActive
@@ -677,21 +661,20 @@ class AppearanceSettingsPanel extends StatelessWidget {
                 snapshot.bubbleAiUseImage,
               ),
               actions: <Widget>[
-                if (!themeController.packageVisualsLocked)
-                  FilledButton.tonalIcon(
-                    style: SettingsControlStyles.sectionTextButton(),
-                    onPressed: () {
-                      unawaited(
-                        _pickBubbleImage(
-                          themeController,
-                          snapshot: snapshot,
-                          isUser: false,
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.image_outlined, size: 16),
-                    label: Text(l10n.settingsAppearanceChooseAiBubbleImage),
-                  ),
+                FilledButton.tonalIcon(
+                  style: SettingsControlStyles.sectionTextButton(),
+                  onPressed: () {
+                    unawaited(
+                      _pickBubbleImage(
+                        themeController,
+                        snapshot: snapshot,
+                        isUser: false,
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.image_outlined, size: 16),
+                  label: Text(l10n.settingsAppearanceChooseAiBubbleImage),
+                ),
                 if (aiImageActive) ...<Widget>[
                   OutlinedButton.icon(
                     style: SettingsControlStyles.sectionTextButton(),
@@ -708,19 +691,18 @@ class AppearanceSettingsPanel extends StatelessWidget {
                     icon: const Icon(Icons.tune_outlined, size: 16),
                     label: Text(l10n.settingsAppearanceBubbleImageAdjustAi),
                   ),
-                  if (!themeController.packageVisualsLocked)
-                    SettingsEntityIconButton(
-                      tooltip: l10n.settingsAppearanceClearAiBubbleImage,
-                      icon: Icons.layers_clear_outlined,
-                      onPressed: () {
-                        unawaited(
-                          themeController.saveThemeSettings(
-                            bubbleAiUseImage: false,
-                            bubbleAiImageUri: '',
-                          ),
-                        );
-                      },
-                    ),
+                  SettingsEntityIconButton(
+                    tooltip: l10n.settingsAppearanceClearAiBubbleImage,
+                    icon: Icons.layers_clear_outlined,
+                    onPressed: () {
+                      unawaited(
+                        themeController.saveThemeSettings(
+                          bubbleAiUseImage: false,
+                          bubbleAiImageUri: '',
+                        ),
+                      );
+                    },
+                  ),
                 ],
               ],
               bottom: aiImageActive
@@ -956,227 +938,64 @@ class AppearanceSettingsPanel extends StatelessWidget {
 }
 
 class _AppearanceHeaderBar extends StatelessWidget {
-  const _AppearanceHeaderBar({required this.themeController});
-  final OperitThemeController themeController;
+  /// Creates the independent appearance-category header.
+  const _AppearanceHeaderBar();
 
+  /// Builds the responsive appearance tabs without plugin-owned target selection.
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
     final colorScheme = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final selection = themeController.selection;
-    final locked = themeController.packageVisualsLocked;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-      child: Align(
-        alignment: Alignment.topCenter,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 1180),
-          child: OperitGlassSurface(
-            color: colorScheme.surfaceContainerHighest.withValues(
-              alpha: isDark ? 0.42 : 0.52,
-            ),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: locked
-                  ? colorScheme.primary.withValues(alpha: 0.32)
-                  : colorScheme.outlineVariant.withValues(alpha: 0.22),
-            ),
-            material: true,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 10, 12, 6),
-                  child: Row(
-                    children: <Widget>[
-                      DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: locked
-                              ? colorScheme.primaryContainer.withValues(alpha: 0.78)
-                              : colorScheme.secondaryContainer.withValues(alpha: 0.72),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: <Widget>[
-                              Icon(
-                                locked
-                                    ? Icons.inventory_2_outlined
-                                    : Icons.auto_fix_high_outlined,
-                                size: 14,
-                                color: locked
-                                    ? colorScheme.onPrimaryContainer
-                                    : colorScheme.onSecondaryContainer,
-                              ),
-                              const SizedBox(width: 5),
-                              Text(
-                                locked ? '主题包模式' : '个人外观模式',
-                                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                  color: locked
-                                      ? colorScheme.onPrimaryContainer
-                                      : colorScheme.onSecondaryContainer,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          selection != null
-                              ? '${selection.themeId} · v${selection.version}（视觉契约锁定，明暗与交互项可调）'
-                              : l10n.settingsAppearancePersonalThemeSummary,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: colorScheme.onSurfaceVariant,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Tooltip(
-                        message: isDark ? '切换为亮色模式' : '切换为暗色模式',
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(8),
-                          onTap: () => themeController.toggle(context),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: <Widget>[
-                                Icon(
-                                  isDark
-                                      ? Icons.dark_mode_outlined
-                                      : Icons.light_mode_outlined,
-                                  size: 15,
-                                  color: colorScheme.primary,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  isDark ? '暗色' : '亮色',
-                                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                                    color: colorScheme.onSurface,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Divider(
-                  height: 1,
-                  color: colorScheme.outlineVariant.withValues(alpha: 0.18),
-                ),
-                TabBar(
-                  isScrollable: true,
-                  tabAlignment: TabAlignment.start,
-                  dividerColor: Colors.transparent,
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  labelStyle: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                  unselectedLabelStyle: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    fontWeight: FontWeight.w500,
-                  ),
-                  tabs: <Widget>[
-                    for (final tab in _appearanceSettingsTabs)
-                      Tab(
-                        height: 38,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: <Widget>[
-                            Icon(_appearanceSettingsTabIcon(tab), size: 16),
-                            const SizedBox(width: 6),
-                            Text(_appearanceSettingsTabLabel(l10n, tab)),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-IconData _appearanceSettingsTabIcon(_AppearanceSettingsTab tab) {
-  return switch (tab) {
-    _AppearanceSettingsTab.library => Icons.widgets_outlined,
-    _AppearanceSettingsTab.theme => Icons.palette_outlined,
-    _AppearanceSettingsTab.background => Icons.wallpaper_outlined,
-    _AppearanceSettingsTab.bubbles => Icons.chat_bubble_outline_rounded,
-    _AppearanceSettingsTab.interaction => Icons.tune_rounded,
-  };
-}
-
-class _ResponsiveTwoColumnTabView extends StatelessWidget {
-  const _ResponsiveTwoColumnTabView({
-    required this.leftChildren,
-    required this.rightChildren,
-  });
-
-  final List<Widget> leftChildren;
-  final List<Widget> rightChildren;
-
-  @override
-  Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (constraints.maxWidth >= 720) {
-          return SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1120),
+        final useHorizontalHeader = constraints.maxWidth >= 680;
+        if (useHorizontalHeader) {
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
                 child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: leftChildren,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: rightChildren,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: TabBar(
+                          isScrollable: true,
+                          tabAlignment: TabAlignment.start,
+                          dividerColor: Colors.transparent,
+                          tabs: <Widget>[
+                            for (final tab in _appearanceSettingsTabs)
+                              Tab(text: _appearanceSettingsTabLabel(l10n, tab)),
+                          ],
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
-            ),
+              Divider(
+                height: 1,
+                color: colorScheme.outlineVariant.withValues(alpha: 0.22),
+              ),
+            ],
           );
         }
 
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+        return Column(
+          mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            ...leftChildren,
-            ...rightChildren,
+            Material(
+              color: Colors.transparent,
+              child: TabBar(
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
+                tabs: <Widget>[
+                  for (final tab in _appearanceSettingsTabs)
+                    Tab(text: _appearanceSettingsTabLabel(l10n, tab)),
+                ],
+              ),
+            ),
           ],
         );
       },
@@ -1208,8 +1027,10 @@ class _ResponsivePreviewSplitTabViewState
     return LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxWidth >= 820) {
-          final previewWidth =
-              (constraints.maxWidth * 0.40).clamp(340.0, 420.0);
+          final previewWidth = (constraints.maxWidth * 0.40).clamp(
+            340.0,
+            420.0,
+          );
           return Align(
             alignment: Alignment.topCenter,
             child: ConstrainedBox(
@@ -1244,8 +1065,9 @@ class _ResponsivePreviewSplitTabViewState
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Material(
-                color:
-                    colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+                color: colorScheme.surfaceContainerHighest.withValues(
+                  alpha: 0.35,
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                   side: BorderSide(
@@ -1275,9 +1097,8 @@ class _ResponsivePreviewSplitTabViewState
                         Expanded(
                           child: Text(
                             l10n.settingsAppearanceLivePreviewTitle,
-                            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(fontWeight: FontWeight.w600),
                           ),
                         ),
                         SettingsInfoBadge(
@@ -1342,7 +1163,6 @@ String _appearanceSettingsTabLabel(
   _AppearanceSettingsTab tab,
 ) {
   return switch (tab) {
-    _AppearanceSettingsTab.library => l10n.settingsAppearanceThemeLibraryTab,
     _AppearanceSettingsTab.theme => l10n.settingsAppearanceThemeSection,
     _AppearanceSettingsTab.background =>
       l10n.settingsAppearanceBackgroundSection,
@@ -2159,8 +1979,12 @@ Future<void> _showBubbleImageAdjustDialog(
                       color: previewColor,
                       borderRadius: BorderRadius.circular(
                         isUser
-                            ? snapshot.bubbleUserRoundedCornersEnabled ? 12 : 4
-                            : snapshot.bubbleAiRoundedCornersEnabled ? 12 : 4,
+                            ? snapshot.bubbleUserRoundedCornersEnabled
+                                  ? 12
+                                  : 4
+                            : snapshot.bubbleAiRoundedCornersEnabled
+                            ? 12
+                            : 4,
                       ),
                       imageStyle: previewStyle,
                       child: Padding(
@@ -2256,7 +2080,9 @@ Future<void> _showBubbleImageAdjustDialog(
                         value: repeatEnd,
                         min: repeatStart + 0.01,
                         max: 0.95,
-                        divisions: ((0.95 - (repeatStart + 0.01)) * 100).round().clamp(1, 100),
+                        divisions: ((0.95 - (repeatStart + 0.01)) * 100)
+                            .round()
+                            .clamp(1, 100),
                         valueText: '${(repeatEnd * 100).round()}%',
                         onChanged: (value) => update(() => repeatEnd = value),
                       ),
@@ -2271,7 +2097,10 @@ Future<void> _showBubbleImageAdjustDialog(
                         onChanged: (value) => update(() {
                           repeatYStart = value;
                           if (repeatYEnd <= repeatYStart + 0.01) {
-                            repeatYEnd = (repeatYStart + 0.01).clamp(0.06, 0.95);
+                            repeatYEnd = (repeatYStart + 0.01).clamp(
+                              0.06,
+                              0.95,
+                            );
                           }
                         }),
                       ),
@@ -2281,7 +2110,9 @@ Future<void> _showBubbleImageAdjustDialog(
                         value: repeatYEnd,
                         min: repeatYStart + 0.01,
                         max: 0.95,
-                        divisions: ((0.95 - (repeatYStart + 0.01)) * 100).round().clamp(1, 100),
+                        divisions: ((0.95 - (repeatYStart + 0.01)) * 100)
+                            .round()
+                            .clamp(1, 100),
                         valueText: '${(repeatYEnd * 100).round()}%',
                         onChanged: (value) => update(() => repeatYEnd = value),
                       ),
@@ -3601,8 +3432,8 @@ class _BubbleImageRenderModeSelector extends StatelessWidget {
       onChanged: onChanged,
       segments: <ButtonSegment<String>>[
         ButtonSegment<String>(
-          value: UserPreferencesManager
-              .BUBBLE_IMAGE_RENDER_MODE_TILED_NINE_SLICE,
+          value:
+              UserPreferencesManager.BUBBLE_IMAGE_RENDER_MODE_TILED_NINE_SLICE,
           icon: const Icon(Icons.grid_view_outlined, size: 16),
           label: Text(l10n.settingsAppearanceBubbleImageTiledNineSlice),
         ),
@@ -3837,7 +3668,9 @@ class _SectionCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       title,
-                      style: SettingsControlStyles.sectionTitleTextStyle(context),
+                      style: SettingsControlStyles.sectionTitleTextStyle(
+                        context,
+                      ),
                     ),
                   ),
                   if (action != null) ...<Widget>[
@@ -3970,10 +3803,7 @@ class _CompactAssetTile extends StatelessWidget {
               ),
             ],
           ),
-          if (bottom != null) ...<Widget>[
-            const SizedBox(height: 6),
-            bottom!,
-          ],
+          if (bottom != null) ...<Widget>[const SizedBox(height: 6), bottom!],
         ],
       ),
     );
@@ -4007,15 +3837,9 @@ class _TwoColumnSliderGrid extends StatelessWidget {
               ),
             );
           }
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: rows,
-          );
+          return Column(mainAxisSize: MainAxisSize.min, children: rows);
         }
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: children,
-        );
+        return Column(mainAxisSize: MainAxisSize.min, children: children);
       },
     );
   }

@@ -281,7 +281,7 @@ impl ThemeConfigManager {
     ) -> Result<(), PreferencesDataStoreError> {
         validateThemePreferenceSnapshot(&snapshot)?;
         self.dataStore.try_edit_result(|preferences| {
-            let mut state = readState(preferences)?;
+            let mut state = readCatalogState(preferences)?;
             writeThemePreferenceSnapshot(preferences, &snapshot)?;
             state.activeThemeConfigId = None;
             writeState(preferences, &state)
@@ -314,8 +314,8 @@ fn commitAppearance(
     Ok(updated)
 }
 
-/// Decodes and validates one committed catalog together with its active ordinary appearance.
-fn readState(preferences: &Preferences) -> Result<ThemeConfigState, PreferencesDataStoreError> {
+/// Decodes saved configurations independently of the ordinary appearance being replaced.
+fn readCatalogState(preferences: &Preferences) -> Result<ThemeConfigState, PreferencesDataStoreError> {
     // Absent new-domain keys mean an untouched, genuinely empty catalog and custom appearance.
     // Malformed stored values never enter these initial-state branches.
     let configs = match preferences.get(&stringPreferencesKey(THEME_CONFIGS_KEY)) {
@@ -332,6 +332,12 @@ fn readState(preferences: &Preferences) -> Result<ThemeConfigState, PreferencesD
         activeThemeConfigId,
     };
     validateState(&state)?;
+    Ok(state)
+}
+
+/// Validates the active ordinary appearance in addition to the saved catalog.
+fn readState(preferences: &Preferences) -> Result<ThemeConfigState, PreferencesDataStoreError> {
+    let state = readCatalogState(preferences)?;
     if let Some(id) = &state.activeThemeConfigId {
         assertThemePreferenceSnapshot(preferences, &findConfig(&state, id)?.snapshot)?;
     }

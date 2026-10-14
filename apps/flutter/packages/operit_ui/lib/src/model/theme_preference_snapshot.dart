@@ -4,6 +4,7 @@ class ThemePreferenceSnapshot {
   /// Creates the complete effective theme state for one UI surface.
   const ThemePreferenceSnapshot({
     required this.themeMode,
+    this.themePaletteJson,
     required this.useCustomColors,
     required this.customPrimaryColor,
     required this.customSecondaryColor,
@@ -108,6 +109,7 @@ class ThemePreferenceSnapshot {
   });
 
   final ThemeMode themeMode;
+  final String? themePaletteJson;
   final bool useCustomColors;
   final int? customPrimaryColor;
   final int? customSecondaryColor;
@@ -214,6 +216,7 @@ class ThemePreferenceSnapshot {
   Map<String, Object?> toJson() {
     return <String, Object?>{
       'themeMode': themeMode.name,
+      'themePaletteJson': themePaletteJson,
       'useCustomColors': useCustomColors,
       'customPrimaryColor': customPrimaryColor,
       'customSecondaryColor': customSecondaryColor,
@@ -340,6 +343,7 @@ class ThemePreferenceSnapshot {
 
     return ThemePreferenceSnapshot(
       themeMode: ThemeMode.values.byName(requiredString('themeMode')),
+      themePaletteJson: optionalString('themePaletteJson'),
       useCustomColors: requiredBool('useCustomColors'),
       customPrimaryColor: optionalInt('customPrimaryColor'),
       customSecondaryColor: optionalInt('customSecondaryColor'),
@@ -383,8 +387,7 @@ class ThemePreferenceSnapshot {
       inputAttachmentAssetSize:
           (json['inputAttachmentAssetSize'] as num?)?.toDouble() ?? 18,
       inputMicAsset: optionalString('inputMicAsset'),
-      inputMicAssetSize:
-          (json['inputMicAssetSize'] as num?)?.toDouble() ?? 26,
+      inputMicAssetSize: (json['inputMicAssetSize'] as num?)?.toDouble() ?? 26,
       inputSendAsset: optionalString('inputSendAsset'),
       inputSendAssetSize:
           (json['inputSendAssetSize'] as num?)?.toDouble() ?? 26,

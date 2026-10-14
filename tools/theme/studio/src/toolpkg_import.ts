@@ -139,6 +139,62 @@ function editableManifestText(value: unknown): string | undefined {
   return zh;
 }
 
+/** Uses the ordinary ToolPkg rule: the package ID is a nonblank string. */
+export function validateToolPkgId(value: unknown): asserts value is string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error("ToolPkg manifest.toolpkg_id must be nonblank text");
+  }
+}
+
+/** Projects only the fields displayed by the form while leaving the source manifest intact. */
+function readToolPkgMetadata(
+  manifest: Record<string, unknown>, files: Map<string, Uint8Array>, manifestBase: string,
+): ImportedThemeMetadata {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  validateToolPkgId(manifest.toolpkg_id);
+  if (manifest.version !== undefined && typeof manifest.version !== "string") {
+    throw new Error("ToolPkg manifest.version must be text");
+  }
+  const metadata: ImportedThemeMetadata = {
+    themeId: manifest.toolpkg_id,
+    version: manifest.version,
+    displayName: editableManifestText(manifest.display_name),
+    description: editableManifestText(manifest.description),
+  };
+  if (manifest.author !== undefined) {
+    if (typeof manifest.author === "string") {
+      metadata.authorName = manifest.author;
+    } else if (Array.isArray(manifest.author) && manifest.author.every((author: unknown) => typeof author === "string")) {
+      metadata.authorName = manifest.author.join(", ");
+    } else {
+      throw new Error("ToolPkg manifest.author must be text or a list of text");
+    }
+  }
+  if (manifest.license !== undefined && manifest.license !== null) {
+    if (typeof manifest.license !== "string") throw new Error("ToolPkg manifest.license must be a resource path");
+    const licenseBytes = files.get(`${manifestBase}${manifest.license}`);
+    if (licenseBytes == null) throw new Error("ToolPkg 引用的协议文本不存在");
+    metadata.themeLicenseText = decoder.decode(licenseBytes);
+  }
+  return metadata;
+}
+
+/** Updates the editable Chinese translation without discarding other language entries. */
+function updateLocalizedMetadata(manifest: Record<string, unknown>, key: string, text: string): void {
+  const value = manifest[key];
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const object = value as Record<string, unknown>;
+    if (Object.hasOwn(object, "values")) {
+      (object.values as Record<string, unknown>).zh = text;
+    } else object.zh = text;
+  } else manifest[key] = text;
+}
+
+/** Represents an absent optional form field by its displayed empty text. */
+function formText(value: string | undefined): string {
+  return value === undefined ? "" : value;
+}
+
 /** Resolves the same manifest names and ordering as the shared ToolPkg parser. */
 function manifestEntry(files: Map<string, Uint8Array>): string {
   const candidates = [...files.keys()].map(path => {
@@ -215,33 +271,7 @@ export async function parseImportedThemeFile(
     if (selected == null) throw new Error(`ToolPkg 中不存在 theme 声明: ${selectedId}`);
     theme = selected;
   }
-  if (typeof manifest.toolpkg_id !== "string" || !manifest.toolpkg_id) {
-    throw new Error("ToolPkg manifest.toolpkg_id is required");
-  }
-  if (manifest.version !== undefined && typeof manifest.version !== "string") {
-    throw new Error("ToolPkg manifest.version must be text");
-  }
-  const metadata: ImportedThemeMetadata = {
-    themeId: manifest.toolpkg_id,
-    version: manifest.version,
-    displayName: editableManifestText(manifest.display_name),
-    description: editableManifestText(manifest.description),
-  };
-  if (manifest.author !== undefined) {
-    if (typeof manifest.author === "string") {
-      metadata.authorName = manifest.author;
-    } else if (Array.isArray(manifest.author) && manifest.author.every((author: unknown) => typeof author === "string")) {
-      metadata.authorName = manifest.author.join(", ");
-    } else {
-      throw new Error("ToolPkg manifest.author must be text or a list of text");
-    }
-  }
-  if (manifest.license !== undefined && manifest.license !== null) {
-    if (typeof manifest.license !== "string") throw new Error("ToolPkg manifest.license must be a resource path");
-    const licenseBytes = files.get(`${manifestBase}${manifest.license}`);
-    if (licenseBytes == null) throw new Error("ToolPkg 引用的协议文本不存在");
-    metadata.themeLicenseText = decoder.decode(licenseBytes);
-  }
+  const metadata = readToolPkgMetadata(manifest, files, manifestBase);
   const themeBytes = files.get(`${manifestBase}${theme.path}`)!;
   const visual = JSON.parse(decoder.decode(themeBytes));
   if (visual === null || typeof visual !== "object" || Array.isArray(visual)) {
@@ -304,35 +334,56 @@ function writeStoredToolPkg(entries: Map<string, Uint8Array>): Uint8Array {
   return result;
 }
 
-/** Replaces the selected template while retaining all other capabilities and package entries. */
+/** Writes an immutable template directory and changes only explicitly edited package metadata. */
 export async function updateToolPkgTheme(source: ImportedToolPkgSource, authored: Uint8Array): Promise<Uint8Array> {
   const edited = await parseImportedThemeFile(new File([Uint8Array.from(authored).buffer], "edited.toolpkg"));
-  if (edited.source == null) throw new Error("Template export must produce ToolPkg entries");
+  if (edited.source == null || edited.metadata == null) {
+    throw new Error("Template export must produce ToolPkg entries and metadata");
+  }
   const manifest = structuredClone(source.manifest);
   const entries = new Map(source.entries);
   const templates = manifest.themes as ToolPkgThemeDeclaration[];
   const index = templates.findIndex(template => template.id === source.template.id);
   if (index < 0) throw new Error("Selected template no longer exists in ToolPkg");
+  const digestBytes = new Uint8Array(await crypto.subtle.digest("SHA-256", Uint8Array.from(authored).buffer));
+  const digest = Array.from(digestBytes, byte => byte.toString(16).padStart(2, "0")).join("");
+  const templateBase = `templates/edited-${digest}/`;
   const declaration = structuredClone(edited.source.template);
   declaration.id = source.template.id;
-  declaration.path = source.template.path;
-  declaration.preview = source.template.preview;
+  declaration.path = `${templateBase}${edited.source.template.path}`;
+  declaration.preview = `${templateBase}${edited.source.template.preview}`;
   templates[index] = declaration;
-  for (const key of ["toolpkg_id", "version", "display_name", "author", "description"]) {
-    if (Object.hasOwn(edited.source.manifest, key)) manifest[key] = edited.source.manifest[key];
-    else delete manifest[key];
-  }
   const manifestBase = source.manifestPath.slice(0, source.manifestPath.lastIndexOf("/") + 1);
-  const templateBase = declaration.path.slice(0, declaration.path.lastIndexOf("/") + 1);
-  const base = `${manifestBase}${templateBase}`;
+  const original = readToolPkgMetadata(source.manifest, source.entries, manifestBase);
+  for (const [key, before, after] of [
+    ["toolpkg_id", original.themeId, edited.metadata.themeId],
+    ["version", original.version, edited.metadata.version],
+  ] as const) {
+    if (formText(before) !== formText(after)) manifest[key] = formText(after);
+  }
+  for (const [key, before, after] of [
+    ["display_name", original.displayName, edited.metadata.displayName],
+    ["description", original.description, edited.metadata.description],
+  ] as const) {
+    if (formText(before) !== formText(after)) updateLocalizedMetadata(manifest, key, formText(after));
+  }
+  if (formText(original.authorName) !== formText(edited.metadata.authorName)) {
+    manifest.author = [formText(edited.metadata.authorName)];
+  }
   for (const [path, bytes] of edited.source.entries) {
-    if (path === "manifest.json") continue;
-    const target = path === "theme.json" ? `${manifestBase}${declaration.path}` : path === "preview.png" ? `${manifestBase}${declaration.preview}` : `${base}${path}`;
+    if (path === edited.source.manifestPath) continue;
+    const target = `${manifestBase}${templateBase}${path}`;
+    const existing = entries.get(target);
+    if (existing !== undefined && (existing.length !== bytes.length || !existing.every((byte, i) => byte === bytes[i]))) {
+      throw new Error(`ToolPkg immutable template path already contains different bytes: ${target}`);
+    }
     entries.set(target, bytes);
   }
-  if (typeof edited.source.manifest.license === "string") {
-    manifest.license = `${templateBase}${edited.source.manifest.license}`;
-  } else delete manifest.license;
+  if (formText(original.themeLicenseText) !== formText(edited.metadata.themeLicenseText)) {
+    if (typeof edited.source.manifest.license === "string") {
+      manifest.license = `${templateBase}${edited.source.manifest.license}`;
+    } else delete manifest.license;
+  }
   // Installation seals authenticate the original installed bytes and are not authoring metadata.
   entries.delete(".operit/market-install.seal");
   delete manifest.market_origin;

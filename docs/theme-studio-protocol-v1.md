@@ -1,6 +1,6 @@
 # Theme Studio ↔ Flutter Preview 协议 v1
 
-状态：Theme Studio 与独立 Flutter Web + Rust/WASM 预览核（`client-shell-v6`）之间的同源 MessagePort 协议与二进制导出规范。
+状态：Theme Studio 与独立 Flutter Web + Rust/WASM 预览核（`client-shell-v7`）之间的同源 MessagePort 协议与二进制导出规范。
 
 ## 1. 信任边界
 
@@ -73,6 +73,7 @@ reserve revision → preview-owned Rust/WASM validation
 - `normalizeThemeDraft(themeJson: &[u8]) -> String`：校验并展开编辑态草稿默认值，返回 `canonicalThemeJson` 与 `themeSha256`。
 - `validateThemePreviewDraft(themeJson: &[u8], directoryJson: &[u8], payload: &[u8]) -> String`：接收闭合资产目录与连续二进制缓冲区，执行完整契约与 L4 媒体校验，返回规范化 JSON 与 `ThemePreviewValidationReceipt`。
 - `exportToolPkgFromTheme(metadataJson: &[u8], themeJson: &[u8], previewPng: &[u8], directoryJson: &[u8], payload: &[u8]) -> Result<Vec<u8>, JsValue>`：生成固定顺序、固定 DOS 时间戳与权限的 Stored ZIP（`.toolpkg`），并在返回前立刻用导入校验器（`validate_toolpkg_theme_templates`）对生成字节执行完整自检。
+- `validateAuthoredToolPkg(archiveBytes: &[u8], manifestPath: &str) -> String`：导出已有 ToolPkg 时，对合并后归档的所有模板执行校验；支持重写为 JSON 的嵌套 manifest 路径。校验失败时不提供下载。
 
 ## 5. 构建与验证命令
 

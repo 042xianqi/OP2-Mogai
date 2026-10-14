@@ -2368,8 +2368,6 @@ dependencies = [
  "operit-host-api",
  "operit-host-native-storage",
  "operit-model",
- "operit-plugin-sdk",
- "operit-plugin-theme",
  "operit-util",
  "regex",
  "rusqlite",

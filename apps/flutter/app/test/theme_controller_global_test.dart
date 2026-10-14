@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:operit2/core/bridge/OperitRuntimeBridge.dart';
@@ -12,158 +13,227 @@ import 'package:operit2/core/proxy/generated/CoreProxyClients.g.dart';
 import 'package:operit2/data/preferences/UserPreferencesManager.dart';
 import 'package:operit2/ui/theme/OperitTheme.dart';
 
+/// Verifies synchronized ordinary appearance through generated clients.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  OperitThemeController controller(_NodeThemeBridge bridge) {
+  OperitThemeController controller(_SharedThemeBridge bridge) {
     final clients = GeneratedCoreProxyClients(bridge);
     return OperitThemeController(
-      onChanged: () {}, clients: clients,
+      onChanged: () {},
       preferencesManager: UserPreferencesManager(clients: clients),
       saveStartupThemeMode: (_) async {},
     );
   }
 
-  test('startup observes node-global state without character or group calls', () async {
-    final bridge = _NodeThemeBridge();
-    final theme = controller(bridge);
-    addTearDown(theme.dispose);
-    addTearDown(bridge.close);
-    await theme.start();
-    expect(theme.selection, isNull);
-    expect(theme.themeLoadError, isNull);
-    expect(bridge.calls, <String>['initializeNodeThemeAppearance', 'nodeThemeState']);
-    expect(bridge.watches, <String>['nodeThemeStateFlow']);
-    expect(theme.themePreferenceSnapshot.toJson(), UserPreferencesManager.defaultThemePreferenceSnapshot.toJson());
-  });
+  test(
+    'startup reads released preferences and watches shared appearance',
+    () async {
+      final bridge = _SharedThemeBridge();
+      final theme = controller(bridge);
+      addTearDown(theme.dispose);
+      addTearDown(bridge.close);
+      await theme.start();
+      expect(theme.themeLoadError, isNull);
+      expect(bridge.calls, <String>['getPreferences']);
+      expect(bridge.watches, <String>['preferencesFlow']);
+      expect(
+        theme.themePreferenceSnapshot.toJson(),
+        UserPreferencesManager.defaultThemePreferenceSnapshot.toJson(),
+      );
+    },
+  );
 
-  test('mode and scaling edits use only atomic CoreNode appearance updates', () async {
-    final bridge = _NodeThemeBridge();
-    final theme = controller(bridge);
-    addTearDown(theme.dispose);
-    addTearDown(bridge.close);
-    await theme.start();
-    await theme.setThemeMode(ThemeMode.dark);
-    await theme.saveThemeSettings(fontScale: 1.2);
-    await Future<void>.delayed(Duration.zero);
-    expect(theme.themeMode, ThemeMode.dark);
-    expect(theme.themePreferenceSnapshot.fontScale, 1.2);
-    expect(bridge.updates, <Map<String, String>>[
-      <String, String>{'themeMode': '"dark"'}, <String, String>{'fontScale': '1.2'},
-    ]);
-    expect(bridge.calls.every((name) => <String>{
-      'initializeNodeThemeAppearance', 'nodeThemeState', 'updateNodeThemeAppearance',
-    }.contains(name)), isTrue);
-  });
+  test(
+    'mode and scaling edits use the original atomic shared appearance owner',
+    () async {
+      final bridge = _SharedThemeBridge();
+      final theme = controller(bridge);
+      addTearDown(theme.dispose);
+      addTearDown(bridge.close);
+      await theme.start();
+      await theme.setThemeMode(ThemeMode.dark);
+      await theme.saveThemeSettings(fontScale: 1.2);
+      await Future<void>.delayed(Duration.zero);
+      expect(theme.themeMode, ThemeMode.dark);
+      expect(theme.themePreferenceSnapshot.fontScale, 1.2);
+      expect(bridge.updates, <Map<String, Object?>>[
+        <String, Object?>{'theme_mode': 'dark'},
+        <String, Object?>{'font_scale': 1.2},
+      ]);
+      expect(
+        bridge.calls.every(
+          (name) =>
+              <String>{'getPreferences', 'patchAppearance'}.contains(name),
+        ),
+        isTrue,
+      );
+    },
+  );
 
-  test('an unavailable selected package reports an error and retains selection', () async {
-    final bridge = _NodeThemeBridge()..selection = <String, Object?>{
-      'schemaVersion': 1, 'themeId': 'com.example.missing:default', 'version': '1.0.0',
-      'archiveSha256': List<String>.filled(64, 'a').join(),
-    };
-    final theme = controller(bridge);
-    addTearDown(theme.dispose);
-    addTearDown(bridge.close);
-    await theme.start();
-    expect(theme.themeLoadError.toString(), contains('等待 Space 同步'));
-    expect(theme.selection?.themeId, 'com.example.missing:default');
-    expect(theme.packageVisualsLocked, isTrue);
-    expect(bridge.calls, isNot(contains('applyTheme')));
-    expect(bridge.calls, isNot(contains('selectPersonalThemeAppearance')));
-  });
-
-  test('deleting another template from the active ToolPkg requires explicit unselection', () async {
-    final digest = List<String>.filled(64, 'b').join();
-    final bridge = _NodeThemeBridge()..selection = <String, Object?>{
-      'schemaVersion': 1, 'themeId': 'com.example.active:night', 'version': '1.0.0',
-      'archiveSha256': digest,
-    };
-    final theme = controller(bridge);
-    addTearDown(theme.dispose);
-    addTearDown(bridge.close);
-    await theme.start();
-    await expectLater(
-      () => theme.deleteLibraryTheme(
-        themeId: 'com.example.active:day',
-        archiveSha256: digest,
-      ),
-      throwsA(isA<StateError>()),
-    );
-    await theme.deleteLibraryTheme(
-      themeId: 'com.example.active:day',
-      archiveSha256: digest,
-      unselectIfActive: true,
-    );
-    expect(bridge.calls, containsAllInOrder(<String>[
-      'selectPersonalThemeAppearance',
-      'deleteTheme',
-    ]));
-    expect(theme.selection, isNull);
-  });
+  test(
+    'legacy template selections cannot block independent appearance',
+    () async {
+      final bridge = _SharedThemeBridge();
+      bridge.preferences['active_toolpkg_theme'] = <String, Object?>{
+        'themeId': 'dev.removed.plugin:default',
+        'archiveSha256': 'missing',
+      };
+      final theme = controller(bridge);
+      addTearDown(theme.dispose);
+      addTearDown(bridge.close);
+      await theme.start();
+      expect(theme.themeLoadError, isNull);
+      expect(theme.themeMode, ThemeMode.system);
+      expect(bridge.calls, <String>['getPreferences']);
+      expect(bridge.watches, <String>['preferencesFlow']);
+    },
+  );
+  test(
+    'editing copied colors clears the complete palette through the ordinary owner',
+    () async {
+      final bridge = _SharedThemeBridge();
+      final theme = controller(bridge);
+      addTearDown(theme.dispose);
+      addTearDown(bridge.close);
+      final visual =
+          jsonDecode(
+                await rootBundle.loadString(
+                  'packages/operit_ui/assets/fixtures/theme-v1.json',
+                ),
+              )
+              as Map<String, dynamic>;
+      bridge.preferences['theme_palette_json'] = jsonEncode(visual['palette']);
+      await theme.start();
+      expect(theme.themePreferenceSnapshot.themePaletteJson, isNotNull);
+      await theme.saveThemeSettings(
+        useCustomColors: true,
+        customPrimaryColor: 0xff123456,
+      );
+      expect(bridge.preferences.containsKey('theme_palette_json'), isFalse);
+      expect(theme.themePreferenceSnapshot.themePaletteJson, isNull);
+      expect(theme.themePreferenceSnapshot.customPrimaryColor, 0xff123456);
+      expect(theme.themeLoadError, isNull);
+    },
+  );
+  test(
+    'invalid appearance remains an error until explicitly retried or reset',
+    () async {
+      final bridge = _SharedThemeBridge();
+      bridge.preferences['theme_palette_json'] = 'not json';
+      bridge.preferences['custom_user_avatar_uri'] =
+          'runtime/data/user_assets/theme/avatar.png';
+      final theme = controller(bridge);
+      addTearDown(theme.dispose);
+      addTearDown(bridge.close);
+      await theme.start();
+      await Future<void>.delayed(Duration.zero);
+      expect(theme.themeLoadError, isNotNull);
+      expect(theme.hasLoadedTheme, isFalse);
+      expect(bridge.preferences['theme_palette_json'], 'not json');
+      expect(bridge.calls, isNot(contains('useCustomAppearance')));
+      await theme.reloadTheme();
+      expect(theme.themeLoadError, isNotNull);
+      expect(bridge.preferences['theme_palette_json'], 'not json');
+      await theme.restoreDefaultAppearance();
+      await Future<void>.delayed(Duration.zero);
+      expect(theme.themeLoadError, isNull);
+      expect(theme.hasLoadedTheme, isTrue);
+      expect(
+        theme.themePreferenceSnapshot.customUserAvatarUri,
+        'runtime/data/user_assets/theme/avatar.png',
+      );
+      expect(
+        bridge.calls.where((call) => call == 'useCustomAppearance'),
+        hasLength(1),
+      );
+    },
+  );
 }
 
-/// This fake exercises generated typed call/watch codecs. It does not validate
-/// archives, emulate Space sync, register public fonts or prove rendered parity.
-class _NodeThemeBridge extends OperitRuntimeBridge {
+/// Exercises ordinary appearance calls and watches through the real Link codecs.
+class _SharedThemeBridge extends OperitRuntimeBridge {
   final List<String> calls = <String>[];
   final List<String> watches = <String>[];
-  final List<Map<String, String>> updates = <Map<String, String>>[];
-  final StreamController<CoreEvent> _events = StreamController<CoreEvent>.broadcast(sync: true);
-  Map<String, Object?> appearance = UserPreferencesManager.defaultThemePreferenceSnapshot.toJson();
-  Map<String, Object?>? selection;
-  CoreWatchRequest? _watch;
+  final List<Map<String, Object?>> updates = <Map<String, Object?>>[];
+  final Map<String, Object?> preferences = <String, Object?>{};
+  final Map<String, CoreWatchRequest> _watchRequests =
+      <String, CoreWatchRequest>{};
+  final StreamController<CoreEvent> _events =
+      StreamController<CoreEvent>.broadcast(sync: true);
 
-  Map<String, Object?> get state => <String, Object?>{
-    'schemaVersion': 1, 'selection': selection,
-    'privateAppearanceJson': jsonEncode(appearance),
-  };
-
+  /// Implements only the ordinary appearance operations under test.
   @override
   Future<Uint8List> callBytes(CoreCallRequest request) async {
     calls.add(request.methodName);
     final args = request.args as Map;
     switch (request.methodName) {
-      case 'initializeNodeThemeAppearance':
-      case 'nodeThemeState':
-        return encodeCoreLink(<Object?>[0, state]);
-      case 'updateNodeThemeAppearance':
-        final patch = Map<String, String>.from(args['updates'] as Map);
-        updates.add(patch);
-        for (final field in patch.entries) { appearance[field.key] = jsonDecode(field.value); }
-        final watch = _watch;
-        if (watch != null) _events.add(_event(watch));
-        return encodeCoreLink(<Object?>[0, state]);
-      case 'selectPersonalThemeAppearance':
-        selection = null;
-        return encodeCoreLink(<Object?>[0, state]);
-      case 'deleteTheme':
+      case 'getPreferences':
+        return encodeCoreLink(<Object?>[
+          0,
+          <String, Object?>{
+            for (final key in (args['keys'] as List).cast<String>())
+              if (preferences.containsKey(key)) key: preferences[key],
+          },
+        ]);
+      case 'useCustomAppearance':
+        final snapshot = Map<String, Object?>.from(args['snapshot'] as Map);
+        preferences.clear();
+        preferences['custom_user_avatar_uri'] = snapshot['customUserAvatarUri'];
         return encodeCoreLink(<Object?>[0, null]);
-      case 'readToolPkgForThemeTemplate':
-        throw StateError('等待 Space 同步主题包');
+      case 'patchAppearance':
+        final patch = Map<String, Object?>.from(args['values'] as Map);
+        updates.add(patch);
+        for (final key in (args['removeKeys'] as List).cast<String>()) {
+          preferences.remove(key);
+        }
+        preferences.addAll(patch);
+        final watch = _watchRequests['preferencesFlow'];
+        if (watch != null)
+          _events.add(_event(watch, Map<String, Object?>.of(preferences)));
+        return encodeCoreLink(<Object?>[0, null]);
       default:
-        throw UnsupportedError('Unexpected theme call: ${request.target}/${request.methodName}');
+        throw UnsupportedError(
+          'Unexpected theme call: ${request.target}/${request.methodName}',
+        );
     }
   }
 
-  CoreEvent _event(CoreWatchRequest request) => CoreEvent.raw(
-    requestId: request.requestId, target: request.target, propertyName: request.propertyName,
-    kind: 'Snapshot', valueBytes: encodeCoreLink(state), decodeValue: decodeCoreLink<Object?>,
+  /// Encodes an event for exactly the generated watch that owns its payload.
+  CoreEvent _event(CoreWatchRequest request, Object value) => CoreEvent.raw(
+    requestId: request.requestId,
+    target: request.target,
+    propertyName: request.propertyName,
+    kind: 'Snapshot',
+    valueBytes: encodeCoreLink(value),
+    decodeValue: decodeCoreLink<Object?>,
   );
 
+  /// Registers the ordinary preference stream.
   @override
   Stream<CoreEvent> watchStream(CoreWatchRequest request) {
     watches.add(request.propertyName);
-    if (request.target != 'core/application' || request.propertyName != 'nodeThemeStateFlow') {
-      throw UnsupportedError('Unexpected watch: ${request.target}/${request.propertyName}');
+    if (request.propertyName != 'preferencesFlow') {
+      throw UnsupportedError(
+        'Unexpected watch: ${request.target}/${request.propertyName}',
+      );
     }
-    _watch = request;
-    return _events.stream;
+    _watchRequests[request.propertyName] = request;
+    return _events.stream.where(
+      (event) => event.requestId == request.requestId,
+    );
   }
 
+  /// Provides a deterministic watch snapshot for generated clients.
   @override
-  Future<CoreEvent> watchSnapshot(CoreWatchRequest request) async => _event(request);
-  @override
-  Future<CorePushSink> push(CorePushRequest request) => throw UnimplementedError();
+  Future<CoreEvent> watchSnapshot(CoreWatchRequest request) async =>
+      _event(request, preferences);
 
+  /// Rejects push operations outside this appearance contract.
+  @override
+  Future<CorePushSink> push(CorePushRequest request) =>
+      throw UnimplementedError();
+
+  /// Closes the event source when the test completes.
   Future<void> close() => _events.close();
 }

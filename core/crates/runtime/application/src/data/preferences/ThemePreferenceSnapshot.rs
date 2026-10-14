@@ -19,6 +19,7 @@ pub(crate) enum FieldKind {
     Boolean,
     OptionalColor,
     OptionalString,
+    OptionalPalette,
     Enum(&'static [&'static str]),
     OptionalEnum(&'static [&'static str]),
     Number { min: f64, max: f64 },
@@ -488,12 +489,47 @@ pub(crate) const SNAPSHOT_FIELDS: &[SnapshotField] = &[
     },
 ];
 
+/// Input appearance fields added after the released saved-theme snapshot contract.
+/// Older saved configurations do not own fields they never declared.
+pub(crate) const EXTENDED_SNAPSHOT_FIELDS: &[SnapshotField] = &[
+    SnapshotField { json_key: "themePaletteJson", preference_key: "theme_palette_json", kind: FieldKind::OptionalPalette },
+    SnapshotField { json_key: "inputBackgroundColor", preference_key: "input_background_color", kind: FieldKind::OptionalColor },
+    SnapshotField { json_key: "inputRoundedCornersEnabled", preference_key: "input_rounded_corners_enabled", kind: FieldKind::Boolean },
+    SnapshotField { json_key: "inputUseImage", preference_key: "input_use_image", kind: FieldKind::Boolean },
+    SnapshotField { json_key: "inputImageUri", preference_key: "input_image_uri", kind: FieldKind::OptionalString },
+    SnapshotField { json_key: "inputImageRenderMode", preference_key: "input_image_render_mode", kind: FieldKind::Enum(&["tiled_nine_slice", "nine_patch"]) },
+    SnapshotField { json_key: "inputImageCropLeft", preference_key: "input_image_crop_left", kind: FieldKind::Number { min: 0.0, max: f64::MAX } },
+    SnapshotField { json_key: "inputImageCropTop", preference_key: "input_image_crop_top", kind: FieldKind::Number { min: 0.0, max: f64::MAX } },
+    SnapshotField { json_key: "inputImageCropRight", preference_key: "input_image_crop_right", kind: FieldKind::Number { min: 0.0, max: f64::MAX } },
+    SnapshotField { json_key: "inputImageCropBottom", preference_key: "input_image_crop_bottom", kind: FieldKind::Number { min: 0.0, max: f64::MAX } },
+    SnapshotField { json_key: "inputImageRepeatStart", preference_key: "input_image_repeat_start", kind: FieldKind::Number { min: 0.0, max: 1.0 } },
+    SnapshotField { json_key: "inputImageRepeatEnd", preference_key: "input_image_repeat_end", kind: FieldKind::Number { min: 0.0, max: 1.0 } },
+    SnapshotField { json_key: "inputImageRepeatYStart", preference_key: "input_image_repeat_y_start", kind: FieldKind::Number { min: 0.0, max: 1.0 } },
+    SnapshotField { json_key: "inputImageRepeatYEnd", preference_key: "input_image_repeat_y_end", kind: FieldKind::Number { min: 0.0, max: 1.0 } },
+    SnapshotField { json_key: "inputImageScale", preference_key: "input_image_scale", kind: FieldKind::Number { min: 0.01, max: f64::MAX } },
+    SnapshotField { json_key: "inputSettingsAsset", preference_key: "input_settings_asset", kind: FieldKind::OptionalString },
+    SnapshotField { json_key: "inputSettingsAssetSize", preference_key: "input_settings_asset_size", kind: FieldKind::Number { min: 0.0, max: f64::MAX } },
+    SnapshotField { json_key: "inputAttachmentAsset", preference_key: "input_attachment_asset", kind: FieldKind::OptionalString },
+    SnapshotField { json_key: "inputAttachmentAssetSize", preference_key: "input_attachment_asset_size", kind: FieldKind::Number { min: 0.0, max: f64::MAX } },
+    SnapshotField { json_key: "inputMicAsset", preference_key: "input_mic_asset", kind: FieldKind::OptionalString },
+    SnapshotField { json_key: "inputMicAssetSize", preference_key: "input_mic_asset_size", kind: FieldKind::Number { min: 0.0, max: f64::MAX } },
+    SnapshotField { json_key: "inputSendAsset", preference_key: "input_send_asset", kind: FieldKind::OptionalString },
+    SnapshotField { json_key: "inputSendAssetSize", preference_key: "input_send_asset_size", kind: FieldKind::Number { min: 0.0, max: f64::MAX } },
+    SnapshotField { json_key: "inputStopAsset", preference_key: "input_stop_asset", kind: FieldKind::OptionalString },
+    SnapshotField { json_key: "inputStopAssetSize", preference_key: "input_stop_asset_size", kind: FieldKind::Number { min: 0.0, max: f64::MAX } },
+];
+
+/// Enumerates the declared ordinary appearance fields without inferring key names.
+pub(crate) fn snapshotFields() -> impl Iterator<Item = &'static SnapshotField> {
+    SNAPSHOT_FIELDS.iter().chain(EXTENDED_SNAPSHOT_FIELDS.iter())
+}
+
 /// Rejects missing, unknown, mistyped, out-of-range and inconsistent snapshot values.
 pub fn validateThemePreferenceSnapshot(
     snapshot: &BTreeMap<String, Value>,
 ) -> Result<(), PreferencesDataStoreError> {
     for key in snapshot.keys() {
-        if !SNAPSHOT_FIELDS.iter().any(|field| field.json_key == key) {
+        if !snapshotFields().any(|field| field.json_key == key) {
             return Err(invalidSnapshot(key, "unknown field"));
         }
     }
@@ -502,6 +538,11 @@ pub fn validateThemePreferenceSnapshot(
             .get(field.json_key)
             .ok_or_else(|| invalidSnapshot(field.json_key, "missing field"))?;
         validateField(field, value)?;
+    }
+    for field in EXTENDED_SNAPSHOT_FIELDS {
+        if let Some(value) = snapshot.get(field.json_key) {
+            validateField(field, value)?;
+        }
     }
     for (start, end) in [
         ("bubbleUserImageRepeatStart", "bubbleUserImageRepeatEnd"),
@@ -528,7 +569,7 @@ pub(crate) fn readThemePreferenceSnapshot(
 ) -> Result<BTreeMap<String, Value>, PreferencesDataStoreError> {
     validateThemePreferenceSnapshot(initialSnapshot)?;
     let mut snapshot = initialSnapshot.clone();
-    for field in SNAPSHOT_FIELDS {
+    for field in snapshotFields() {
         if let Some(text) = preferences.get(&stringPreferencesKey(field.preference_key)) {
             let value = text.clone();
             validateField(field, &value)?;
@@ -665,9 +706,7 @@ pub(crate) fn validateThemePreferenceKeys<'a>(
     keys: impl Iterator<Item = &'a str>,
 ) -> Result<(), PreferencesDataStoreError> {
     for key in keys {
-        if !SNAPSHOT_FIELDS
-            .iter()
-            .any(|field| field.preference_key == key)
+        if !snapshotFields().any(|field| field.preference_key == key)
         {
             return Err(invalidSnapshot(key, "unknown appearance preference"));
         }
@@ -681,11 +720,13 @@ pub(crate) fn writeThemePreferenceSnapshot(
     snapshot: &BTreeMap<String, Value>,
 ) -> Result<(), PreferencesDataStoreError> {
     validateThemePreferenceSnapshot(snapshot)?;
-    for field in SNAPSHOT_FIELDS {
-        let value = snapshot
-            .get(field.json_key)
-            .ok_or_else(|| invalidSnapshot(field.json_key, "missing field"))?;
+    for field in snapshotFields() {
         let key = stringPreferencesKey(field.preference_key);
+        let Some(value) = snapshot.get(field.json_key) else {
+            // An older configuration declares none of the extended appearance values.
+            preferences.remove(&key);
+            continue;
+        };
         match value {
             Value::Null => preferences.remove(&key),
             Value::String(value) => preferences.set(&key, value.clone()),
@@ -709,10 +750,10 @@ pub(crate) fn assertThemePreferenceSnapshot(
     snapshot: &BTreeMap<String, Value>,
 ) -> Result<(), PreferencesDataStoreError> {
     validateThemePreferenceSnapshot(snapshot)?;
-    for field in SNAPSHOT_FIELDS {
-        let expected = snapshot
-            .get(field.json_key)
-            .ok_or_else(|| invalidSnapshot(field.json_key, "missing field"))?;
+    for field in snapshotFields() {
+        let Some(expected) = snapshot.get(field.json_key) else {
+            continue;
+        };
         let key = stringPreferencesKey(field.preference_key);
         let actual = match (expected, preferences.get(&key)) {
             (Value::Null, None) => Value::Null,
@@ -761,6 +802,10 @@ fn validateField(field: &SnapshotField, value: &Value) -> Result<(), Preferences
             value.is_null() || value.as_u64().is_some_and(|color| color <= u32::MAX as u64)
         }
         FieldKind::OptionalString => value.is_null() || value.is_string(),
+        FieldKind::OptionalPalette => value.is_null() || value.as_str().is_some_and(|text| {
+            serde_json::from_str::<Value>(text).is_ok_and(|palette|
+                operit_plugin_theme::validate_palette(&palette).is_ok())
+        }),
         FieldKind::Enum(allowed) => value
             .as_str()
             .is_some_and(|text| allowed.iter().any(|candidate| *candidate == text)),

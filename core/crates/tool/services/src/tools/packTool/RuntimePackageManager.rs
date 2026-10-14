@@ -3841,34 +3841,21 @@ impl RuntimePackageManager {
         })
     }
 
-    /// Imports ordinary ToolPkg bytes through the shared package loader and extension catalog.
+    /// Reads an archive from its registered ToolPkg source through the existing host abstractions.
     #[allow(non_snake_case)]
-    pub fn importToolPkgBytes(&mut self, bytes: Vec<u8>) -> Result<bool, String> {
-        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).map_err(|error| error.to_string())?;
-        let index = ToolPkgArchiveParser::buildZipEntryIndex(&mut archive);
-        let preview = ToolPkgArchiveParser::readToolPkgManifestPreview(&mut archive, &index)
-            .ok_or("ToolPkg manifest is missing or invalid")?;
-        let id = preview.manifest.toolpkgId;
-        if id.is_empty() || id.split('.').any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))) {
-            return Err("ToolPkg id is not a safe package identifier".to_string());
+    pub fn readToolPkgArchiveBytes(&self, packageName: &str) -> Result<Vec<u8>, String> {
+        let runtime = self.getToolPkgContainerRuntime(packageName)
+            .ok_or("ToolPkg is not registered")?;
+        match runtime.sourceType {
+            ToolPkgSourceType::ASSET => RuntimeToolPkgAssetSource {
+                runtimeSupport: self.toolHandler.runtimeDependencies().shared_runtime_support(),
+            }.toolPkgAssetBytes(&runtime.sourcePath)
+                .ok_or_else(|| "Registered ToolPkg asset is missing".to_string()),
+            ToolPkgSourceType::EXTERNAL | ToolPkgSourceType::MARKET => self.fileSystemHost
+                .readFileBytes(&runtime.sourcePath).map_err(|error| error.to_string()),
         }
-        let records = ExtensionStore::default().records("package")?;
-        if let Some(record) = records.into_iter().find(|record| record.id == id) {
-            let source = format!("{}/{}", ExtensionStore::root("package", &record.scope)?, record.sourceName);
-            let installed = operit_store::RuntimeStorageHost::defaultRuntimeStorageHost().readBytes(&source)
-                .map_err(|error| error.to_string())?;
-            if installed == bytes { return Ok(true); }
-            return Err(format!("ToolPkg '{id}' is already installed; update it through package management ({source})"));
-        }
-        let directory = self.storePaths.toolpkg_cache_dir().join(format!(".toolpkg-import-{}", sha256Hex(&bytes)));
-        self.fileSystemHost.makeDirectory(&hostPath(&directory), true).map_err(|error| error.to_string())?;
-        let path = directory.join(format!("{id}.toolpkg"));
-        self.fileSystemHost.writeFileBytes(&hostPath(&path), &bytes).map_err(|error| error.to_string())?;
-        let imported = self.addPackageFileFromExternalStorageResult(&hostPath(&path));
-        self.fileSystemHost.deleteFile(&hostPath(&directory), true).map_err(|error| error.to_string())?;
-        imported?;
-        Ok(false)
     }
+
 
     /// Imports one marketplace artifact from bytes after validating its declared digest.
     #[allow(non_snake_case)]
