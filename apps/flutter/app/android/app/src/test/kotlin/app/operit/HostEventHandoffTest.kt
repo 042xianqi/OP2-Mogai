@@ -154,4 +154,26 @@ class HostEventHandoffTest {
         assertEquals("DELIVERY", json.getString("stage"))
         assertEquals("boom", json.getString("reason"))
     }
+
+    // --- Throwable, not only Exception: the firing is already consumed when these run,
+    //     so an escaping Error must still be retained (and finish() still guaranteed). ---
+
+    @Test
+    fun coreStartErrorIsRetainedInsteadOfEscaping() {
+        val failure = Error("core start exploded")
+
+        val outcome = HostEventHandoff.begin(
+            schedule = schedule,
+            firedAtMillis = firedAtMillis,
+            startCore = { throw failure },
+            submitBackground = { _, _ -> throw AssertionError("must not submit after a start failure") },
+            retain = { retained.add(it) },
+        )
+
+        assertTrue(outcome is HostEventHandoffOutcome.Undelivered)
+        val undelivered = outcome as HostEventHandoffOutcome.Undelivered
+        assertEquals(HostEventHandoffStage.START_CORE, undelivered.fire.stage)
+        assertSame(failure, undelivered.cause)
+        assertEquals(1, retained.size)
+    }
 }

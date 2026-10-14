@@ -61,6 +61,11 @@ internal object HostEventHandoff {
      * Starts Core and submits the background delivery for an already consumed firing.
      * A failure in either step is retained through [retain] and returned as
      * [HostEventHandoffOutcome.Undelivered]; it is never retried here.
+     *
+     * Both steps catch [Throwable], not only [Exception]: the firing is already consumed
+     * at this point, so an escaping [Error] would crash the broadcast with
+     * `pendingResult.finish()` never called and no retention record — the exact loss
+     * this hand-off exists to prevent.
      */
     fun begin(
         schedule: AndroidHostEventSchedule,
@@ -71,12 +76,12 @@ internal object HostEventHandoff {
     ): HostEventHandoffOutcome {
         try {
             startCore()
-        } catch (error: Exception) {
+        } catch (error: Throwable) {
             return retainFailure(retain, schedule, firedAtMillis, HostEventHandoffStage.START_CORE, error)
         }
         try {
             submitBackground(schedule, firedAtMillis)
-        } catch (error: Exception) {
+        } catch (error: Throwable) {
             return retainFailure(retain, schedule, firedAtMillis, HostEventHandoffStage.SUBMIT_BACKGROUND, error)
         }
         return HostEventHandoffOutcome.Submitted

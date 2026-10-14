@@ -271,8 +271,15 @@ object AndroidHostEventScheduler {
         )
     }
 
-    /** Computes the first future interval boundary after one alarm firing. */
-    private fun nextIntervalTime(
+    /**
+     * Computes the first future interval boundary after one alarm firing.
+     *
+     * Internal (not private) so the overflow paths named in the upstream review —
+     * `addExact` on the future branch and `multiplyExact` on the catch-up branch —
+     * are assertable from plain JVM tests instead of only reachable through the
+     * receiver, which needs an Android runtime.
+     */
+    internal fun nextIntervalTime(
         scheduledAtMillis: Long,
         intervalMs: Long,
         nowMillis: Long,

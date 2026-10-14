@@ -120,4 +120,55 @@ class AndroidHostEventScheduleTest {
         }
         assertTrue(error.message!!.contains("nextFireAtMillis"))
     }
+
+    // --- interval re-arm computation (nextIntervalTime): the overflow branch the
+    //     upstream review named as uncovered. ArithmeticException must propagate:
+    //     consumeFire then leaves the schedule un-re-armed and the receiver logs the
+    //     "Interval overflow while rescheduling" line instead of swallowing it. ---
+
+    @Test
+    fun nextIntervalTimeAdvancesOneBoundaryWhenScheduledInFuture() {
+        val next = AndroidHostEventScheduler.nextIntervalTime(
+            scheduledAtMillis = 1_000L,
+            intervalMs = 500L,
+            nowMillis = 900L,
+        )
+        assertEquals(1_500L, next)
+    }
+
+    @Test
+    fun nextIntervalTimeCatchUpSkipsMissedBoundaries() {
+        // The alarm fired 2.5 intervals late: skip the missed boundaries instead of
+        // re-arming them one by one (multiplyExact path).
+        val next = AndroidHostEventScheduler.nextIntervalTime(
+            scheduledAtMillis = 0L,
+            intervalMs = 1_000L,
+            nowMillis = 2_500L,
+        )
+        assertEquals(3_000L, next)
+    }
+
+    @Test
+    fun nextIntervalTimeFutureBranchOverflowPropagates() {
+        // addExact(scheduledAt, intervalMs) overflows on the future branch.
+        assertThrows(ArithmeticException::class.java) {
+            AndroidHostEventScheduler.nextIntervalTime(
+                scheduledAtMillis = Long.MAX_VALUE - 5,
+                intervalMs = 10L,
+                nowMillis = 0L,
+            )
+        }
+    }
+
+    @Test
+    fun nextIntervalTimeCatchUpOverflowPropagates() {
+        // multiplyExact(steps, intervalMs) overflows on the catch-up branch.
+        assertThrows(ArithmeticException::class.java) {
+            AndroidHostEventScheduler.nextIntervalTime(
+                scheduledAtMillis = 0L,
+                intervalMs = 2L,
+                nowMillis = Long.MAX_VALUE,
+            )
+        }
+    }
 }
