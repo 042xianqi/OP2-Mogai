@@ -74,7 +74,6 @@ impl RuntimePeerService for ApprovalMeshPeer {
         &self,
         _: PeerEndpoint,
         _: Option<PeerTransport>,
-        _: Option<&str>,
     ) -> Result<PendingPairing, CoreLinkError> {
         unreachable!()
     }
