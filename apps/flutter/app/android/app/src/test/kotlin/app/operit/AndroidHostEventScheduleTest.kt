@@ -7,14 +7,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * JVM unit tests for the three bad-input classes named in the upstream review:
- * illegal interval, integer overflow and corrupt storage.
- *
- * These cover the parse/validation layer (fromCommand / fromStored), where the
- * explicit rejection now happens; the receiver-side log classification needs an
- * Android runtime and is not covered here.
- */
+/** Schedule configuration, storage decoding, and interval boundary tests. */
 class AndroidHostEventScheduleTest {
     private fun command(kind: String, delayMs: Long, intervalMs: Any?): JSONObject =
         JSONObject()
@@ -31,7 +24,6 @@ class AndroidHostEventScheduleTest {
             .put("intervalMs", intervalMs ?: JSONObject.NULL)
             .put("nextFireAtMillis", nextFireAtMillis)
 
-    // --- happy path: valid schedules still parse, and storage round-trips ---
 
     @Test
     fun validTimerCommandParses() {
@@ -47,7 +39,6 @@ class AndroidHostEventScheduleTest {
         assertEquals(original, decoded)
     }
 
-    // --- bad input 1: illegal interval (rejected on both entry paths) ---
 
     @Test
     fun commandRejectsNonPositiveInterval() {
@@ -72,7 +63,6 @@ class AndroidHostEventScheduleTest {
         }
     }
 
-    // --- bad input 2: integer overflow is propagated explicitly, not swallowed ---
 
     @Test
     fun commandOverflowPropagatesAsArithmeticException() {
@@ -82,7 +72,6 @@ class AndroidHostEventScheduleTest {
         }
     }
 
-    // --- bad input 3: corrupt storage is rejected explicitly at decode time ---
 
     @Test
     fun storedRejectsUnknownKind() {
@@ -121,10 +110,7 @@ class AndroidHostEventScheduleTest {
         assertTrue(error.message!!.contains("nextFireAtMillis"))
     }
 
-    // --- interval re-arm computation (nextIntervalTime): the overflow branch the
-    //     upstream review named as uncovered. ArithmeticException must propagate:
-    //     consumeFire then leaves the schedule un-re-armed and the receiver logs the
-    //     "Interval overflow while rescheduling" line instead of swallowing it. ---
+    // Interval re-arm boundaries and arithmetic overflow.
 
     @Test
     fun nextIntervalTimeAdvancesOneBoundaryWhenScheduledInFuture() {

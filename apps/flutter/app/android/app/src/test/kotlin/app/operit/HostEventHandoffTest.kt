@@ -1,19 +1,11 @@
 package app.operit
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * JVM unit tests for the hand-off that happens *after* a firing was consumed from
- * storage — the three paths named in the upstream review: broadcast completion,
- * background submission failure and delivery failure.
- *
- * The hand-off is a pure object with injected side effects, so these run without an
- * Android runtime. What still needs a device is the receiver wiring around it
- * (goAsync / runBackground / logcat), and is not covered here.
- */
 class HostEventHandoffTest {
     private val schedule = AndroidHostEventSchedule(
         scheduleId = "hook-1",
@@ -25,7 +17,6 @@ class HostEventHandoffTest {
     private val firedAtMillis = 5000L
     private val retained = mutableListOf<UndeliveredHostEventFire>()
 
-    // --- path 1: the broadcast completes: submitted, delivered, nothing retained ---
 
     @Test
     fun broadcastCompletionDeliversWithoutRetaining() {
@@ -55,7 +46,6 @@ class HostEventHandoffTest {
         assertTrue(retained.isEmpty())
     }
 
-    // --- path 2: background submission failures are retained, exactly once, no retry ---
 
     @Test
     fun coreStartFailureIsRetainedAsStartCore() {
@@ -68,7 +58,8 @@ class HostEventHandoffTest {
         )
 
         assertTrue(outcome is HostEventHandoffOutcome.Undelivered)
-        val fire = (outcome as HostEventHandoffOutcome.Undelivered).fire
+        assertNull((outcome as HostEventHandoffOutcome.Undelivered).retentionError)
+        val fire = outcome.fire
         assertEquals(HostEventHandoffStage.START_CORE, fire.stage)
         assertEquals("hook-1", fire.scheduleId)
         assertEquals(firedAtMillis, fire.firedAtMillis)
@@ -99,7 +90,6 @@ class HostEventHandoffTest {
         assertEquals(1, retained.size)
     }
 
-    // --- path 3: delivery failures are retained instead of only logged ---
 
     @Test
     fun coreRejectionAnswerIsRetainedAsDelivery() {
@@ -136,7 +126,6 @@ class HostEventHandoffTest {
         assertEquals(1, retained.size)
     }
 
-    // --- the retained record survives as JSON (what gets written back) ---
 
     @Test
     fun retainedRecordEncodesStageAndReason() {
@@ -153,10 +142,8 @@ class HostEventHandoffTest {
         assertEquals(firedAtMillis, json.getLong("firedAtMillis"))
         assertEquals("DELIVERY", json.getString("stage"))
         assertEquals("boom", json.getString("reason"))
+        assertEquals(fire, UndeliveredHostEventFire.fromJson(json))
     }
-
-    // --- Throwable, not only Exception: the firing is already consumed when these run,
-    //     so an escaping Error must still be retained (and finish() still guaranteed). ---
 
     @Test
     fun coreStartErrorIsRetainedInsteadOfEscaping() {
@@ -176,4 +163,53 @@ class HostEventHandoffTest {
         assertSame(failure, undelivered.cause)
         assertEquals(1, retained.size)
     }
+    @Test
+    fun startFailureAndRetentionFailureAreBothReported() {
+        val deliveryError = IllegalStateException("service unavailable")
+        val storageError = IllegalStateException("storage unavailable")
+        var retentionCalls = 0
+        val outcome = HostEventHandoff.begin(
+            schedule, firedAtMillis,
+            startCore = { throw deliveryError },
+            submitBackground = { _, _ -> throw AssertionError("must not submit") },
+            retain = { retentionCalls++; throw storageError },
+        ) as HostEventHandoffOutcome.Undelivered
+
+        assertSame(deliveryError, outcome.cause)
+        assertSame(storageError, outcome.retentionError)
+        assertEquals(HostEventHandoffStage.START_CORE, outcome.fire.stage)
+        assertEquals(1, retentionCalls)
+    }
+
+    @Test
+    fun submissionFailureAndRetentionErrorAreBothReported() {
+        val deliveryError = java.util.concurrent.RejectedExecutionException("executor stopped")
+        val storageError = AssertionError("storage failed")
+        val outcome = HostEventHandoff.begin(
+            schedule, firedAtMillis,
+            startCore = {},
+            submitBackground = { _, _ -> throw deliveryError },
+            retain = { throw storageError },
+        ) as HostEventHandoffOutcome.Undelivered
+
+        assertSame(deliveryError, outcome.cause)
+        assertSame(storageError, outcome.retentionError)
+        assertEquals(HostEventHandoffStage.SUBMIT_BACKGROUND, outcome.fire.stage)
+    }
+
+    @Test
+    fun deliveryFailureAndRetentionFailureAreBothReported() {
+        val deliveryError = IllegalStateException("Core rejected firing")
+        val storageError = IllegalStateException("disk full")
+        val outcome = HostEventHandoff.completeDelivery(
+            schedule, firedAtMillis,
+            emit = { throw deliveryError },
+            retain = { throw storageError },
+        ) as HostEventHandoffOutcome.Undelivered
+
+        assertSame(deliveryError, outcome.cause)
+        assertSame(storageError, outcome.retentionError)
+        assertEquals(HostEventHandoffStage.DELIVERY, outcome.fire.stage)
+    }
+
 }

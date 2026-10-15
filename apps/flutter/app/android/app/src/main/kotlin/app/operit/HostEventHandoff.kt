@@ -2,71 +2,61 @@ package app.operit
 
 import org.json.JSONObject
 
-/**
- * Which hand-off step failed *after* the firing had already been consumed (deleted or
- * re-armed and persisted) by [AndroidHostEventScheduler.consumeFire].
- */
+/** The delivery step that failed after a schedule firing was consumed. */
 internal enum class HostEventHandoffStage {
-    /** Starting [OperitCoreService] failed. */
     START_CORE,
-    /** Obtaining the runtime host or submitting the background task failed. */
     SUBMIT_BACKGROUND,
-    /** The background emit to Core failed, including `ok=false` answers. */
     DELIVERY,
 }
 
-/**
- * One firing that was consumed from storage but never handed to Core.
- *
- * It is written back to persistent storage so the loss survives this process and stays
- * visible to the upper layer. Retention is a *record*: no alarm is re-armed and no retry
- * is scheduled.
- */
+/** A diagnostic record of an undelivered firing; recording it does not schedule a retry. */
 internal data class UndeliveredHostEventFire(
     val scheduleId: String,
     val firedAtMillis: Long,
     val stage: HostEventHandoffStage,
     val reason: String,
 ) {
-    fun toJson(): JSONObject = JSONObject()
-        .put("scheduleId", scheduleId)
-        .put("firedAtMillis", firedAtMillis)
-        .put("stage", stage.name)
-        .put("reason", reason)
+    fun toJson(): JSONObject = JSONObject(toMap())
+
+    fun toMap(): Map<String, Any> = mapOf(
+        "scheduleId" to scheduleId,
+        "firedAtMillis" to firedAtMillis,
+        "stage" to stage.name,
+        "reason" to reason,
+    )
+
+    companion object {
+        fun fromJson(value: JSONObject): UndeliveredHostEventFire {
+            val scheduleId = value.getString("scheduleId")
+            val firedAtMillis = value.getLong("firedAtMillis")
+            require(scheduleId.isNotBlank()) { "undelivered host event scheduleId is required" }
+            require(firedAtMillis >= 0L) { "undelivered host event firedAtMillis must not be negative" }
+            return UndeliveredHostEventFire(
+                scheduleId = scheduleId,
+                firedAtMillis = firedAtMillis,
+                stage = HostEventHandoffStage.valueOf(value.getString("stage")),
+                reason = value.getString("reason"),
+            )
+        }
+    }
 }
 
-/** Result of one hand-off; [Undelivered] is the failure shape that used to be logged away. */
 internal sealed class HostEventHandoffOutcome {
-    /** Consumed and submitted: delivery now completes on the background executor. */
+    /** Accepted by the executor; delivery has not necessarily completed. */
     object Submitted : HostEventHandoffOutcome()
 
-    /** The background emit completed successfully. */
     object Delivered : HostEventHandoffOutcome()
 
-    /** Consumed, but never reached Core; [fire] has been passed to the retain callback. */
-    data class Undelivered(val fire: UndeliveredHostEventFire, val cause: Throwable) :
-        HostEventHandoffOutcome()
+    /** Keeps the delivery error and any separate diagnostic storage error. */
+    data class Undelivered(
+        val fire: UndeliveredHostEventFire,
+        val cause: Throwable,
+        val retentionError: Throwable?,
+    ) : HostEventHandoffOutcome()
 }
 
-/**
- * The hand-off between "the alarm fired and was consumed" and "Core owns this firing".
- *
- * Everything here is free of Android types on purpose: the receiver wires the real side
- * effects in as lambdas, which keeps the three paths named in the upstream review —
- * broadcast completion, background submission failure and delivery failure — assertable
- * from plain JVM unit tests.
- */
+/** Separates delivery failures from failures to persist their diagnostic records. */
 internal object HostEventHandoff {
-    /**
-     * Starts Core and submits the background delivery for an already consumed firing.
-     * A failure in either step is retained through [retain] and returned as
-     * [HostEventHandoffOutcome.Undelivered]; it is never retried here.
-     *
-     * Both steps catch [Throwable], not only [Exception]: the firing is already consumed
-     * at this point, so an escaping [Error] would crash the broadcast with
-     * `pendingResult.finish()` never called and no retention record — the exact loss
-     * this hand-off exists to prevent.
-     */
     fun begin(
         schedule: AndroidHostEventSchedule,
         firedAtMillis: Long,
@@ -87,10 +77,6 @@ internal object HostEventHandoff {
         return HostEventHandoffOutcome.Submitted
     }
 
-    /**
-     * Runs the emit on the background executor. A thrown error, or an `ok=false` answer
-     * from Core, is retained as [HostEventHandoffStage.DELIVERY] instead of being logged only.
-     */
     fun completeDelivery(
         schedule: AndroidHostEventSchedule,
         firedAtMillis: Long,
@@ -112,13 +98,14 @@ internal object HostEventHandoff {
         stage: HostEventHandoffStage,
         error: Throwable,
     ): HostEventHandoffOutcome.Undelivered {
-        val fire = UndeliveredHostEventFire(
-            scheduleId = schedule.scheduleId,
-            firedAtMillis = firedAtMillis,
-            stage = stage,
-            reason = error.toString(),
-        )
-        retain(fire)
-        return HostEventHandoffOutcome.Undelivered(fire, error)
+        val fire = UndeliveredHostEventFire(schedule.scheduleId, firedAtMillis, stage, error.toString())
+        // Catch Throwable only after consumption, preserving both failures in the result.
+        val retentionError = try {
+            retain(fire)
+            null
+        } catch (storageError: Throwable) {
+            storageError
+        }
+        return HostEventHandoffOutcome.Undelivered(fire, error, retentionError)
     }
 }

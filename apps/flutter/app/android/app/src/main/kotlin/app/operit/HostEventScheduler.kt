@@ -216,31 +216,34 @@ object AndroidHostEventScheduler {
         check(committed) { "failed to persist Android host event schedules" }
     }
 
-    /**
-     * Persists one firing that was consumed but never handed to Core, so the loss stays
-     * visible after this process dies ([UndeliveredHostEventFire] is the record).
-     * Retention only: no alarm is re-armed and no retry is scheduled. The oldest records
-     * are dropped past [retainedUndeliveredCap] so a failing device cannot grow forever;
-     * each drop gets its own log line (a silently dropped record would hide a failure).
-     *
-     * Runs under the same [lock] as [consumeFire]: the receiver thread (start-core /
-     * submit failures) and the background executor (delivery failures) can retain at the
-     * same time, and read-modify-write without the lock would lose records.
-     */
+    /** Reads retained failures without clearing them or scheduling retries. */
+    internal fun readUndelivered(context: Context): List<UndeliveredHostEventFire> {
+        synchronized(lock) {
+            val encoded = context.applicationContext
+                .getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
+                .getString(undeliveredFiresKey, "[]")
+                ?: error("undelivered host event storage is unavailable")
+            val values = JSONArray(encoded)
+            return (0 until values.length()).map { index ->
+                UndeliveredHostEventFire.fromJson(values.getJSONObject(index))
+            }
+        }
+    }
+
+    /** Appends a diagnostic record under the schedule lock; storage failures propagate. */
     internal fun retainUndelivered(context: Context, fire: UndeliveredHostEventFire) {
         synchronized(lock) {
-            val preferences = context.applicationContext
-                .getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
-            val values = JSONArray(preferences.getString(undeliveredFiresKey, "[]") ?: "[]")
-            values.put(fire.toJson())
-            while (values.length() > retainedUndeliveredCap) {
-                values.remove(0)
-                Log.w(
-                    logTag,
-                    "Undelivered host event records at cap ($retainedUndeliveredCap); dropping the oldest record",
-                )
+            val retained = readUndelivered(context).toMutableList()
+            retained.add(fire)
+            while (retained.size > retainedUndeliveredCap) {
+                retained.removeAt(0)
+                Log.w(logTag, "Undelivered host event records at cap ($retainedUndeliveredCap); dropping the oldest record")
             }
-            val committed = preferences.edit()
+            val values = JSONArray()
+            retained.forEach { values.put(it.toJson()) }
+            val committed = context.applicationContext
+                .getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
+                .edit()
                 .putString(undeliveredFiresKey, values.toString())
                 .commit()
             check(committed) { "failed to persist undelivered host event ${fire.scheduleId}" }
@@ -282,14 +285,7 @@ object AndroidHostEventScheduler {
         )
     }
 
-    /**
-     * Computes the first future interval boundary after one alarm firing.
-     *
-     * Internal (not private) so the overflow paths named in the upstream review —
-     * `addExact` on the future branch and `multiplyExact` on the catch-up branch —
-     * are assertable from plain JVM tests instead of only reachable through the
-     * receiver, which needs an Android runtime.
-     */
+    /** Computes the first future interval boundary after one alarm firing. */
     internal fun nextIntervalTime(
         scheduledAtMillis: Long,
         intervalMs: Long,
@@ -309,72 +305,35 @@ class HostEventScheduleReceiver : BroadcastReceiver() {
         private const val LOG_TAG = "HostEventScheduleReceiver"
     }
 
-    /** Restores the persistent Core and forwards one system schedule firing. */
+    /** Consumes one alarm and transfers broadcast completion to an accepted background task. */
     override fun onReceive(context: Context, intent: Intent) {
         val pendingResult = goAsync()
+        var submitted = false
         try {
             val scheduleId = intent.getStringExtra("scheduleId")
-            if (scheduleId == null) {
+            if (scheduleId.isNullOrBlank()) {
                 Log.w(LOG_TAG, "Host event broadcast without scheduleId; dropping")
-                pendingResult.finish()
                 return
             }
             val schedule = try {
                 AndroidHostEventScheduler.consumeFire(context, scheduleId)
             } catch (error: Exception) {
-                // Classify the failure explicitly: malformed input, interval overflow,
-                // corrupt storage and storage write failure are distinguishable in the
-                // log instead of collapsing into one generic "dropped broadcast" line.
-                // Nothing was consumed when these throw, so there is no loss to retain.
-                when (error) {
-                    is IllegalArgumentException -> Log.e(
-                        LOG_TAG,
-                        "Rejected malformed host event schedule (scheduleId=$scheduleId); broadcast dropped",
-                        error,
-                    )
-                    is ArithmeticException -> Log.e(
-                        LOG_TAG,
-                        "Interval overflow while rescheduling (scheduleId=$scheduleId); schedule not re-armed, broadcast dropped",
-                        error,
-                    )
-                    is JSONException -> Log.e(
-                        LOG_TAG,
-                        "Corrupt stored host event schedule (scheduleId=$scheduleId); broadcast dropped",
-                        error,
-                    )
-                    is IllegalStateException -> Log.e(
-                        LOG_TAG,
-                        "Host event schedule storage failed (scheduleId=$scheduleId); broadcast dropped",
-                        error,
-                    )
-                    else -> Log.e(
-                        LOG_TAG,
-                        "Host event schedule dispatch failed (scheduleId=$scheduleId); broadcast dropped",
-                        error,
-                    )
+                val failure = when (error) {
+                    is IllegalArgumentException -> "Invalid host event schedule"
+                    is ArithmeticException -> "Host event interval overflow"
+                    is JSONException -> "Corrupt host event schedule storage"
+                    is IllegalStateException -> "Host event schedule storage failed"
+                    else -> "Host event consumption failed"
                 }
-                pendingResult.finish()
+                Log.e(LOG_TAG, "$failure (scheduleId=$scheduleId)", error)
                 return
             }
             if (schedule == null) {
                 Log.w(LOG_TAG, "No stored host event schedule for scheduleId=$scheduleId; dropping broadcast")
-                pendingResult.finish()
                 return
             }
-            // From here the firing is consumed: a later failure would mean a deleted timer
-            // that never reached Core. Every such failure is retained (written back), not
-            // just logged, and never retried. Retention errors must not mask that failure,
-            // so they get their own log line instead of propagating.
             val retain: (UndeliveredHostEventFire) -> Unit = { fire ->
-                try {
-                    AndroidHostEventScheduler.retainUndelivered(context, fire)
-                } catch (error: Exception) {
-                    Log.e(
-                        LOG_TAG,
-                        "Could not persist the undelivered host event record (scheduleId=${fire.scheduleId})",
-                        error,
-                    )
-                }
+                AndroidHostEventScheduler.retainUndelivered(context, fire)
             }
             val outcome = HostEventHandoff.begin(
                 schedule = schedule,
@@ -402,12 +361,7 @@ class HostEventScheduleReceiver : BroadcastReceiver() {
                                 retain = retain,
                             )
                             if (delivery is HostEventHandoffOutcome.Undelivered) {
-                                Log.e(
-                                    LOG_TAG,
-                                    "Host event delivery to Core failed (scheduleId=${delivery.fire.scheduleId}); " +
-                                        "failure retained, no retry",
-                                    delivery.cause,
-                                )
+                                logUndelivered(delivery)
                             }
                         } finally {
                             pendingResult.finish()
@@ -416,20 +370,29 @@ class HostEventScheduleReceiver : BroadcastReceiver() {
                 },
                 retain = retain,
             )
+            submitted = outcome is HostEventHandoffOutcome.Submitted
             if (outcome is HostEventHandoffOutcome.Undelivered) {
-                Log.e(
-                    LOG_TAG,
-                    "Host event consumed but not handed to Core (scheduleId=${outcome.fire.scheduleId}, " +
-                        "stage=${outcome.fire.stage}); failure retained, no retry",
-                    outcome.cause,
-                )
-                pendingResult.finish()
-                return
+                logUndelivered(outcome)
             }
-            // Submitted: delivery runs on the background executor, which owns finish().
         } catch (error: Exception) {
-            Log.e(LOG_TAG, "Host event schedule dispatch failed after consumption", error)
-            pendingResult.finish()
+            Log.e(LOG_TAG, "Host event schedule dispatch failed", error)
+        } finally {
+            if (!submitted) {
+                pendingResult.finish()
+            }
+        }
+    }
+
+    private fun logUndelivered(outcome: HostEventHandoffOutcome.Undelivered) {
+        val retention = if (outcome.retentionError == null) "failure retained" else "failure NOT retained"
+        Log.e(
+            LOG_TAG,
+            "Host event delivery failed (scheduleId=${outcome.fire.scheduleId}, " +
+                "stage=${outcome.fire.stage}); $retention; no retry",
+            outcome.cause,
+        )
+        outcome.retentionError?.let { error ->
+            Log.e(LOG_TAG, "Could not persist the undelivered host event ${outcome.fire.scheduleId}", error)
         }
     }
 }
