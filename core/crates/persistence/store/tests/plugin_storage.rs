@@ -280,6 +280,43 @@ fn sqlite_tracks_only_changed_rows_and_preserves_int64_and_blobs() {
     f.dispose();
 }
 
+/// Repeated outer UPSERTs must keep dirty tracking atomic, including persisted legacy triggers.
+#[test]
+fn sqlite_repeated_upserts_sync_after_legacy_trigger_upgrade() {
+    for legacy in [false, true] {
+        let f = Fixture::new("first");
+        let peer = Fixture::new("second");
+        let handle = f.open("sqlite");
+        f.call(json!({"op":"define_table","handle":handle,"table":table()})).unwrap();
+        f.call(json!({"op":"close","handle":handle})).unwrap();
+        if legacy {
+            let store = SqliteStore::openWithHost(f.host.clone(), &f.path).unwrap();
+            store.executeBatch("DROP TRIGGER _operit_track_records_update;
+                CREATE TRIGGER _operit_track_records_update AFTER UPDATE ON records BEGIN
+                INSERT OR REPLACE INTO _operit_dirty VALUES('records',OLD.id,1);
+                INSERT OR REPLACE INTO _operit_dirty VALUES('records',NEW.id,0); END;").unwrap();
+        }
+        let handle = f.open("sqlite");
+        let statements = (1..=3).map(|value| json!({
+            "sql":format!("INSERT INTO records VALUES('one',{value},NULL) ON CONFLICT(id) DO UPDATE SET count=excluded.count"),
+            "params":[]
+        })).collect::<Vec<_>>();
+        f.call(json!({"op":"transaction","handle":handle,"statements":statements})).unwrap();
+        let operations = f.export();
+        assert_eq!(operations.last().unwrap().payload["changes"].as_array().unwrap().len(), 1);
+        peer.replay(&operations);
+        peer.replay(&operations);
+        let remote = peer.open("sqlite");
+        let rows = peer.call(json!({"op":"query","handle":remote,"statement":{
+            "sql":"SELECT id,count FROM records","params":[]
+        }})).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["values"][1]["value"], "3");
+        f.dispose();
+        peer.dispose();
+    }
+}
+
 /// Rejects stale SQL mutations without publishing earlier writes or synchronization changes.
 #[test]
 fn sql_affected_row_guards_rollback_the_batch_and_journal() {

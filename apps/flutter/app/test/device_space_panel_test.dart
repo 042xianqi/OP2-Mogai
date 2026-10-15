@@ -15,7 +15,6 @@ import 'package:operit2/ui/theme/OperitTheme.dart';
 
 const List<String> _userCapabilities = <String>[
   'network.devices.view',
-  'chat.read',
   'network.relay',
   'runtime.execute',
 ];
@@ -69,7 +68,7 @@ Map<String, Object?> _topology({
         relayHops: 1,
         relayPath: <String>['relay'],
         identityName: 'Relay',
-        capabilities: <String>['network.relay'],
+        capabilities: <String>['network.devices.view', 'network.relay'],
       ),
       _member(deviceId: 'relay', deviceName: 'relay-linux'),
     ],
@@ -331,7 +330,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.text('当前身份: 中继节点'), findsOneWidget);
-    expect(find.text('可用权限: 中继网络流量'), findsOneWidget);
+    expect(find.text('可用权限: 查看设备与当前身份、中继网络流量'), findsOneWidget);
     expect(find.text('设备 ID: tablet'), findsOneWidget);
     expect(find.textContaining('在线 · 经中继 1 跳'), findsWidgets);
     expect(find.textContaining('路径: 本机 → relay-linux'), findsWidgets);
@@ -540,9 +539,8 @@ void main() {
     expect(find.text('普通用户'), findsOneWidget);
     for (final label in <String>[
       '查看设备与当前身份',
-      '读取聊天记录',
       '中继网络流量',
-      '执行任务',
+      '承载 Core 执行',
     ]) {
       expect(find.text(label), findsOneWidget);
     }
@@ -574,7 +572,7 @@ void main() {
               ),
               _auditRecord(
                 'newer',
-                'Set identity Auditor on android-tablet',
+                'Set identity Edge on android-tablet',
                 accepted: false,
                 time: 2000,
               ),
@@ -585,8 +583,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('已执行'), findsOneWidget);
       expect(find.text('已拒绝'), findsOneWidget);
-      expect(find.text('android-tablet · 审计员'), findsOneWidget);
-      expect(find.text('Set identity Auditor on android-tablet'), findsNothing);
+      expect(find.text('android-tablet · 边缘节点'), findsOneWidget);
+      expect(find.text('Set identity Edge on android-tablet'), findsNothing);
       expect(
         find.textContaining('issuer lacks required capability'),
         findsNothing,
@@ -663,7 +661,7 @@ void main() {
               ..audit = <Map<String, Object?>>[
                 _auditRecord(
                   'one',
-                  'Set identity Auditor on tablet-with-a-long-name',
+                  'Set identity Edge on tablet-with-a-long-name',
                 ),
               ];
         await mountNetworkPanel(

@@ -297,6 +297,24 @@ impl RuntimeRemoteLinkService {
         Ok(overview)
     }
 
+    /// Reads only this device's bounded configuration, never a business replica.
+    pub fn devicePreferences(&self, nodeId: String) -> Result<BTreeMap<String, serde_json::Value>, String> {
+        let space = self.spaceStore.space()?;
+        if !space.members.contains(&nodeId) { return Err("Device is not a Space member".into()); }
+        operit_store::DevicePreferencesStore::DevicePreferencesStore::new(self.localRuntime.runtimeStorageHost())
+            .read(&space.spaceId, &nodeId).map(|state| state.values())
+    }
+
+    /// Local configuration editors can configure a member without granting storage.
+    pub fn setDevicePreference(&self, nodeId: String, key: String, value: Option<serde_json::Value>) -> Result<(), String> {
+        let space = self.spaceStore.space()?;
+        if !space.members.contains(&nodeId) || self.networkControlStore.nodeIsDisconnected(&nodeId)? {
+            return Err("Device is not an active Space member".into());
+        }
+        operit_store::DevicePreferencesStore::DevicePreferencesStore::new(self.localRuntime.runtimeStorageHost())
+            .set(&space.spaceId, &nodeId, &self.nodeRouter.localNodeId(), &key, value).map(|_| ())
+    }
+
     /// Creates the initial administrator policy for this device's new single-device Space.
     #[allow(non_snake_case)]
     pub fn bootstrapDeviceSpaceControl(&self) -> Result<NetworkControlState, String> {
@@ -808,12 +826,12 @@ impl RuntimeRemoteLinkService {
                 "route change target is not a member of the current device space: {targetNodeId}"
             ));
         }
-        if !self
-            .networkControlStore
-            .nodeHasCapability(&targetNodeId, "runtime.execute", None)?
+        if !self.spaceStore.deviceProfiles()?.get(&targetNodeId)
+            .is_some_and(|profile| profile.coreVersion.is_some())
+            || !self.networkControlStore.nodeHasCapability(&targetNodeId, "runtime.execute", None)?
         {
             return Err(format!(
-                "route change target cannot execute runtime work: {targetNodeId}"
+                "route change target cannot host Core execution: {targetNodeId}"
             ));
         }
         let localNodeId = self.nodeRouter.localNodeId();

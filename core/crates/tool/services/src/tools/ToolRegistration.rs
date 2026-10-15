@@ -45,7 +45,7 @@ use operit_tools::ToolExecutionManager::{
 
 use crate::tools::defaultTool::standard::{
     StandardModelTools::ModelToolExecutor,
-    StandardTtsTools::{TtsToolExecutor, TtsToolOperation},
+    StandardTtsTools::{TtsToolExecutor, TtsToolOperation, SttToolExecutor},
     StandardThemeTools::{ThemeToolExecutor, ThemeToolOperation},
     StandardCatalogTools::CatalogToolExecutor,
     StandardStorageTools::StorageToolExecutor,
@@ -122,6 +122,7 @@ fn registerPublicTools(handler: &mut AIToolHandler, context: &HostManager) {
                                 "platform": node.platform,
                                 "model": node.model,
                                 "reachable": node.reachable,
+                                "canExecute": node.canExecute,
                             });
                             if let Some(relayHops) = node.relayHops {
                                 encoded["relayHops"] = serde_json::json!(relayHops);
@@ -1109,6 +1110,16 @@ fn registerModelTools(handler: &mut AIToolHandler) {
 #[allow(non_snake_case)]
 fn registerTtsTools(handler: &mut AIToolHandler) {
     handler.registerBuiltinTool(
+        BuiltinToolName::TtsSynthesize,
+        RegisteredToolExecutor::Shared(Arc::new(TtsToolExecutor { operation: TtsToolOperation::Synthesize })),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+    handler.registerBuiltinTool(
+        BuiltinToolName::SttTranscribe,
+        RegisteredToolExecutor::Shared(Arc::new(SttToolExecutor)),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+    handler.registerBuiltinTool(
         BuiltinToolName::TtsListConfigs,
         RegisteredToolExecutor::Shared(Arc::new(TtsToolExecutor {
             operation: TtsToolOperation::ListConfigs,
@@ -1442,6 +1453,12 @@ fn resolveSwitchCoreTarget<'a>(
     };
     match state.resolveNodeReference(targetReference) {
         CoreNodeReferenceMatch::Resolved(node) => {
+            if !node.canExecute {
+                return Err(format!(
+                    "switch_core target cannot host Core execution: {}",
+                    coreNodeReferenceLabel(node)
+                ));
+            }
             if !node.reachable {
                 return Err(format!(
                     "switch_core target is not currently reachable: {}",
@@ -1476,10 +1493,22 @@ mod switch_core_tests {
                     platform: "linux".to_string(),
                     model: String::new(),
                     reachable,
+                    canExecute: true,
                     relayHops: None,
                     relayPath: None,
                 })
                 .collect(),
+        }
+    }
+
+    #[test]
+    fn switch_core_rejects_reachable_devices_without_execution_capacity() {
+        let mut state = routeState(vec![("esp-relay", "desk-relay", "owner", true)]);
+        state.nodes[0].canExecute = false;
+        for reference in ["esp-relay", "desk-relay", "owner", "esp-"] {
+            let error = resolveSwitchCoreTarget(&state, reference).unwrap_err();
+            assert!(error.contains("cannot host Core execution"), "{error}");
+            assert!(error.contains("esp-relay"), "{error}");
         }
     }
 

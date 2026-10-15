@@ -584,7 +584,7 @@ export namespace ToolPkg {
   /**
    * Enumerates every hook event that a ToolPkg plugin may register.
    */
-  export type HookEventName = AppLifecycleEvent | HookEventNameVariant2 | HookEventNameVariant3 | HookEventNameVariant4 | ChatInputEventName | ChatViewEventName | ChatMessageEventName | ChatLifecycleEventName | ChatMessageMenuItemEventName | ChatRuntimeEventName | HookEventNameVariant7 | ToolLifecycleEventName | PromptInputEventName | PromptHistoryEventName | SystemPromptComposeEventName | ToolPromptComposeEventName | PromptFinalizeEventName | SummaryGenerateEventName | CoreCommandEventName | HostEventName | HookEventNameVariant20 | EdgeEventName;
+  export type HookEventName = AppLifecycleEvent | HookEventNameVariant2 | HookEventNameVariant3 | HookEventNameVariant4 | ChatInputEventName | ChatViewEventName | ChatMessageEventName | ChatLifecycleEventName | ChatMessageMenuItemEventName | ChatRuntimeEventName | HookEventNameVariant7 | ToolLifecycleEventName | PromptInputEventName | PromptHistoryEventName | SystemPromptComposeEventName | ToolPromptComposeEventName | PromptFinalizeEventName | SummaryGenerateEventName | CoreCommandEventName | HostEventName | HookEventNameVariant20;
 
   /**
    * Accepts a JSON result, no result, or asynchronous completion from a generic hook.
@@ -4022,11 +4022,6 @@ export namespace ToolPkg {
      */
     getSpaceDataDir(): string;
   }
-
-  /**
-   * Device action events, independent of screens or touch input.
-   */
-  export type EdgeEventName = "edge_event";
 
 }
 

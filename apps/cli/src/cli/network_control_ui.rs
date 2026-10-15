@@ -119,10 +119,11 @@ pub(crate) fn network_role_summary(role: &NetworkControlRole) -> String {
 fn network_capability_label(capability: &str) -> String {
     match capability {
         "*" => "all permissions".to_string(),
+        "network.devices.view" => "view member devices".to_string(),
         "network.audit.read" => "view audit history".to_string(),
         "network.relay" => "relay network traffic".to_string(),
-        "storage.provide" => "provide storage".to_string(),
-        "runtime.execute" => "run tasks".to_string(),
+        "storage.provide" => "store shared data replicas".to_string(),
+        "runtime.execute" => "host Core execution".to_string(),
         value => value.to_string(),
     }
 }

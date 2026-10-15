@@ -36,33 +36,6 @@ use route_forwarding::{requireRouteMember, requireRoutableTarget, RouteParticipa
 mod device_tools;
 use operit_tools::tools::DeviceTools::{DeviceToolService, DEVICE_TOOL_TARGET};
 
-// An event sender may not impersonate another Edge or use Target to bypass the
-// Binding permission path. Called only after normal incoming-route validation.
-fn validateEdgeEventOrigin(
-    request: &CoreCallRequest,
-    origin: &str,
-    kind: RoutedCoreRequestKind,
-) -> Result<(), CoreLinkError> {
-    if request.target != CORE_INTERNAL_TARGET || request.methodName != "chatEdgeEvent" {
-        return Ok(());
-    }
-    let node = match &request.args {
-        CoreValue::Map(args) => args.get("nodeId"),
-        _ => None,
-    };
-    if !matches!(
-        kind,
-        RoutedCoreRequestKind::SpaceBinding | RoutedCoreRequestKind::SpaceRoute
-    ) || !matches!(node, Some(CoreValue::String(id)) if id == origin)
-    {
-        return Err(CoreLinkError::new(
-            "EDGE_EVENT_ORIGIN_DENIED",
-            "Edge event requires its authenticated Space origin",
-        ));
-    }
-    Ok(())
-}
-
 /// Reports both persisted ownership and the device currently selected by routing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BindingRouteStatus {
@@ -506,6 +479,7 @@ impl CoreNodeRouter {
         targetNodeId: &str,
     ) -> Result<(), CoreLinkError> {
         let capability = route.permissionCapability;
+        if capability.is_empty() { return Ok(()); }
         let (subject, subjectNodeId) = match route.permissionScope {
             crate::GeneratedRoutePermissionSubject::Caller => ("caller", callerNodeId),
             crate::GeneratedRoutePermissionSubject::Target => ("target", targetNodeId),
@@ -918,15 +892,17 @@ impl CoreNodeRouter {
         }
     }
 
-    /// Allocate bindings only for explicit creation commands, after caller authorization.
+    /// Allocate bindings only for explicit creation commands on a capable executor.
     async fn prepareCreationBinding(&self, route: &crate::GeneratedSpaceRoute, key: &str,
         origin: &str) -> Result<(), CoreLinkError> {
         if route.createBindingCapability.is_empty() { return Ok(()); }
         self.requireRoutePermission(route, origin, &self.localNodeId)?;
+        let profiles = self.spaceStore.deviceProfiles().map_err(CoreLinkError::internal)?;
         let bindings = CoreNodeBindingStore::new(self.localCore.runtimeStorageHost()).map_err(CoreLinkError::internal)?;
         let commit = if let Some(binding) = bindings.bindingOptional(key).map_err(CoreLinkError::internal)? {
-            if !self.networkControlStore.nodeHasCapability(&binding.nodeId, route.createBindingCapability, None).map_err(CoreLinkError::internal)? {
-                return Err(CoreLinkError::new("ROUTE_PERMISSION_DENIED", "Binding target lacks execution capability"));
+            if !profiles.get(&binding.nodeId).is_some_and(|profile| profile.coreVersion.is_some())
+                || !self.networkControlStore.nodeHasCapability(&binding.nodeId, route.createBindingCapability, None).map_err(CoreLinkError::internal)? {
+                return Err(CoreLinkError::new("ROUTE_UNAVAILABLE", "Binding target cannot host Core execution"));
             }
             bindings.compareAndSet(key, &binding.nodeId, &binding.nodeId).map_err(CoreLinkError::internal)?
         } else {
@@ -934,7 +910,8 @@ impl CoreNodeRouter {
             members.sort_by_key(|id| (id != &self.localNodeId, id.clone()));
             let mut selected = None;
             for member in members {
-                if self.networkControlStore.nodeHasCapability(&member, route.createBindingCapability, None).map_err(CoreLinkError::internal)?
+                if profiles.get(&member).is_some_and(|profile| profile.coreVersion.is_some())
+                    && self.networkControlStore.nodeHasCapability(&member, route.createBindingCapability, None).map_err(CoreLinkError::internal)?
                     && (member == self.localNodeId || self.nodeIsReachable(&member).map_err(CoreLinkError::internal)?) {
                     selected = Some(member); break;
                 }
@@ -960,9 +937,6 @@ impl CoreNodeRouter {
         originNodeId: String,
     ) -> CoreCallResponse {
         let requestId = request.requestId.clone();
-        if let Err(error) = validateEdgeEventOrigin(&request, &originNodeId, RoutedCoreRequestKind::SpaceBinding) {
-            return CoreCallResponse::err(requestId, error);
-        }
         let route = match crate::generated_space_call_route(&request) {
             Some(route) => route,
             None => {
@@ -1736,6 +1710,8 @@ impl CoreNodeToolRuntime for CoreNodeToolRouteRuntime {
                 platform: profile.platform.clone(),
                 model: profile.model.clone(),
                 reachable,
+                canExecute: profile.coreVersion.is_some()
+                    && self.networkControlStore.nodeHasCapability(&nodeId, "runtime.execute", None)?,
                 relayHops,
                 relayPath,
                 nodeId,
@@ -1967,9 +1943,6 @@ impl CoreNodeRouter {
             Ok(true) => {
                 if request.payload.target == DEVICE_TOOL_TARGET {
                     return CoreCallResponse::err(requestId, CoreLinkError::new("DEVICE_TOOL_MODE_INVALID", "Device tools require a cancellable watch"));
-                }
-                if let Err(error) = validateEdgeEventOrigin(&request.payload, &request.originNodeId, request.routeKind) {
-                    return CoreCallResponse::err(requestId, error);
                 }
                 if request.payload.target == crate::NodeSpaceService::NODE_SPACE_CONTROL_TARGET {
                     if request.routeKind != RoutedCoreRequestKind::Target {
@@ -3551,6 +3524,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn core_route_candidates_report_live_execution_capacity() {
+        let _guard = routeTestGlobalLock().lock().await;
+        installTestRuntimeScheduler();
+        let router = testCoreNodeRouter("capacity-local", "capacity-peer", "capacity-chat");
+        let link = installTestPeer(&router, "capacity-peer".into(), Arc::new(TestClientEndpoint)).unwrap();
+        let runtime = CoreNodeToolRouteRuntime {
+            peerServices: router.peerServices.clone(), localNodeId: router.localNodeId.clone(),
+            spaceStore: router.spaceStore.clone(), networkControlStore: router.networkControlStore.clone(),
+        };
+        for (role, hasCore, expected) in [("relay", true, false), ("edge", true, true),
+            ("user", true, true), ("user", false, false), ("edge", false, false)] {
+            let mut profile = router.spaceStore.deviceProfiles().unwrap().remove("capacity-peer").unwrap();
+            profile.coreVersion = hasCore.then(|| "test-core".into());
+            profile.updatedAt += 1;
+            router.spaceStore.importDeviceProfiles(vec![profile]).unwrap();
+            router.networkControlStore.setIdentity(operit_store::NetworkControlStore::NetworkControlIdentityAssignment {
+                nodeId: "capacity-peer".into(), roleId: role.into(),
+            }).unwrap();
+            let state = runtime.coreNodeRouteState().unwrap();
+            let candidate = state.nodes.iter().find(|node| node.nodeId == "capacity-peer").unwrap();
+            assert!(candidate.reachable);
+            assert_eq!(candidate.canExecute, expected);
+            if !expected {
+                let service = RuntimeRemoteLinkService::newWithRouter((*router.localCore).clone(), router.clone());
+                let before = router.bindingStore.binding("capacity-chat").unwrap();
+                let context = operit_tools::runtime_support::CoreRouteResumeContext {
+                    runtimeChatHistory: Vec::new(), workspacePath: None,
+                    promptFunctionType: operit_model::PromptFunctionType::PromptFunctionType::CHAT,
+                    enableThinking: false, participantId: String::new(), extensionOwner: String::new(),
+                    messageExtension: serde_json::Map::new(), proxySenderName: None,
+                    notifyReplyOverride: None, chatProviderIdOverride: None, chatModelIdOverride: None,
+                    turnOptions: Default::default(),
+                };
+                let error = service.requestChangeRoute("capacity-chat".into(), "capacity-peer".into(), context)
+                    .await.unwrap_err();
+                assert!(error.contains("cannot host Core execution"), "{error}");
+                assert_eq!(router.bindingStore.binding("capacity-chat").unwrap(), before);
+            }
+        }
+        link.close();
+    }
+
+    fn grantTestReplicaRole(control: &NetworkControlStore, node: &str) {
+        control.defineRole(operit_store::NetworkControlStore::NetworkControlRole {
+            roleId: "replica".into(), displayName: "Test replica".into(),
+            capabilities: BTreeSet::from(["storage.provide".into()]),
+        }).unwrap();
+        control.setIdentity(operit_store::NetworkControlStore::NetworkControlIdentityAssignment {
+            nodeId: node.into(), roleId: "replica".into(),
+        }).unwrap();
+    }
+
+    #[tokio::test]
     async fn non_storage_members_cannot_enter_replication_or_blob_receivers() {
         let _guard = routeTestGlobalLock().lock().await;
         installTestRuntimeScheduler();
@@ -3577,7 +3603,7 @@ mod tests {
             targetNodeId: request.targetNodeId.clone(), ttl: 0, routeKind: RoutedCoreRequestKind::Target,
             payload: CorePushRequest::new("blob-denied", NODE_SYNC_TARGET, "syncReceiveBlob") };
         let error = match router.routedOpenPush("storage-peer".into(), push).await {
-            Ok(_) => panic!("runner must not open a blob receiver"), Err(error) => error,
+            Ok(_) => panic!("non-storage member must not open a blob receiver"), Err(error) => error,
         };
         assert_eq!(error.code, "SPACE_STORAGE_PERMISSION_DENIED");
         let after = router.localCore.runtimeStorageHost().list("runtime/").unwrap();
@@ -3588,9 +3614,7 @@ mod tests {
         control.payload = CoreCallRequest::new("control-allowed", crate::NodeSpaceService::NODE_SPACE_CONTROL_TARGET,
             "exchange", operit_link::toCoreValue(Vec::<operit_store::SyncOperationStore::SyncOperation>::new()).unwrap());
         assert!(router.routedCall("storage-peer".into(), control).await.result.is_ok());
-        router.networkControlStore.setIdentity(operit_store::NetworkControlStore::NetworkControlIdentityAssignment {
-            nodeId: "storage-peer".into(), roleId: "storage".into(),
-        }).unwrap();
+        grantTestReplicaRole(&router.networkControlStore, "storage-peer");
         assert!(router.requirePeerStorageProviders("storage-peer", "storage-local").is_ok());
         router.networkControlStore.clearIdentity("storage-peer".into()).unwrap();
         assert_eq!(router.routedCall("storage-peer".into(), request).await.result.unwrap_err().code,
@@ -3613,9 +3637,7 @@ mod tests {
         let _guard = routeTestGlobalLock().lock().await;
         installTestRuntimeScheduler();
         let router = testCoreNodeRouter("stream-local", "stream-peer", "stream-binding");
-        router.networkControlStore.setIdentity(operit_store::NetworkControlStore::NetworkControlIdentityAssignment {
-            nodeId: "stream-peer".into(), roleId: "storage".into(),
-        }).unwrap();
+        grantTestReplicaRole(&router.networkControlStore, "stream-peer");
         let count = Arc::new(AtomicUsize::new(0));
         let mut stream = router.guardPeerSyncPush("stream-peer".into(), "stream-local".into(),
             router.spaceStore.space().unwrap().spaceId, Box::new(CountingSyncPush(count.clone())));
@@ -3641,11 +3663,9 @@ mod tests {
             "a creator must not discard its own Space's data");
         assert!(!worker.storageReplicationAllowed("worker-peer").unwrap());
         worker.synchronizeReachablePeer("worker-peer".into(), 512, true).await.unwrap();
-        assert_eq!(endpoint.callCount.load(Ordering::SeqCst), 1);
+        assert_eq!(endpoint.callCount.load(Ordering::SeqCst), 2);
         assert_eq!(router.localCore.runtimeStorageHost().readBytes("runtime/sync/clocks.json").unwrap(), before);
-        router.networkControlStore.setIdentity(operit_store::NetworkControlStore::NetworkControlIdentityAssignment {
-            nodeId: "worker-peer".into(), roleId: "storage".into(),
-        }).unwrap();
+        grantTestReplicaRole(&router.networkControlStore, "worker-peer");
         assert!(router.requirePeerStorageProviders("worker-local", "worker-peer").is_ok());
         let mut profile = router.spaceStore.deviceProfiles().unwrap().remove("worker-peer").unwrap();
         profile.coreVersion = None; profile.updatedAt += 1;
@@ -3654,7 +3674,7 @@ mod tests {
         // A lightweight endpoint has no Core store even with a broad user role.
         assert!(!worker.storageReplicationAllowed("worker-peer").unwrap());
         worker.synchronizeReachablePeer("worker-peer".into(), 512, true).await.unwrap();
-        assert_eq!(endpoint.methodNames(), vec!["exchange", "exchange"]);
+        assert_eq!(endpoint.methodNames(), vec!["exchange", "exchangePreferences", "exchange", "exchangePreferences"]);
         assert!(!router.localCore.runtimeStorageHost().exists("runtime/link_access/storage_replica.preferences.json").unwrap());
         assert_eq!(router.localCore.runtimeStorageHost().readBytes("runtime/sync/clocks.json").unwrap(), before,
             "skipped initial sync must not reset/advance replication clocks");
@@ -3724,7 +3744,7 @@ mod tests {
         spaceStore.admitRemoteMember(targetNodeId.into(), "Target".into(), "test".into(), "core".into(), "1".into()).unwrap();
         networkControlStore.admitMember(targetNodeId.to_string()).unwrap();
         networkControlStore.setIdentity(operit_store::NetworkControlStore::NetworkControlIdentityAssignment {
-            nodeId: targetNodeId.to_string(), roleId: "runner".into(),
+            nodeId: targetNodeId.to_string(), roleId: "edge".into(),
         }).unwrap();
         let bindingStore: Arc<dyn CoreNodeBindingRuntime> = Arc::new(TestBindingRuntime::new(
             bindingKey,
@@ -3749,6 +3769,11 @@ mod tests {
         router.spaceStore.admitRemoteMember(
             "edge-client".into(), "Edge".into(), "test".into(), "edge".into(), "1".into(),
         ).unwrap();
+        router.networkControlStore.admitMember("edge-client".into()).unwrap();
+        router.networkControlStore.setIdentity(operit_store::NetworkControlStore::NetworkControlIdentityAssignment {
+            nodeId: "edge-client".into(), roleId: "relay".into(),
+        }).unwrap();
+        assert!(!router.networkControlStore.nodeHasCapability("edge-client", "runtime.execute", None).unwrap());
         let target = TestRoutedCallEndpoint::new();
         let link = installTestPeer(&router, "edge-executor".into(), target.clone()).unwrap();
         let request = RoutedCoreRequest {
@@ -3765,9 +3790,8 @@ mod tests {
         let response = router.routedCall("edge-client".into(), request.clone()).await;
         assert!(response.result.is_ok(), "{:?}", response.result);
         assert_eq!(target.callCount.load(Ordering::SeqCst), 1);
-        // Clearing resets the target to the default user identity, which
-        // still carries the runtime.execute capability this route needs, so
-        // the call keeps succeeding instead of losing its local UI access.
+        // Resetting the identity retains ordinary member access to the
+        // existing chat Binding; execution capacity is checked when selecting it.
         router
             .networkControlStore
             .clearIdentity("edge-executor".into())
@@ -3832,7 +3856,7 @@ mod tests {
             networkControlStore.admitMember(member.clone()).unwrap();
             networkControlStore.setIdentity(operit_store::NetworkControlStore::NetworkControlIdentityAssignment {
                 nodeId: member.clone(),
-                roleId: if member == bindingNodeId { "runner".into() } else { "user".into() },
+                roleId: if member == bindingNodeId { "edge".into() } else { "user".into() },
             }).unwrap();
         }
         spaceStore
@@ -4325,11 +4349,12 @@ mod tests {
             if self.policyOnly {
                 assert_eq!(request.routeKind, RoutedCoreRequestKind::Target);
                 assert_eq!(request.payload.target, crate::NodeSpaceService::NODE_SPACE_CONTROL_TARGET);
-                assert_eq!(request.payload.methodName, "exchange", "no business RPC is allowed");
+                assert!(matches!(request.payload.methodName.as_str(), "exchange" | "exchangePreferences"), "no business RPC is allowed");
                 self.callCount.fetch_add(1, Ordering::SeqCst);
+                let response = if request.payload.methodName == "exchangePreferences" { request.payload.args.clone() }
+                    else { operit_link::toCoreValue(Vec::<operit_store::SyncOperationStore::SyncOperation>::new()).unwrap() };
                 self.methods.lock().unwrap().push(request.payload.methodName);
-                return CoreCallResponse::ok(request.payload.requestId,
-                    operit_link::toCoreValue(Vec::<operit_store::SyncOperationStore::SyncOperation>::new()).unwrap());
+                return CoreCallResponse::ok(request.payload.requestId, response);
             }
             assert_eq!(request.routeKind, RoutedCoreRequestKind::SpaceRoute);
             assert_eq!(
@@ -5606,28 +5631,4 @@ mod tests {
     mod chat_input_menu_tests { use super::*; include!("router_chat_input_menu_tests.rs"); }
     mod device_space_tests { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/device_space/mod.rs")); }
 
-}
-
-#[cfg(test)]
-mod edge_event_origin_tests {
-    use super::*;
-    #[test]
-    fn edge_event_sender_is_authenticated_not_a_self_reported_node_or_target_bypass() {
-        let args =
-            operit_link::toCoreValue(serde_json::json!({"chatId":"chat","nodeId":"edge"})).unwrap();
-        let request =
-            CoreCallRequest::new("event", CORE_INTERNAL_TARGET, "chatEdgeEvent", args);
-        for kind in [
-            RoutedCoreRequestKind::SpaceBinding,
-            RoutedCoreRequestKind::SpaceRoute,
-        ] {
-            assert!(validateEdgeEventOrigin(&request, "edge", kind).is_ok());
-            assert!(validateEdgeEventOrigin(&request, "impostor", kind).is_err());
-        }
-        assert!(validateEdgeEventOrigin(&request, "edge", RoutedCoreRequestKind::Target).is_err());
-        let unrelated = CoreCallRequest::new("device", "device.status", "read", CoreValue::Null);
-        assert!(
-            validateEdgeEventOrigin(&unrelated, "edge", RoutedCoreRequestKind::Target).is_ok()
-        );
-    }
 }

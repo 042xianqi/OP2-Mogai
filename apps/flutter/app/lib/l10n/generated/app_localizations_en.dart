@@ -3604,13 +3604,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsRuntimeControlCapabilityStorageProvide =>
-      'Provide storage';
+      'Store shared data replicas';
 
   @override
-  String get settingsRuntimeControlCapabilityRuntimeExecute => 'Run tasks';
-
-  @override
-  String get settingsRuntimeControlCapabilityChatRead => 'Read chat history';
+  String get settingsRuntimeControlCapabilityRuntimeExecute =>
+      'Host Core execution';
 
   @override
   String get settingsRuntimeControlCapabilityViewDevices =>
@@ -3629,16 +3627,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsRuntimeControlRoleAdministrator => 'Administrator';
 
   @override
-  String get settingsRuntimeControlRoleAuditor => 'Auditor';
-
-  @override
   String get settingsRuntimeControlRoleRelay => 'Relay node';
 
   @override
-  String get settingsRuntimeControlRoleStorage => 'Storage node';
-
-  @override
-  String get settingsRuntimeControlRoleRunner => 'Task runner';
+  String get settingsRuntimeControlRoleEdge => 'Edge node';
 
   @override
   String get settingsRuntimeControlRoleUser => 'User';

@@ -30,6 +30,7 @@ const HOST_TRAITS: &[(&str, &str, &str)] = &[
     ),
     ("js_sdk/models.rs", "ModelsHost", "Models"),
     ("js_sdk/tts.rs", "TtsHost", "Tts"),
+    ("js_sdk/stt.rs", "SttHost", "Stt"),
     ("js_sdk/theme.rs", "ThemeHost", "Theme"),
     ("js_sdk/catalog.rs", "CatalogHost", "Catalog"),
     ("js_sdk/chat.rs", "ChatHost", "Chat"),

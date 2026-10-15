@@ -202,7 +202,15 @@
                     if (signal.aborted) abort();
                 }
                 pending.then(function(value) {
-                    if (settled) return;
+                    if (settled) {
+                        // An opening can win the remote race after local cancellation.
+                        if (action === 'transport' && params.op === 'open' && value && value.handle) {
+                            invokeHostAsync(root.__operitNativeCallToolStructured,
+                                ['default', '__device_transport', {op:'close',handle:value.handle}, String(root.__operitCurrentCallId),
+                                    {nodeId:nodeId,invocationId:invocationId+':close',action:'transport',timeoutMs:metadata.timeoutMs}], parseToolResult).catch(function() {});
+                        }
+                        return;
+                    }
                     settled = true; cleanup(); resolve(value);
                 }, function(error) {
                     if (settled) return;

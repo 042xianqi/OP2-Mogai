@@ -32,6 +32,8 @@ pub enum ToolResultData {
     EnvironmentVariableReadResultData(EnvironmentVariableReadResultData),
     EnvironmentVariableWriteResultData(EnvironmentVariableWriteResultData),
     ModelsListSummariesResultData(ModelsListSummariesResultData),
+    TtsSynthesizeResultData(TtsSynthesizeResultData),
+    SttTranscribeResultData(SttTranscribeResultData),
     TtsListConfigsResultData(TtsListConfigsResultData),
     TtsGetCurrentConfigIdResultData(TtsGetCurrentConfigIdResultData),
     TtsSetCurrentConfigIdResultData(TtsSetCurrentConfigIdResultData),
@@ -115,6 +117,8 @@ impl ToolResultData {
             Self::EnvironmentVariableReadResultData(data) => data.toString(),
             Self::EnvironmentVariableWriteResultData(data) => data.toString(),
             Self::ModelsListSummariesResultData(data) => data.toString(),
+            Self::TtsSynthesizeResultData(data) => data.toString(),
+            Self::SttTranscribeResultData(data) => data.toString(),
             Self::TtsListConfigsResultData(data) => data.toString(),
             Self::TtsGetCurrentConfigIdResultData(data) => data.toString(),
             Self::TtsSetCurrentConfigIdResultData(data) => data.toString(),
@@ -547,6 +551,27 @@ impl ModelsListSummariesResultData {
     pub fn toString(&self) -> String {
         serde_json::to_string(self).expect("ModelsListSummariesResultData serialization failed")
     }
+}
+
+/// One encoded audio segment, in synthesis order.
+#[derive(Clone, Serialize, Deserialize)]
+#[allow(non_snake_case)]
+#[serde(deny_unknown_fields)]
+pub struct TtsAudioSegment {
+    pub audio: Vec<u8>,
+    pub contentType: String,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TtsSynthesizeResultData { pub segments: Vec<TtsAudioSegment> }
+impl TtsSynthesizeResultData {
+    pub fn toString(&self) -> String { serde_json::to_string(self).expect("TTS result serialization failed") }
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SttTranscribeResultData { pub text: String }
+impl SttTranscribeResultData {
+    pub fn toString(&self) -> String { serde_json::to_string(self).expect("STT result serialization failed") }
 }
 
 /// Returns the complete configured speech records.

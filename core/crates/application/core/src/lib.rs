@@ -16,6 +16,7 @@ use operit_plugin_sdk_ipc_bridge::OperitPluginSdkIpcBridge;
 use operit_runtime::core::application::OperitApplication::OperitApplication;
 
 mod device_tools;
+mod device_transport;
 
 type LocalClientConfigurator = Box<dyn FnOnce(&mut LocalCoreProxy) -> Result<(), String> + Send>;
 
@@ -251,3 +252,6 @@ impl Drop for CoreApplication {
         let _ = self.accessServices.stopSpaceSync();
     }
 }
+
+#[cfg(test)]
+mod speech_transport_tests;

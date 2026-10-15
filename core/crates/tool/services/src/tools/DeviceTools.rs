@@ -17,6 +17,7 @@ pub type DeviceToolPreflight = JsExecutionCompletion<Result<(), String>>;
 
 /// Outbound capability installed by the owning Core assembly.
 pub trait DeviceToolRuntime: Send + Sync {
+    fn close_transports(&self, _owner: &str) {}
     fn dispatch(&self, request: JsToolCallRequest) -> JsExecutionCompletion<JsToolCallResult> {
         self.dispatch_with_preflight(request, None)
     }
@@ -236,5 +237,26 @@ impl DeviceToolService for AIToolHandler {
             )
             .map_err(|error| CoreLinkError::internal(error.to_string()))?;
         Ok(stream)
+    }
+}
+
+/// Owns the channels of one JS engine, including its cloned invocation hosts.
+pub(crate) struct DeviceTransportScope {
+    pub id: String,
+    support: std::sync::Mutex<Option<std::sync::Weak<dyn crate::runtime_support::ToolRuntimeSupport>>>,
+}
+impl Default for DeviceTransportScope {
+    fn default() -> Self { Self {id: uuid::Uuid::new_v4().to_string(), support:Default::default()} }
+}
+impl DeviceTransportScope {
+    pub fn bind(&self, support: &std::sync::Arc<dyn crate::runtime_support::ToolRuntimeSupport>) {
+        *self.support.lock().unwrap()=Some(std::sync::Arc::downgrade(support));
+    }
+}
+impl Drop for DeviceTransportScope {
+    fn drop(&mut self) {
+        if let Some(support)=self.support.get_mut().unwrap().as_ref().and_then(std::sync::Weak::upgrade) {
+            support.closeDeviceTransports(&self.id);
+        }
     }
 }

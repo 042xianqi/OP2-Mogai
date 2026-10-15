@@ -12,6 +12,7 @@ pub mod CoreNodeIdentityStore;
 pub mod CoreSpaceStore;
 #[path = "NetworkControlStore.rs"]
 pub mod NetworkControlStore;
+#[cfg(feature = "full")]
 #[path = "PluginStorage.rs"]
 pub mod PluginStorage;
 #[path = "PreferencesDataStore.rs"]
@@ -51,8 +52,12 @@ pub mod repository;
 #[cfg(feature = "full")]
 pub mod sync;
 
+#[cfg(feature = "full")]
 #[path = "PluginExtensions.rs"]
 pub(crate) mod PluginExtensions;
 
+#[cfg(feature = "full")]
 #[path = "ChatExecutionLease.rs"]
 pub mod ChatExecutionLease;
+
+pub mod DevicePreferencesStore;

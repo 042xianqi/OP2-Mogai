@@ -513,10 +513,9 @@ impl SyncOperationStore {
             }
         }
         let now = currentTimeMillis()?;
-        let mut hasher = DefaultHasher::new();
-        self.rootPath.hash(&mut hasher);
-        now.hash(&mut hasher);
-        let deviceId = format!("core-{now}-{:016x}", hasher.finish());
+        // Hosts commonly use the same relative sync root and may initialize
+        // within the same millisecond. Their operation origins must be unique.
+        let deviceId = format!("core-{now}-{}", uuid::Uuid::new_v4().simple());
         self.storageHost.writeBytes(&path, deviceId.as_bytes())?;
         localDeviceIdState.loaded = true;
         localDeviceIdState.value = Some(deviceId.clone());

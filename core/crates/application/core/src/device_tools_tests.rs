@@ -2,7 +2,7 @@ use super::*;
 use crate::CoreApplication;
 use operit_host_api::HostManager::HostManager;
 use operit_host_native_common::{
-    NativeHostJavaScriptRuntimeHost, NativeHostRuntimeTaskSchedulerHost, NativeHttpHost,
+    NativeHostJavaScriptRuntimeHost, NativeHostRuntimeTaskSchedulerHost,
     NativeRuntimeStorageHost, PosixFileSystemHost,
 };
 use operit_plugin_sdk::javascript::{JsDeviceToolCall, JsToolCallResultData};
@@ -116,12 +116,14 @@ async fn device_tools_runtime_executes_permissions_hooks_binary_cancellation_and
     setDefaultRuntimeStoreRootConfig(RuntimeStoreRootConfig::new(data.clone(), workspace.clone()));
     let storage = Arc::new(NativeRuntimeStorageHost::new(data, workspace));
     let scheduler = Arc::new(NativeHostRuntimeTaskSchedulerHost::new());
+    let speech_http=Arc::new(crate::speech_transport_tests::SpeechHttp::default());
     let host = HostManager {
         runtimeStorageHost: Some(storage.clone()),
         runtimeStorageWriteHost: Some(storage.clone()),
         runtimeSqliteHost: Some(storage),
         fileSystemHost: Some(Arc::new(PosixFileSystemHost::new())),
-        httpHost: Some(Arc::new(NativeHttpHost::new())),
+        httpHost: Some(speech_http.clone()),
+        tcpHost: Some(Arc::new(operit_host_native_common::NativeTcpHost)),
         systemOperationHost: Some(Arc::new(TestSystemLocale)),
         hostRuntimeTaskSchedulerHost: Some(scheduler.clone()),
         hostJavaScriptRuntimeHost: Some(Arc::new(NativeHostJavaScriptRuntimeHost::new())),
@@ -181,7 +183,7 @@ async fn device_tools_runtime_executes_permissions_hooks_binary_cancellation_and
     handler.registerAsyncTool(
         "delayed_probe".into(),
         Box::new(AsyncFnToolExecutor {
-            invoke: Arc::new(move |tool| {
+            invoke: Arc::new(move |tool, _context| {
                 let started = started.clone();
                 let dropped = dropped.clone();
                 Box::pin(async move {
@@ -210,7 +212,7 @@ async fn device_tools_runtime_executes_permissions_hooks_binary_cancellation_and
         }),
     );
     let proxy = Arc::new(LocalCoreProxy::new(application));
-    let core = CoreApplication::startWithSharedLocalClientConfigured(
+    let mut core = CoreApplication::startWithSharedLocalClientConfigured(
         proxy.clone(),
         operit_link::protocol::LinkDeviceInfo {
             platform: "test".into(),
@@ -385,6 +387,7 @@ async fn device_tools_runtime_executes_permissions_hooks_binary_cancellation_and
         "Timed-out executor must return to the registry"
     );
     assert!(runtime.pending.lock().unwrap().is_empty());
+    crate::speech_transport_tests::verify(&mut core,&handler,&root,speech_http).await;
     // Close the application before deleting its runtime files.
     operit_link::clearCoreRouteRuntime();
     drop(runtime);

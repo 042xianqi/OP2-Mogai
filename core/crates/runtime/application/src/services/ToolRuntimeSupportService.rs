@@ -131,6 +131,10 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
     fn bindDeviceToolRuntime(&self, runtime: Arc<dyn operit_tools::tools::DeviceTools::DeviceToolRuntime>) -> Result<(), String> {
         self.deviceToolRuntime.set(runtime).map_err(|_| "Device tool routing is already initialized".into())
     }
+    fn closeDeviceTransports(&self, owner: &str) {
+        if let Some(runtime)=self.deviceToolRuntime.get() {runtime.close_transports(owner);}
+    }
+
     fn executeDeviceTool(&self, request: operit_plugin_sdk::javascript::JsToolCallRequest,
         preflight: Option<operit_tools::tools::DeviceTools::DeviceToolPreflight>)
         -> operit_plugin_sdk::javascript::JsExecutionCompletion<operit_plugin_sdk::javascript::JsToolCallResult> {
@@ -208,6 +212,26 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
             .map_err(|error| error.to_string())?;
         serde_json::from_value(serde_json::to_value(summaries).map_err(|error| error.to_string())?)
             .map_err(|error| error.to_string())
+    }
+
+    fn synthesizeSpeech(&self, request: operit_plugin_sdk::js_sdk::tts::TtsSynthesizeRequest)
+        -> Result<operit_plugin_sdk::js_sdk::results::TtsSynthesizeResultData, String> {
+        let id = match request.configId {
+            Some(id) => id,
+            None => self.getCurrentTtsConfigId()?,
+        };
+        crate::services::TtsSynthesisService::TtsSynthesisService::getInstance(&self.hostManager)
+            .synthesizeAudioWithConfig(&id, &request.text)
+    }
+
+    fn transcribeSpeech(&self, request: operit_plugin_sdk::js_sdk::stt::SttTranscribeRequest)
+        -> Result<operit_plugin_sdk::js_sdk::results::SttTranscribeResultData, String> {
+        let service = crate::services::SttRecognitionService::SttRecognitionService::getInstance(&self.hostManager);
+        let result = match request.configId {
+            Some(id) => service.transcribeWithConfigId(id, request.audio, request.fileName, request.contentType, request.language)?,
+            None => service.transcribeCurrent(request.audio, request.fileName, request.contentType, request.language)?,
+        };
+        Ok(operit_plugin_sdk::js_sdk::results::SttTranscribeResultData { text: result.text })
     }
 
     /// Reads complete real configured speech records without consulting character preferences.

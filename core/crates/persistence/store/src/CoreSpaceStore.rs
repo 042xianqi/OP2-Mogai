@@ -2318,13 +2318,15 @@ mod tests {
         sourcePolicy.initializeCurrentSpace().unwrap();
         addTestSpaceMember(&sourceSpace, "projection-member");
         sourcePolicy.admitMember("projection-member".into()).unwrap();
-        sourcePolicy.setIdentity(NetworkControlIdentityAssignment { nodeId: "projection-member".into(), roleId: "runner".into() }).unwrap();
+        sourcePolicy.setIdentity(NetworkControlIdentityAssignment { nodeId: "projection-member".into(), roleId: "edge".into() }).unwrap();
         let sourceLog = SyncOperationStore::new(source.clone(), RUNTIME_SYNC_DIR_PATH);
         let business = sourceLog.appendLocalOperation(&CoreNodeIdentityStore::new(source.clone()).initialize().unwrap().nodeId, NewSyncOperation {
             domain: "chat".into(), entityType: "test".into(), entityId: "older-message".into(),
             operation: "write".into(), semantics: SyncOperationSemantics::Transaction, payload: serde_json::json!({}),
         }).unwrap();
-        sourcePolicy.setIdentity(NetworkControlIdentityAssignment { nodeId: "projection-member".into(), roleId: "storage".into() }).unwrap();
+        sourcePolicy.defineRole(NetworkControlRole { roleId: "replica".into(), displayName: "Test replica".into(),
+            capabilities: BTreeSet::from(["storage.provide".into()]) }).unwrap();
+        sourcePolicy.setIdentity(NetworkControlIdentityAssignment { nodeId: "projection-member".into(), roleId: "replica".into() }).unwrap();
         let receiver = Arc::new(MemoryStorageHost::default());
         CoreNodeIdentityStore::new(receiver.clone()).writeNodeId("projection-member".into()).unwrap();
         let receiverSpace = CoreSpaceStore::newNodeLocal(receiver.clone());
@@ -2390,9 +2392,6 @@ mod tests {
         assert!(control
             .nodeHasCapability("peer-member", "network.devices.view", None)
             .expect("default user device view capability must materialize"));
-        assert!(control
-            .nodeHasCapability("peer-member", "chat.read", None)
-            .expect("default user chat read capability must materialize"));
         assert!(!control
             .nodeHasCapability("peer-member", "storage.provide", None)
             .expect("default user storage capability must be evaluated"),
@@ -2420,15 +2419,19 @@ mod tests {
         control
             .admitMember("peer-runner".to_string())
             .expect("administrator must admit a member");
+        control.defineRole(NetworkControlRole {
+            roleId: "history-reader".into(), displayName: "History reader".into(),
+            capabilities: BTreeSet::from(["network.audit.read".into()]),
+        }).unwrap();
         control
             .setIdentity(NetworkControlIdentityAssignment {
                 nodeId: "peer-runner".to_string(),
-                roleId: "auditor".to_string(),
+                roleId: "history-reader".to_string(),
             })
-            .expect("administrator must grant auditor role");
+            .expect("administrator must grant custom history reader role");
         assert!(control
             .nodeHasCapability("peer-runner", "network.audit.read", None)
-            .expect("auditor capability must materialize"));
+            .expect("audit capability must materialize"));
 
         control
             .removeMember("peer-runner".to_string())
@@ -2439,7 +2442,7 @@ mod tests {
 
         assert!(!control
             .nodeHasCapability("peer-runner", "network.audit.read", None)
-            .expect("readmitted member must not regain auditor capability"));
+            .expect("readmitted member must not regain audit capability"));
         assert!(control
             .nodeHasCapability("peer-runner", "network.devices.view", None)
             .expect("readmitted member must receive device view capability"));

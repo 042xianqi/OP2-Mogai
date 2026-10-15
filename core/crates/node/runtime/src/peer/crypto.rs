@@ -176,7 +176,7 @@ pub(super) struct MultiplexedChannel {
     channel: Arc<super::LiveChannel>,
     pending: Mutex<BTreeMap<String, oneshot::Sender<Result<CoreLinkResponse, CoreLinkError>>>>,
     watches: Mutex<BTreeMap<String, mpsc::UnboundedSender<CoreEvent>>>,
-    spaceOffers: Mutex<BTreeSet<String>>,
+    spaceOffers: Mutex<BTreeSet<(String, String)>>,
     failure: StdMutex<Option<CoreLinkError>>,
     activeLeases: AtomicUsize,
     /// Present when this channel also carries the peer's calls back to us: a
@@ -188,6 +188,8 @@ pub(super) struct MultiplexedChannel {
     /// Signals that this channel's reader has stopped, for the accept path that
     /// closes the connection as soon as its serve call returns.
     stopped: tokio::sync::Notify,
+    /// Cancels inbound sessions when the authenticated carrier ends.
+    dispatchStopped: tokio::sync::Notify,
 }
 
 /// Keeps one leased multiplexed channel alive until its operation is released.
@@ -240,6 +242,7 @@ impl MultiplexedChannel {
             activeLeases: AtomicUsize::new(0),
             inboundRequests,
             stopped: tokio::sync::Notify::new(),
+            dispatchStopped: tokio::sync::Notify::new(),
         });
         let reader = multiplexed.clone();
         scheduler.scheduleHostRuntimeAsyncTask("peer-multiplexed-reader", Box::new(move || Box::pin(async move {
@@ -266,14 +269,14 @@ impl MultiplexedChannel {
         ChannelLease::Pooled(self.clone())
     }
 
-    /// Reports whether one pairing credential has already been offered on this channel.
-    pub(super) async fn hasSpaceOffer(&self, pairingId: &str) -> bool {
-        self.spaceOffers.lock().await.contains(pairingId)
+    /// Reports whether this pairing has already offered a return grant for this Space.
+    pub(super) async fn hasSpaceOffer(&self, pairingId: &str, spaceId: &str) -> bool {
+        self.spaceOffers.lock().await.contains(&(pairingId.to_string(), spaceId.to_string()))
     }
 
-    /// Records that one pairing credential was accepted by the remote Space endpoint.
-    pub(super) async fn markSpaceOffer(&self, pairingId: &str) {
-        self.spaceOffers.lock().await.insert(pairingId.to_string());
+    /// Records a scoped offer so a surviving connection reoffers after a Space merge.
+    pub(super) async fn markSpaceOffer(&self, pairingId: &str, spaceId: &str) {
+        self.spaceOffers.lock().await.insert((pairingId.to_string(), spaceId.to_string()));
     }
 
     /// Sends one correlated Link request and waits for its matching response.
@@ -282,6 +285,7 @@ impl MultiplexedChannel {
         let (sender, receiver) = oneshot::channel();
         {
             let mut pending = self.pending.lock().await;
+            if pending.contains_key(&key) { return Err(error("Link request correlation is already in flight")); }
             pending.insert(key.clone(), sender);
         }
         if let Err(error) = self.channel.send(PeerMessage::Request(request)).await {
@@ -351,6 +355,8 @@ impl MultiplexedChannel {
         let drained = std::mem::take(&mut *pending);
         for (_, sender) in drained { let _ = sender.send(Err(error.clone())); }
         self.watches.lock().await.clear();
+        self.inboundRequests.lock().unwrap().take();
+        self.dispatchStopped.notify_one();
     }
 
     /// Returns the terminal channel error or a new local error.
@@ -389,25 +395,19 @@ impl MultiplexedChannel {
 
     /// Answers the peer's calls while this reader keeps the other direction
     /// flowing, and flushes the watch events this side owes it.
-    async fn dispatchLoop(self: Arc<Self>, mut side: super::dispatch::InboundSide, mut requests: mpsc::UnboundedReceiver<CoreLinkRequest>) {
-        enum Item { Request(CoreLinkRequest), Event(CoreLinkResponse) }
-        loop {
-            let item = if side.hasWatches() {
-                tokio::select! {
-                    request = requests.recv() => request.map(Item::Request),
-                    event = side.nextWatchEvent() => event.map(Item::Event),
-                }
-            } else { requests.recv().await.map(Item::Request) };
-            let Some(item) = item else { return; };
-            let channel = self.channel.channel();
-            // Every business entry re-confirms the channel's authorization: a
-            // revocation must not be bypassed by a connection that is already open.
-            if let Err(error) = side.validate(&channel) { self.fail(error).await; return; }
-            let response = match item {
-                Item::Event(event) => event,
-                Item::Request(request) => side.answer(&channel, request).await,
-            };
-            if let Err(error) = self.channel.send(PeerMessage::Response(response)).await { self.fail(error).await; return; }
+    async fn dispatchLoop(self: Arc<Self>, side: super::dispatch::InboundSide, requests: mpsc::UnboundedReceiver<CoreLinkRequest>) {
+        // Dropping InboundSide also terminates its open Watch/Push sessions.
+        // A dispatcher may be awaiting a backpressured Push item when the reader
+        // ends, so closing only the request queue is not sufficient.
+        tokio::select! {
+            _ = self.dispatchStopped.notified() => {},
+            result = super::dispatch::serveIncoming(
+                side, self.channel.channel(),
+                futures_util::stream::unfold(requests, |mut requests| async move {
+                    requests.recv().await.map(|request| (Ok(PeerMessage::Request(request)), requests))
+                }),
+                |message| self.channel.send(message),
+            ) => if let Err(error) = result { self.fail(error).await; },
         }
     }
 
