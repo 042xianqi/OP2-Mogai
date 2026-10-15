@@ -53,7 +53,9 @@ jobs:
 
       - name: Install built-in workflow plugin dependencies
         working-directory: plugins/packages/buildin/workflow
-        run: corepack pnpm install --frozen-lockfile
+        run: |
+          corepack enable pnpm
+          corepack pnpm install --frozen-lockfile
 
       - name: Install and check Theme Studio
         working-directory: tools/theme/studio
@@ -76,6 +78,12 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
           targets: wasm32-unknown-unknown
+
+      - name: Generate Dart proxy artifacts
+        run: |
+          cargo check --manifest-path core/crates/proxy/local/Cargo.toml --quiet
+          test -s apps/flutter/app/lib/core/proxy/generated/CoreProxyClients.g.dart
+          test -s apps/flutter/app/lib/core/proxy/generated/CoreProxyModels.g.dart
 
       - name: Install Flutter bridge locked wasm-bindgen CLI
         run: |
