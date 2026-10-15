@@ -94,12 +94,12 @@ pub(crate) fn saveRecord(service: &dyn NodeSpaceContext, path: &str, id: &str, r
         profile: record.profile.clone(), source: if active(&record.request.status) { record.source.clone() } else {
             // A terminal request is an identity/membership receipt, not another
             // replica of the applicant's profiles, topology and policy log.
-            PeerSpaceSnapshot { space: record.source.space.clone(), deviceProfiles: Vec::new(), topology: Vec::new(), controlOperations: Vec::new() }
+            PeerSpaceSnapshot { space: record.source.space.clone(), deviceProfiles: Vec::new(), topology: Vec::new(), controlOperations: Vec::new(), departures: Vec::new() }
         }, unavailableSince: record.unavailableSince,
         approvedDecision: record.approvedDecision, decisionRevision: record.decisionRevision,
         cancelRequested: record.cancelRequested,
         accepted: record.accepted.as_ref().map(|accepted| Box::new(PeerSpaceJoin {
-            space: accepted.space.clone(), deviceProfiles: Vec::new(), topology: Vec::new(), controlOperations: Vec::new(),
+            space: accepted.space.clone(), deviceProfiles: Vec::new(), topology: Vec::new(), controlOperations: Vec::new(), departures: Vec::new(),
         })),
     };
     store(service).putRecord(path, id, &durable)
@@ -146,8 +146,8 @@ pub(crate) fn admissionCommitted(service: &dyn NodeSpaceContext, record: &Record
         operation.entityId == id && operation.originDeviceId == reviewer
             && NetworkControlCommandRecord::deserialize(&operation.payload).is_ok_and(|command| {
                 command.spaceId == record.targetSpaceId && command.issuerNodeId == operation.originDeviceId
-                    && matches!(command.command, NetworkControlCommand::AdmitSpace { sourceSpaceId, nodeIds }
-                        if sourceSpaceId == record.sourceSpaceId && nodeIds == members)
+                    && matches!(command.command, NetworkControlCommand::AdmitSpace { sourceSpaceId, identities }
+                        if sourceSpaceId == record.sourceSpaceId && identities.keys().cloned().collect::<BTreeSet<_>>() == members)
             })
     }))
 }
@@ -293,6 +293,10 @@ pub(crate) fn applyRemovedMemberLocalEffects(service: &dyn NodeSpaceContext, ope
     for operation in operations {
         let Ok(record) = NetworkControlCommandRecord::deserialize(&operation.payload) else { continue };
         if record.spaceId != spaceId { continue; }
+        if matches!(record.command, NetworkControlCommand::LeaveSpace)
+            && record.issuerNodeId != local && !state.memberNodeIds.contains(&record.issuerNodeId) {
+            removed.push(record.issuerNodeId.clone());
+        }
         if let NetworkControlCommand::RemoveMember { nodeId, revokedIncarnation } = &record.command {
             // The local device's own removal retires the whole Space separately,
             // and a removal the replayed policy already superseded is inert.
@@ -413,6 +417,18 @@ pub(crate) fn retireRemovedLocalDevice(service: &dyn NodeSpaceContext, keepPeer:
 /// with approval mutations so a decision cannot restore the Space being left.
 pub(crate) fn leave(service: &dyn NodeSpaceContext) -> Result<CoreSpace, String> {
     let _lock = MUTATION.lock().map_err(|e| e.to_string())?;
+    leaveLocked(service)
+}
+
+/// A crash can land between persisting the exit and switching the local Space.
+/// Finish only that committed transition; historical exits never undo admission.
+pub(crate) fn recoverLocalDeparture(service: &dyn NodeSpaceContext) -> Result<(), String> {
+    let _lock = MUTATION.lock().map_err(|e| e.to_string())?;
+    if service.networkControlStore().committedLocalDeparture()?.is_some() { leaveLocked(service)?; }
+    Ok(())
+}
+
+fn leaveLocked(service: &dyn NodeSpaceContext) -> Result<CoreSpace, String> {
     // The retired single-device approval schema has no readers or active
     // requests. Explicit local exit deletes it without parsing or migration,
     // before allocating the new Space's state on bounded storage.
@@ -426,27 +442,23 @@ pub(crate) fn leave(service: &dyn NodeSpaceContext) -> Result<CoreSpace, String>
             service.storage().delete(path, false).map_err(|e| e.to_string())?;
         }
     }
+    // Retire the old Space's application receipts before allocating its exit
+    // receipt and replacement identity on bounded storage. None can belong to
+    // the fresh Space, whose id has not been minted yet.
+    for path in [INBOUND, INBOX] {
+        for id in store(service).records::<Record>(path)?.into_keys() {
+            store(service).deleteRecord(RESULTS, &id)?;
+            store(service).deleteRecord(path, &id)?;
+        }
+    }
+    for (id, record) in store(service).records::<Record>(OUTBOUND)? {
+        if !active(&record.request.status) { store(service).deleteRecord(OUTBOUND, &id)?; }
+    }
+    space_departure::prepare(service)?;
     let space = service.spaceStore().leave()?;
     service.spaceStore().pruneNodeLocalProjection()?;
     service.networkControlStore().pruneNodeLocalProjection()?;
     service.networkControlStore().initializeCurrentSpace()?;
-    // Old target-Space submissions cannot be replayed in the new Space. Retire
-    // their local review state rather than carrying complete source snapshots
-    // into every later admission. Pairing, policy audit and business data stay.
-    for path in [INBOUND, INBOX] {
-        for (id, record) in store(service).records::<Record>(path)? {
-            if record.targetSpaceId != space.spaceId {
-                store(service).deleteRecord(RESULTS, &id)?;
-                store(service).deleteRecord(path, &id)?;
-            }
-        }
-    }
-    for (id, record) in store(service).records::<Record>(OUTBOUND)? {
-        if !active(&record.request.status) && record.targetSpaceId != space.spaceId
-            && record.sourceSpaceId != space.spaceId {
-            store(service).deleteRecord(OUTBOUND, &id)?;
-        }
-    }
     // The pairing world resets with the Space: this device takes a new pairing
     // generation. A removal still in flight revokes the generation it was
     // issued against, so it can never match the credentials this device pairs
@@ -484,6 +496,7 @@ pub(crate) async fn request(service: &dyn NodeSpaceContext, deviceId: String) ->
     }
     let snapshot: PeerSpaceSnapshot = callPeerSpace(service, &deviceId, "snapshot", CoreValue::Null).await?;
     if !snapshot.space.members.contains(&deviceId) { return Err("Target is not in its advertised Space".into()); }
+    space_departure::observe(service, &deviceId, &snapshot.departures, &snapshot.controlOperations)?;
     let source = peerSpaceSnapshot(service)?;
     let local = source.space.clone();
     let localId = service.localNodeId();
@@ -643,6 +656,7 @@ pub(crate) fn receive(service: &dyn NodeSpaceContext, peer: &str, request: CoreC
         if !cancellation && input.sourceSpaceId == current.spaceId {
             return Err("Join request must merge a distinct source Space, not the target itself".into());
         }
+        space_departure::observe(service, peer, &[], &input.source.controlOperations)?;
         let mut records = store(service).records::<Record>(INBOUND)?;
         if let Some(old) = records.get(&input.requestId) {
             if old.request.applicantDeviceId != peer || old.targetSpaceId != input.targetSpaceId
@@ -868,7 +882,7 @@ fn claimDecision(service: &dyn NodeSpaceContext, origin: &str, decision: Decisio
     Ok(Claim { record, current: PeerSpaceJoin { space: current,
         deviceProfiles: service.spaceStore().deviceProfilesForCurrentSpace()?,
         topology: service.spaceStore().topologyRecords()?.into_values().collect(),
-        controlOperations: service.networkControlStore().currentSpaceOperations()? } })
+        controlOperations: service.networkControlStore().currentSpaceOperations()?, departures: Vec::new() } })
 }
 fn completeDecision(service: &dyn NodeSpaceContext, origin: &str, outcome: Outcome, current: CoreSpace) -> Result<Record, String> {
             let mut record = load(service, INBOUND, &outcome.decision.requestId)?;
@@ -882,8 +896,8 @@ fn completeDecision(service: &dyn NodeSpaceContext, origin: &str, outcome: Outco
                 let operation = outcome.admission.as_ref().ok_or("Approval has no admission operation")?;
                 let command: NetworkControlCommandRecord = NetworkControlCommandRecord::deserialize(&operation.payload).map_err(|e| e.to_string())?;
                 if command.spaceId != record.targetSpaceId || command.issuerNodeId != origin
-                    || !matches!(command.command, NetworkControlCommand::AdmitSpace { ref sourceSpaceId, ref nodeIds }
-                        if sourceSpaceId == &record.sourceSpaceId && nodeIds == &record.source.space.members.iter().cloned().collect()) {
+                    || !matches!(command.command, NetworkControlCommand::AdmitSpace { ref sourceSpaceId, ref identities }
+                        if sourceSpaceId == &record.sourceSpaceId && identities.keys().cloned().collect::<BTreeSet<_>>() == record.source.space.members.iter().cloned().collect()) {
                     return Err("Approval operation is not this reviewer's admission for this applicant".into());
                 }
                 let members = record.source.space.members.iter().cloned().collect();
@@ -951,8 +965,18 @@ pub(crate) async fn decide(service: &dyn NodeSpaceContext, id: String, version: 
             CoreSpaceStore::validateSpaceProfiles(&claim.record.source.space, &claim.record.source.deviceProfiles)?;
             service.spaceStore().importDeviceProfiles(claim.record.source.deviceProfiles.clone())?;
             service.spaceStore().importTopologyRecords(claim.record.source.topology.clone())?;
+            // Select initial identities from the approved immutable profiles;
+            // policy persistence and replay only see the generic assignment map.
+            let profiles = &claim.record.source.deviceProfiles;
+            let identities = claim.record.source.space.members.iter()
+                .map(|nodeId| {
+                    let profile = profiles.iter().find(|profile| &profile.nodeId == nodeId)
+                        .ok_or_else(|| format!("Space snapshot is missing a member profile: {nodeId}"))?;
+                    Ok((nodeId.clone(), if profile.coreVersion.is_some() { "user" } else { "edge" }.into()))
+                })
+                .collect::<Result<_, String>>()?;
             let operation = service.networkControlStore().admitSpaceForReview(claim.record.sourceSpaceId.clone(),
-                claim.record.source.space.members.iter().cloned().collect(), &format!("{id}-{version}"))?;
+                identities, &format!("{id}-{version}"))?;
             joined.members.extend(claim.record.source.space.members.clone());
             joined.members.sort();
             joined.members.dedup();

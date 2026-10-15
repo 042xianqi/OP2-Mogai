@@ -2885,7 +2885,10 @@ impl PreferencesDataStore {
             .lock()
             .expect("PreferencesDataStore transaction mutex must not be poisoned");
         self.loadUnlocked()?;
-        self.migrateSchemaUnlocked()?;
+        // Validate/migrate in memory. Publishing a schema-only intermediate
+        // file would leave a broken Space record if the complete write fails.
+        let mut migrated = self.loadedPreferences().expect("replacement snapshot loaded");
+        self.migratePreferencesToCurrentSchema(&mut migrated)?;
         if let Some(schema) = &self.schema {
             preferences.set(&Self::schemaVersionKey(), schema.currentVersion);
         }

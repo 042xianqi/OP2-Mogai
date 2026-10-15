@@ -95,7 +95,9 @@ fn node_from_storage(storage: Arc<Storage>) -> (Arc<Storage>, Arc<EdgePeerRouter
         runtimeStorageHost: Some(storage.clone()), tcpHost: Some(Arc::new(NativeTcpHost)),
         hostRuntimeTaskSchedulerHost: Some(Arc::new(NativeHostRuntimeTaskSchedulerHost)), ..HostManager::default()
     });
-    let peer = HostRuntimePeerService::new(host.clone(), &router, operit_link::protocol::LinkDeviceInfo { platform: "test".into(), model: "test".into() , pairingIncarnation: None }).unwrap();
+    let peer = crate::peer::createPeerService(host.clone(), &router,
+        operit_link::protocol::LinkDeviceInfo { platform: "test".into(), model: "test".into(), pairingIncarnation: None },
+        operit_node_runtime::HostRuntimePeerService::PeerRuntimeLimits::default()).unwrap();
     let space = NodeSpaceService::new(storage.clone(), peer.clone()).unwrap();
     space.initialize(CoreSpaceDeviceProfile { nodeId: id, displayName: if bounded { "ESP32-2432S028" } else { "HAN-DESKTOP (Windows)" }.into(), userName: String::new(), platform: if bounded { "esp32" } else { "windows" }.into(), model: if bounded { "ESP32-2432S028" } else { "Windows desktop" }.into(), coreVersion: None, pairingIncarnation: None, updatedAt: 1 }).unwrap();
     router.installSpace(space.clone()).unwrap();
@@ -278,7 +280,7 @@ async fn approval_retry_recovers_each_partial_write_without_duplicate_admission(
             assert_eq!(applicant.refreshDeviceSpaceJoin(request.requestId).await.unwrap().status, SpaceJoinStatus::Joined, "failure point {failure}");
             let admissions = gateway.networkControlStore().currentSpaceOperations().unwrap().into_iter().filter(|operation| {
                 let record: operit_store::NetworkControlStore::NetworkControlCommandRecord = serde_json::from_value(operation.payload.clone()).unwrap();
-                matches!(record.command, operit_store::NetworkControlStore::NetworkControlCommand::AdmitSpace { nodeIds, .. } if nodeIds.contains(&applicant_id))
+                matches!(record.command, operit_store::NetworkControlStore::NetworkControlCommand::AdmitSpace { identities, .. } if identities.contains_key(&applicant_id))
             }).count();
             assert_eq!(admissions, 1, "failure point {failure} appended duplicate admissions");
             // Reopen fresh storage identity: no process-shared store caches.
@@ -307,6 +309,7 @@ mod core_edge {
     use operit_store::CoreSpaceStore::CoreSpaceStore;
     use operit_store::NetworkControlStore::NetworkControlIdentityAssignment;
     use std::time::Duration;
+
 
     static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -509,7 +512,7 @@ mod core_edge {
             traffic: Mutex::default(),
         });
         let host = host(storage.clone());
-        let peers = HostRuntimePeerService::new(
+        let peers = crate::peer::createPeerService(
             host.clone(),
             &router,
             operit_link::protocol::LinkDeviceInfo {
@@ -517,6 +520,7 @@ mod core_edge {
                 model: "ESP32-2432S028".into(),
             pairingIncarnation: None,
         },
+            operit_node_runtime::HostRuntimePeerService::PeerRuntimeLimits::default(),
         )
         .unwrap();
         let service = NodeSpaceService::new(storage.clone(), peers.clone()).unwrap();
@@ -533,12 +537,9 @@ mod core_edge {
         })
             .unwrap();
         inner.installSpace(service.clone()).unwrap();
-        inner
-            .install(Arc::new(
-                EdgeNode::fromHostManager((*host).clone())
-                    .withNodeServices(NodeServices::new(peers.clone())),
-            ))
-            .unwrap();
+        let edge = EdgeNode::fromHostManager((*host).clone())
+            .withNodeServices(NodeServices::new(peers.clone()));
+        inner.install(Arc::new(edge)).unwrap();
         EdgeFixture {
             storage,
             router,
@@ -578,11 +579,8 @@ mod core_edge {
         target_storage: &Arc<Storage>,
         target_id: String,
     ) {
-        let address = PeerStateStore::new(target_storage.clone())
-            .hostConfig()
-            .unwrap()
-            .unwrap()
-            .bindAddress;
+        let config = PeerStateStore::new(target_storage.clone()).hostConfig().unwrap().unwrap();
+        let address = config.bindAddress.clone();
         let pending = source
             .startPairing(
                 PeerEndpoint {
@@ -617,6 +615,211 @@ mod core_edge {
             .unwrap();
         assert!(target.pairingPrompts().unwrap().is_empty());
     }
+    #[tokio::test]
+    async fn code_only_pairing_in_both_directions_keeps_space_approval() {
+        let core = core_node();
+        let edge = edge_node(Arc::new(Storage::default()));
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            start(&core, &edge).await;
+            let core_config = PeerStateStore::new(core.storage.clone()).hostConfig().unwrap().unwrap();
+            let edge_config = PeerStateStore::new(edge.storage.clone()).hostConfig().unwrap().unwrap();
+            // Code confirmation applies in both directions, independently of
+            // discovery. Pairing does not grant Space admission.
+            assert!(!core_config.discoveryEnabled && !edge_config.discoveryEnabled);
+            pair(&edge.peers, &core.peers, &core.storage, core.router.localNodeId()).await;
+            assert_eq!(core.peers.pairedPeers().unwrap().len(), 1);
+            assert_eq!(edge.peers.pairedPeers().unwrap().len(), 1);
+
+            edge.peers.removePairedPeer(&core.router.localNodeId()).await.unwrap();
+            core.peers.removePairedPeer(&edge.service.localNodeId()).await.unwrap();
+
+            // The helper checks wrong-code rejection before confirming with
+            // the Edge's code; both directions use the same shared engine.
+            pair(&core.peers, &edge.peers, &edge.storage, edge.service.localNodeId()).await;
+            assert_eq!(core.peers.pairedPeers().unwrap().len(), 1);
+            assert_eq!(edge.peers.pairedPeers().unwrap().len(), 1);
+            assert_ne!(operit_store::CoreSpaceStore::CoreSpaceStore::new(core.storage.clone()).space().unwrap().spaceId, edge.service.spaceStore().space().unwrap().spaceId);
+            assert_eq!(edge.service.spaceChannelScope(&core.router.localNodeId()).unwrap(), None);
+            let request = core.service.requestDeviceSpaceJoin(edge.service.localNodeId()).await.unwrap();
+            assert_eq!(request.status, SpaceJoinStatus::Pending);
+            assert!(!edge.service.spaceStore().space().unwrap().members.contains(&core.router.localNodeId()));
+        }).await;
+        core.peers.stop().await.unwrap();
+        edge.peers.stop().await.unwrap();
+        outcome.unwrap();
+    }
+
+    /// Fresh devices use upstream confirmation, without revoking other attempts.
+    #[tokio::test]
+    async fn first_pairing_preserves_other_pending_confirmation_attempts() {
+        let _guard = TEST_LOCK.lock().await;
+        for core_initiates in [true, false] {
+            let core = core_node();
+            let edge = fresh_edge();
+            let result = tokio::time::timeout(Duration::from_secs(20), async {
+                start(&core, &edge).await;
+                let (source, target, target_id, storage) = if core_initiates {
+                    (&core.peers, &edge.peers, edge.service.localNodeId(), &edge.storage)
+                } else {
+                    (&edge.peers, &core.peers, core.router.localNodeId(), &core.storage)
+                };
+                let config = PeerStateStore::new(storage.clone()).hostConfig().unwrap().unwrap();
+                let endpoint = PeerEndpoint { nodeId: target_id, address: config.bindAddress };
+                let first = source.startPairing(endpoint.clone(), Some(PeerTransport::Tcp)).await.unwrap();
+                let second = source.startPairing(endpoint, Some(PeerTransport::Tcp)).await.unwrap();
+                let prompts = target.pairingPrompts().unwrap();
+                assert_eq!(prompts.len(), 2);
+                let code = &prompts.iter().find(|p| p.pairingId == first.pairingId).unwrap().confirmationCode;
+                source.finishPairing(&first.pairingId, code).await.unwrap();
+                let retained = target.pairingPrompts().unwrap();
+                assert_eq!(retained.len(), 1, "a first pairing must not run credential revocation");
+                assert_eq!(retained[0].pairingId, second.pairingId);
+                source.cancelPairing(&second.pairingId).await.unwrap();
+                assert_eq!(source.pairedPeers().unwrap().len(), 1);
+                assert_eq!(target.pairedPeers().unwrap().len(), 1);
+            }).await;
+            core.peers.stop().await.unwrap();
+            edge.peers.stop().await.unwrap();
+            result.unwrap();
+        }
+    }
+
+    /// Edge removal follows the same upstream control ledger and pairing generation.
+    #[tokio::test]
+    async fn upstream_control_removal_retires_edge_pairing_before_fresh_pairing() {
+        let _guard = TEST_LOCK.lock().await;
+        let core = core_node();
+        let edge = fresh_edge();
+        let result = tokio::time::timeout(Duration::from_secs(20), async {
+            start(&core, &edge).await;
+            let core_id = core.router.localNodeId();
+            let edge_id = edge.service.localNodeId();
+            let identity = PeerStateStore::new(edge.storage.clone());
+            let previous_generation = identity.pairingIncarnation().unwrap();
+            pair(&edge.peers, &core.peers, &core.storage, core_id.clone()).await;
+            let request = edge.service.requestDeviceSpaceJoin(core_id.clone()).await.unwrap();
+            core.service.decideDeviceSpaceJoin(request.requestId.clone(), request.assignmentVersion, true).await.unwrap();
+            assert_eq!(edge.service.refreshDeviceSpaceJoin(request.requestId).await.unwrap().status, SpaceJoinStatus::Joined);
+            let former_space = core.service.deviceSpace().unwrap().spaceId;
+            assert_eq!(edge.service.spaceStore().space().unwrap().spaceId, former_space);
+
+            // Deliver the upstream authority log at its authenticated receiver
+            // boundary. Notification transport is best effort; receipt, replay,
+            // pairing cleanup and generation renewal share the upstream handler.
+            let control = operit_store::NetworkControlStore::NetworkControlStore::new(core.storage.clone()).unwrap();
+            control.removeMember(edge_id.clone()).unwrap();
+            let operations = control.currentSpaceOperations().unwrap();
+            operit_node_runtime::NodeSpaceService::acceptSpaceControlCall(
+                edge.service.as_ref(), &core_id,
+                CoreCallRequest::new("remove-edge", NODE_SPACE_CONTROL_TARGET, "exchange",
+                    toCoreValue(operations).unwrap()),
+            ).unwrap();
+            core.peers.removePairedPeer(&edge_id).await.unwrap();
+            assert!(core.peers.pairedPeers().unwrap().is_empty());
+            assert!(edge.peers.pairedPeers().unwrap().is_empty());
+            assert_ne!(edge.service.spaceStore().space().unwrap().spaceId, former_space);
+            let next_generation = identity.pairingIncarnation().unwrap();
+            assert!(next_generation.is_some());
+            assert_ne!(next_generation, previous_generation);
+
+            pair(&core.peers, &edge.peers, &edge.storage, edge_id.clone()).await;
+            assert_eq!(core.peers.pairedPeers().unwrap()[0].pairingIncarnation, next_generation);
+            assert_eq!(edge.service.spaceChannelScope(&core_id).unwrap(), None);
+            assert_eq!(core.service.requestDeviceSpaceJoin(edge_id).await.unwrap().status, SpaceJoinStatus::Pending);
+        }).await;
+        core.peers.stop().await.unwrap();
+        edge.peers.stop().await.unwrap();
+        result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn one_sided_unpair_allows_code_verified_replacement_without_space_admission() {
+        const RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH: &str = "runtime/link_access/inbound_sessions.preferences.json";
+        const RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH: &str = "runtime/link_access/outbound_sessions.preferences.json";
+        let _guard = TEST_LOCK.lock().await;
+        for core_initiates in [true, false] {
+            for reverse_original in [false, true] {
+                let core = core_node();
+                let edge = fresh_edge();
+                start(&core, &edge).await;
+                let outcome = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                    let core_id = core.router.localNodeId();
+                    let edge_id = edge.service.localNodeId();
+                    let (source, target, source_id, target_id, target_storage) = if core_initiates {
+                        (&core.peers, &edge.peers, core_id.clone(), edge_id.clone(), &edge.storage)
+                    } else {
+                        (&edge.peers, &core.peers, edge_id.clone(), core_id.clone(), &core.storage)
+                    };
+                    if reverse_original {
+                        let source_storage = if core_initiates { &core.storage } else { &edge.storage };
+                        pair(target, source, source_storage, source_id.clone()).await;
+                    } else {
+                        pair(source, target, target_storage, target_id.clone()).await;
+                    }
+                    let stale_source_storage = reopened(if core_initiates { &core.storage } else { &edge.storage });
+                    let core_space = core.service.deviceSpace().unwrap();
+                    let edge_space = edge.service.spaceStore().space().unwrap();
+                    let credentials = |path: &str| storedRecords(&target_storage, path);
+                    let old_inbound = credentials(RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH);
+                    let old_outbound = credentials(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH);
+                    source.removePairedPeer(&target_id).await.unwrap();
+                    assert!(source.pairedPeers().unwrap().is_empty());
+                    assert_eq!(target.pairedPeers().unwrap().len(), 1, "unpair remains local-only");
+                    let config = PeerStateStore::new(target_storage.clone()).hostConfig().unwrap().unwrap();
+                    let begin = || source.startPairing(PeerEndpoint {
+                        nodeId: target_id.clone(), address: config.bindAddress.clone(),
+                    }, Some(PeerTransport::Tcp));
+                    let cancelled = begin().await.unwrap();
+                    source.cancelPairing(&cancelled.pairingId).await.unwrap();
+                    assert!(source.finishPairing(&cancelled.pairingId, "123456").await.is_err());
+                    assert_eq!(credentials(RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH), old_inbound);
+                    assert_eq!(credentials(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH), old_outbound);
+                    let pending = begin().await.unwrap();
+                    let code = target.pairingPrompts().unwrap().into_iter()
+                        .find(|p| p.pairingId == pending.pairingId).unwrap().confirmationCode;
+                    let wrong = if code == "000000" { "111111" } else { "000000" };
+                    assert!(source.finishPairing(&pending.pairingId, wrong).await.is_err());
+                    assert_eq!(credentials(RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH), old_inbound);
+                    assert_eq!(credentials(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH), old_outbound);
+                    source.finishPairing(&pending.pairingId, &code).await.unwrap();
+                    let new_inbound = credentials(RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH);
+                    assert!(new_inbound.contains_key(&pending.pairingId));
+                    assert!(old_inbound.keys().filter(|k| k.as_str() != "__operit_preferences_schema_version")
+                        .all(|key| !new_inbound.contains_key(key)));
+                    assert!(credentials(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH).values()
+                        .all(|v| !v.to_string().contains(&source_id)));
+                    let peers = target.pairedPeers().unwrap();
+                    assert_eq!(peers.len(), 1);
+                    assert!(peers[0].inbound && !peers[0].outbound);
+                    assert!(target.pairingPrompts().unwrap().is_empty());
+                    assert!(source.finishPairing(&pending.pairingId, &code).await.is_err(), "no replay");
+                    assert_eq!(core.service.deviceSpace().unwrap(), core_space);
+                    assert_eq!(edge.service.spaceStore().space().unwrap(), edge_space);
+                    // A restarted copy of the previous initiator still holding
+                    // the old secret cannot authenticate after replacement.
+                    if !reverse_original {
+                        if core_initiates {
+                            let stale = core_node_with_storage(stale_source_storage);
+                            assert!(stale.service.requestDeviceSpaceJoin(edge_id.clone()).await.is_err());
+                            stale.peers.stop().await.unwrap();
+                        } else {
+                            let stale = edge_node(stale_source_storage);
+                            assert!(stale.service.requestDeviceSpaceJoin(core_id.clone()).await.is_err());
+                            stale.peers.stop().await.unwrap();
+                        }
+                    }
+                    let join = if core_initiates {
+                        core.service.requestDeviceSpaceJoin(edge_id).await.unwrap()
+                    } else { edge.service.requestDeviceSpaceJoin(core_id).await.unwrap() };
+                    assert_eq!(join.status, SpaceJoinStatus::Pending, "replacement is not Space approval");
+                }).await;
+                core.peers.stop().await.unwrap();
+                edge.peers.stop().await.unwrap();
+                outcome.unwrap();
+            }
+        }
+    }
+
     fn assert_no_replica(core: &CoreFixture, edge: &EdgeFixture) {
         assert!(
             core.application.0.lock().unwrap().is_empty(),
@@ -725,7 +928,7 @@ mod core_edge {
             for (origin, space, expected) in [
                 (
                     "forged-origin".to_string(),
-                    core.service.deviceSpace().unwrap().spaceId,
+                    operit_store::CoreSpaceStore::CoreSpaceStore::new(core.storage.clone()).space().unwrap().spaceId,
                     "PEER_DIRECT_CALL_REQUIRED",
                 ),
                 (
@@ -790,9 +993,14 @@ mod core_edge {
             assert_eq!(core.service.deviceSpace().unwrap(), former, "the remote Core retains its original group");
             assert!(!edge.service.spaceStore().deviceProfiles().unwrap().contains_key(&core_id));
             let withdrawn = core.service.requestDeviceSpaceJoin(edge_id.clone()).await.unwrap();
+            // Requesting the new Space fetches the peer's durable exit receipt.
+            // The old Space loses only Edge before this new admission is approved.
+            let retained = core.service.deviceSpace().unwrap();
+            assert_eq!(retained.spaceId, former.spaceId);
+            assert_eq!(retained.members, vec![core_id.clone()]);
             assert_eq!(core.service.cancelDeviceSpaceJoin(withdrawn.requestId.clone()).await.unwrap().status, SpaceJoinStatus::Cancelled);
             assert!(edge.service.decideDeviceSpaceJoin(withdrawn.requestId, withdrawn.assignmentVersion, true).await.is_err());
-            assert_eq!(core.service.deviceSpace().unwrap(), former, "withdrawal changed the applicant group");
+            assert_eq!(core.service.deviceSpace().unwrap(), retained, "withdrawal changed the applicant group");
             assert_eq!(edge.service.spaceStore().space().unwrap(), singleton, "withdrawal admitted the applicant");
             let request = core.service.requestDeviceSpaceJoin(edge_id.clone()).await.unwrap();
             let before = edge.service.spaceStore().space().unwrap();
@@ -847,7 +1055,7 @@ mod core_edge {
             let profiles: Vec<CoreSpaceDeviceProfile> = serde_json::from_value(record["source"]["deviceProfiles"].clone()).unwrap();
             edge.service.spaceStore().importDeviceProfiles(profiles).unwrap();
             edge.service.networkControlStore().admitSpaceForReview(source_space.spaceId.clone(),
-                source_space.members.iter().cloned().collect(), &format!("{}-{}", request.requestId, request.assignmentVersion)).unwrap();
+                source_space.members.iter().map(|node| (node.clone(), "user".into())).collect(), &format!("{}-{}", request.requestId, request.assignmentVersion)).unwrap();
             let mut joined = edge.service.spaceStore().space().unwrap();
             joined.members.extend(source_space.members); joined.members.sort(); joined.members.dedup();
             joined.spaceRevision = record["decisionRevision"].as_i64().unwrap();
@@ -909,6 +1117,11 @@ mod core_edge {
             let former = core.service.deviceSpace().unwrap();
             let singleton = edge.service.leaveDeviceSpace().unwrap();
             let request = core.service.requestDeviceSpaceJoin(edge_id.clone()).await.unwrap();
+            // Fetching the new Space also delivers the Edge's departure from
+            // the former Space. Cancelling must preserve that received fact.
+            let retained = core.service.deviceSpace().unwrap();
+            assert_eq!(retained.spaceId, former.spaceId);
+            assert_eq!(retained.members, vec![core_id.clone()]);
             let core_credentials = core.peers.pairedPeers().unwrap();
             let edge_credentials = edge.peers.pairedPeers().unwrap();
             edge.peers.stop().await.unwrap();
@@ -932,7 +1145,7 @@ mod core_edge {
             assert!(!edge.service.incomingDeviceSpaceJoins().await.unwrap().iter()
                 .any(|saved| saved.requestId == request.requestId));
             assert!(edge.service.decideDeviceSpaceJoin(request.requestId, request.assignmentVersion, true).await.is_err());
-            assert_eq!(core.service.deviceSpace().unwrap(), former);
+            assert_eq!(core.service.deviceSpace().unwrap(), retained);
             assert_eq!(edge.service.spaceStore().space().unwrap(), singleton);
             assert!(!edge.service.spaceStore().deviceProfiles().unwrap().contains_key(&core_id));
             assert_eq!(core.peers.pairedPeers().unwrap(), core_credentials);
@@ -1091,7 +1304,7 @@ mod core_edge {
             assert_eq!(edge.service.spaceChannelScope(&new_id).unwrap(), Some(left.spaceId.clone()));
             assert_eq!(new.service.deviceSpace().unwrap(), edge.service.spaceStore().space().unwrap());
             new.storage.writeBytes("workspaces/large/fixture.bin", &vec![0x5a; 1024 * 1024]).unwrap();
-            assert!(!edge.storage.exists("runtime/link_access/space_merge_review_results.preferences.json").unwrap(),
+            assert!(storedRecords(&edge.storage, "runtime/link_access/space_merge_review_results.preferences.json").is_empty(),
                 "local approval duplicated its admission operation instead of reusing the policy log");
             print_size("new-core-joined", &edge.storage);
             new.sync.synchronizeOnce().await.unwrap();
@@ -1143,6 +1356,24 @@ mod core_edge {
                 .networkControlStore()
                 .nodeHasCapability(&edge_id, "storage.provide", None)
                 .unwrap());
+            assert_eq!(core.service.deviceSpaceControl().unwrap().deviceIdentityIds[&edge_id], "edge");
+            let space_id = core.service.deviceSpace().unwrap().spaceId;
+            let core_preferences = operit_store::DevicePreferencesStore::DevicePreferencesStore::new(core.storage.clone());
+            let edge_preferences = operit_store::DevicePreferencesStore::DevicePreferencesStore::new(edge.storage.clone());
+            core.service.setDevicePreference(edge_id.clone(), "volume".into(), Some(serde_json::json!(25))).unwrap();
+            core.sync.synchronizeOnce().await.unwrap();
+            assert_eq!(edge_preferences.read(&space_id, &edge_id).unwrap().values()["volume"], serde_json::json!(25));
+            edge_preferences.set(&space_id, &edge_id, &edge_id, "brightness", Some(serde_json::json!(75))).unwrap();
+            edge.service.synchronizePreferences().await.unwrap();
+            assert_eq!(core_preferences.read(&space_id, &edge_id).unwrap().values()["brightness"], serde_json::json!(75));
+            core.service.setDevicePreference(edge_id.clone(), "volume".into(), None).unwrap();
+            edge.service.synchronizePreferences().await.unwrap();
+            assert!(!edge_preferences.read(&space_id, &edge_id).unwrap().values().contains_key("volume"));
+            // A member cannot fetch the configuration of a third device.
+            let unrelated = core_preferences.read(&space_id, "unrelated-device").unwrap();
+            let denied = edge.service.callNode(core_id.clone(), CoreCallRequest::new("foreign-preferences",
+                operit_node_runtime::NodeSpaceService::NODE_SPACE_CONTROL_TARGET, "exchangePreferences", toCoreValue(unrelated).unwrap())).await;
+            assert!(denied.result.is_err());
             // The normal node really has a file much larger than the board's budget.
             // Its production scanner creates a blob/log, but none may reach Edge.
             core.storage
@@ -1151,7 +1382,7 @@ mod core_edge {
             core.sync.synchronizeOnce().await.unwrap();
             assert!(!core.storage.list("runtime/sync").unwrap().is_empty());
             assert_no_replica(&core, &edge);
-            let space_id = core.service.deviceSpace().unwrap().spaceId;
+            let space_id = operit_store::CoreSpaceStore::CoreSpaceStore::new(core.storage.clone()).space().unwrap().spaceId;
             for method in [
                 "syncClock",
                 "syncOperationsSince",
@@ -1237,10 +1468,14 @@ mod core_edge {
                 .importDeviceProfiles(vec![profile])
                 .unwrap();
             // Even an accidental role grant cannot install the absent Core store.
+            core.service.defineDeviceSpaceRole(operit_store::NetworkControlStore::NetworkControlRole {
+                roleId: "replica".into(), displayName: "Test replica".into(),
+                capabilities: std::collections::BTreeSet::from(["storage.provide".into()]),
+            }).unwrap();
             core.service
                 .setDeviceSpaceIdentity(NetworkControlIdentityAssignment {
                     nodeId: edge_id.clone(),
-                    roleId: "storage".into(),
+                    roleId: "replica".into(),
                 })
                 .unwrap();
             core.sync.synchronizeOnce().await.unwrap();
@@ -1444,4 +1679,44 @@ mod core_edge {
         edge.peers.stop().await.unwrap();
         result.unwrap();
     }
+    /// Two bounded endpoints have no Core replication worker. The remaining
+    /// endpoint must still discover an exit over its existing one-way pairing.
+    #[tokio::test]
+    async fn bounded_endpoint_learns_its_paired_neighbors_exit_without_a_core() {
+        let _guard = TEST_LOCK.lock().await;
+        operit_host_api::HostManager::setDefaultHostRuntimeTaskSchedulerHost(Arc::new(NativeHostRuntimeTaskSchedulerHost));
+        let a = fresh_edge();
+        let c = fresh_edge();
+        a.peers.startListening(&[PeerTransport::Tcp]).await.unwrap();
+        c.peers.startListening(&[PeerTransport::Tcp]).await.unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(20), async {
+            let a_id = a.service.localNodeId();
+            let c_id = c.service.localNodeId();
+            pair(&a.peers, &c.peers, &c.storage, c_id.clone()).await;
+            let join = a.service.requestDeviceSpaceJoin(c_id.clone()).await.unwrap();
+            c.service.decideDeviceSpaceJoin(join.requestId.clone(), join.assignmentVersion, true).await.unwrap();
+            a.service.refreshDeviceSpaceJoin(join.requestId).await.unwrap();
+            let original = a.service.spaceStore().space().unwrap().spaceId;
+            let own = c.service.leaveDeviceSpace().unwrap();
+            assert_ne!(own.spaceId, original);
+            let reopened = NodeSpaceService::new(c.storage.clone(), c.peers.clone()).unwrap();
+            // C was only the pairing receiver; its caller A discovers and acks
+            // the receipt without C gaining a reverse pairing or storage grant.
+            reopened.synchronizePreferences().await.unwrap();
+            a.service.synchronizePreferences().await.unwrap();
+            assert_eq!(a.service.spaceStore().space().unwrap().spaceId, original);
+            assert_eq!(a.service.spaceStore().space().unwrap().members, vec![a_id.clone()]);
+            let state = a.service.networkControlStore().currentState().unwrap();
+            assert!(!state.memberNodeIds.contains(&c_id));
+            assert_ne!(state.deviceIdentityIds.get(&a_id).map(String::as_str), Some("admin"));
+            assert_eq!(reopened.spaceStore().space().unwrap(), own);
+            assert_eq!(storedRecords(&c.storage, "runtime/link_access/space_departures.preferences.json").len(), 0);
+            assert!(a.storage.list("runtime/sync").unwrap().is_empty());
+            assert!(c.storage.list("runtime/sync").unwrap().is_empty());
+        }).await;
+        a.peers.stop().await.unwrap();
+        c.peers.stop().await.unwrap();
+        result.unwrap();
+    }
+
 }

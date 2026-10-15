@@ -2203,7 +2203,7 @@ mod tests {
     fn cli_route_permission_error_keeps_structured_diagnostics() {
         let error = CoreLinkError::withDetails(
             "ROUTE_PERMISSION_DENIED",
-            "Space route chatMessagesFlow requires capability chat.read on caller cli-client",
+            "Space route switch_core target cli-client lacks runtime.execute",
             operit_link::CoreValue::Map(BTreeMap::from([
                 (
                     "subject".to_string(),
@@ -2211,7 +2211,7 @@ mod tests {
                 ),
                 (
                     "requiredCapability".to_string(),
-                    operit_link::CoreValue::String("chat.read".to_string()),
+                    operit_link::CoreValue::String("runtime.execute".to_string()),
                 ),
                 (
                     "callerNodeId".to_string(),
@@ -2226,7 +2226,7 @@ mod tests {
         let message = core_command_error_message(error);
         assert!(message.contains("ROUTE_PERMISSION_DENIED"));
         assert!(message.contains("caller"));
-        assert!(message.contains("chat.read"));
+        assert!(message.contains("runtime.execute"));
         assert!(message.contains("cli-client"));
         assert!(message.contains("windows-owner"));
     }

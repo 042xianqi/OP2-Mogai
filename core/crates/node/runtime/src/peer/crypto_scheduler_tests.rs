@@ -127,3 +127,19 @@ fn failedWatchCloseSchedulingIsReportedWithoutFallback() {
         .contains("scheduler unavailable"));
     scheduler.tasks.lock().unwrap().clear();
 }
+
+
+#[tokio::test]
+async fn duplicate_correlation_does_not_cancel_the_original_request() {
+    let channel = channel(Arc::new(RecordingScheduler::default()));
+    let (sender, receiver) = oneshot::channel();
+    channel.pending.lock().await.insert("call:same-id".into(), sender);
+    let duplicate = channel.exchange(CoreLinkRequest::Call(CoreCallRequest::new(
+        "same-id", "test", "read", CoreValue::Null,
+    ))).await.unwrap_err();
+    assert!(duplicate.message.contains("already in flight"));
+    channel.dispatchResponse(CoreLinkResponse::Call(CoreCallResponse::ok(
+        CoreRequestId("same-id".into()), CoreValue::Null,
+    ))).await;
+    assert!(matches!(receiver.await.unwrap().unwrap(), CoreLinkResponse::Call(CoreCallResponse { result: Ok(CoreValue::Null), .. })));
+}

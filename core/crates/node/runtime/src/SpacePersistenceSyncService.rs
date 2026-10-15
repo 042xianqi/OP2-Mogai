@@ -44,12 +44,14 @@ const PEER_FULL_SYNC_BACKOFF_MAX_MS: i64 = 60_000;
 /// ingredient is visible to the probe. Third-party control operations learned
 /// by projection advance neither clock; the local summary counts them, so the
 /// projecting device pushes relayed authority through its own next full pass.
+/// Device preference changes have a separate revision and wake the same scheduler
+/// without creating business operations.
 #[derive(Clone, Default)]
 struct PeerSyncGate {
     /// Summarized remote clock observed at the last completed full pass.
     lastRemoteClockSummary: Option<String>,
     /// Local synchronized-state summary captured right after the last
-    /// completed pass (journal clock plus projected-operation count).
+    /// completed pass (journal clock, projected operations and device preferences).
     lastLocalStateSummary: Option<String>,
     /// Probe clock from the most recent decision, promoted on pass completion.
     probedClockSummary: Option<String>,
@@ -345,7 +347,9 @@ impl SpacePersistenceSyncService {
                 );
             }
         }
-        let mut errors = Vec::new();
+        let service = crate::RuntimeRemoteLinkService::RuntimeRemoteLinkService::newWithRouter(
+            (*self.state.localRuntime).clone(), self.state.nodeRouter.clone());
+        let mut errors = crate::NodeSpaceService::space_departure::synchronize(&service).await.err().into_iter().collect::<Vec<_>>();
         let localStateSummary = self.localStateSummary().await?;
         let mut cycleDecisions = BTreeMap::<String, bool>::new();
         let membershipBeforeExchange = self.state.spaceStore.space()?.members.into_iter().collect::<BTreeSet<_>>();
@@ -433,6 +437,32 @@ impl SpacePersistenceSyncService {
         let remote = crate::NodeSpaceService::decodeControlExchange(response.result)?;
         control.projectPeerControlOperations(&targetNodeId, &remote)?;
         self.applyRemovedMemberEffects(&remote)?;
+        // Small device-owned preferences are available to every admitted member;
+        // their clocks and payloads are separate from business replica clocks.
+        let preferenceStore = operit_store::DevicePreferencesStore::DevicePreferencesStore::new(self.state.localRuntime.runtimeStorageHost());
+        let preferenceScope = self.state.spaceStore.space()?.spaceId;
+        // Every member receives its own configuration. Storage providers also
+        // exchange the local device's configuration as a backup; lightweight
+        // endpoints must not accumulate other devices' preference files.
+        let mut preferenceNodes = vec![targetNodeId.clone()];
+        if self.storageReplicationAllowed(&targetNodeId)? {
+            preferenceNodes.push(self.state.nodeRouter.localNodeId());
+        }
+        for preferenceNodeId in preferenceNodes {
+            let preferences = preferenceStore.read(&preferenceScope, &preferenceNodeId)?;
+            let request = serviceCallRequest(&self.state.nodeRouter,
+                crate::NodeSpaceService::NODE_SPACE_CONTROL_TARGET, "exchangePreferences",
+                serde_json::to_value(preferences).map_err(|e| e.to_string())?)?;
+            let response = self.state.nodeRouter.callNode(targetNodeId.clone(), request).await;
+            let preferences: operit_store::DevicePreferencesStore::DevicePreferences = decodeCoreResponse(response.result.map_err(|e| e.to_string())?)?;
+            if preferences.spaceId != preferenceScope || preferences.nodeId != preferenceNodeId
+                || self.state.spaceStore.space()?.spaceId != preferenceScope
+                || !control.currentState()?.memberNodeIds.contains(&targetNodeId)
+                || control.nodeIsDisconnected(&targetNodeId)? {
+                return Err("Device preference response scope changed".into());
+            }
+            preferenceStore.merge(&preferences)?;
+        }
         // Admission is not a storage grant. No business RPC, blob transfer or
         // bootstrap reset may run unless both endpoints currently have it.
         if !self.storageReplicationAllowed(&targetNodeId)? { return Ok(()); }
@@ -492,7 +522,7 @@ impl SpacePersistenceSyncService {
 
     /// Summarizes this device's synchronized state for the local-change
     /// trigger: the replication journal clock (journal plus chat storage,
-    /// mirroring the application clock) plus the projected-operation count.
+    /// mirroring the application clock), projected operations and preferences.
     /// Projected operations advance neither clock, so their count is what
     /// makes this device push relayed authority to its peers. Read through
     /// local stores directly: gating must never enter the application
@@ -536,11 +566,12 @@ impl SpacePersistenceSyncService {
         }
         let control = NetworkControlStore::new(storageHost)?;
         Ok(format!(
-            "{}#{}",
+            "{}#{}#{}",
             summarizeSyncClock(
                 &serde_json::to_value(&clock).map_err(|error| error.to_string())?
             ),
-            control.projectionEntryCount()?
+            control.projectionEntryCount()?,
+            operit_store::DevicePreferencesStore::devicePreferencesMutationRevision()
         ))
     }
 
@@ -826,7 +857,7 @@ impl SpacePersistenceSyncService {
             (*self.state.localRuntime).clone(), self.state.nodeRouter.clone());
         service.observePeerSpaceSnapshot(peerNodeId, remote)?;
         self.applyRemovedMemberEffects(&snapshotControlOperations)?;
-        let local = service.peerSpaceSnapshot()?;
+        let local = crate::NodeSpaceService::peerSpaceSnapshotForPeer(&service, peerNodeId)?;
         let remoteSpace: CoreSpace = callRemoteService(
             &self.state.nodeRouter, peerNodeId,
             crate::RuntimeRemoteLinkService::NODE_SPACE_TARGET, "observeSpaceSnapshot",

@@ -243,7 +243,16 @@ impl HostRuntimePeerService {
 // client must not silently acquire authority in a different Space on reconnect.
 fn entryIdentity(service: &HostRuntimePeerService, peer: &str) -> Option<crate::NodeServices::SpaceClientIdentity> {
     service.requirePeerConnectionAllowed(peer).ok()?;
-    let (spaceId, generation) = if let Some(channel) = service.cachedSession(peer) {
+    let (spaceId, generation) = if let Ok(record) = service.outbound(peer) {
+        // An Edge may be the TCP/serial initiator. Its own authenticated pairing
+        // is also an entry once both nodes are admitted; a reverse return grant
+        // is only needed by the receiving side, not by this original sender.
+        if !service.activePeerNodeIds().ok()?.contains(peer) { return None; }
+        let scope = service.router().ok()?.spaceChannelScope(peer).ok()??;
+        let connection = service.cachedSession(peer).map(|channel| format!("session:{}", channel.generation))
+            .unwrap_or_else(|| format!("{:?}:{}", record.transport, record.endpoint));
+        (scope, format!("pairing:{}:{}", record.sessionId, connection))
+    } else if let Some(channel) = service.cachedSession(peer) {
         if !service.sessionScopeAllowed(peer, &channel).ok()? { return None; }
         (channel.returnScope.lock().unwrap().clone()?, format!("session:{}", channel.generation))
     } else {
@@ -253,7 +262,11 @@ fn entryIdentity(service: &HostRuntimePeerService, peer: &str) -> Option<crate::
     };
     Some(crate::NodeServices::SpaceClientIdentity { spaceId, peerNodeId: peer.into(), generation })
 }
-struct SessionSpaceClient { service: HostRuntimePeerService, identity: crate::NodeServices::SpaceClientIdentity }
+#[derive(Clone)]
+struct SessionSpaceClient {
+    service: HostRuntimePeerService,
+    identity: crate::NodeServices::SpaceClientIdentity,
+}
 impl SessionSpaceClient {
     fn route<T>(&self, payload: T, routeKind: RoutedCoreRequestKind) -> Result<RoutedCoreRequest<T>, CoreLinkError> {
         if entryIdentity(&self.service, &self.identity.peerNodeId).as_ref() != Some(&self.identity) {
@@ -286,6 +299,14 @@ fn pushRouteKind(request: &CorePushRequest) -> RoutedCoreRequestKind {
 }
 #[async_trait(?Send)]
 impl CoreLinkSharedClient for SessionSpaceClient {
+    fn nominalBytesPerSecond(&self) -> Option<u32> {
+        let transport = self.service.cachedSession(&self.identity.peerNodeId).map(|channel| channel.raw.transport())
+            .or_else(|| self.service.spaceOutbound(&self.identity.peerNodeId).ok().map(|grant| grant.transport))
+            .or_else(|| self.service.outbound(&self.identity.peerNodeId).ok().and_then(|record| parseTransport(&record.transport).ok()))?;
+        if transport == PeerTransport::Serial { Some(115200 / 10) }
+        else { None }
+    }
+
     async fn call(&self, mut r: CoreCallRequest) -> CoreCallResponse {
         r.requestId = CoreRequestId::new(nextCoreRouteRequestId("edge-ui"));
         let id = r.requestId.clone();
@@ -311,8 +332,18 @@ impl CoreLinkSharedClient for SessionSpaceClient {
         request.requestId = CoreRequestId::new(nextCoreRouteRequestId("edge-push"));
         let kind = pushRouteKind(&request);
         let route = self.route(request, kind)?;
-        self.service.openPush(&self.identity.peerNodeId, route).await
+        let session = self.service.openPush(&self.identity.peerNodeId, route).await?;
+        Ok(Box::new(AdmittedPush { client: self.clone(), session }))
     }
+}
+struct AdmittedPush { client: SessionSpaceClient, session: Box<dyn CoreLinkPushSession> }
+#[async_trait]
+impl CoreLinkPushSession for AdmittedPush {
+    async fn send(&mut self, value: CoreValue) -> Result<(), CoreLinkError> {
+        self.client.route((), RoutedCoreRequestKind::SpaceRoute)?;
+        self.session.send(value).await
+    }
+    async fn close(self: Box<Self>) -> Result<(), CoreLinkError> { self.session.close().await }
 }
 pub(super) fn spaceConnection(service: &HostRuntimePeerService) -> Option<crate::NodeServices::SpaceClientConnection> {
     let candidates: BTreeSet<String> = service.state.sharedSessions.lock().unwrap().keys().cloned()
@@ -582,12 +613,40 @@ mod tests {
             inputRequests: Mutex::default(), inputValues: Arc::new(Mutex::default()), inputCloses: Arc::new(AtomicUsize::new(0)),
         });
         let service=HostRuntimePeerService { state:Arc::new(State { limits:PeerRuntimeLimits::default(),
-            host:Arc::new(HostManager {runtimeStorageHost:Some(storage.clone()),..HostManager::default()}),link:HostPeerLink::default(),
+            host:Arc::new(HostManager {
+                runtimeStorageHost:Some(storage.clone()),
+                hostRuntimeTaskSchedulerHost:Some(Arc::new(operit_host_native_common::NativeHostRuntimeTaskSchedulerHost)),
+                ..HostManager::default()
+            }),link:HostPeerLink::default(),
             store:PeerStateStore::new(storage),nodeId:node.into(),info:LinkDeviceInfo {platform:"test".into(),model:"test".into(), pairingIncarnation: None },router:Arc::downgrade(&(router.clone() as Arc<dyn PeerRouter>)),
             listeners:AsyncMutex::default(),connections:Mutex::default(),pooledChannels:Mutex::default(),liveChannels:Mutex::default(),callableInbound:Mutex::default(),dialStates:Mutex::default(),advertisements:Mutex::default(),slots:Arc::new(tokio::sync::Semaphore::new(2)),
             active:Mutex::default(),changes:broadcast::channel(32).0,availability:Mutex::new(None),lifecycle:AsyncMutex::new(()),mutation:Mutex::new(()),
             connectLocks:Mutex::default(),sharedSessions:Mutex::default(),
         })};(service,router)
+    }
+    #[test]
+    fn outbound_space_entry_requires_admission_and_current_pairing() {
+        let (service, router) = service("edge");
+        let mut record = StoredOutbound {
+            deviceId: "edge".into(), peerNodeId: "core".into(), peerDeviceInfo: service.state.info.clone(),
+            pairingServiceVersion: PAIRING_SERVICE_VERSION, sessionId: "pairing".into(),
+            sessionSecret: BASE64.encode([1; 32]), endpoint: "127.0.0.1:1234".into(), transport: "tcp".into(),
+        };
+        service.state.store.putRecord(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH, "pairing", &record).unwrap();
+        assert!(spaceClient(&service).is_none(), "offline pairing is not an active entry");
+        service.state.active.lock().unwrap().insert("core".into());
+        *router.scope.lock().unwrap() = None;
+        assert!(spaceClient(&service).is_none(), "pairing alone must not admit a Space Push");
+        *router.scope.lock().unwrap() = Some("space".into());
+        let identity = entryIdentity(&service, "core").unwrap();
+        let client = SessionSpaceClient {service: service.clone(), identity};
+        assert!(client.route((), RoutedCoreRequestKind::SpaceRoute).is_ok());
+        assert_eq!(client.nominalBytesPerSecond(), None);
+        record.sessionId = "replacement".into();
+        service.state.store.putRecord(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH, "pairing", &record).unwrap();
+        assert_eq!(client.route((), RoutedCoreRequestKind::SpaceRoute).unwrap_err().code, "SPACE_ENTRY_CHANGED");
+        *router.scope.lock().unwrap() = None;
+        assert!(spaceClient(&service).is_none());
     }
     #[test]
     fn space_client_uses_network_return_grant_and_rechecks_scope() {
@@ -615,17 +674,13 @@ mod tests {
         assert_eq!(callRouteKind(&call("ensureRoutedChat")), RoutedCoreRequestKind::SpaceBinding);
         assert!(!crate::generated_space_call_route(&call("ensureRoutedChat")).unwrap().createBindingCapability.is_empty());
         assert_eq!(callRouteKind(&call("createRoutedChat")), RoutedCoreRequestKind::SpaceBinding);
-        // Metadata reads and diagnostic execution must keep distinct permissions.
-        for (method, permission) in [
-            ("chatAvailablePlugins", "chat.read"),
-            ("chatPluginDetails", "chat.read"),
-            ("chatPluginStatus", "chat.write"),
-            ("chatEdgeEvent", "chat.write"),
-        ] {
+        // Chat metadata and diagnostics share the admitted Space and Binding;
+        // neither carries a separate caller read/write permission.
+        for method in ["chatAvailablePlugins", "chatPluginDetails", "chatPluginStatus"] {
             let request = call(method);
             assert_eq!(callRouteKind(&request), RoutedCoreRequestKind::SpaceBinding);
             let route = crate::generated_space_call_route(&request).unwrap();
-            assert_eq!(route.permissionCapability, permission);
+            assert!(route.permissionCapability.is_empty());
             assert!(route.createBindingCapability.is_empty());
         }
         assert!(crate::generated_space_call_route(&call("createRoutedChat")).unwrap().createBindingCapability.is_empty());
@@ -760,6 +815,15 @@ mod tests {
             input.close().await.unwrap();
             assert_eq!(*coreRouter.inputValues.lock().unwrap(), values.to_vec());
             assert_eq!(coreRouter.inputCloses.load(Ordering::SeqCst), 1);
+            assert_eq!(client.nominalBytesPerSecond(), Some(115200 / 10));
+            let mut upload = client.openPush(CorePushRequest::new("upload", "test.input", "upload")).await.unwrap();
+            upload.send(CoreValue::Bytes(vec![1, 2].into())).await.unwrap();
+            upload.close().await.unwrap();
+            let requests = coreRouter.inputRequests.lock().unwrap();
+            let routed = requests.last().unwrap();
+            assert_eq!(routed.targetNodeId, "core");
+            assert_eq!(routed.routeKind, RoutedCoreRequestKind::Target);
+            drop(requests);
             {
                 let requests = coreRouter.inputRequests.lock().unwrap();
                 let route = &requests[0];
@@ -771,14 +835,16 @@ mod tests {
                 assert_eq!(route.payload.args, inputRequest().args);
                 assert_ne!(route.payload.requestId.0, "caller-input");
             }
+            let mut accepted = values.to_vec();
+            accepted.push(CoreValue::Bytes(vec![1, 2].into()));
             let mut revokedInput = client.openPush(inputRequest()).await.unwrap();
-            assert_eq!(coreRouter.inputRequests.lock().unwrap().len(), 2);
+            assert_eq!(coreRouter.inputRequests.lock().unwrap().len(), 3);
             *coreRouter.scope.lock().unwrap()=None;
             assert!(revokedInput.send(CoreValue::Bytes(vec![99].into())).await.is_err());
-            assert_eq!(*coreRouter.inputValues.lock().unwrap(), values.to_vec(), "Revocation must block the next input value");
-            assert_eq!(coreRouter.inputCloses.load(Ordering::SeqCst), 1, "Disconnect must not commit the revoked input");
+            assert_eq!(*coreRouter.inputValues.lock().unwrap(), accepted, "Revocation must block the next input value");
+            assert_eq!(coreRouter.inputCloses.load(Ordering::SeqCst), 2, "Disconnect must not commit the revoked input");
             assert!(client.openPush(inputRequest()).await.is_err());
-            assert_eq!(coreRouter.inputRequests.lock().unwrap().len(), 2);
+            assert_eq!(coreRouter.inputRequests.lock().unwrap().len(), 3);
             let response=client.call(CoreCallRequest::new("revoked","chat","send",CoreValue::Null)).await;
             assert!(response.result.is_err());
             assert_eq!(coreRouter.calls.load(Ordering::SeqCst),1,"Revoked scope cannot execute even on an existing encrypted carrier");

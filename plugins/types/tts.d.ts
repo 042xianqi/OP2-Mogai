@@ -1,6 +1,6 @@
 // Generated from operit-plugin-sdk Rust declarations.
 
-import type { TtsGetCurrentConfigIdResultData, TtsListConfigsResultData, TtsSetCurrentConfigIdResultData } from "./results";
+import type { TtsGetCurrentConfigIdResultData, TtsListConfigsResultData, TtsSetCurrentConfigIdResultData, TtsSynthesizeResultData } from "./results";
 
 /**
  * Reads and selects speech configurations through the canonical host manager.
@@ -46,6 +46,17 @@ export namespace Tts {
   }
 
   /**
+   * Synthesizes audio on the plugin's host without starting host playback.
+   */
+  export interface SynthesizeRequest {
+    text: string;
+    /**
+     * Uses the selected host configuration when omitted.
+     */
+    configId?: string;
+  }
+
+  /**
    * Reads the current application-wide speech configuration ID.
    */
   function getCurrentConfigId(): Promise<TtsGetCurrentConfigIdResultData>;
@@ -57,4 +68,5 @@ export namespace Tts {
    * Selects an exact existing speech configuration ID.
    */
   function setCurrentConfigId(id: string): Promise<TtsSetCurrentConfigIdResultData>;
+  function synthesize(request: SynthesizeRequest): Promise<TtsSynthesizeResultData>;
 }

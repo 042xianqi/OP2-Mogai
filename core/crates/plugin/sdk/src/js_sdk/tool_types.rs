@@ -95,6 +95,8 @@ pub struct ToolResultMap {
     pub write_environment_variable: EnvironmentVariableWriteResultData,
     pub execute_cli_command: serde_json::Value,
     pub models_list_summaries: ModelsListSummariesResultData,
+    pub tts_synthesize: TtsSynthesizeResultData,
+    pub stt_transcribe: SttTranscribeResultData,
     pub tts_list_configs: TtsListConfigsResultData,
     pub tts_get_current_config_id: TtsGetCurrentConfigIdResultData,
     pub tts_set_current_config_id: TtsSetCurrentConfigIdResultData,

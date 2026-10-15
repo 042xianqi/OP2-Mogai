@@ -3426,10 +3426,10 @@ async fn device_tools_hardware_uses_selected_node_and_rejects_failures() {
             if (tools !== Tools) throw Error('different Tools object');
             if (Tools.Edge !== undefined || Tools.Io !== undefined) throw Error('old global hardware APIs remain');
             if (Tools.edge !== undefined || Tools.io !== undefined) throw Error('noncanonical namespace');
-            const edge=await Tools.device('edge-one').Edge.execute({pluginId:'device.status',action:'read'},{text:'ping'});
+            const edge=await Tools.device('edge-one').Edge.execute({target:'edge.status',method:'read'},{text:'ping'});
             const io=await Tools.device('edge-two').Io.execute({port:'gpio',operation:'read'},{pin:2});
             let failure='';
-            try { await Tools.device('unauthorized').Edge.execute({pluginId:'device.status',action:'read'}); }
+            try { await Tools.device('unauthorized').Edge.execute({target:'edge.status',method:'read'}); }
             catch(error) { failure=String(error.message || error); }
             return {edge:edge.nodeId,io:io.nodeId,failure};
         };
@@ -3438,7 +3438,7 @@ async fn device_tools_hardware_uses_selected_node_and_rejects_failures() {
     assert_eq!(result,serde_json::json!({"edge":"edge-one","io":"edge-two","failure":"Edge node access denied"}));
     let calls=host.edgePortCalls.lock().unwrap();
     assert_eq!(calls.len(),3);
-    assert_eq!(calls[0]["params"], serde_json::json!({"interface_info":{"pluginId":"device.status","action":"read"},"args":{"text":"ping"}}));
+    assert_eq!(calls[0]["params"], serde_json::json!({"interface_info":{"target":"edge.status","method":"read"},"args":{"text":"ping"}}));
     assert_eq!(calls[0]["device"]["nodeId"], "edge-one");
     assert_eq!(calls[1]["params"], serde_json::json!({"interface_info":{"port":"gpio","operation":"read"},"args":{"pin":2}}));
     assert_eq!(calls[1]["device"]["nodeId"], "edge-two");

@@ -1,5 +1,6 @@
 //! 已鉴权 Link 会话：路由元数据留在标准 args 中，执行仍使用既有 CoreLinkSession。
 use super::*;
+use futures_util::{future::LocalBoxFuture, stream::{self, FuturesUnordered}, Stream, StreamExt};
 
 pub(super) fn routedCall(request: RoutedCoreRequest<CoreCallRequest>) -> Result<CoreCallRequest, CoreLinkError> {
     let mut wire = request.payload.clone();
@@ -47,7 +48,8 @@ impl CoreLinkClient for RoutedClient {
         self.router()?.routedOpenPush(self.peer.clone(), r).await
     }
 }
-pub(super) enum Authorization { Pairing, SpaceChannel, SessionReturn, SpaceDuplex }
+#[derive(Clone, Copy)]
+pub(super) enum Authorization { Pairing, SpaceChannel, SessionReturn, PairingDuplex, SpaceDuplex }
 
 /// Answers the inbound direction of one authenticated channel: requests are
 /// executed here and watch events are flushed by whoever drives the frames.
@@ -76,6 +78,10 @@ impl InboundSide {
                 .is_some_and(|c| c.deviceId == self.peer && c.pairingServiceVersion == PAIRING_SERVICE_VERSION),
             Authorization::SessionReturn => self.service.outbound(&self.peer).is_ok_and(|c| c.sessionId == self.sessionId)
                 && self.service.sessionScopeAllowed(&self.peer, channel)?,
+            // Admission may reach the gateway before the applicant's refresh finishes.
+            // Keep the authenticated pairing alive; the router rejects premature
+            // same-Space calls without tearing down the in-flight refresh.
+            Authorization::PairingDuplex => self.service.outbound(&self.peer).is_ok_and(|c| c.sessionId == self.sessionId),
             // The dialing side answers a peer that granted it this channel: the
             // grant that let this device dial is what lets the peer call back,
             // so both directions end when that grant is revoked.
@@ -111,34 +117,87 @@ pub(super) async fn serveLive(service: HostRuntimePeerService, live: Arc<LiveCha
     serveChannel(service, channel, Some(live), peer, sessionId, if spaceChannel { Authorization::SpaceChannel } else { Authorization::Pairing }).await
 }
 async fn serveChannel(service: HostRuntimePeerService, channel: Arc<Channel>, live: Option<Arc<LiveChannel>>, peer: String, sessionId: String, authorization: Authorization) -> Result<(), CoreLinkError> {
-    let receive = || async {
-        match &live { Some(live) => live.receive().await, None => channel.receive().await }
-    };
-    let send = |message| async {
+    let incoming = stream::unfold((channel.clone(), live.clone()), |(channel, live)| async move {
+        let message = match &live { Some(live) => live.receive().await, None => channel.receive().await };
+        message.transpose().map(|message| (message, (channel, live)))
+    });
+    let side = InboundSide::new(service, peer, sessionId, authorization);
+    serveIncoming(side, channel.clone(), incoming, |message| async {
         match &live { Some(live) => live.send(message).await, None => channel.send(message).await }
-    };
-    let mut side = InboundSide::new(service, peer, sessionId, authorization);
-    loop {
-        enum Incoming { Message(Option<PeerMessage>), Event(Option<CoreLinkResponse>) }
-        let incoming = if side.hasWatches() {
+    }).await
+}
+
+/// Calls have independent correlations and may forward through this same carrier.
+/// Serializing them creates wait cycles while routes change. Stream state remains
+/// owned by one session so Watch/Push operations retain their connection order.
+pub(super) async fn serveIncoming<I, S, F>(
+    side: InboundSide, channel: Arc<Channel>, incoming: I, send: S,
+) -> Result<(), CoreLinkError>
+where
+    I: Stream<Item = Result<PeerMessage, CoreLinkError>>,
+    S: Fn(PeerMessage) -> F,
+    F: std::future::Future<Output = Result<(), CoreLinkError>>,
+{
+    // Poll the ordered session independently: opening a Watch or a backpressured
+    // Push may itself await a Call carried by this same connection.
+    let session = InboundSide::new(side.service.clone(), side.peer.clone(), side.sessionId.clone(), side.authorization);
+    let (requests, queue) = tokio::sync::mpsc::unbounded_channel();
+    let sessions = stream::unfold((session, queue, channel.clone()), |(mut session, mut queue, channel)| async move {
+        enum Item { Request(Option<CoreLinkRequest>), Event(Option<CoreLinkResponse>) }
+        let item = if session.hasWatches() {
             tokio::select! {
-                message = receive() => Incoming::Message(message?),
-                event = side.nextWatchEvent() => Incoming::Event(event),
+                request = queue.recv() => Item::Request(request),
+                event = session.nextWatchEvent() => Item::Event(event),
             }
-        } else { Incoming::Message(receive().await?) };
-        side.validate(&channel)?;
-        match incoming {
-            Incoming::Message(Some(PeerMessage::Request(request))) => {
-                let response = side.answer(&channel, request).await;
-                send(PeerMessage::Response(response)).await?;
+        } else { Item::Request(queue.recv().await) };
+        let response = match session.validate(&channel) {
+            Err(error) => Err(error),
+            Ok(()) => match item {
+                Item::Request(Some(request)) => Ok(session.answer(&channel, request).await),
+                Item::Event(Some(event)) => Ok(event),
+                _ => return None,
             },
-            Incoming::Event(Some(event)) => send(PeerMessage::Response(event)).await?,
-            Incoming::Message(None) => break,
-            _ => return Err(error("Unexpected inbound Link response")),
+        };
+        Some((response, (session, queue, channel)))
+    });
+    futures_util::pin_mut!(incoming, sessions);
+    let mut calls = FuturesUnordered::<LocalBoxFuture<'static, CoreLinkResponse>>::new();
+    loop {
+        enum Incoming {
+            Message(Option<Result<PeerMessage, CoreLinkError>>),
+            Response(CoreLinkResponse),
+            Session(Option<Result<CoreLinkResponse, CoreLinkError>>),
         }
+        let item = tokio::select! {
+            message = incoming.next() => Incoming::Message(message),
+            Some(response) = calls.next(), if !calls.is_empty() => Incoming::Response(response),
+            response = sessions.next() => Incoming::Session(response),
+        };
+        side.validate(&channel)?;
+        let response = match item {
+            Incoming::Message(Some(Ok(PeerMessage::Request(CoreLinkRequest::Call(request))))) => {
+                let mut call = InboundSide::new(side.service.clone(), side.peer.clone(), side.sessionId.clone(), side.authorization);
+                let channel = channel.clone();
+                calls.push(Box::pin(async move {
+                    if let Err(error) = call.validate(&channel) { return CoreLinkResponse::Call(CoreCallResponse::err(request.requestId, error)); }
+                    call.answer(&channel, CoreLinkRequest::Call(request)).await
+                }));
+                continue;
+            }
+            Incoming::Message(Some(Ok(PeerMessage::Request(request)))) => {
+                requests.send(request).map_err(|_| error("Inbound stream dispatcher stopped"))?;
+                continue;
+            }
+            Incoming::Message(Some(Err(error))) | Incoming::Session(Some(Err(error))) => return Err(error),
+            Incoming::Message(None) | Incoming::Session(None) => break,
+            Incoming::Response(response) | Incoming::Session(Some(Ok(response))) => response,
+            _ => return Err(error("Unexpected inbound Link response")),
+        };
+        send(PeerMessage::Response(response)).await?;
     }
     Ok(())
 }
+
 pub(super) async fn watchSnapshot(service: &HostRuntimePeerService, node: &str, request: RoutedCoreRequest<CoreWatchRequest>) -> Result<CoreEvent, CoreLinkError> {
     let channel = service.acquirePooledChannel(node).await?;
     let id = request.payload.requestId.clone();
@@ -161,7 +220,8 @@ pub(super) async fn watch(service: &HostRuntimePeerService, node: &str, request:
     Ok(stream.withOnClose(move || drop(watchLease)))
 }
 struct Push {
-    lease: ChannelLease,
+    lease: Option<ChannelLease>,
+    scheduler: Arc<dyn operit_host_api::HostRuntimeTaskSchedulerHost>,
     id: String,
     next: u64,
 }
@@ -172,7 +232,7 @@ impl CoreLinkPushSession for Push {
     async fn send(&mut self, args: CoreValue) -> Result<(), CoreLinkError> {
         let sequence = self.next;
         self.next = sequence.checked_add(1).ok_or_else(|| error("Push sequence exhausted"))?;
-        match self.lease.exchange(CoreLinkRequest::Push(CoreLinkPushRequestMessage::Item(CorePushItem {
+        match self.lease.as_ref().unwrap().exchange(CoreLinkRequest::Push(CoreLinkPushRequestMessage::Item(CorePushItem {
             pushId: self.id.clone(), sequence, args,
         }))).await? {
             CoreLinkResponse::Push { pushId, result: Ok(CoreLinkPushResponse::ItemAccepted { sequence: accepted }) }
@@ -183,8 +243,9 @@ impl CoreLinkPushSession for Push {
     }
 
     /// Closes one logical Push session while retaining the shared channel.
-    async fn close(self: Box<Self>) -> Result<(), CoreLinkError> {
-        let result = self.lease.exchange(CoreLinkRequest::Push(CoreLinkPushRequestMessage::Close {
+    async fn close(mut self: Box<Self>) -> Result<(), CoreLinkError> {
+        let lease = self.lease.take().unwrap();
+        let result = lease.exchange(CoreLinkRequest::Push(CoreLinkPushRequestMessage::Close {
             pushId: self.id.clone(),
         })).await;
         match result? {
@@ -194,12 +255,24 @@ impl CoreLinkPushSession for Push {
         }
     }
 }
+impl Drop for Push {
+    fn drop(&mut self) {
+        if let Some(lease) = self.lease.take() {
+            let pushId = self.id.clone();
+            let _ = self.scheduler.scheduleHostRuntimeAsyncTask("peer-push-close", Box::new(move || Box::pin(async move {
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(10), lease.exchange(
+                    CoreLinkRequest::Push(CoreLinkPushRequestMessage::Close { pushId }))).await;
+            })));
+        }
+    }
+}
 pub(super) async fn openPush(service: &HostRuntimePeerService, node: &str, request: RoutedCoreRequest<CorePushRequest>) -> Result<Box<dyn CoreLinkPushSession>, CoreLinkError> {
+    let scheduler = service.state.host.hostRuntimeTaskSchedulerHost.clone().ok_or_else(|| error("Host scheduler missing"))?;
     let lease = service.acquirePooledChannel(node).await?;
     let id = request.payload.requestId.0.clone();
     match lease.exchange(CoreLinkRequest::Push(CoreLinkPushRequestMessage::Open(routedPush(request)?))).await? {
         CoreLinkResponse::Push { pushId, result: Ok(CoreLinkPushResponse::Opened) } if pushId == id =>
-            Ok(Box::new(Push { lease, id, next: 0 })),
+            Ok(Box::new(Push { lease: Some(lease), scheduler, id, next: 0 })),
         CoreLinkResponse::Push { result: Err(error), .. } => Err(error),
         _ => Err(error("Push open response mismatch")),
     }

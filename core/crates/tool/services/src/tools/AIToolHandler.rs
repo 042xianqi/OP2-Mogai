@@ -55,6 +55,7 @@ pub struct AIToolHandler {
     /// Contains only the immutable package identity bound by the JavaScript engine.
     pub(crate) authenticatedExtensionOwner: Option<String>,
     pub(crate) storageSession: operit_store::PluginStorage::PluginStorageSession,
+    pub(crate) deviceTransportScope: Arc<crate::tools::DeviceTools::DeviceTransportScope>,
     pub(crate) chatObservations: Arc<Mutex<BTreeMap<String, JsAsyncIterable<ChatSendEvent>>>>,
     pub(crate) invocationSnapshot: crate::ToolExecutionManager::ToolInvocationSnapshot,
 }
@@ -227,6 +228,7 @@ impl AIToolHandler {
             executorAvailability: Arc::new(tokio::sync::Notify::new()),
             authenticatedExtensionOwner: None,
             invocationSnapshot: crate::ToolExecutionManager::ToolInvocationSnapshot::default(),
+            deviceTransportScope: Default::default(),
             chatObservations: Arc::new(Mutex::new(BTreeMap::new())),
             storageSession: operit_store::PluginStorage::PluginStorageSession::default(),
         }
@@ -1171,6 +1173,7 @@ impl JsExecutionHost for AIToolHandler {
         let mut host = self.clone();
         host.authenticatedExtensionOwner = Some(context.container_package_name.clone());
         host.storageSession = operit_store::PluginStorage::PluginStorageSession::default();
+        host.deviceTransportScope = Default::default();
         host.chatObservations = Arc::new(Mutex::new(BTreeMap::new()));
         Ok(Arc::new(host))
     }
@@ -1258,13 +1261,22 @@ impl JsExecutionHost for AIToolHandler {
     /// Executes an SDK JavaScript tool request through the registered Operit tool chain.
     fn execute_tool_call(
         &self,
-        request: JsToolCallRequest,
+        mut request: JsToolCallRequest,
     ) -> operit_plugin_sdk::javascript::JsExecutionCompletion<JsToolCallResult> {
+        if request.device.as_ref().is_some_and(|device| device.action == operit_plugin_sdk::javascript::JsDeviceToolAction::Transport) {
+            self.deviceTransportScope.bind(&self.runtimeSupport());
+            request.parameters.insert("__transport_owner".into(), serde_json::Value::String(self.deviceTransportScope.id.clone()));
+        }
+        if request.device.as_ref().is_some_and(|device| device.action == operit_plugin_sdk::javascript::JsDeviceToolAction::Transport)
+            && !matches!(request.parameters.get("op").and_then(serde_json::Value::as_str), Some("open" | "call")) {
+            return self.runtimeSupport().executeDeviceTool(request, None);
+        }
         if let Some(device) = &request.device {
             if !matches!(
                 device.action,
                 operit_plugin_sdk::javascript::JsDeviceToolAction::Execute
                     | operit_plugin_sdk::javascript::JsDeviceToolAction::Port
+                    | operit_plugin_sdk::javascript::JsDeviceToolAction::Transport
             ) {
                 return self.runtimeSupport().executeDeviceTool(request, None);
             }
@@ -1825,6 +1837,10 @@ mod tests {
     impl PipelineFixture {
         /// Builds only real registry, permission and storage components with rejecting business services.
         fn new() -> Self {
+            static SCHEDULER: std::sync::Once = std::sync::Once::new();
+            SCHEDULER.call_once(|| operit_host_api::HostManager::setDefaultHostRuntimeTaskSchedulerHost(Arc::new(
+                operit_host_native_scheduler::NativeHostRuntimeTaskSchedulerHost::new(),
+            )));
             let root = std::env::temp_dir().join(format!("operit-tool-pipeline-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&root).unwrap();
             let storage = Arc::new(operit_host_native_storage::NativeRuntimeStorageHost::new(
@@ -1836,7 +1852,9 @@ mod tests {
                 inner: Arc::new(Mutex::new(AIToolHandlerState {
                     availableTools: BTreeMap::new(), executingTools: BTreeSet::new(),
                     toolVisibility: BTreeMap::new(), defaultToolsRegistered: true,
-                    context: HostManager { runtimeStorageHost: Some(storage.clone()), runtimeSqliteHost: Some(storage), ..Default::default() },
+                    context: HostManager { runtimeStorageHost: Some(storage.clone()), runtimeSqliteHost: Some(storage),
+                        hostRuntimeTaskSchedulerHost: Some(operit_host_api::HostManager::defaultHostRuntimeTaskSchedulerHost()),
+                        ..Default::default() },
                     runtimeDependencies: ToolRuntimeDependencies::new(
                         Arc::new(UnusedRuntimeSupport),
                         Arc::new(operit_js_bridge::javascript::JsExecutionProvider::QuickJsExecutionProvider::new()),
@@ -1846,7 +1864,7 @@ mod tests {
                 executorAvailability: Arc::new(tokio::sync::Notify::new()),
                 authenticatedExtensionOwner: Some("engine-owner".into()),
                 invocationSnapshot: Default::default(),
-                storageSession: Default::default(), chatObservations: Default::default(),
+                storageSession: Default::default(), chatObservations: Default::default(), deviceTransportScope: Default::default(),
             };
             Self { handler, root }
         }

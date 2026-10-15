@@ -1,6 +1,6 @@
 //! Speech configuration selection exposed to plugins.
 use super::JsFuture;
-use super::results::{TtsListConfigsResultData, TtsGetCurrentConfigIdResultData, TtsSetCurrentConfigIdResultData};
+use super::results::{TtsListConfigsResultData, TtsGetCurrentConfigIdResultData, TtsSetCurrentConfigIdResultData, TtsSynthesizeResultData};
 use serde::{Deserialize, Serialize};
 
 /// Preserves one configured speech request or response-pipeline header.
@@ -38,8 +38,18 @@ pub struct TtsConfig {
     pub createdAt: i64,
     pub updatedAt: i64,
 }
+/// Synthesizes audio on the plugin's host without starting host playback.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[allow(non_snake_case)]
+#[serde(deny_unknown_fields)]
+pub struct TtsSynthesizeRequest {
+    pub text: String,
+    /// Uses the selected host configuration when omitted.
+    pub configId: Option<String>,
+}
 /// Reads and selects speech configurations through the canonical host manager.
 pub trait TtsHost: Send + Sync {
+    fn synthesize(&self, request: TtsSynthesizeRequest) -> JsFuture<TtsSynthesizeResultData>;
     /// Returns complete configured speech records.
     fn listConfigs(&self) -> JsFuture<TtsListConfigsResultData>;
     /// Reads the current application-wide speech configuration ID.

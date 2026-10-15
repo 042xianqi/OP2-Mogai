@@ -221,16 +221,20 @@ fn gateMesh(
     (routers, access, peers)
 }
 
-/// The joining member needs the storage role: clock probes are
+/// The joining member needs a custom storage capability role: clock probes are
 /// storage-replication calls, and the idle gate only skips passes whose probe
 /// succeeds. The owning administrator already satisfies the check through its
 /// wildcard capability, and reassigning it would drop the administrator.
 fn grantStorageRole(routers: &[CoreNodeRouter], access: &[RuntimeRemoteLinkService]) {
+    access[0].defineDeviceSpaceRole(operit_store::NetworkControlStore::NetworkControlRole {
+        roleId: "replica".into(), displayName: "Test replica".into(),
+        capabilities: std::collections::BTreeSet::from(["storage.provide".into()]),
+    }).unwrap();
     access[0]
         .setDeviceSpaceIdentity(
             operit_store::NetworkControlStore::NetworkControlIdentityAssignment {
                 nodeId: routers[1].localNodeId(),
-                roleId: "storage".into(),
+                roleId: "replica".into(),
             },
         )
         .unwrap();
@@ -351,4 +355,95 @@ async fn a_failed_pass_backs_off_before_retrying_the_full_exchange() {
     let markersAfterRetry = fullPassMarkers(&peers[1]);
     observer.synchronizeOnce().await.unwrap();
     assert_eq!(fullPassMarkers(&peers[1]), markersAfterRetry);
+}
+
+/// A preference-only edit must reopen a settled storage-provider gate without
+/// creating business operations, then return to idling after convergence.
+#[tokio::test]
+async fn preference_edits_reopen_a_settled_storage_provider_gate() {
+    let _guard = routeTestGlobalLock().lock().await;
+    installTestRuntimeScheduler();
+    let (routers, access, peers) = gateMesh("sync-device-preferences");
+    grantStorageRole(&routers, &access);
+    let observer = idleObserver(&routers[1]);
+    observer.synchronizeOnce().await.unwrap();
+    observer.synchronizeOnce().await.unwrap();
+    let markersBefore = fullPassMarkers(&peers[1]);
+    observer.synchronizeOnce().await.unwrap();
+    assert_eq!(fullPassMarkers(&peers[1]), markersBefore);
+
+    let space = routers[1].spaceStore.space().unwrap();
+    let target = routers[0].localNodeId();
+    let source = operit_store::DevicePreferencesStore::DevicePreferencesStore::new(
+        routers[1].localCore.runtimeStorageHost(),
+    );
+    let destination = operit_store::DevicePreferencesStore::DevicePreferencesStore::new(
+        routers[0].localCore.runtimeStorageHost(),
+    );
+    let clocksBefore: Vec<_> = routers
+        .iter()
+        .map(|router| {
+            GateTestApplicationClient {
+                control: router.networkControlStore.clone(),
+            }
+            .gateClock()
+            .unwrap()
+        })
+        .collect();
+    let notifications = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = notifications.clone();
+    let callbackSource = source.clone();
+    let callbackSpace = space.spaceId.clone();
+    let callbackTarget = target.clone();
+    let _subscription = operit_store::SyncOperationStore::subscribeSyncMutations(move || {
+        // A subscriber may immediately read back the committed preferences.
+        callbackSource
+            .read(&callbackSpace, &callbackTarget)
+            .unwrap();
+        count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    });
+    access[1]
+        .setDevicePreference(target.clone(), "volume".into(), Some(serde_json::json!(42)))
+        .unwrap();
+    assert!(notifications.load(std::sync::atomic::Ordering::Relaxed) > 0);
+    observer.synchronizeOnce().await.unwrap();
+    assert!(fullPassMarkers(&peers[1]) > markersBefore);
+    assert_eq!(
+        destination.read(&space.spaceId, &target).unwrap().values()["volume"],
+        serde_json::json!(42)
+    );
+    let notificationsAfterSync = notifications.load(std::sync::atomic::Ordering::Relaxed);
+    let state = source.read(&space.spaceId, &target).unwrap();
+    source.merge(&state).unwrap();
+    assert_eq!(
+        notifications.load(std::sync::atomic::Ordering::Relaxed),
+        notificationsAfterSync,
+        "idempotent preference exchange must not keep rescheduling synchronization"
+    );
+    let markersAfterSync = fullPassMarkers(&peers[1]);
+    observer.synchronizeOnce().await.unwrap();
+    assert_eq!(fullPassMarkers(&peers[1]), markersAfterSync);
+    let local = routers[1].localNodeId();
+    access[1]
+        .setDevicePreference(local.clone(), "volume".into(), Some(serde_json::json!(7)))
+        .unwrap();
+    observer.synchronizeOnce().await.unwrap();
+    assert_eq!(
+        destination.read(&space.spaceId, &local).unwrap().values()["volume"],
+        serde_json::json!(7),
+        "a local device setting must propagate through the same settled gate"
+    );
+    let markersAfterLocalEdit = fullPassMarkers(&peers[1]);
+    observer.synchronizeOnce().await.unwrap();
+    assert_eq!(fullPassMarkers(&peers[1]), markersAfterLocalEdit);
+    for (router, before) in routers.iter().zip(clocksBefore) {
+        assert_eq!(
+            GateTestApplicationClient {
+                control: router.networkControlStore.clone()
+            }
+            .gateClock()
+            .unwrap(),
+            before
+        );
+    }
 }

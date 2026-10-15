@@ -288,6 +288,12 @@ fn defineTable(
             SqliteValue::Text(definition),
         ],
     )?;
+    installDirtyTracking(tx, table)?;
+    Ok(true)
+}
+
+/// Uses explicit UPSERT so an outer statement cannot override the trigger's conflict policy.
+fn installDirtyTracking(tx: &mut SqliteTransaction<'_>, table: &StorageTable) -> Result<(), SqliteStoreError> {
     let name = identifier(&table.name)?;
     let key = identifier(&table.primary_key)?;
     for (suffix, event, body) in [
@@ -295,7 +301,7 @@ fn defineTable(
             "insert",
             "INSERT",
             format!(
-                "INSERT OR REPLACE INTO _operit_dirty VALUES('{}',NEW.{key},0);",
+                "INSERT INTO _operit_dirty VALUES('{}',NEW.{key},0) ON CONFLICT(collection,key) DO UPDATE SET deleted=excluded.deleted;",
                 table.name
             ),
         ),
@@ -303,7 +309,7 @@ fn defineTable(
             "delete",
             "DELETE",
             format!(
-                "INSERT OR REPLACE INTO _operit_dirty VALUES('{}',OLD.{key},1);",
+                "INSERT INTO _operit_dirty VALUES('{}',OLD.{key},1) ON CONFLICT(collection,key) DO UPDATE SET deleted=excluded.deleted;",
                 table.name
             ),
         ),
@@ -311,14 +317,15 @@ fn defineTable(
             "update",
             "UPDATE",
             format!(
-                "INSERT OR REPLACE INTO _operit_dirty VALUES('{}',OLD.{key},1); INSERT OR REPLACE INTO _operit_dirty VALUES('{}',NEW.{key},0);",
+                "INSERT INTO _operit_dirty VALUES('{}',OLD.{key},1) ON CONFLICT(collection,key) DO UPDATE SET deleted=excluded.deleted; INSERT INTO _operit_dirty VALUES('{}',NEW.{key},0) ON CONFLICT(collection,key) DO UPDATE SET deleted=excluded.deleted;",
                 table.name, table.name
             ),
         ),
     ] {
+        tx.execute(&format!("DROP TRIGGER IF EXISTS \"_operit_track_{}_{suffix}\"", table.name), Vec::new())?;
         tx.execute(&format!("CREATE TRIGGER \"_operit_track_{}_{suffix}\" AFTER {event} ON {name} BEGIN {body} END", table.name), Vec::new())?;
     }
-    Ok(true)
+    Ok(())
 }
 
 /// Opens only a database carrying the same owner, path, kind and synchronization policy.
@@ -359,6 +366,16 @@ fn openDatabase(
                     SqliteValue::Integer(i64::from(manifest.sync)),
                 ],
             )?;
+        }
+        // Upgrade existing databases once; fresh databases already have UPSERT triggers.
+        let legacy = tx.queryRows(
+            "SELECT DISTINCT t.definition FROM _operit_tables t JOIN sqlite_master s ON s.tbl_name=t.name WHERE s.type='trigger' AND s.name GLOB '_operit_track_*' AND instr(s.sql,'INSERT OR REPLACE INTO _operit_dirty')>0",
+            Vec::new(),
+        )?;
+        for row in legacy {
+            let table: StorageTable = serde_json::from_str(&row.get::<_, String>(0)?)
+                .map_err(|error| failure(error.to_string()))?;
+            installDirtyTracking(tx, &table)?;
         }
         if !origin.is_empty() {
             let row = tx.queryOne("SELECT origin FROM _operit_origins WHERE device=?1", vec![SqliteValue::Text(origin.clone())])?;

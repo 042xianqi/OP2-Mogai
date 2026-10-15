@@ -19,9 +19,10 @@ type Pending = Arc<Mutex<HashMap<(String, String), Option<oneshot::Sender<()>>>>
 
 #[derive(Clone)]
 pub(super) struct CoreDeviceToolRuntime {
-    router: Weak<CoreNodeRouter>,
-    scheduler: Arc<dyn HostRuntimeTaskSchedulerHost>,
+    pub(super) router: Weak<CoreNodeRouter>,
+    pub(super) scheduler: Arc<dyn HostRuntimeTaskSchedulerHost>,
     pending: Pending,
+    pub(super) channels: super::device_transport::Channels,
 }
 impl CoreDeviceToolRuntime {
     pub fn new(
@@ -32,6 +33,7 @@ impl CoreDeviceToolRuntime {
             router,
             scheduler,
             pending: Arc::new(Mutex::new(HashMap::new())),
+            channels: Arc::default(),
         }
     }
 }
@@ -86,6 +88,9 @@ impl CoreDeviceToolRuntime {
         request: JsToolCallRequest,
         device: JsDeviceToolCall,
     ) -> Result<JsToolCallResult, String> {
+        if device.action == JsDeviceToolAction::Transport {
+            return self.execute_transport(request, device).await;
+        }
         if device.action == JsDeviceToolAction::Port {
             let (call, _) =
                 operit_tools::tools::EdgePortTool::prepare_device_port(&device.node_id, &request)?;
@@ -136,6 +141,8 @@ impl CoreDeviceToolRuntime {
 }
 
 impl DeviceToolRuntime for CoreDeviceToolRuntime {
+    fn close_transports(&self, owner: &str) {self.close_transport_owner(owner);}
+
     fn dispatch_with_preflight(
         &self,
         mut request: JsToolCallRequest,
@@ -185,6 +192,8 @@ impl DeviceToolRuntime for CoreDeviceToolRuntime {
             "core-device-tool",
             Box::new(move || {
                 Box::pin(async move {
+                    let transport_open=device.action==JsDeviceToolAction::Transport && request.parameters.get("op").and_then(serde_json::Value::as_str)==Some("open");
+                    let transport_receive=device.action==JsDeviceToolAction::Transport && request.parameters.get("op").and_then(serde_json::Value::as_str)==Some("next");
                     let execution = async {
                         if let Some(preflight) = preflight {
                             preflight.await?;
@@ -195,16 +204,28 @@ impl DeviceToolRuntime for CoreDeviceToolRuntime {
                         biased;
                         _ = cancelled => failure("Device tool call cancelled"),
                         _ = send.closed() => failure("Device tool caller was dropped"),
-                        result = tokio::time::timeout_at(deadline, execution) => {
-                            match result {
-                                Ok(Ok(result)) => result,
-                                Ok(Err(error)) => failure(error),
-                                Err(_) => failure("Device tool call timed out"),
+                        result = async {
+                            // Watching an idle endpoint is not a failed request. Ownership,
+                            // cancellation and endpoint EOF still end this pending receive.
+                            if transport_receive {
+                                execution.await.unwrap_or_else(failure)
+                            } else {
+                                match tokio::time::timeout_at(deadline, execution).await {
+                                    Ok(Ok(result)) => result,
+                                    Ok(Err(error)) => failure(error),
+                                    Err(_) => failure("Device tool call timed out"),
+                                }
                             }
-                        }
+                        } => result
                     };
                     drop(guard);
-                    let _ = send.send(result);
+                    if let Err(result)=send.send(result) {
+                        if transport_open {
+                            if let JsToolCallResultData::Value(value)=result.data {
+                                if let Some(handle)=value["handle"].as_str() {runtime.close_transport_handle(handle);}
+                            }
+                        }
+                    }
                 })
             }),
         );

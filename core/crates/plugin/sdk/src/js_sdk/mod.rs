@@ -25,6 +25,7 @@ pub mod runtime_bindings;
 pub mod software_settings;
 pub mod models;
 pub mod tts;
+pub mod stt;
 pub mod theme;
 pub mod catalog;
 pub mod storage;

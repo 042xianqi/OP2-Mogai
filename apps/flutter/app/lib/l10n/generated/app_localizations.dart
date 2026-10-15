@@ -6493,20 +6493,14 @@ abstract class AppLocalizations {
   /// No description provided for @settingsRuntimeControlCapabilityStorageProvide.
   ///
   /// In en, this message translates to:
-  /// **'Provide storage'**
+  /// **'Store shared data replicas'**
   String get settingsRuntimeControlCapabilityStorageProvide;
 
   /// No description provided for @settingsRuntimeControlCapabilityRuntimeExecute.
   ///
   /// In en, this message translates to:
-  /// **'Run tasks'**
+  /// **'Host Core execution'**
   String get settingsRuntimeControlCapabilityRuntimeExecute;
-
-  /// No description provided for @settingsRuntimeControlCapabilityChatRead.
-  ///
-  /// In en, this message translates to:
-  /// **'Read chat history'**
-  String get settingsRuntimeControlCapabilityChatRead;
 
   /// No description provided for @settingsRuntimeControlCapabilityViewDevices.
   ///
@@ -6532,29 +6526,17 @@ abstract class AppLocalizations {
   /// **'Administrator'**
   String get settingsRuntimeControlRoleAdministrator;
 
-  /// No description provided for @settingsRuntimeControlRoleAuditor.
-  ///
-  /// In en, this message translates to:
-  /// **'Auditor'**
-  String get settingsRuntimeControlRoleAuditor;
-
   /// No description provided for @settingsRuntimeControlRoleRelay.
   ///
   /// In en, this message translates to:
   /// **'Relay node'**
   String get settingsRuntimeControlRoleRelay;
 
-  /// No description provided for @settingsRuntimeControlRoleStorage.
+  /// No description provided for @settingsRuntimeControlRoleEdge.
   ///
   /// In en, this message translates to:
-  /// **'Storage node'**
-  String get settingsRuntimeControlRoleStorage;
-
-  /// No description provided for @settingsRuntimeControlRoleRunner.
-  ///
-  /// In en, this message translates to:
-  /// **'Task runner'**
-  String get settingsRuntimeControlRoleRunner;
+  /// **'Edge node'**
+  String get settingsRuntimeControlRoleEdge;
 
   /// No description provided for @settingsRuntimeControlRoleUser.
   ///

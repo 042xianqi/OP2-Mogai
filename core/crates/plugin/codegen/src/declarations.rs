@@ -71,6 +71,7 @@ const MODULES: &[ModuleSpec] = &[
         nullable_wire_fields: false,
     },
     ModuleSpec { rust_file: "js_sdk/models.rs", additional_rust_file: None, ts_file: "models.d.ts", nullable_wire_fields: false },
+    ModuleSpec { rust_file: "js_sdk/stt.rs", additional_rust_file: None, ts_file: "stt.d.ts", nullable_wire_fields: false },
     ModuleSpec { rust_file: "js_sdk/tts.rs", additional_rust_file: None, ts_file: "tts.d.ts", nullable_wire_fields: false },
     ModuleSpec { rust_file: "js_sdk/theme.rs", additional_rust_file: None, ts_file: "theme.d.ts", nullable_wire_fields: false },
     ModuleSpec { rust_file: "js_sdk/catalog.rs", additional_rust_file: None, ts_file: "catalog.d.ts", nullable_wire_fields: false },
@@ -560,6 +561,7 @@ impl<'a> EmitContext<'a> {
         });
         output.push_str(name);
         output.push_str(&self.emit_item_generics(group, scope));
+        if name == "DeviceTransportChannel" { output.push_str(" extends AsyncIterable<DeviceTransportEvent>"); }
         let bases = group
             .items
             .iter()
@@ -1468,6 +1470,7 @@ fn infer_declaration(item: ItemRef<'_>, ts_file: &str) -> Option<(Vec<String>, S
             "SystemMusicHost" => Some(vec!["System".to_string(), "music".to_string()]),
             "ModelsHost" => Some(vec!["Models".to_string()]),
             "TtsHost" => Some(vec!["Tts".to_string()]),
+            "SttHost" => Some(vec!["Stt".to_string()]),
             "ThemeHost" => Some(vec!["Theme".to_string()]),
             "CatalogHost" => Some(vec!["Catalog".to_string()]),
             "SoftwareSettingsHost" => Some(vec!["SoftwareSettings".to_string()]),
@@ -1488,6 +1491,7 @@ fn infer_declaration(item: ItemRef<'_>, ts_file: &str) -> Option<(Vec<String>, S
         "system.d.ts" => prefixed_path(declaration_name, "System"),
         "models.d.ts" => prefixed_path(declaration_name, "Models"),
         "tts.d.ts" => prefixed_path(declaration_name, "Tts"),
+        "stt.d.ts" => prefixed_path(declaration_name, "Stt"),
         "theme.d.ts" => prefixed_path(declaration_name, "Theme"),
         "catalog.d.ts" => prefixed_path(declaration_name, "Catalog"),
         "software_settings.d.ts" => prefixed_path(declaration_name, "SoftwareSettings"),

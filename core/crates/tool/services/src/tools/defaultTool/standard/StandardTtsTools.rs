@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use super::ToolArguments::{decodeArguments, decodeConfigArguments, EmptyArguments};
+use super::ToolArguments::{decodeArguments, decodeConfigArguments, EmptyArguments, RequestArguments};
 use crate::tools::ToolInvocation::prepareInvocation;
 use crate::tools::ToolResultDataClasses::{
     ToolResultData, TtsGetCurrentConfigIdResultData, TtsListConfigsResultData,
@@ -13,6 +13,7 @@ use crate::ToolExecutionManager::{
 /// Selects the registered speech configuration operation.
 #[derive(Clone, Copy)]
 pub(crate) enum TtsToolOperation {
+    Synthesize,
     ListConfigs,
     GetCurrentConfigId,
     SetCurrentConfigId,
@@ -31,6 +32,13 @@ impl SharedToolExecutor for TtsToolExecutor {
         checkAccess: bool,
     ) -> Result<PreparedToolInvocation<'a>, String> {
         match self.operation {
+            TtsToolOperation::Synthesize => {
+                let args: RequestArguments<operit_plugin_sdk::js_sdk::tts::TtsSynthesizeRequest> = decodeArguments(request)?;
+                if args.request.text.trim().is_empty() { return Err("TTS text is empty".into()); }
+                Ok(prepareInvocation(request, checkAccess, ToolEffect::READ, async move {
+                    Ok(ToolResultData::TtsSynthesizeResultData(context.host().runtimeSupport().synthesizeSpeech(args.request)?))
+                }))
+            }
             TtsToolOperation::ListConfigs => {
                 let _: EmptyArguments = decodeArguments(request)?;
                 Ok(prepareInvocation(
@@ -77,5 +85,18 @@ impl SharedToolExecutor for TtsToolExecutor {
                 ))
             }
         }
+    }
+}
+
+/// Executes recognition on this host; no device transport or chat orchestration.
+pub(crate) struct SttToolExecutor;
+impl SharedToolExecutor for SttToolExecutor {
+    fn prepare<'a>(&'a self, request: &'a ToolCall, context: &'a ToolInvocationContext, checkAccess: bool)
+        -> Result<PreparedToolInvocation<'a>, String> {
+        let args: RequestArguments<operit_plugin_sdk::js_sdk::stt::SttTranscribeRequest> = decodeArguments(request)?;
+        if args.request.audio.is_empty() { return Err("STT audio is empty".into()); }
+        Ok(prepareInvocation(request, checkAccess, ToolEffect::READ, async move {
+            Ok(ToolResultData::SttTranscribeResultData(context.host().runtimeSupport().transcribeSpeech(args.request)?))
+        }))
     }
 }

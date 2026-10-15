@@ -182,6 +182,8 @@ pub struct RuntimeCoreNodeStatus {
     pub platform: String,
     pub model: String,
     pub reachable: bool,
+    /// Whether this device can be selected to host Core execution.
+    pub canExecute: bool,
     /// Peer Links one routed request traverses, reported only for multi-hop members.
     pub relayHops: Option<u32>,
     /// Hop node ids from the first hop through the member, reported only for multi-hop members.
@@ -306,6 +308,8 @@ pub trait ToolRuntimeSupport: Send + Sync {
     fn bindDeviceToolRuntime(&self, _runtime: Arc<dyn crate::tools::DeviceTools::DeviceToolRuntime>) -> Result<(), String> {
         Err("Device tool routing is not supported by this runtime".into())
     }
+    fn closeDeviceTransports(&self, _owner: &str) {}
+
     fn executeDeviceTool(&self, _request: operit_plugin_sdk::javascript::JsToolCallRequest,
         _preflight: Option<crate::tools::DeviceTools::DeviceToolPreflight>)
         -> operit_plugin_sdk::javascript::JsExecutionCompletion<operit_plugin_sdk::javascript::JsToolCallResult> {
@@ -338,6 +342,16 @@ pub trait ToolRuntimeSupport: Send + Sync {
     fn listModelSummaries(
         &self,
     ) -> Result<Vec<operit_plugin_sdk::js_sdk::models::ModelsSummary>, String>;
+    /// Synthesizes encoded audio through the configured provider on this host.
+    fn synthesizeSpeech(&self, _request: operit_plugin_sdk::js_sdk::tts::TtsSynthesizeRequest)
+        -> Result<operit_plugin_sdk::js_sdk::results::TtsSynthesizeResultData, String> {
+        Err("Speech synthesis is unavailable on this host".into())
+    }
+    /// Recognizes supplied audio through the configured provider on this host.
+    fn transcribeSpeech(&self, _request: operit_plugin_sdk::js_sdk::stt::SttTranscribeRequest)
+        -> Result<operit_plugin_sdk::js_sdk::results::SttTranscribeResultData, String> {
+        Err("Speech recognition is unavailable on this host".into())
+    }
     /// Reads complete configured speech records directly from the canonical configuration manager.
     #[allow(non_snake_case)]
     fn listTtsConfigs(
@@ -592,6 +606,7 @@ mod tests {
             platform: "android".to_string(),
             model: "M2007J1SC".to_string(),
             reachable,
+            canExecute: true,
             relayHops: None,
             relayPath: None,
         }

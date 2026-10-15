@@ -3467,13 +3467,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeControlCapabilityNetworkRelay => '中继网络流量';
 
   @override
-  String get settingsRuntimeControlCapabilityStorageProvide => '提供存储空间';
+  String get settingsRuntimeControlCapabilityStorageProvide => '保存共享数据副本';
 
   @override
-  String get settingsRuntimeControlCapabilityRuntimeExecute => '执行任务';
-
-  @override
-  String get settingsRuntimeControlCapabilityChatRead => '读取聊天记录';
+  String get settingsRuntimeControlCapabilityRuntimeExecute => '承载 Core 执行';
 
   @override
   String get settingsRuntimeControlCapabilityViewDevices => '查看设备与当前身份';
@@ -3490,16 +3487,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeControlRoleAdministrator => '管理员';
 
   @override
-  String get settingsRuntimeControlRoleAuditor => '审计员';
-
-  @override
   String get settingsRuntimeControlRoleRelay => '中继节点';
 
   @override
-  String get settingsRuntimeControlRoleStorage => '存储节点';
-
-  @override
-  String get settingsRuntimeControlRoleRunner => '执行节点';
+  String get settingsRuntimeControlRoleEdge => '边缘节点';
 
   @override
   String get settingsRuntimeControlRoleUser => '普通用户';
