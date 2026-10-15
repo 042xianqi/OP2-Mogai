@@ -31,10 +31,12 @@ pub trait RuntimePeerService: Send + Sync {
     /// Starts pairing over PeerLink using ephemeral keys and identity-bound proofs.
     /// Every transport requires confirmation with the code shown by the receiving device.
     /// Pairing grants no Space membership or business-call authorization.
+    /// transport 为 None 时按地址自动判定载体：URL scheme 直接映射，
+    /// 裸 `ip:port` 用一次性探测连接分类。
     async fn startPairing(
         &self,
         target: PeerEndpoint,
-        transport: PeerTransport,
+        transport: Option<PeerTransport>,
     ) -> Result<PendingPairing, CoreLinkError>;
 
     /// 按配对标识取出本地待确认状态，通过同一 Link Call 流程提交确认码。

@@ -2323,6 +2323,13 @@ class AppLocalizationsEn extends AppLocalizations {
       'host:port, for example 192.168.1.10:37195';
 
   @override
+  String get settingsRuntimeTransportAuto => 'Auto (recommended)';
+
+  @override
+  String get settingsRuntimeTransportAutoHint =>
+      'Enter host:port; the carrier (HTTP/WebSocket/TCP) is detected automatically';
+
+  @override
   String settingsRuntimeConnectionFailed(String error) {
     return 'Device connection failed: $error';
   }
@@ -4117,4 +4124,56 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get settingsRuntimeControlDeleteRoleMessage =>
       'Devices holding this role fall back to the default user identity.';
+
+  @override
+  String get settingsAppearanceThemeConfigSource => 'Create from';
+
+  @override
+  String get settingsAppearanceThemeConfigFromDefaults => 'Default appearance';
+
+  @override
+  String get settingsAppearanceThemeConfigFromCurrent => 'Current appearance';
+
+  @override
+  String settingsAppearanceThemeConfigInherit(String name) {
+    return 'Inherit: $name';
+  }
+
+  @override
+  String settingsAppearanceThemeConfigFromTemplate(String name) {
+    return 'Template: $name';
+  }
+
+  @override
+  String get settingsAppearanceThemeConfigDefaultsHint =>
+      'Start with the app defaults';
+
+  @override
+  String get settingsAppearanceThemeConfigCurrentHint =>
+      'Copy your current appearance';
+
+  @override
+  String get settingsAppearanceThemeConfigSavedSources =>
+      'Inherit a saved configuration';
+
+  @override
+  String get settingsAppearanceThemeConfigPluginSources =>
+      'Use a plugin template';
+
+  @override
+  String get settingsAppearanceThemeConfigSourceHint =>
+      'Templates come from installed plugins. New configurations can be edited independently and use existing appearance sync.';
+
+  @override
+  String get settingsAppearanceLoadFailed => 'Unable to load appearance';
+
+  @override
+  String get settingsAppearanceRepairHint =>
+      'Your saved appearance has not been replaced. Retry after repairing its resources, or reset appearance explicitly. Reset keeps your avatar and saved configurations and selects custom appearance.';
+
+  @override
+  String get settingsAppearanceRetry => 'Retry';
+
+  @override
+  String get settingsAppearanceResetAfterError => 'Reset appearance';
 }

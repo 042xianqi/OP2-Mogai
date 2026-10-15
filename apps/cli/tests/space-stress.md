@@ -293,3 +293,18 @@ A/B/D 最终成员列表均为 A/B/D，控制状态中的成员和身份映射�
 python3 apps/cli/tests/space_stress_session.py --focus silent-removal --transport tcp
 python3 apps/cli/tests/space_stress_session.py --focus silent-removal --transport mixed
 ```
+
+
+## 两个 CLI 单向配对与状态同步（2026-10-15）
+
+新增 `--focus directed-pair`，仅启动两个隔离的真实 CLI。进程网络策略只允许 B 主动连接 A，禁止 A 主动发起任何 TCP 连接，并执行允许/禁止端口探针。全程仅由 B 发起一次配对；A 的配对记录为 inbound=true/outbound=false，B 为 inbound=false/outbound=true，没有反向再次配对。
+
+配对本身保留双方独立空间，不生成加入申请。B 正常申请加入 A 的空间并获批后，两端空间信息（包括名称、版本、成员）和完整控制状态相同；身份均为 A=admin、B=user；两端设备列表均包含双方，且双方查看对方状态均为 Online。A 修改空间名称，B 自动同步；配置载荷通过既有连接双向同步。
+
+分别强杀 B、A：存活端的设备列表和状态接口均显示对方 Offline，但保留两端成员资格。存活端为离线端写入配置后，重启离线端，无需再次配对或申请加入即恢复双方 Online、同步离线配置；重连后再次验证双向配置同步。
+
+纯 TCP 共 6/6 场景、164 条真实 CLI 命令通过，用时 7.89 秒。报告为 `/tmp/operit-space-stress-15p5lkrv/report.json`，清理错误为空，所有测试 CLI 子进程均已退出。 此次使用工作区已有的 `apps/cli/target/debug/operit2` 二进制。收尾时工作区存在另外的未解决合并冲突：`core/crates/node/edge/src/space_admission_tests.rs` 和 `core/crates/tool/services/src/tools/AIToolHandler.rs`，且部分运行时源码晚于该二进制。因此这次运行证明现有二进制的行为，不代表当前合并中的源码已经构建验证。未修改或处理这些合并冲突。逐端证据保留为 `joined-{A,B}.json`、`renamed-{A,B}.json`、`restarted-{A,B}-{A,B}.json`；离线状态为 `offline-B-seen-by-A.json`、`offline-A-seen-by-B.json`。本轮只补回归，无产品代码改动。
+
+```sh
+python3 apps/cli/tests/space_stress_session.py --focus directed-pair --transport tcp
+```

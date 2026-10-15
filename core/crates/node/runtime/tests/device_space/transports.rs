@@ -103,7 +103,8 @@ async fn tcpAdmissionReturnChannel(macBind: &str) {
                     nodeId: "tcp-ios".into(),
                     address,
                 },
-                PeerTransport::Tcp)
+                Some(PeerTransport::Tcp),
+            )
             .await
             .unwrap();
         let prompts = iosPeer.pairingPrompts().unwrap();
@@ -425,7 +426,8 @@ async fn real_tcp_space_remove_deletes_pairing_and_allows_repairing() {
                     nodeId: "remove-ios".into(),
                     address: address.clone(),
                 },
-                PeerTransport::Tcp)
+                Some(PeerTransport::Tcp),
+            )
             .await
             .unwrap();
         let code = iosPeer
@@ -476,7 +478,8 @@ async fn real_tcp_space_remove_deletes_pairing_and_allows_repairing() {
                     nodeId: "remove-ios".into(),
                     address,
                 },
-                PeerTransport::Tcp)
+                Some(PeerTransport::Tcp),
+            )
             .await
             .unwrap();
         assert_ne!(repaired.pairingId, pairing.pairingId);
@@ -589,7 +592,8 @@ async fn real_tcp_listener_gate_reports_revocation_to_dialer() {
                     nodeId: "gate-ios".into(),
                     address,
                 },
-                PeerTransport::Tcp)
+                Some(PeerTransport::Tcp),
+            )
             .await
             .unwrap();
         let code = iosPeer
@@ -724,7 +728,7 @@ async fn outbound_only_hosts_pair_over_http_and_websocket() {
             assert!(clientPromptFlow.value().is_empty());
             assert!(client.discoverPeers(1).await.is_err());
             assert!(server.pairingPrompts().unwrap().is_empty());
-            let pairing = client.startPairing(serverRouter.localNodeId(), endpoint.clone(), transport).await.unwrap();
+            let pairing = client.startPairing(serverRouter.localNodeId(), endpoint.clone(), Some(transport)).await.unwrap();
             let prompts = server.pairingPrompts().unwrap();
             assert_eq!(prompts.len(), 1);
             let code = prompts.iter().find(|prompt| prompt.pairingId == pairing.pairingId)
@@ -745,11 +749,11 @@ async fn outbound_only_hosts_pair_over_http_and_websocket() {
             assert!(serverPeer.pairedPeers().unwrap()[0].inbound);
             for nodeId in [serverRouter.localNodeId(), String::new()] {
                 let duplicate = clientPeer.startPairing(PeerEndpoint { nodeId, address: endpoint.clone() },
-                    transport).await.unwrap_err();
+                    Some(transport)).await.unwrap_err();
                 assert_eq!(duplicate.code, "PEER_ALREADY_PAIRED");
             }
             let reverse = serverPeer.startPairing(PeerEndpoint { nodeId: clientRouter.localNodeId(), address: endpoint.clone() },
-                transport).await.unwrap_err();
+                Some(transport)).await.unwrap_err();
             assert_eq!(reverse.code, "PEER_ALREADY_PAIRED");
             // Address-only discovery learned the identity after starting a new
             // challenge. Receiver now allows challenges for retained pairings;
@@ -765,7 +769,7 @@ async fn outbound_only_hosts_pair_over_http_and_websocket() {
             let old = serverStore.records::<crate::PeerStateStore::StoredInbound>(operit_util::RuntimeStorageLayout::RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH).unwrap();
             clientPeer.removePairedPeer(&serverRouter.localNodeId()).await.unwrap();
             assert_eq!(serverPeer.pairedPeers().unwrap().len(), 1);
-            let fresh = client.startPairing(serverRouter.localNodeId(), endpoint.clone(), transport).await.unwrap();
+            let fresh = client.startPairing(serverRouter.localNodeId(), endpoint.clone(), Some(transport)).await.unwrap();
             let code = server.pairingPrompts().unwrap().into_iter()
                 .find(|prompt| prompt.pairingId == fresh.pairingId).unwrap().confirmationCode;
             assert!(old.keys().all(|id| serverStore.records::<crate::PeerStateStore::StoredInbound>(operit_util::RuntimeStorageLayout::RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH).unwrap().contains_key(id)));

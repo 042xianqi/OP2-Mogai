@@ -1122,6 +1122,8 @@
   "settingsRuntimeFinishPairing": "完成连接",
   "settingsRuntimeBaseUrl": "设备地址",
   "settingsRuntimeTcpAddressHint": "host:端口，例如 192.168.1.10:37195",
+  "settingsRuntimeTransportAuto": "自动（推荐）",
+  "settingsRuntimeTransportAutoHint": "输入 IP:端口，自动识别 HTTP/WebSocket/TCP 协议",
   "settingsRuntimeConnectionFailed": "设备连接失败：{error}",
   "@settingsRuntimeConnectionFailed": {
     "placeholders": {
@@ -1729,7 +1731,13 @@
   "settingsRuntimeControlDeviceId": "设备 ID",
   "settingsRuntimeControlNoAudit": "暂无操作记录，身份和设备的变更会显示在这里",
   "settingsRuntimeControlAuditCount": "{count} 条记录",
-  "@settingsRuntimeControlAuditCount": {"placeholders": {"count": {"type": "int"}}},
+  "@settingsRuntimeControlAuditCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "settingsRuntimeControlNoBindings": "暂无设备绑定",
   "settingsRuntimeControlGranted": "已授予",
   "settingsRuntimeControlRevoked": "已撤销",
@@ -1750,7 +1758,13 @@
   "settingsRuntimeControlIdentityResetDone": "身份已重置为默认用户",
   "settingsRuntimeControlIdentityDefinitions": "身份权限",
   "settingsRuntimeControlIdentityCount": "{count} 个身份",
-  "@settingsRuntimeControlIdentityCount": {"placeholders": {"count": {"type": "int"}}},
+  "@settingsRuntimeControlIdentityCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "settingsRuntimeControlIdentityAssignment": "身份分配",
   "settingsRuntimeControlNoIdentity": "未设置身份",
   "settingsRuntimeControlOnline": "在线",
@@ -1992,16 +2006,20 @@
       }
     }
   },
-
   "settingsPeerPortModeHelp": "固定模式使用填写的 IP 和端口，适用于内网穿透和端口映射。固定端口被占用时会报错，不会改变监听地址。",
   "settingsPeerPortMode": "端口分配方式",
   "settingsPeerPortModeFixed": "固定 IP 和端口",
   "settingsPeerPortModeAutomatic": "自动分配端口",
-
   "settingsPeerAdvanced": "高级选项",
   "settingsPeerDiscoveryUnavailable": "当前 Host 不支持在局域网广播监听服务。支持的协议仍可通过地址直接连接。",
   "settingsPeerTransportUnavailable": "当前 Host 不支持 {transport} 监听。",
-  "@settingsPeerTransportUnavailable": {"placeholders": {"transport": {"type": "String"}}},
+  "@settingsPeerTransportUnavailable": {
+    "placeholders": {
+      "transport": {
+        "type": "String"
+      }
+    }
+  },
   "settingsPeerTransportHelp": "暴露方式（可多选）。HTTP 和 WebSocket 可共用端口；TCP 暂不能与它们共用端口。蓝牙需要平台支持。关闭发现并取消全部选择可停止监听。修改设置会中断现有连接；仅关闭发现不会关闭直接连接。",
   "settingsPeerBindAddress": "监听 IP 地址",
   "settingsPeerBindAddressHelp": "例如 0.0.0.0，允许局域网访问；也支持 IPv6 地址。",
@@ -2072,14 +2090,26 @@
   "deviceSpacePairedOnly": "已配对",
   "deviceSpaceDirectLink": "直连",
   "deviceSpaceRelayHops": "经中继 {hops} 跳",
-  "@deviceSpaceRelayHops": {"placeholders": {"hops": {"type": "int"}}},
+  "@deviceSpaceRelayHops": {
+    "placeholders": {
+      "hops": {
+        "type": "int"
+      }
+    }
+  },
   "deviceSpaceRelayPath": "路径",
   "deviceSpaceLocalDevice": "本机",
   "deviceSpaceManageDevice": "管理设备",
   "deviceSpaceConnectDirect": "建立直连",
   "deviceSpaceConnectDirectHint": "该设备已是本空间成员。与它配对成功即建立直连，无需重新加入空间；配对需要对方显示、由你输入六位确认码。",
   "deviceSpaceDirectLinkEstablished": "已建立直连：{device}",
-  "@deviceSpaceDirectLinkEstablished": {"placeholders": {"device": {"type": "String"}}},
+  "@deviceSpaceDirectLinkEstablished": {
+    "placeholders": {
+      "device": {
+        "type": "String"
+      }
+    }
+  },
   "deviceSpaceUnpair": "解除配对",
   "deviceSpaceMore": "更多设备操作",
   "deviceSpaceConnectionSettings": "连接设置",
@@ -2094,7 +2124,13 @@
   "workspaceUndo": "撤销",
   "workspaceRedo": "重做",
   "workspaceInsertSymbol": "插入 {symbol}",
-  "@workspaceInsertSymbol": {"placeholders": {"symbol": {"type": "String"}}},
+  "@workspaceInsertSymbol": {
+    "placeholders": {
+      "symbol": {
+        "type": "String"
+      }
+    }
+  },
   "settingsAppearanceThemeConfig": "主题配置",
   "settingsAppearanceThemeConfigCustom": "未绑定的外观",
   "settingsAppearanceThemeConfigCreate": "新建主题配置",
@@ -2115,6 +2151,40 @@
   "settingsRuntimeControlEditRole": "编辑角色",
   "settingsRuntimeControlDeleteRole": "删除角色",
   "settingsRuntimeControlDeleteRoleTitle": "删除角色 {roleName}？",
-  "@settingsRuntimeControlDeleteRoleTitle": {"placeholders":{"roleName":{"type":"String"}}},
-  "settingsRuntimeControlDeleteRoleMessage": "持有该角色的设备将回退为默认的普通用户身份。"
+  "@settingsRuntimeControlDeleteRoleTitle": {
+    "placeholders": {
+      "roleName": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsRuntimeControlDeleteRoleMessage": "持有该角色的设备将回退为默认的普通用户身份。",
+  "settingsAppearanceThemeConfigSource": "创建来源",
+  "settingsAppearanceThemeConfigFromDefaults": "默认外观",
+  "settingsAppearanceThemeConfigFromCurrent": "当前外观",
+  "settingsAppearanceThemeConfigInherit": "继承：{name}",
+  "@settingsAppearanceThemeConfigInherit": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsAppearanceThemeConfigFromTemplate": "模板：{name}",
+  "@settingsAppearanceThemeConfigFromTemplate": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsAppearanceThemeConfigDefaultsHint": "从软件默认样式开始",
+  "settingsAppearanceThemeConfigCurrentHint": "复制现在的外观设置",
+  "settingsAppearanceThemeConfigSavedSources": "继承已有配置",
+  "settingsAppearanceThemeConfigPluginSources": "从插件模板新建",
+  "settingsAppearanceThemeConfigSourceHint": "模板来自已安装的插件。新建后可独立编辑，并沿用外观配置同步。",
+  "settingsAppearanceLoadFailed": "无法加载外观设置",
+  "settingsAppearanceRepairHint": "已保存的外观没有被替换。修复资源后可以重试，也可以主动重置外观。重置会保留头像和已保存的配置，并切换到自定义外观。",
+  "settingsAppearanceRetry": "重试",
+  "settingsAppearanceResetAfterError": "重置外观"
 }

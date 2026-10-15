@@ -166,7 +166,7 @@ impl RuntimeRemoteLinkService {
     }
     /// Creates pending pairing for subsequent code confirmation.
     pub async fn startPairing(&self, nodeId: String, address: String,
-        transport: operit_peer_link::PeerTransport,
+        transport: Option<operit_peer_link::PeerTransport>,
     ) -> Result<crate::NodeServices::PendingPairing, String> {
         self.nodeServices()?.peers().startPairing(crate::NodeServices::PeerEndpoint { nodeId, address },
             transport).await.map_err(|error| error.to_string())

@@ -63,7 +63,7 @@ impl CoreAccess {
                                     nodeId: node.into(),
                                     address: address.into(),
                                 },
-                                PeerTransport::Tcp,
+                                Some(PeerTransport::Tcp),
                             )
                             .await
                             .map_err(|e| e.to_string())?,

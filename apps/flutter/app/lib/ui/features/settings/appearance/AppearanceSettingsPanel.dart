@@ -131,54 +131,56 @@ class AppearanceSettingsPanel extends StatelessWidget {
           title: l10n.settingsAppearanceTextSection,
           icon: Icons.text_fields_outlined,
           children: <Widget>[
-            _AppearanceFieldBlock(
-              label: l10n.settingsAppearanceFontFamily,
-              badge: _fontFamilyLabel(l10n, snapshot),
-              child: _FontFamilySelector(
-                value: _fontFamilyPresetFromSnapshot(snapshot),
-                onChanged: (value) {
-                  unawaited(
-                    themeController.saveThemeSettings(
-                      fontType: UserPreferencesManager.FONT_TYPE_SYSTEM,
-                      systemFontName: _systemFontNameFromPreset(value),
-                      useCustomFont: false,
-                      customFontPath: '',
-                    ),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 10),
-            _CompactAssetTile(
-              icon: Icons.font_download_outlined,
-              title: l10n.settingsAppearanceCustomFont,
-              subtitle: _customFontLabel(l10n, snapshot.customFontPath),
-              actions: <Widget>[
-                FilledButton.tonalIcon(
-                  style: SettingsControlStyles.sectionTextButton(),
-                  onPressed: () {
-                    unawaited(_pickCustomFont(themeController));
+            ...<Widget>[
+              _AppearanceFieldBlock(
+                label: l10n.settingsAppearanceFontFamily,
+                badge: _fontFamilyLabel(l10n, snapshot),
+                child: _FontFamilySelector(
+                  value: _fontFamilyPresetFromSnapshot(snapshot),
+                  onChanged: (value) {
+                    unawaited(
+                      themeController.saveThemeSettings(
+                        fontType: UserPreferencesManager.FONT_TYPE_SYSTEM,
+                        systemFontName: _systemFontNameFromPreset(value),
+                        useCustomFont: false,
+                        customFontPath: '',
+                      ),
+                    );
                   },
-                  icon: const Icon(Icons.folder_open_outlined, size: 16),
-                  label: Text(l10n.settingsAppearanceChooseCustomFont),
                 ),
-                if (hasCustomFont)
-                  SettingsEntityIconButton(
-                    tooltip: l10n.settingsAppearanceClearCustomFont,
-                    icon: Icons.close,
+              ),
+              const SizedBox(height: 10),
+              _CompactAssetTile(
+                icon: Icons.font_download_outlined,
+                title: l10n.settingsAppearanceCustomFont,
+                subtitle: _customFontLabel(l10n, snapshot.customFontPath),
+                actions: <Widget>[
+                  FilledButton.tonalIcon(
+                    style: SettingsControlStyles.sectionTextButton(),
                     onPressed: () {
-                      unawaited(
-                        themeController.saveThemeSettings(
-                          useCustomFont: false,
-                          fontType: UserPreferencesManager.FONT_TYPE_SYSTEM,
-                          customFontPath: '',
-                        ),
-                      );
+                      unawaited(_pickCustomFont(themeController));
                     },
+                    icon: const Icon(Icons.folder_open_outlined, size: 16),
+                    label: Text(l10n.settingsAppearanceChooseCustomFont),
                   ),
-              ],
-            ),
-            const SizedBox(height: 8),
+                  if (hasCustomFont)
+                    SettingsEntityIconButton(
+                      tooltip: l10n.settingsAppearanceClearCustomFont,
+                      icon: Icons.close,
+                      onPressed: () {
+                        unawaited(
+                          themeController.saveThemeSettings(
+                            useCustomFont: false,
+                            fontType: UserPreferencesManager.FONT_TYPE_SYSTEM,
+                            customFontPath: '',
+                          ),
+                        );
+                      },
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+            ],
             SettingsSliderRow(
               icon: Icons.zoom_in_outlined,
               label: l10n.settingsAppearanceInterfaceScale,
@@ -1002,8 +1004,8 @@ class _AppearanceHeaderBar extends StatelessWidget {
 }
 
 class _ResponsivePreviewSplitTabView extends StatefulWidget {
-  /// Creates the responsive independent appearance controls and their preview.
   const _ResponsivePreviewSplitTabView({
+    super.key,
     required this.previewCard,
     required this.children,
   });
@@ -3451,6 +3453,13 @@ String _bubbleImageRenderModeValue(String value) {
       : UserPreferencesManager.BUBBLE_IMAGE_RENDER_MODE_TILED_NINE_SLICE;
 }
 
+String _bubbleImageRenderModeLabel(AppLocalizations l10n, String value) {
+  return _bubbleImageRenderModeValue(value) ==
+          UserPreferencesManager.BUBBLE_IMAGE_RENDER_MODE_NINE_PATCH
+      ? l10n.settingsAppearanceBubbleImageNinePatch
+      : l10n.settingsAppearanceBubbleImageTiledNineSlice;
+}
+
 enum _FontFamilyPreset { defaultFont, serif, monospace }
 
 class _FontFamilySelector extends StatelessWidget {
@@ -3836,6 +3845,27 @@ class _TwoColumnSliderGrid extends StatelessWidget {
   }
 }
 
+class _InfoLine extends StatelessWidget {
+  const _InfoLine({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: <Widget>[
+          Expanded(child: Text(label)),
+          const SizedBox(width: 12),
+          SettingsInfoBadge(label: value),
+        ],
+      ),
+    );
+  }
+}
+
 class _BodyText extends StatelessWidget {
   const _BodyText(this.text);
 
@@ -3855,6 +3885,28 @@ class _BodyText extends StatelessWidget {
   }
 }
 
+class _SettingSwitch extends StatelessWidget {
+  const _SettingSwitch({
+    required this.title,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String title;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SettingsSwitchRow(
+      title: title,
+      value: value,
+      onChanged: onChanged,
+      dense: true,
+    );
+  }
+}
+
 class _DialogSectionTitle extends StatelessWidget {
   const _DialogSectionTitle(this.text);
 
@@ -3870,6 +3922,111 @@ class _DialogSectionTitle extends StatelessWidget {
           fontWeight: FontWeight.w700,
           color: Theme.of(context).colorScheme.primary,
         ),
+      ),
+    );
+  }
+}
+
+class _PercentSlider extends StatelessWidget {
+  const _PercentSlider({
+    required this.label,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.onChanged,
+  });
+
+  final String label;
+  final double value;
+  final double min;
+  final double max;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SettingsSliderRow(
+      compact: true,
+      label: label,
+      value: value,
+      min: min,
+      max: max,
+      divisions: ((max - min) * 100).round().clamp(1, 100),
+      valueText: '${(value * 100).round()}%',
+      onChanged: onChanged,
+    );
+  }
+}
+
+class _ValueSlider extends StatelessWidget {
+  const _ValueSlider({
+    required this.label,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.divisions,
+    required this.onChanged,
+    this.valueText,
+  });
+
+  final String label;
+  final double value;
+  final double min;
+  final double max;
+  final int divisions;
+  final String? valueText;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SettingsSliderRow(
+      compact: true,
+      label: label,
+      value: value,
+      min: min,
+      max: max,
+      divisions: divisions,
+      valueText: valueText ?? value.toStringAsFixed(2),
+      onChanged: onChanged,
+    );
+  }
+}
+
+class _AvatarActionRow extends StatelessWidget {
+  const _AvatarActionRow({
+    required this.chooseLabel,
+    required this.clearLabel,
+    required this.clearEnabled,
+    required this.onChoose,
+    required this.onClear,
+  });
+
+  final String chooseLabel;
+  final String clearLabel;
+  final bool clearEnabled;
+  final VoidCallback onChoose;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 4,
+        children: <Widget>[
+          FilledButton.tonalIcon(
+            style: SettingsControlStyles.sectionTextButton(),
+            onPressed: onChoose,
+            icon: const Icon(Icons.image_outlined, size: 16),
+            label: Text(chooseLabel),
+          ),
+          OutlinedButton.icon(
+            style: SettingsControlStyles.sectionTextButton(),
+            onPressed: clearEnabled ? onClear : null,
+            icon: const Icon(Icons.layers_clear_outlined, size: 16),
+            label: Text(clearLabel),
+          ),
+        ],
       ),
     );
   }

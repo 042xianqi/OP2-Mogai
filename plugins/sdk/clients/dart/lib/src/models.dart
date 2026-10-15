@@ -672,6 +672,8 @@ class ToolPkgContainerRuntime {
     required this.manifestExtensions,
     required this.author,
     required this.mainEntry,
+    required this.themes,
+    required this.license,
     required this.sourceType,
     required this.sourcePath,
     required this.subpackages,
@@ -725,6 +727,8 @@ class ToolPkgContainerRuntime {
     manifestExtensions: (value['manifestExtensions'] as Map).map((key, item) => MapEntry(key as String, item)),
     author: (value['author'] as List<Object?>).map((item) => item as String).toList(growable: false),
     mainEntry: value['mainEntry'] as String,
+    themes: (value['themes'] as List<Object?>).map((item) => ToolPkgManifestTheme.fromMessagePackValue(item as Map<String, Object?>)).toList(growable: false),
+    license: value['license'] == null ? null : value['license'] as String,
     sourceType: ToolPkgSourceType.fromMessagePackValue(value['sourceType'] as Map<String, Object?>),
     sourcePath: value['sourcePath'] as String,
     subpackages: (value['subpackages'] as List<Object?>).map((item) => ToolPkgSubpackageRuntime.fromMessagePackValue(item as Map<String, Object?>)).toList(growable: false),
@@ -778,6 +782,8 @@ class ToolPkgContainerRuntime {
     'manifestExtensions': manifestExtensions.map((key, item) => MapEntry(key, item)),
     'author': author.map((item) => item).toList(growable: false),
     'mainEntry': mainEntry,
+    'themes': themes.map((item) => item.toMessagePackValue()).toList(growable: false),
+    'license': license == null ? null : license!,
     'sourceType': sourceType.toMessagePackValue(),
     'sourcePath': sourcePath,
     'subpackages': subpackages.map((item) => item.toMessagePackValue()).toList(growable: false),
@@ -829,6 +835,8 @@ class ToolPkgContainerRuntime {
   final Map<String, Object?> manifestExtensions;
   final List<String> author;
   final String mainEntry;
+  final List<ToolPkgManifestTheme> themes;
+  final String? license;
   final ToolPkgSourceType sourceType;
   final String sourcePath;
   final List<ToolPkgSubpackageRuntime> subpackages;
@@ -1092,6 +1100,37 @@ class ToolPkgManifestRequirement {
   final String description;
   final String? minVersion;
   final String? maxVersion;
+}
+
+/// Generated SDK model for Rust type `operit_plugin_sdk::toolpkg::ToolPkgParser::ToolPkgManifestTheme`.
+class ToolPkgManifestTheme {
+  const ToolPkgManifestTheme({
+    required this.id,
+    required this.path,
+    required this.preview,
+    required this.files,
+  });
+
+  /// Decodes `operit_plugin_sdk::toolpkg::ToolPkgParser::ToolPkgManifestTheme` from a MessagePack value map.
+  factory ToolPkgManifestTheme.fromMessagePackValue(Map<String, Object?> value) => ToolPkgManifestTheme(
+    id: value['id'] as String,
+    path: value['path'] as String,
+    preview: value['preview'] as String,
+    files: (value['files'] as List<Object?>).map((item) => ManifestFile.fromMessagePackValue(item as Map<String, Object?>)).toList(growable: false),
+  );
+
+  /// Encodes this model into a MessagePack-compatible value map.
+  Map<String, Object?> toMessagePackValue() => <String, Object?>{
+    'id': id,
+    'path': path,
+    'preview': preview,
+    'files': files.map((item) => item.toMessagePackValue()).toList(growable: false),
+  };
+
+  final String id;
+  final String path;
+  final String preview;
+  final List<ManifestFile> files;
 }
 
 /// Generated SDK model for Rust type `operit_plugin_sdk::toolpkg::ToolPkgParser::ToolPkgMarketOrigin`.
@@ -1557,6 +1596,37 @@ class ToolPkgWorkspaceTemplateRuntime {
   final LocalizedText description;
   final String resource_key;
   final String project_type;
+}
+
+/// Generated SDK model for Rust type `operit_plugin_theme::ManifestFile`.
+class ManifestFile {
+  const ManifestFile({
+    required this.path,
+    required this.media_type,
+    required this.bytes,
+    required this.sha256,
+  });
+
+  /// Decodes `operit_plugin_theme::ManifestFile` from a MessagePack value map.
+  factory ManifestFile.fromMessagePackValue(Map<String, Object?> value) => ManifestFile(
+    path: value['path'] as String,
+    media_type: value['mediaType'] as String,
+    bytes: (value['bytes'] as num).toInt(),
+    sha256: value['sha256'] as String,
+  );
+
+  /// Encodes this model into a MessagePack-compatible value map.
+  Map<String, Object?> toMessagePackValue() => <String, Object?>{
+    'path': path,
+    'mediaType': media_type,
+    'bytes': bytes,
+    'sha256': sha256,
+  };
+
+  final String path;
+  final String media_type;
+  final int bytes;
+  final String sha256;
 }
 
 /// Generated SDK model for Rust type `operit_tools::ConversationMarkupManager::ToolResult`.

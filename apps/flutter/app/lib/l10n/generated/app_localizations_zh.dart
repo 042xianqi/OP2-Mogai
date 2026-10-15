@@ -2232,6 +2232,13 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsRuntimeTcpAddressHint => 'host:端口，例如 192.168.1.10:37195';
 
   @override
+  String get settingsRuntimeTransportAuto => '自动（推荐）';
+
+  @override
+  String get settingsRuntimeTransportAutoHint =>
+      '输入 IP:端口，自动识别 HTTP/WebSocket/TCP 协议';
+
+  @override
   String settingsRuntimeConnectionFailed(String error) {
     return '设备连接失败：$error';
   }
@@ -3952,4 +3959,52 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String get settingsRuntimeControlDeleteRoleMessage =>
       '持有该角色的设备将回退为默认的普通用户身份。';
+
+  @override
+  String get settingsAppearanceThemeConfigSource => '创建来源';
+
+  @override
+  String get settingsAppearanceThemeConfigFromDefaults => '默认外观';
+
+  @override
+  String get settingsAppearanceThemeConfigFromCurrent => '当前外观';
+
+  @override
+  String settingsAppearanceThemeConfigInherit(String name) {
+    return '继承：$name';
+  }
+
+  @override
+  String settingsAppearanceThemeConfigFromTemplate(String name) {
+    return '模板：$name';
+  }
+
+  @override
+  String get settingsAppearanceThemeConfigDefaultsHint => '从软件默认样式开始';
+
+  @override
+  String get settingsAppearanceThemeConfigCurrentHint => '复制现在的外观设置';
+
+  @override
+  String get settingsAppearanceThemeConfigSavedSources => '继承已有配置';
+
+  @override
+  String get settingsAppearanceThemeConfigPluginSources => '从插件模板新建';
+
+  @override
+  String get settingsAppearanceThemeConfigSourceHint =>
+      '模板来自已安装的插件。新建后可独立编辑，并沿用外观配置同步。';
+
+  @override
+  String get settingsAppearanceLoadFailed => '无法加载外观设置';
+
+  @override
+  String get settingsAppearanceRepairHint =>
+      '已保存的外观没有被替换。修复资源后可以重试，也可以主动重置外观。重置会保留头像和已保存的配置，并切换到自定义外观。';
+
+  @override
+  String get settingsAppearanceRetry => '重试';
+
+  @override
+  String get settingsAppearanceResetAfterError => '重置外观';
 }

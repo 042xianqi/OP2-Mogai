@@ -27,11 +27,12 @@ use operit_store::sync::SqlChatSyncStore::{SqlChatSyncStore, CHAT_SYNC_DOMAIN};
 use operit_store::CoreNodeBindingStore::{CoreNodeBindingStore, BINDING_SYNC_DOMAIN};
 use operit_store::NetworkControlStore::{NetworkControlStore, NETWORK_CONTROL_SYNC_DOMAIN};
 use operit_store::PluginStorage::{self, PLUGIN_STORAGE_SYNC_DOMAIN};
-use operit_store::PreferencesDataStore::StateFlow;
+use operit_store::PreferencesDataStore::{Flow, StateFlow};
 use operit_store::PreferencesDataStore::{PreferencesDataStore, PreferencesSyncedEntry};
 use operit_store::RuntimeFileSyncStore::{
     RuntimeFileSyncReference, RuntimeFileSyncStore, RUNTIME_FILE_SYNC_DOMAIN,
 };
+use operit_plugin_theme::ThemeValidationReceipt;
 use operit_store::RuntimeStorageHost::{
     defaultRuntimeStorageHost, setDefaultHostSecretStore, setDefaultRuntimeSqliteHost,
     setDefaultRuntimeStorageHost,
@@ -58,6 +59,31 @@ use operit_util::RuntimeStoreRoot::{setDefaultRuntimeStoreRootConfig, RuntimeSto
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::Mutex as AsyncMutex;
+
+/// One in-memory asset handed to the preview surface. It is not a library
+/// record and is never written by the preview API.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemePreviewAsset {
+    pub path: String,
+    /// Theme media crosses the CoreLink boundary as MessagePack bin data.
+    /// Without this annotation serde treats `Vec<u8>` as an integer array,
+    /// while the generated Dart proxy correctly expects `Uint8List`/bin.
+    #[serde(with = "serde_bytes")]
+    pub bytes: Vec<u8>,
+}
+
+/// Receipt for the preview phase. It deliberately carries no selection or
+/// persistence result.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemePreviewReceipt {
+    pub validation: ThemeValidationReceipt,
+    pub theme_id: String,
+    pub version: String,
+    pub theme_json: String,
+    pub assets: Vec<ThemePreviewAsset>,
+}
 
 use operit_util::AppLogger::AppLogger;
 use operit_util::OperitPaths;
@@ -1211,6 +1237,72 @@ impl OperitApplication {
             .readBlobChunk(&contentHash, offset, length)
     }
 
+    /// Builds a validated creation payload without changing installed packages or appearance.
+    #[allow(non_snake_case)]
+    fn previewThemeArchive(
+        &self,
+        archiveBytes: Vec<u8>,
+        themeId: String,
+    ) -> Result<ThemePreviewReceipt, String> {
+        let package = self.validateThemeArchive(&archiveBytes, &themeId)?;
+        let themeJson = String::from_utf8(package.theme().canonical_bytes())
+            .map_err(|error| error.to_string())?;
+        let assets = package
+            .receipt()
+            .files
+            .iter()
+            .filter(|file| file.path == "preview.png" || file.path.starts_with("assets/"))
+            .map(|file| {
+                let bytes = package
+                    .file_bytes(&file.path)
+                    .ok_or_else(|| format!("validated preview asset disappeared: {}", file.path))?;
+                Ok(ThemePreviewAsset {
+                    path: file.path.clone(),
+                    bytes: bytes.to_vec(),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(ThemePreviewReceipt {
+            validation: package.receipt().clone(),
+            theme_id: package.metadata().theme_id.clone(),
+            version: package.metadata().version.clone(),
+            theme_json: themeJson,
+            assets,
+        })
+    }
+
+    /// Prepares a declared template from the current ToolPkg registry without persisting a selection.
+    #[allow(non_snake_case)]
+    pub fn previewToolPkgTheme(
+        &self,
+        packageName: String,
+        templateId: String,
+    ) -> Result<ThemePreviewReceipt, String> {
+        let bytes = {
+            let manager = self.packageManager();
+            let manager = manager.lock().map_err(|error| error.to_string())?;
+            let runtime = manager.getToolPkgContainerRuntime(&packageName)
+                .ok_or("ToolPkg is not registered")?;
+            if !runtime.themes.iter().any(|template| template.id == templateId) {
+                return Err("Theme template is not declared by this ToolPkg".to_string());
+            }
+            manager.readToolPkgArchiveBytes(&packageName)?
+        };
+        self.previewThemeArchive(bytes, format!("{packageName}:{templateId}"))
+    }
+
+    /// Validates an explicitly declared template using the ordinary ToolPkg parser.
+    #[allow(non_snake_case)]
+    fn validateThemeArchive(
+        &self,
+        archiveBytes: &[u8],
+        themeId: &str,
+    ) -> Result<operit_plugin_theme::ValidatedThemeTemplate, String> {
+        operit_plugin_sdk::toolpkg::ToolPkgParser::ToolPkgArchiveParser::readThemeTemplates(archiveBytes)?
+            .into_iter().find(|template| template.metadata().theme_id == themeId)
+            .ok_or_else(|| "Selected theme template is not declared by this ToolPkg".to_string())
+    }
+
     /// Creates the persistent sync operation store owned by this application instance.
     #[allow(non_snake_case)]
     fn runtimeSyncOperationStore(&self) -> Result<SyncOperationStore, String> {
@@ -1341,5 +1433,24 @@ fn mergeSyncClock(target: &mut SyncClock, source: SyncClock) {
         if sequence > target.sequenceFor(&deviceId) {
             target.setSequence(deviceId, sequence);
         }
+    }
+}
+
+#[cfg(test)]
+mod theme_preview_wire_tests {
+    use super::ThemePreviewAsset;
+    use operit_link::{toCoreValue, CoreValue};
+
+    #[test]
+    fn preview_asset_bytes_use_messagepack_binary() {
+        let value = toCoreValue(&ThemePreviewAsset {
+            path: "assets/images/example.png".to_string(),
+            bytes: vec![0, 127, 255],
+        })
+        .expect("theme preview asset must convert to a CoreValue map");
+        let CoreValue::Map(fields) = value else {
+            panic!("theme preview asset must convert to a CoreValue map");
+        };
+        assert_eq!(fields.get("bytes"), Some(&CoreValue::Bytes(vec![0, 127, 255].into())));
     }
 }

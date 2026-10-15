@@ -241,13 +241,16 @@ async fn execute_node_pairing_command(
     args: &[String],
 ) -> Result<(), String> {
     use operit_node_runtime::NodeServices::{PeerEndpoint, PeerTransport as Transport};
+    // `auto` leaves the carrier open: the core classifies the endpoint from
+    // the address itself (URL scheme or one probe connection).
     let transport = |value: &str| match value {
-        "http" => Ok(Transport::Http),
-        "ws" => Ok(Transport::WebSocket),
-        "tcp" => Ok(Transport::Tcp),
-        "serial" => Ok(Transport::Serial),
-        "bluetooth" => Ok(Transport::Bluetooth),
-        _ => Err("transport must be http, ws, tcp, serial or bluetooth".to_string()),
+        "http" => Ok(Some(Transport::Http)),
+        "ws" => Ok(Some(Transport::WebSocket)),
+        "tcp" => Ok(Some(Transport::Tcp)),
+        "serial" => Ok(Some(Transport::Serial)),
+        "bluetooth" => Ok(Some(Transport::Bluetooth)),
+        "auto" => Ok(None),
+        _ => Err("transport must be auto, http, ws, tcp, serial or bluetooth".to_string()),
     };
     let value = match args {
         [command, node, address, mode] if command == "pair-start" => {
@@ -270,7 +273,10 @@ async fn execute_node_pairing_command(
         [command] if command == "prompts" => serde_json::to_value(services.pairingPrompts().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?,
         [command] if command == "peers" => serde_json::to_value(services.pairedPeers().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?,
         [command, mode] if command == "listen" => {
-            services.startListening(&[transport(mode)?]).await.map_err(|e| e.to_string())?;
+            // Listening binds concrete carriers; "auto" only dials.
+            let listenTransport = transport(mode)?
+                .ok_or_else(|| "listening requires an explicit transport, not auto".to_string())?;
+            services.startListening(&[listenTransport]).await.map_err(|e| e.to_string())?;
             tokio::signal::ctrl_c().await.map_err(|e| e.to_string())?;
             services.stop().await.map_err(|e| e.to_string())?;
             serde_json::json!({"stopped": true})

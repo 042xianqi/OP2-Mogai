@@ -1129,6 +1129,8 @@
   "settingsRuntimeFinishPairing": "Finish connection",
   "settingsRuntimeBaseUrl": "Device address",
   "settingsRuntimeTcpAddressHint": "host:port, for example 192.168.1.10:37195",
+  "settingsRuntimeTransportAuto": "Auto (recommended)",
+  "settingsRuntimeTransportAutoHint": "Enter host:port; the carrier (HTTP/WebSocket/TCP) is detected automatically",
   "settingsRuntimeConnectionFailed": "Device connection failed: {error}",
   "@settingsRuntimeConnectionFailed": {
     "placeholders": {
@@ -1736,7 +1738,13 @@
   "settingsRuntimeControlDeviceId": "Device ID",
   "settingsRuntimeControlNoAudit": "No activity yet. Identity and device changes will appear here.",
   "settingsRuntimeControlAuditCount": "{count} records",
-  "@settingsRuntimeControlAuditCount": {"placeholders": {"count": {"type": "int"}}},
+  "@settingsRuntimeControlAuditCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "settingsRuntimeControlNoBindings": "No device bindings",
   "settingsRuntimeControlGranted": "Granted",
   "settingsRuntimeControlRevoked": "Revoked",
@@ -1757,7 +1765,13 @@
   "settingsRuntimeControlIdentityResetDone": "Identity reset to the default user",
   "settingsRuntimeControlIdentityDefinitions": "Identity permissions",
   "settingsRuntimeControlIdentityCount": "{count} identities",
-  "@settingsRuntimeControlIdentityCount": {"placeholders": {"count": {"type": "int"}}},
+  "@settingsRuntimeControlIdentityCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "settingsRuntimeControlIdentityAssignment": "Identity assignment",
   "settingsRuntimeControlNoIdentity": "No identity assigned",
   "settingsRuntimeControlOnline": "Online",
@@ -1999,16 +2013,20 @@
       }
     }
   },
-
   "settingsPeerPortModeHelp": "Fixed mode keeps the entered IP and port for tunnels and port forwarding. A busy fixed port reports an error without changing the address.",
   "settingsPeerPortMode": "Port allocation",
   "settingsPeerPortModeFixed": "Fixed address and port",
   "settingsPeerPortModeAutomatic": "Automatic port",
-
   "settingsPeerAdvanced": "Advanced options",
   "settingsPeerDiscoveryUnavailable": "This Host cannot advertise listeners on the local network. Direct connections remain available for supported transports.",
   "settingsPeerTransportUnavailable": "{transport} listening is not supported by this Host.",
-  "@settingsPeerTransportUnavailable": {"placeholders": {"transport": {"type": "String"}}},
+  "@settingsPeerTransportUnavailable": {
+    "placeholders": {
+      "transport": {
+        "type": "String"
+      }
+    }
+  },
   "settingsPeerTransportHelp": "Listener transports (multiple selections). HTTP and WebSocket can share a port; TCP cannot share that port with them. Bluetooth requires platform support. Clear all selections and disable discovery to stop listening. Changing settings interrupts existing connections. Disabling discovery alone does not stop direct connections.",
   "settingsPeerBindAddress": "Listen IP address",
   "settingsPeerBindAddressHelp": "Example: 0.0.0.0 for LAN access; IPv6 addresses are also supported.",
@@ -2079,14 +2097,26 @@
   "deviceSpacePairedOnly": "Paired",
   "deviceSpaceDirectLink": "Direct",
   "deviceSpaceRelayHops": "Relayed · {hops} hops",
-  "@deviceSpaceRelayHops": {"placeholders": {"hops": {"type": "int"}}},
+  "@deviceSpaceRelayHops": {
+    "placeholders": {
+      "hops": {
+        "type": "int"
+      }
+    }
+  },
   "deviceSpaceRelayPath": "Path",
   "deviceSpaceLocalDevice": "This device",
   "deviceSpaceManageDevice": "Manage device",
   "deviceSpaceConnectDirect": "Connect directly",
   "deviceSpaceConnectDirectHint": "This device is already a Space member. Pairing it adds a direct link without joining again; pairing shows a six-digit code on the other device for you to enter.",
   "deviceSpaceDirectLinkEstablished": "Direct link established: {device}",
-  "@deviceSpaceDirectLinkEstablished": {"placeholders": {"device": {"type": "String"}}},
+  "@deviceSpaceDirectLinkEstablished": {
+    "placeholders": {
+      "device": {
+        "type": "String"
+      }
+    }
+  },
   "deviceSpaceUnpair": "Unpair device",
   "deviceSpaceMore": "More device actions",
   "deviceSpaceConnectionSettings": "Connection settings",
@@ -2101,7 +2131,13 @@
   "workspaceUndo": "Undo",
   "workspaceRedo": "Redo",
   "workspaceInsertSymbol": "Insert {symbol}",
-  "@workspaceInsertSymbol": {"placeholders": {"symbol": {"type": "String"}}},
+  "@workspaceInsertSymbol": {
+    "placeholders": {
+      "symbol": {
+        "type": "String"
+      }
+    }
+  },
   "settingsAppearanceThemeConfig": "Theme configuration",
   "settingsAppearanceThemeConfigCustom": "Unbound appearance",
   "settingsAppearanceThemeConfigCreate": "New theme configuration",
@@ -2122,6 +2158,40 @@
   "settingsRuntimeControlEditRole": "Edit role",
   "settingsRuntimeControlDeleteRole": "Delete role",
   "settingsRuntimeControlDeleteRoleTitle": "Delete role {roleName}?",
-  "@settingsRuntimeControlDeleteRoleTitle": {"placeholders":{"roleName":{"type":"String"}}},
-  "settingsRuntimeControlDeleteRoleMessage": "Devices holding this role fall back to the default user identity."
+  "@settingsRuntimeControlDeleteRoleTitle": {
+    "placeholders": {
+      "roleName": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsRuntimeControlDeleteRoleMessage": "Devices holding this role fall back to the default user identity.",
+  "settingsAppearanceThemeConfigSource": "Create from",
+  "settingsAppearanceThemeConfigFromDefaults": "Default appearance",
+  "settingsAppearanceThemeConfigFromCurrent": "Current appearance",
+  "settingsAppearanceThemeConfigInherit": "Inherit: {name}",
+  "@settingsAppearanceThemeConfigInherit": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsAppearanceThemeConfigFromTemplate": "Template: {name}",
+  "@settingsAppearanceThemeConfigFromTemplate": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsAppearanceThemeConfigDefaultsHint": "Start with the app defaults",
+  "settingsAppearanceThemeConfigCurrentHint": "Copy your current appearance",
+  "settingsAppearanceThemeConfigSavedSources": "Inherit a saved configuration",
+  "settingsAppearanceThemeConfigPluginSources": "Use a plugin template",
+  "settingsAppearanceThemeConfigSourceHint": "Templates come from installed plugins. New configurations can be edited independently and use existing appearance sync.",
+  "settingsAppearanceLoadFailed": "Unable to load appearance",
+  "settingsAppearanceRepairHint": "Your saved appearance has not been replaced. Retry after repairing its resources, or reset appearance explicitly. Reset keeps your avatar and saved configurations and selects custom appearance.",
+  "settingsAppearanceRetry": "Retry",
+  "settingsAppearanceResetAfterError": "Reset appearance"
 }

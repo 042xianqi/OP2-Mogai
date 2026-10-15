@@ -186,7 +186,7 @@ impl DeviceSpaceUi {
                                 nodeId: peer.nodeId,
                                 address: peer.address,
                             },
-                            mode,
+                            Some(mode),
                         )
                         .await;
                     let mut state = state.lock().unwrap();

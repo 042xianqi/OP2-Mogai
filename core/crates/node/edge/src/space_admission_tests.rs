@@ -43,8 +43,8 @@ impl Storage {
         self.update(|files| { files.insert(path.into(),bytes.into()); })
     }
 }
-impl RuntimeStorageHost for Storage {
-    fn runtimeRootDir(&self) -> Option<std::path::PathBuf> { None }
+impl RuntimeStorageHost for Storage {    fn runtimeRootDir(&self) -> Option<std::path::PathBuf> { None }
+
     fn workspaceRootDir(&self) -> Option<std::path::PathBuf> { None }
     fn readBytes(&self, path: &str) -> HostResult<Vec<u8>> { self.0.lock().unwrap().get(path).cloned().ok_or_else(|| HostError::new("missing")) }
     fn writeBytes(&self, path: &str, bytes: &[u8]) -> HostResult<()> { self.write(path, bytes) }
@@ -58,14 +58,29 @@ impl RuntimeStorageHost for Storage {
     }
     fn list(&self, prefix: &str) -> HostResult<Vec<RuntimeStorageEntry>> { Ok(self.0.lock().unwrap().iter().filter(|(path, _)| path.starts_with(prefix)).map(|(path, bytes)| RuntimeStorageEntry { path: path.clone(), isDirectory: false, size: bytes.len() as i64 }).collect()) }
 }
-/// Reads native JSON records without treating the preferences schema as a record.
-fn persisted_records(storage: &Storage, path: &str) -> BTreeMap<String, serde_json::Value> {
-    let mut records: BTreeMap<String, serde_json::Value> = serde_json::from_slice(
-        &storage.readBytes(path).unwrap_or_else(|_| b"{}".to_vec()),
-    ).unwrap();
-    records.remove(operit_store::PreferencesDataStore::PREFERENCES_SCHEMA_VERSION_KEY_NAME);
-    records
+
+/// Reads one peer state preferences file the way the product store does after
+/// the native JSON migration: structured JSON entries keyed by record id, not
+/// the pre-migration `{id: "<record json string>"}` blobs.
+fn storedRecords(
+    storage: &Arc<Storage>,
+    path: &str,
+) -> BTreeMap<String, serde_json::Value> {
+    let preferences = operit_store::PreferencesDataStore::CoreNodeStateStore::newWithStorage(
+        storage.clone(),
+        path,
+    )
+    .data()
+    .expect("peer state preferences must parse");
+    preferences
+        .iterEntries()
+        .filter(|(name, _)| {
+            *name != operit_store::PreferencesDataStore::PREFERENCES_SCHEMA_VERSION_KEY_NAME
+        })
+        .map(|(name, value)| (name.to_owned(), value.clone()))
+        .collect()
 }
+
 fn node(bounded: bool) -> (Arc<Storage>, Arc<EdgePeerRouter>, Arc<HostRuntimePeerService>, Arc<NodeSpaceService>) {
     node_from_storage(Arc::new(Storage(Mutex::default(), bounded, Mutex::default(), Mutex::default())))
 }
@@ -123,7 +138,7 @@ async fn paired_edge_requires_explicit_approval_and_restores_space() {
         b_peer.startListening(&[PeerTransport::Tcp]).await.unwrap();
         let address = PeerStateStore::new(b_store.clone()).hostConfig().unwrap().unwrap().bindAddress;
         let b_id = b_space.localNodeId(); let a_id = a_space.localNodeId();
-        let pairing = a_peer.startPairing(PeerEndpoint { nodeId: b_id.clone(), address }, PeerTransport::Tcp).await.unwrap();
+        let pairing = a_peer.startPairing(PeerEndpoint { nodeId: b_id.clone(), address }, Some(PeerTransport::Tcp)).await.unwrap();
         let code = b_peer.pairingPrompts().unwrap()[0].confirmationCode.clone();
         a_peer.finishPairing(&pairing.pairingId, &code).await.unwrap();
         print_size("paired", &b_store);
@@ -145,8 +160,7 @@ async fn paired_edge_requires_explicit_approval_and_restores_space() {
         assert!(!a_space.networkControlStore().nodeHasCapability(&a_id, "network.approval", None).unwrap());
         print_size("approved", &b_store);
         assert!(b_store.list("runtime/sync").unwrap().is_empty(), "endpoint approval must not create replica clocks or logs");
-        let receipt = persisted_records(&b_store, "runtime/link_access/space_merge_inbound.preferences.json");
-        for record in receipt.values() {
+        for record in storedRecords(&b_store, "runtime/link_access/space_merge_inbound.preferences.json").into_values() {
             if !record["accepted"].is_null() { assert_eq!(record["accepted"]["controlOperations"].as_array().unwrap().len(), 0); }
         }
         let restored = NodeSpaceService::new(b_store.clone(), b_peer.clone()).unwrap();
@@ -172,7 +186,7 @@ async fn failed_local_cancellation_preserves_pending_request_and_can_retry() {
     let address = PeerStateStore::new(gatewayStorage).hostConfig().unwrap().unwrap().bindAddress;
     let pairing = applicantPeer.startPairing(PeerEndpoint {
         nodeId: gateway.localNodeId(), address,
-    }, PeerTransport::Tcp).await.unwrap();
+    }, Some(PeerTransport::Tcp)).await.unwrap();
     let code = gatewayPeer.pairingPrompts().unwrap()[0].confirmationCode.clone();
     applicantPeer.finishPairing(&pairing.pairingId, &code).await.unwrap();
     let request = applicant.requestDeviceSpaceJoin(gateway.localNodeId()).await.unwrap();
@@ -181,7 +195,7 @@ async fn failed_local_cancellation_preserves_pending_request_and_can_retry() {
     *storage.3.lock().unwrap() = Some(0);
     let error = applicant.cancelDeviceSpaceJoin(request.requestId.clone()).await.unwrap_err();
     assert!(error.contains("injected approval persistence failure"), "{error}");
-    let saved = persisted_records(&storage, "runtime/link_access/space_merge_outbound.preferences.json");
+    let saved = storedRecords(&storage, "runtime/link_access/space_merge_outbound.preferences.json");
     let record = saved[&request.requestId].clone();
     assert_eq!(record["request"]["status"], "pending");
     assert_eq!(gateway.incomingDeviceSpaceJoins().await.unwrap()[0].status, SpaceJoinStatus::Pending);
@@ -189,7 +203,7 @@ async fn failed_local_cancellation_preserves_pending_request_and_can_retry() {
 
     let cancelled = applicant.cancelDeviceSpaceJoin(request.requestId.clone()).await.unwrap();
     assert_eq!(cancelled.status, SpaceJoinStatus::Cancelled);
-    let saved = persisted_records(&storage, "runtime/link_access/space_merge_outbound.preferences.json");
+    let saved = storedRecords(&storage, "runtime/link_access/space_merge_outbound.preferences.json");
     let record = saved[&request.requestId].clone();
     assert_eq!(record["request"]["status"], "cancelled");
     assert!(gateway.incomingDeviceSpaceJoins().await.unwrap().is_empty());
@@ -232,7 +246,7 @@ async fn approval_retry_recovers_each_partial_write_without_duplicate_admission(
             let gateway_id = gateway.localNodeId();
             let applicant_id = applicant.localNodeId();
             let address = PeerStateStore::new(storage.clone()).hostConfig().unwrap().unwrap().bindAddress;
-            let pairing = applicant_peer.startPairing(PeerEndpoint { nodeId: gateway_id.clone(), address }, PeerTransport::Tcp).await.unwrap();
+            let pairing = applicant_peer.startPairing(PeerEndpoint { nodeId: gateway_id.clone(), address }, Some(PeerTransport::Tcp)).await.unwrap();
             let code = gateway_peer.pairingPrompts().unwrap()[0].confirmationCode.clone();
             applicant_peer.finishPairing(&pairing.pairingId, &code).await.unwrap();
             // Real hardware contains earlier declined/expired applications.
@@ -573,7 +587,7 @@ mod core_edge {
                     nodeId: target_id,
                     address,
                 },
-                PeerTransport::Tcp,
+                Some(PeerTransport::Tcp),
             )
             .await
             .unwrap();
@@ -651,8 +665,8 @@ mod core_edge {
                 };
                 let config = PeerStateStore::new(storage.clone()).hostConfig().unwrap().unwrap();
                 let endpoint = PeerEndpoint { nodeId: target_id, address: config.bindAddress };
-                let first = source.startPairing(endpoint.clone(), PeerTransport::Tcp).await.unwrap();
-                let second = source.startPairing(endpoint, PeerTransport::Tcp).await.unwrap();
+                let first = source.startPairing(endpoint.clone(), Some(PeerTransport::Tcp)).await.unwrap();
+                let second = source.startPairing(endpoint, Some(PeerTransport::Tcp)).await.unwrap();
                 let prompts = target.pairingPrompts().unwrap();
                 assert_eq!(prompts.len(), 2);
                 let code = &prompts.iter().find(|p| p.pairingId == first.pairingId).unwrap().confirmationCode;
@@ -745,7 +759,7 @@ mod core_edge {
                     let stale_source_storage = reopened(if core_initiates { &core.storage } else { &edge.storage });
                     let core_space = core.service.deviceSpace().unwrap();
                     let edge_space = edge.service.spaceStore().space().unwrap();
-                    let credentials = |path: &str| persisted_records(&target_storage, path);
+                    let credentials = |path: &str| storedRecords(&target_storage, path);
                     let old_inbound = credentials(RUNTIME_LINK_ACCESS_INBOUND_SESSIONS_PATH);
                     let old_outbound = credentials(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH);
                     source.removePairedPeer(&target_id).await.unwrap();
@@ -754,7 +768,7 @@ mod core_edge {
                     let config = PeerStateStore::new(target_storage.clone()).hostConfig().unwrap().unwrap();
                     let begin = || source.startPairing(PeerEndpoint {
                         nodeId: target_id.clone(), address: config.bindAddress.clone(),
-                    }, PeerTransport::Tcp);
+                    }, Some(PeerTransport::Tcp));
                     let cancelled = begin().await.unwrap();
                     source.cancelPairing(&cancelled.pairingId).await.unwrap();
                     assert!(source.finishPairing(&cancelled.pairingId, "123456").await.is_err());
@@ -1034,7 +1048,8 @@ mod core_edge {
                 operit_link::toCoreValue(serde_json::json!({"requestId": request.requestId,
                     "assignmentVersion": request.assignmentVersion, "approve": true})).unwrap(),
             )).await.unwrap();
-            let records = persisted_records(&edge.storage, "runtime/link_access/space_merge_inbound.preferences.json");
+            let records = storedRecords(&edge.storage,
+                "runtime/link_access/space_merge_inbound.preferences.json");
             let record = records[&request.requestId].clone();
             let source_space: operit_store::CoreSpaceStore::CoreSpace = serde_json::from_value(record["source"]["space"].clone()).unwrap();
             let profiles: Vec<CoreSpaceDeviceProfile> = serde_json::from_value(record["source"]["deviceProfiles"].clone()).unwrap();
@@ -1112,7 +1127,8 @@ mod core_edge {
             edge.peers.stop().await.unwrap();
             wait_for_peer_availability(&core.peers, &edge_id, false).await;
             assert!(core.service.cancelDeviceSpaceJoin(request.requestId.clone()).await.is_err());
-            let records = persisted_records(&core.storage, "runtime/link_access/space_merge_outbound.preferences.json");
+            let records = storedRecords(&core.storage,
+                "runtime/link_access/space_merge_outbound.preferences.json");
             let saved = records[&request.requestId].clone();
             assert_eq!(saved["cancelRequested"], true, "lost cancellation must retain durable intent");
             assert_eq!(core.service.outgoingDeviceSpaceJoins().unwrap().into_iter()
@@ -1220,8 +1236,8 @@ mod core_edge {
             assert_eq!(stuck.reviewerDeviceId, None, "the offline old administrator cannot review");
             assert!(edge.service.incomingDeviceSpaceJoins().await.unwrap().is_empty());
             assert_eq!(new.service.cancelDeviceSpaceJoin(stuck.requestId).await.unwrap().status, SpaceJoinStatus::Cancelled);
-            let saved = persisted_records(&edge.storage, "runtime/link_access/space_merge_inbound.preferences.json");
-            let receipt = saved.values().next().unwrap();
+            let receipt = storedRecords(&edge.storage,
+                "runtime/link_access/space_merge_inbound.preferences.json").into_values().next().unwrap();
             for field in ["deviceProfiles", "topology", "controlOperations"] {
                 assert!(receipt["source"][field].as_array().unwrap().is_empty(), "cancelled request retained a complete source snapshot: {field}");
             }
@@ -1270,7 +1286,8 @@ mod core_edge {
             let request = new.service.requestDeviceSpaceJoin(edge_id.clone()).await.unwrap();
             assert_eq!(request.status, SpaceJoinStatus::Pending);
             assert_eq!(request.reviewerDeviceId, Some(edge_id.clone()));
-            let saved = persisted_records(&new.storage, "runtime/link_access/space_merge_outbound.preferences.json");
+            let saved = storedRecords(&new.storage,
+                "runtime/link_access/space_merge_outbound.preferences.json");
             let record = saved[&request.requestId].clone();
             assert_eq!(record["source"]["deviceProfiles"].as_array().unwrap().len(), 1, "unrelated historical profiles entered the admission wire snapshot");
             let core_policy = new.service.networkControlStore().currentSpaceOperations().unwrap();
@@ -1287,7 +1304,7 @@ mod core_edge {
             assert_eq!(edge.service.spaceChannelScope(&new_id).unwrap(), Some(left.spaceId.clone()));
             assert_eq!(new.service.deviceSpace().unwrap(), edge.service.spaceStore().space().unwrap());
             new.storage.writeBytes("workspaces/large/fixture.bin", &vec![0x5a; 1024 * 1024]).unwrap();
-            assert!(persisted_records(&edge.storage, "runtime/link_access/space_merge_review_results.preferences.json").is_empty(),
+            assert!(storedRecords(&edge.storage, "runtime/link_access/space_merge_review_results.preferences.json").is_empty(),
                 "local approval duplicated its admission operation instead of reusing the policy log");
             print_size("new-core-joined", &edge.storage);
             new.sync.synchronizeOnce().await.unwrap();
@@ -1693,7 +1710,7 @@ mod core_edge {
             assert!(!state.memberNodeIds.contains(&c_id));
             assert_ne!(state.deviceIdentityIds.get(&a_id).map(String::as_str), Some("admin"));
             assert_eq!(reopened.spaceStore().space().unwrap(), own);
-            assert_eq!(persisted_records(&c.storage, "runtime/link_access/space_departures.preferences.json").len(), 0);
+            assert_eq!(storedRecords(&c.storage, "runtime/link_access/space_departures.preferences.json").len(), 0);
             assert!(a.storage.list("runtime/sync").unwrap().is_empty());
             assert!(c.storage.list("runtime/sync").unwrap().is_empty());
         }).await;
