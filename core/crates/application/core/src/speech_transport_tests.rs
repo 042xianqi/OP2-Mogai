@@ -171,7 +171,7 @@ pub(super) async fn verify(
                 nodeId: id.clone(),
                 address,
             },
-            PeerTransport::Tcp,
+            Some(PeerTransport::Tcp),
         )
         .await
         .unwrap();
