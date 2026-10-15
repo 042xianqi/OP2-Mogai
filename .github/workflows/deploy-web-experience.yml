@@ -77,14 +77,19 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
           targets: wasm32-unknown-unknown
 
-      - name: Install locked wasm-bindgen CLI
+      - name: Install Flutter bridge locked wasm-bindgen CLI
         run: |
-          WASM_BINDGEN_VERSION="$(python3 -c 'import pathlib, tomllib; lock = tomllib.loads(pathlib.Path("core/Cargo.lock").read_text("utf-8")); print(next(p["version"] for p in lock["package"] if p["name"] == "wasm-bindgen"))')"
+          WASM_BINDGEN_VERSION="$(python3 -c 'import pathlib, tomllib; lock = tomllib.loads(pathlib.Path("apps/flutter/native/operit-flutter-bridge/Cargo.lock").read_text("utf-8")); print(next(p["version"] for p in lock["package"] if p["name"] == "wasm-bindgen"))')"
           cargo install wasm-bindgen-cli --version "${WASM_BINDGEN_VERSION}" --locked
 
       - name: Build Flutter Web experience
         working-directory: apps/flutter/app
         run: fvm flutter build web --release --no-wasm-dry-run --base-href /
+
+      - name: Install Theme Studio locked wasm-bindgen CLI
+        run: |
+          WASM_BINDGEN_VERSION="$(python3 -c 'import pathlib, tomllib; lock = tomllib.loads(pathlib.Path("core/Cargo.lock").read_text("utf-8")); print(next(p["version"] for p in lock["package"] if p["name"] == "wasm-bindgen"))')"
+          cargo install wasm-bindgen-cli --version "${WASM_BINDGEN_VERSION}" --locked
 
       - name: Build Theme Studio (/theme/)
         run: |
