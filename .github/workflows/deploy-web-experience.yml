@@ -60,7 +60,8 @@ jobs:
       - name: Install and check Theme Studio
         working-directory: tools/theme/studio
         run: |
-          npm ci
+          npm ci --include=optional
+          node -e "require('rollup'); require('esbuild').transformSync('const ready = true')"
           npm run typecheck
           npm test
 
