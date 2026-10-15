@@ -186,6 +186,9 @@ dependencies {
     implementation("com.github.topjohnwu.libsu:core:6.0.0")
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
+    testImplementation("junit:junit:4.13.2")
+    // Real org.json for JVM unit tests; shadows the "not mocked" android.jar stubs.
+    testImplementation("org.json:json:20240303")
 }
 
 val operitBridgeCrate = project.layout.projectDirectory
