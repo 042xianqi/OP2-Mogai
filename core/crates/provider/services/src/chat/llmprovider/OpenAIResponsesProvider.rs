@@ -937,6 +937,22 @@ impl OpenAIResponsesPayloadAdapter {
                                 );
                             }
                         }
+                        "video_url" | "input_video" => {
+                            let videoUrl = if partType == "input_video" {
+                                part.get("video_url")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                            } else {
+                                part.pointer("/video_url/url")
+                                    .and_then(Value::as_str)
+                                    .or_else(|| part.get("video_url").and_then(Value::as_str))
+                                    .unwrap_or_default()
+                            };
+                            if !videoUrl.is_empty() {
+                                convertedParts
+                                    .push(json!({"type": "input_video", "video_url": videoUrl}));
+                            }
+                        }
                         _ => {
                             if let Some(text) = part.get("text").and_then(Value::as_str) {
                                 if !text.is_empty() {

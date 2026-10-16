@@ -19,7 +19,7 @@ use crate::chat::llmprovider::AIService::{
     SendMessageRequest, SharedAiResponseStream, TokenCounts,
 };
 use crate::chat::llmprovider::LlmRetryPolicy::delay_retry_ms;
-use crate::chat::llmprovider::MediaLinkParser::MediaLinkParser;
+use crate::chat::llmprovider::MediaLinkParser::{MediaLink, MediaLinkParser};
 use operit_host_api::HostManager::defaultHostRuntimeTaskSchedulerHost;
 use operit_host_api::HostRuntimeTaskSchedulerHost;
 use operit_host_api::TimeUtils::currentTimeMillis;
@@ -1085,35 +1085,129 @@ impl OpenAIProvider {
     /// Builds the OpenAI-compatible content field for one provider message.
     fn build_content_field(&self, text: &str, role: &str) -> Value {
         let text = self.input_content_text(text);
-        if !MediaLinkParser::has_image_links(&text) {
+        let has_images = MediaLinkParser::has_image_links(&text);
+        let has_media = MediaLinkParser::has_media_links(&text);
+        if !has_images && !has_media {
             return json!(text);
         }
 
-        let image_links = MediaLinkParser::extract_image_links(&text);
-        let text_without_links = MediaLinkParser::remove_image_links(&text).trim().to_string();
-        let can_carry_images = self.supports_vision
-            && (canCarryUserRichContent(role) || self.canCarryToolImages(role));
+        let allow_user_rich_content = canCarryUserRichContent(role);
+        let allow_responses_tool_images = self.canCarryToolImages(role);
 
-        if !can_carry_images || image_links.is_empty() {
-            return json!(imageLinkTextWhenNotSent(
-                &text_without_links,
-                !image_links.is_empty(),
-            ));
+        let media_links = if has_media {
+            MediaLinkParser::extract_media_links(&text)
+        } else {
+            Vec::new()
+        };
+        let image_links = if has_images {
+            MediaLinkParser::extract_image_links(&text)
+        } else {
+            Vec::new()
+        };
+
+        let audio_links: Vec<_> = media_links
+            .iter()
+            .filter(|link| link.link_type == "audio")
+            .cloned()
+            .collect();
+        let video_links: Vec<_> = media_links
+            .iter()
+            .filter(|link| link.link_type == "video")
+            .cloned()
+            .collect();
+        let file_links: Vec<_> = media_links
+            .iter()
+            .filter(|link| link.link_type == "file")
+            .cloned()
+            .collect();
+
+        let has_supported_media = (self.supports_audio && !audio_links.is_empty())
+            || (self.supports_video && !video_links.is_empty());
+
+        let mut text_without_links = text.clone();
+        if has_media {
+            text_without_links = MediaLinkParser::remove_media_links(&text_without_links);
+        }
+        if has_images {
+            text_without_links = MediaLinkParser::remove_image_links(&text_without_links);
+        }
+        let text_without_links = text_without_links.trim().to_string();
+
+        let has_any_supported_rich_content = (allow_user_rich_content && has_supported_media)
+            || ((allow_user_rich_content || allow_responses_tool_images)
+                && self.supports_vision
+                && !image_links.is_empty());
+
+        if !has_any_supported_rich_content {
+            if !text_without_links.is_empty() {
+                return json!(text_without_links);
+            }
+            if !audio_links.is_empty() || !video_links.is_empty() {
+                return json!("[Audio/Video omitted]");
+            }
+            if !image_links.is_empty() {
+                return json!("[Image omitted]");
+            }
+            if !file_links.is_empty() {
+                return json!("[File omitted]");
+            }
+            return json!("[Empty]");
         }
 
         let mut content_array = Vec::new();
-        for link in image_links {
-            content_array.push(json!({
-                "type": "image_url",
-                "image_url": {
-                    "url": format!("data:{};base64,{}", link.mime_type, link.base64_data),
-                },
-            }));
+
+        if allow_user_rich_content && self.supports_audio {
+            for link in audio_links {
+                content_array.push(json!({
+                    "type": "input_audio",
+                    "input_audio": self.build_input_audio_payload(&link),
+                }));
+            }
         }
+
+        if allow_user_rich_content && self.supports_video {
+            for link in video_links {
+                content_array.push(json!({
+                    "type": "video_url",
+                    "video_url": {
+                        "url": format!("data:{};base64,{}", link.mime_type, link.base64_data),
+                    },
+                }));
+            }
+        }
+
+        if (allow_user_rich_content || allow_responses_tool_images) && self.supports_vision {
+            for link in image_links {
+                content_array.push(json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": format!("data:{};base64,{}", link.mime_type, link.base64_data),
+                    },
+                }));
+            }
+        }
+
         if !text_without_links.is_empty() {
             content_array.push(json!({"type": "text", "text": text_without_links}));
         }
+
         Value::Array(content_array)
+    }
+
+    /// Encodes registered audio using the provider's request payload format.
+    pub fn build_input_audio_payload(&self, link: &MediaLink) -> Value {
+        let format = audio_format_from_mime(&link.mime_type);
+        if self.provider_type == "ALIYUN" || self.provider_type == "QWEN" {
+            json!({
+                "data": format!("data:{};base64,{}", link.mime_type, link.base64_data),
+                "format": format,
+            })
+        } else {
+            json!({
+                "data": link.base64_data,
+                "format": format,
+            })
+        }
     }
 
     /// Reports whether a tool message can carry image content for this provider mode.
@@ -2663,14 +2757,14 @@ fn canCarryUserRichContent(role: &str) -> bool {
     role.eq_ignore_ascii_case("user") || role.eq_ignore_ascii_case("summary")
 }
 
-/// Returns text for an image-link message that is not represented as rich content.
-fn imageLinkTextWhenNotSent(text: &str, has_image_data: bool) -> String {
-    if !text.is_empty() {
-        text.to_string()
-    } else if has_image_data {
-        "[Image omitted]".to_string()
-    } else {
-        "[Empty]".to_string()
+/// Maps a media MIME type to the audio format used in provider request payloads.
+fn audio_format_from_mime(mime_type: &str) -> &str {
+    match mime_type.to_ascii_lowercase().as_str() {
+        "audio/wav" | "audio/x-wav" => "wav",
+        "audio/mpeg" | "audio/mp3" => "mp3",
+        "audio/ogg" => "ogg",
+        "audio/webm" => "webm",
+        _ => mime_type.rsplit_once('/').map(|(_, ext)| ext).unwrap_or("wav"),
     }
 }
 
