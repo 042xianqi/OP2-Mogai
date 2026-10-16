@@ -4319,6 +4319,10 @@ export interface ComposeDslContext {
    */
   useMemo<T>(key: string, factory: () => T, deps?: unknown[]): T;
   /**
+   * Runs composition-owned work and cleans it up on dependency change or disposal.
+   */
+  useEffect(key: string, setup: () => () => void, dependencies: any[]): void;
+  /**
    * Measures text using host font metrics and the supplied layout constraints.
    */
   measureText(request: ComposeTextMeasureRequest): ComposeTextMeasureResult;

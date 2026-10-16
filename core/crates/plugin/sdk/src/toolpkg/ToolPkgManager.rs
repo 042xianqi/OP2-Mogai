@@ -51,6 +51,21 @@ struct ToolPkgExecutionEngineEntry {
     activeLeases: usize,
 }
 
+/// Holds one execution lease until the associated asynchronous operation finishes or is cancelled.
+pub struct ToolPkgExecutionEngineLease {
+    manager: ToolPkgManager,
+    contextKey: String,
+    containerPackageName: String,
+}
+
+impl Drop for ToolPkgExecutionEngineLease {
+    /// Releases the execution lease after the caller stops owning the asynchronous operation.
+    fn drop(&mut self) {
+        self.manager
+            .releaseToolPkgExecutionEngine(&self.contextKey, &self.containerPackageName);
+    }
+}
+
 /// Tracks live engines and revocation generations under the same registry lock.
 #[derive(Default)]
 struct ToolPkgExecutionEngineRegistry {
@@ -422,6 +437,24 @@ impl ToolPkgManager {
         self.executionEngineWithLease(contextKey, containerPackageName, true).map(|_| ())
     }
 
+    /// Acquires an execution lease whose lifetime is coupled to the caller's asynchronous work.
+    #[allow(non_snake_case)]
+    pub fn leaseToolPkgExecutionEngine(
+        &self,
+        contextKey: &str,
+        containerPackageName: &str,
+    ) -> Result<(Arc<dyn JsExecutionEngine>, ToolPkgExecutionEngineLease), String> {
+        let engine = self.executionEngineWithLease(contextKey, containerPackageName, true)?;
+        Ok((
+            engine,
+            ToolPkgExecutionEngineLease {
+                manager: self.clone(),
+                contextKey: contextKey.trim().to_string(),
+                containerPackageName: containerPackageName.trim().to_string(),
+            },
+        ))
+    }
+
     /// Starts workers without holding the registry lock. Startup authenticates via
     /// the package manager; concurrent release holds that manager while consulting
     /// this registry. Holding both across startup creates a lock inversion.
@@ -727,7 +760,7 @@ impl ToolPkgHookDispatcher for ToolPkgManager {
     ) -> crate::javascript::JsExecutionCompletion<Result<Option<String>, String>> {
         let prepared = self.prepareToolPkgHook(enabledPackageNames, &invocation);
         Box::pin(async move {
-            let (engine, script, params) = prepared?;
+            let (engine, script, params, _lease) = prepared?;
             engine
                 .execute_script_function_with_timeout_millis(
                     &script,
@@ -752,7 +785,7 @@ impl ToolPkgManager {
         enabledPackageNames: &[String],
         invocation: ToolPkgHookInvocation,
     ) -> Result<Option<String>, String> {
-        let (engine, script, params) = self.prepareToolPkgHook(enabledPackageNames, &invocation)?;
+        let (engine, script, params, _lease) = self.prepareToolPkgHook(enabledPackageNames, &invocation)?;
         engine
             .execute_script_function_async(
                 script,
@@ -773,7 +806,12 @@ impl ToolPkgManager {
         &self,
         enabledPackageNames: &[String],
         invocation: &ToolPkgHookInvocation,
-    ) -> Result<(Arc<dyn JsExecutionEngine>, String, BTreeMap<String, Value>), String> {
+    ) -> Result<(
+        Arc<dyn JsExecutionEngine>,
+        String,
+        BTreeMap<String, Value>,
+        ToolPkgExecutionEngineLease,
+    ), String> {
         let containerPackageName = invocation.containerPackageName.trim();
         let runtime = self
             .getToolPkgContainerRuntime(containerPackageName)
@@ -887,8 +925,8 @@ impl ToolPkgManager {
         }
 
         let contextKey = resolveToolPkgExecutionContextKey(&runtime.packageName, &params);
-        let engine = self.getToolPkgExecutionEngine(&contextKey, &runtime.packageName)?;
-        Ok((engine, script, params))
+        let (engine, lease) = self.leaseToolPkgExecutionEngine(&contextKey, &runtime.packageName)?;
+        Ok((engine, script, params, lease))
     }
 }
 

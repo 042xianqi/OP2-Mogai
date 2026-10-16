@@ -20,7 +20,8 @@ use operit_host_api::HostRuntimeTaskSchedulerHost;
 use operit_model::PromptTurn::{PromptTurn, PromptTurnKind};
 use operit_model::ToolPrompt::ToolPrompt;
 use operit_util::stream::RevisableTextStream::{
-    empty_revisable_event_channel, with_event_channel, RevisableTextStreamLike,
+    empty_revisable_event_channel, with_event_channel_and_failure, RevisableTextStream,
+    RevisableTextStreamLike, TerminalFailureState,
 };
 use operit_util::stream::Stream::FnStream;
 use operit_util::ChatMarkupRegex::ChatMarkupRegex;
@@ -779,6 +780,7 @@ impl AIService for ClaudeProvider {
         self.set_cancelled(true);
     }
 
+    /// Sends a Claude request while preserving producer failures through the cold wrapper.
     async fn send_message(
         &mut self,
         request: SendMessageRequest,
@@ -788,6 +790,8 @@ impl AIService for ClaudeProvider {
         if request.stream {
             let event_channel = empty_revisable_event_channel();
             let streamEventChannel = event_channel.clone();
+            let terminalFailure = TerminalFailureState::new();
+            let producerTerminalFailure = terminalFailure.clone();
             let mut ownedProvider = Some(self.clone());
             let mut ownedRequest = Some(request);
             let coldStream = FnStream::new(move |emit| {
@@ -798,17 +802,31 @@ impl AIService for ClaudeProvider {
                     .take()
                     .expect("ClaudeProvider stream must only be collected once");
                 let eventChannel = streamEventChannel.clone();
+                let producerTerminalFailure = producerTerminalFailure.clone();
                 Box::pin(async move {
-                    if let Ok(mut responseStream) = provider.send_streaming_message(request).await {
-                        responseStream.collect(emit).await;
+                    match provider.send_streaming_message(request).await {
+                        Ok(mut responseStream) => {
+                            responseStream.collect(emit).await;
+                            if let Some(error) = responseStream.terminal_failure() {
+                                producerTerminalFailure.set(error);
+                            }
+                        }
+                        Err(AiServiceError::RequestCancelled) => {}
+                        Err(error) => producerTerminalFailure.set(error.to_string()),
                     }
                     eventChannel.close();
                 })
             });
-            return Ok(Box::new(with_event_channel(coldStream, event_channel)));
+            return Ok(Box::new(with_event_channel_and_failure(
+                coldStream,
+                event_channel,
+                terminalFailure,
+            )));
         }
         let event_channel = empty_revisable_event_channel();
         let streamEventChannel = event_channel.clone();
+        let terminalFailure = TerminalFailureState::new();
+        let producerTerminalFailure = terminalFailure.clone();
         let mut ownedProvider = Some(self.clone());
         let mut ownedRequest = Some(request);
         let coldStream = FnStream::new(move |emit| {
@@ -819,14 +837,26 @@ impl AIService for ClaudeProvider {
                 .take()
                 .expect("ClaudeProvider non-stream request must only be collected once");
             let eventChannel = streamEventChannel.clone();
+            let producerTerminalFailure = producerTerminalFailure.clone();
             Box::pin(async move {
-                if let Ok(mut responseStream) = provider.send_non_streaming_message(request).await {
-                    responseStream.collect(emit).await;
+                match provider.send_non_streaming_message(request).await {
+                    Ok(mut responseStream) => {
+                        responseStream.collect(emit).await;
+                        if let Some(error) = responseStream.terminal_failure() {
+                            producerTerminalFailure.set(error);
+                        }
+                    }
+                    Err(AiServiceError::RequestCancelled) => {}
+                    Err(error) => producerTerminalFailure.set(error.to_string()),
                 }
                 eventChannel.close();
             })
         });
-        Ok(Box::new(with_event_channel(coldStream, event_channel)))
+        Ok(Box::new(with_event_channel_and_failure(
+            coldStream,
+            event_channel,
+            terminalFailure,
+        )))
     }
 
     async fn calculate_input_tokens(

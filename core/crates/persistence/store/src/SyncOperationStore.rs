@@ -1648,9 +1648,7 @@ struct SyncEntityKey {
     entityId: String,
 }
 
-/// Compacts replaceable entity states while preserving every transaction operation.
-/// A later JSON-parent replacement supersedes earlier descendant edits from the
-/// same origin; edits after the replacement and other origins remain independent.
+/// Preserves preference history for identity replay and compacts other replaceable entity states.
 #[allow(non_snake_case)]
 pub fn compactSyncOperations(operations: Vec<SyncOperation>) -> Vec<SyncOperation> {
     let mut latestSequences = BTreeMap::<SyncEntityKey, i64>::new();
@@ -1665,32 +1663,11 @@ pub fn compactSyncOperations(operations: Vec<SyncOperation>) -> Vec<SyncOperatio
     operations
         .into_iter()
         .filter(|operation| {
-            operation.semantics == SyncOperationSemantics::Transaction
-                || (latestSequences.get(&syncEntityKey(operation)) == Some(&operation.sequence)
-                    && !hasNewerPreferenceAncestor(operation, &latestSequences))
+            operation.domain == "preferences"
+                || operation.semantics == SyncOperationSemantics::Transaction
+                || latestSequences.get(&syncEntityKey(operation)) == Some(&operation.sequence)
         })
         .collect()
-}
-
-/// Prevents exporting a model leaf edit after its creation has been compacted
-/// away by a later model deletion or replacement.
-#[allow(non_snake_case)]
-fn hasNewerPreferenceAncestor(
-    operation: &SyncOperation,
-    latestSequences: &BTreeMap<SyncEntityKey, i64>,
-) -> bool {
-    let Some(ancestors) =
-        crate::PreferencesDataStore::preferenceMutationAncestorEntityIds(operation)
-    else {
-        return false;
-    };
-    let mut key = syncEntityKey(operation);
-    ancestors.into_iter().any(|entityId| {
-        key.entityId = entityId;
-        latestSequences
-            .get(&key)
-            .is_some_and(|sequence| *sequence > operation.sequence)
-    })
 }
 
 /// Builds the origin-scoped identity used for operation-log compaction.

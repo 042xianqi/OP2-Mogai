@@ -25,7 +25,7 @@ import {
   storedValue,
 } from "./records";
 import type { StoredRecord } from "./records";
-import { RelationalDatabase, decodeScalarProjection } from "./relational";
+import { RelationalDatabase, decodeScalarProjection, migrateCharacterSchema, characterSchemaVersion } from "./relational";
 import type { RelationalMutation } from "./relational";
 import {
   assertBoolean,
@@ -70,25 +70,31 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
       directory,
       directories,
     );
-    const metadata = await database.get("meta", "state");
-    if (metadata === null) {
-      const rows = await repository.readRecords();
-      if (rows.length !== 0)
-        throw new Error("Character database has records without metadata");
+    const existingMetadata = await database.get("meta", "state");
+    if (existingMetadata === null) {
       const state = createInitialState(Date.now());
       assertCharacterState(state);
-      const documents = state.owners.map((owner) => ({
-        ownerKey: owner.ownerKey,
-        path: directory + "/" + owner.userDocumentPath,
-        content: "",
-        newDocument: true,
-      }));
-      await repository.publish(state, [], documents, [], null, {});
+      const initialized = await database.commit([
+        { op: "put", collection: "schema_migrations", key: "character", expectedVersion: null, value: { version: characterSchemaVersion } },
+        ...records(state).map(row => ({ op: "put" as const, ...row, expectedVersion: null })),
+        { op: "put", collection: "meta", key: "state", expectedVersion: null,
+          value: { version: state.version, nextId: state.nextId,
+            active: "Model" in state.active ? null : storedValue(state.active),
+            memoryPreferences: storedValue(state.memoryPreferences) } },
+      ], { collection: "meta", key: "state" });
+      if (initialized !== null) {
+        for (const owner of state.owners) {
+          const path = directory + "/" + owner.userDocumentPath;
+          completed(await Tools.Files.mkdir(path.slice(0, path.lastIndexOf("/")), true));
+          completed(await Tools.Files.write(path, "", false));
+        }
+      }
     } else {
-      assertCharacterState(
-        stateFromRecords(metadata.value, await repository.readRecords()),
-      );
+      await migrateCharacterSchema(database, directories === null ? [] : await directories.listModels());
     }
+    const metadata = await database.get("meta", "state");
+    if (metadata === null) throw new Error("Character initialization did not publish metadata");
+    assertCharacterState(stateFromRecords(metadata.value, await repository.readRecords()));
     return repository;
   }
 

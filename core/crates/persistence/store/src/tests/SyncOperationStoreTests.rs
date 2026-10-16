@@ -453,12 +453,12 @@ fn builtin_identities_expose_only_current_node_capabilities() {
     let state = store.currentState().unwrap();
     assert_eq!(state.roles.keys().map(String::as_str).collect::<Vec<_>>(),
         vec!["admin", "edge", "relay", "user"]);
-    for (identity, relay, execute) in [("relay", true, false), ("edge", false, true), ("user", true, true)] {
+    for (identity, relay, execute, storage) in [("relay", true, false, true), ("edge", false, true, false), ("user", true, true, true)] {
         store.setIdentity(NetworkControlIdentityAssignment { nodeId: "peer".into(), roleId: identity.into() }).unwrap();
         assert!(store.nodeHasCapability("peer", "network.devices.view", None).unwrap());
         assert_eq!(store.nodeHasCapability("peer", "network.relay", None).unwrap(), relay);
         assert_eq!(store.nodeHasCapability("peer", "runtime.execute", None).unwrap(), execute);
-        assert!(!store.nodeHasCapability("peer", "storage.provide", None).unwrap());
+        assert_eq!(store.nodeHasCapability("peer", "storage.provide", None).unwrap(), storage);
         assert!(!store.nodeHasCapability("peer", "network.audit.read", None).unwrap());
     }
     for identity in ["auditor", "runner", "storage"] {
@@ -1023,8 +1023,9 @@ fn preferenceOperation(origin: &str, sequence: i64, path: Value) -> SyncOperatio
     op
 }
 
+/// Keeps earlier entity versions needed to reconstruct durable identity equivalences.
 #[test]
-fn compact_preferences_discards_descendants_superseded_by_parent_replacement() {
+fn compact_preferences_preserves_identity_replay_history() {
     let parent =
         json!([{"kind": "field", "value": "models"}, {"kind": "item", "value": "old-model"}]);
     let child = json!([{"kind": "field", "value": "models"}, {"kind": "item", "value": "old-model"}, {"kind": "field", "value": "capabilitiesOverride"}]);
@@ -1036,9 +1037,10 @@ fn compact_preferences_discards_descendants_superseded_by_parent_replacement() {
         preferenceOperation("android", 4, parent),
         preferenceOperation("android", 5, child),
     ]);
-    assert_eq!(sequences(&compacted), vec![3, 4, 5]);
+    assert_eq!(sequences(&compacted), vec![1, 2, 3, 4, 5]);
 }
 
+/// Retains independent origin histories and their complete chronological replacements.
 #[test]
 fn compact_preferences_preserves_other_origins_and_edits_after_entry_replacement() {
     let child = json!([{"kind": "field", "value": "apiKey"}]);
@@ -1053,7 +1055,12 @@ fn compact_preferences_preserves_other_origins_and_edits_after_entry_replacement
             .iter()
             .map(|op| (op.originDeviceId.as_str(), op.sequence))
             .collect::<Vec<_>>(),
-        vec![("windows", 2), ("android", 3), ("android", 4)]
+        vec![
+            ("android", 1),
+            ("windows", 2),
+            ("android", 3),
+            ("android", 4)
+        ]
     );
 }
 

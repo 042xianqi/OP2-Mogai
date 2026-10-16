@@ -96,13 +96,14 @@ export function nativeSidebarRows(ctx: ComposeDslContext, current: CurrentSideba
         }, surface))])));
   }
 
+  /** Renders the preview subset and counts hidden chats directly from its size. */
   function chats(values: SidebarChatSummary[], id: string, section: CharacterSidebarSection, groupId: string | null, matchAll = false): ComposeNode[] {
     const matches = query === '' || matchAll ? values : values.filter(chat => chat.title.toLocaleLowerCase().includes(query));
     const expanded = state.expandedGroups.includes('preview:' + id);
     const preview = query !== '' || expanded ? matches : matches.filter((chat, index) => index < m.previewLimit || chat.pinned
       || current.chatSidebar.currentChatId === chat.id || current.chatSidebar.activeStreamingChatIds.includes(chat.id));
     const result = preview.map(chat => chatRow(chat, section, groupId));
-    const hidden = matches.filter(chat => !preview.includes(chat)).length;
+    const hidden = matches.length - preview.length;
     if (query === '' && (hidden > 0 || expanded && matches.length > m.previewLimit)) result.push(ctx.UI.Row({
       key: 'sidebar-preview-' + id, fillMaxWidth: true, paddingStart: m.chatStart, paddingEnd: m.chatEnd, paddingTop: 2,
       height: 34, verticalAlignment: 'center', spacing: 8,

@@ -1,8 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
+use uuid::Uuid;
+
 use operit_host_api::HostEnvironmentDescriptor;
 use operit_host_api::HostManager::HostManager;
+use operit_link::{CoreCallRequest, CoreEventStream, CoreWatchRequest};
 use operit_plugin_sdk::javascript::{
     JsExecutionHost, JsToolCallRequest, JsToolCallResult, JsToolCallResultData,
     JsToolNameResolutionRequest, JsToolPkgIpcCompletion, JsToolPkgIpcRequest,
@@ -48,6 +51,30 @@ pub enum ToolRegistrationVisibility {
     INTERNAL,
 }
 
+/// Owns one authenticated route stream and its pending-read cancellation signal.
+pub(crate) struct CoreRouteWatch {
+    stream: tokio::sync::Mutex<CoreEventStream>,
+    closed: tokio::sync::Notify,
+    value: Mutex<Option<operit_link::CoreValue>>,
+}
+
+/// Owns a cancellable input stream without holding the registry lock across network waits.
+pub(crate) struct CoreRoutePush {
+    session: tokio::sync::Mutex<Option<Box<dyn operit_link::CoreLinkPushSession>>>,
+    closed: tokio::sync::Notify,
+}
+
+/// Serializes a decorated invocation with an engine-authenticated package owner.
+fn toolPkgRouteArguments(owner: Option<String>, method: String, args: Value) -> Result<operit_link::CoreValue, String> {
+    let owner = owner.ok_or("Plugin routes require an authenticated engine")?;
+    crate::tools::packTool::ToolPkgRouteRuntime::requireSpacePackage(&owner)?;
+    let mut args = args.as_object().cloned().ok_or("Plugin route arguments must be an object")?;
+    if args.contains_key("packageName") || args.contains_key("methodName") { return Err("Plugin route envelope cannot override authenticated identity".into()); }
+    args.insert("packageName".into(), Value::String(owner));
+    args.insert("methodName".into(), Value::String(method));
+    operit_link::toCoreValue(Value::Object(args)).map_err(|error| error.to_string())
+}
+
 #[derive(Clone)]
 pub struct AIToolHandler {
     inner: Arc<Mutex<AIToolHandlerState>>,
@@ -57,6 +84,8 @@ pub struct AIToolHandler {
     pub(crate) storageSession: operit_store::PluginStorage::PluginStorageSession,
     pub(crate) deviceTransportScope: Arc<crate::tools::DeviceTools::DeviceTransportScope>,
     pub(crate) chatObservations: Arc<Mutex<BTreeMap<String, JsAsyncIterable<ChatSendEvent>>>>,
+    pub(crate) coreRoutePushes: Arc<Mutex<BTreeMap<String, Arc<CoreRoutePush>>>>,
+    pub(crate) coreRouteWatches: Arc<Mutex<BTreeMap<String, Arc<CoreRouteWatch>>>>,
     pub(crate) invocationSnapshot: crate::ToolExecutionManager::ToolInvocationSnapshot,
 }
 
@@ -230,6 +259,8 @@ impl AIToolHandler {
             invocationSnapshot: crate::ToolExecutionManager::ToolInvocationSnapshot::default(),
             deviceTransportScope: Default::default(),
             chatObservations: Arc::new(Mutex::new(BTreeMap::new())),
+            coreRoutePushes: Default::default(),
+            coreRouteWatches: Arc::new(Mutex::new(BTreeMap::new())),
             storageSession: operit_store::PluginStorage::PluginStorageSession::default(),
         }
     }
@@ -1175,6 +1206,8 @@ impl JsExecutionHost for AIToolHandler {
         host.storageSession = operit_store::PluginStorage::PluginStorageSession::default();
         host.deviceTransportScope = Default::default();
         host.chatObservations = Arc::new(Mutex::new(BTreeMap::new()));
+        host.coreRoutePushes = Default::default();
+        host.coreRouteWatches = Arc::new(Mutex::new(BTreeMap::new()));
         Ok(Arc::new(host))
     }
 
@@ -1574,6 +1607,167 @@ impl JsExecutionHost for AIToolHandler {
             .map_err(|error| error.to_string())
     }
 
+    /// Resolves the package installation and delegates the Binding decision to the Rust route runtime.
+    fn should_route_toolpkg(&self, binding: String, streaming: bool) -> Result<bool, String> {
+        let owner = self.authenticatedExtensionOwner.as_ref().ok_or("Plugin routes require an authenticated engine")?;
+        let record = operit_store::ExtensionStore::ExtensionStore::default().record("package", owner)?;
+        if record.scope == "device" { return Ok(false); }
+        let args = operit_link::toCoreValue(serde_json::json!({ "bindingKey": binding })).map_err(|error| error.to_string())?;
+        let runtime = operit_link::coreRouteRuntime().ok_or("Core route runtime is not installed")?;
+        if streaming {
+            let remote = runtime.shouldRouteWatch("watchToolPkgRoute", &args).map_err(|error| error.message)?;
+            let local = runtime.shouldUseLocalWatchSource("watchToolPkgRoute", &args).map_err(|error| error.message)?;
+            Ok(remote || local)
+        } else { runtime.shouldRoute("callToolPkgRoute", &args).map_err(|error| error.message) }
+    }
+
+    /// Adds the authenticated package identity to the private route argument envelope.
+    fn call_core_route(&self, target: String, method: String, args: Value)
+        -> operit_plugin_sdk::javascript::JsExecutionFuture<Result<Value, String>> {
+        let owner = self.authenticatedExtensionOwner.clone();
+        Box::pin(async move {
+            if target != "callToolPkgRoute" { return Err("Invalid plugin Call entry point".into()); }
+            let args = toolPkgRouteArguments(owner, method, args)?;
+            let runtime = operit_link::coreRouteRuntime().ok_or("Core route runtime is not installed")?;
+            let request = CoreCallRequest::new(operit_link::nextCoreRouteRequestId(&target), operit_link::CORE_INTERNAL_TARGET, target, args);
+            let value = runtime.call(request).await.result.map_err(|error| error.message)?;
+            operit_link::fromCoreValue(value).map_err(|error| error.to_string())
+        })
+    }
+
+    /// Obtains a normal Core embedded stream and opens its existing Watch descriptor.
+    fn open_core_route_watch(&self, target: String, method: String, args: Value)
+        -> operit_plugin_sdk::javascript::JsExecutionFuture<Result<Value, String>> {
+        let owner = self.authenticatedExtensionOwner.clone();
+        let watches = self.coreRouteWatches.clone();
+        Box::pin(async move {
+            if target != "watchToolPkgRoute" { return Err("Invalid plugin Watch entry point".into()); }
+            let args = toolPkgRouteArguments(owner, method, args)?;
+            let runtime = operit_link::coreRouteRuntime().ok_or("Core route runtime is not installed")?;
+            let value = runtime.call(CoreCallRequest::new(operit_link::nextCoreRouteRequestId(&target), operit_link::CORE_INTERNAL_TARGET, target.clone(), args.clone())).await.result.map_err(|error| error.message)?;
+            let descriptor = operit_link::fromCoreValue::<operit_link::CoreStream<Value>>(value).map_err(|error| error.to_string())?.descriptor;
+            let openArgs = operit_rslink_runtime::core_route_embedded_stream_open_args(
+                descriptor.args, "call", target, args,
+            ).map_err(|error| error.message)?;
+            let request = CoreWatchRequest::new(operit_link::nextCoreRouteRequestId("plugin-watch"), descriptor.target, descriptor.propertyName, openArgs);
+            let stream = runtime.watch(request).await.map_err(|error| error.message)?;
+            let id = Uuid::new_v4().to_string();
+            watches.lock().map_err(|_| "Core route watch registry is poisoned")?.insert(id.clone(), Arc::new(CoreRouteWatch {
+                stream: tokio::sync::Mutex::new(stream), closed: tokio::sync::Notify::new(), value: Mutex::new(None),
+            }));
+            Ok(serde_json::json!({ "subscriptionId": id }))
+        })
+    }
+
+    /// Opens one ordered input stream through the existing Core Link Push abstraction.
+    fn open_toolpkg_route_push(&self, method: String, args: Value)
+        -> operit_plugin_sdk::javascript::JsExecutionFuture<Result<Value, String>> {
+        let owner = self.authenticatedExtensionOwner.clone();
+        let pushes = self.coreRoutePushes.clone();
+        Box::pin(async move {
+            let args = toolPkgRouteArguments(owner, method, args)?;
+            let runtime = operit_link::coreRouteRuntime().ok_or("Core route runtime is not installed")?;
+            let request = operit_link::CorePushRequest::new(operit_link::nextCoreRouteRequestId("plugin-push"), operit_link::CORE_INTERNAL_TARGET, "pushToolPkgRoute").withArgs(args);
+            let session = runtime.openPush(request).await.map_err(|error| error.message)?;
+            let id = Uuid::new_v4().to_string();
+            pushes.lock().map_err(|_| "Core Push registry is poisoned")?.insert(id.clone(), Arc::new(CoreRoutePush {
+                session: tokio::sync::Mutex::new(Some(session)), closed: tokio::sync::Notify::new(),
+            }));
+            Ok(serde_json::json!({ "subscriptionId": id }))
+        })
+    }
+
+    /// Sends exactly one item and preserves Link backpressure for the producer.
+    fn send_toolpkg_route_push(&self, id: String, value: Value)
+        -> operit_plugin_sdk::javascript::JsExecutionFuture<Result<Value, String>> {
+        let pushes = self.coreRoutePushes.clone();
+        Box::pin(async move {
+            let push = pushes.lock().map_err(|_| "Core Push registry is poisoned")?.get(&id).cloned().ok_or("Plugin Push session is not active")?;
+            let mut guard = push.session.try_lock().map_err(|_| "Plugin Push already has a pending send")?;
+            let value = operit_link::toCoreValue(value).map_err(|error| error.to_string())?;
+            let session = guard.as_mut().ok_or("Plugin Push session is closed")?;
+            tokio::select! {
+                biased;
+                _ = push.closed.notified() => { guard.take(); Err("Plugin Push was aborted".into()) },
+                sent = session.send(value) => { sent.map_err(|error| error.message)?; Ok(Value::Null) },
+            }
+        })
+    }
+
+    /// Completes or aborts one authenticated producer and removes its owned session.
+    fn close_toolpkg_route_push(&self, id: String, abort: bool)
+        -> operit_plugin_sdk::javascript::JsExecutionFuture<Result<Value, String>> {
+        let pushes = self.coreRoutePushes.clone();
+        Box::pin(async move {
+            let push = pushes.lock().map_err(|_| "Core Push registry is poisoned")?.remove(&id).ok_or("Plugin Push session is not active")?;
+            if abort { push.closed.notify_one(); }
+            let session = push.session.lock().await.take();
+            if !abort { session.ok_or("Plugin Push session is closed")?.close().await.map_err(|error| error.message)?; }
+            Ok(Value::Null)
+        })
+    }
+
+    /// Waits for a route event or explicit cancellation of the authenticated subscription.
+    fn next_core_route_watch(&self, subscription_id: String)
+        -> operit_plugin_sdk::javascript::JsExecutionFuture<Result<Value, String>> {
+        let watches = self.coreRouteWatches.clone();
+        Box::pin(async move {
+            let watch = watches.lock()
+                .map_err(|_| "Core route watch registry is poisoned".to_string())?
+                .get(&subscription_id).cloned()
+                .ok_or_else(|| "Core route watch subscription is not active".to_string())?;
+            let mut stream = watch.stream.try_lock()
+                .map_err(|_| "Core route watch already has a pending read".to_string())?;
+            let event = tokio::select! {
+                biased;
+                _ = watch.closed.notified() => None,
+                event = stream.recv() => event,
+            };
+            match event {
+                Some(event) => {
+                    let mut previous = watch.value.lock().map_err(|_| "Core route watch value is poisoned")?;
+                    let value = if event.kind == operit_link::CoreEventKind::Delta {
+                        previous.take().ok_or("Core stream received a delta before its initial value")?.intoIncrementalDelta(&event.value)?
+                    } else { event.value };
+                    *previous = Some(value.clone());
+                    let value: Value = operit_link::fromCoreValue(value).map_err(|error| error.to_string())?;
+                    if let Some(error) = value.get("error").and_then(Value::as_str) { return Err(error.into()); }
+                    Ok(value)
+                },
+                None => {
+                    watches.lock().map_err(|_| "Core route watch registry is poisoned".to_string())?
+                        .remove(&subscription_id);
+                    Ok(Value::Null)
+                }
+            }
+        })
+    }
+
+    /// Cancels a pending watch read and releases its route stream.
+    fn close_core_route_watch(&self, subscription_id: String) -> Result<(), String> {
+        let watch = self.coreRouteWatches.lock()
+            .map_err(|_| "Core route watch registry is poisoned".to_string())?
+            .remove(&subscription_id);
+        if let Some(watch) = watch { watch.closed.notify_one(); }
+        Ok(())
+    }
+
+    /// Observes an exact key using the current engine's authenticated storage handles.
+    fn wait_plugin_storage_record(
+        &self,
+        handle: String,
+        collection: String,
+        key: String,
+        after: Option<operit_host_api::PluginStorage::StorageRecordWatchState>,
+    ) -> operit_plugin_sdk::javascript::JsExecutionFuture<Result<Value, String>> {
+        let session = self.storageSession.clone();
+        Box::pin(async move {
+            let entry = session.waitForRecord(handle, collection, key, after).await
+                .map_err(|error| error.to_string())?;
+            serde_json::to_value(entry).map_err(|error| error.to_string())
+        })
+    }
+
     /// Waits for the runtime scheduler to advance JavaScript work on a later host turn.
     fn wait_for_javascript_runtime_turn(&self) -> operit_host_api::HostRuntimeTurnFuture {
         self.getContext()
@@ -1877,7 +2071,7 @@ mod tests {
                 executorAvailability: Arc::new(tokio::sync::Notify::new()),
                 authenticatedExtensionOwner: Some("engine-owner".into()),
                 invocationSnapshot: Default::default(),
-                storageSession: Default::default(), chatObservations: Default::default(), deviceTransportScope: Default::default(),
+                storageSession: Default::default(), chatObservations: Default::default(), coreRouteWatches: Default::default(), coreRoutePushes: Default::default(), deviceTransportScope: Default::default(),
             };
             Self { handler, root }
         }

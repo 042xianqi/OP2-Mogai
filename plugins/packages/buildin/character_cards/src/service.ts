@@ -454,8 +454,10 @@ function normalizedCharacter(card: Card): Card {
     card.memoryBindingMode !== "SHARED"
   )
     throw new Error("记忆绑定模式无效");
-  if (card.chatModelBindingMode === "FIXED_MODEL")
+  if (card.chatModelBindingMode === "FIXED_MODEL") {
+    requireId(card.chatProviderId, "固定聊天模型提供商");
     requireId(card.chatModelId, "固定聊天模型");
+  }
   if (card.memoryBindingMode === "SHARED")
     requireId(card.sharedMemoryId, "共享记忆库");
   if (card.ttsConfigId !== null) requireId(card.ttsConfigId, "TTS 配置");

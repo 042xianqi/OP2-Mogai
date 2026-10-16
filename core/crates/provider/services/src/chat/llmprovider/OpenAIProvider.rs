@@ -2421,6 +2421,7 @@ impl AIService for OpenAIProvider {
 }
 
 impl OpenAIProvider {
+    /// Runs one prepared request and preserves terminal failures on the shared response stream.
     pub async fn send_prepared_request(
         &mut self,
         request: SendMessageRequest,
@@ -2447,7 +2448,7 @@ impl OpenAIProvider {
                         let mut emitter = StreamEmitter::new(producer.clone());
                         emitter.emit_savepoint(&request_savepoint_id);
                         let mut retryCount = 0;
-                        loop {
+                        let result = loop {
                             let attempt = retryCount + 1;
                             AppLogger::i(
                                 PROVIDER_TRANSPORT_LOG_TAG,
@@ -2474,15 +2475,18 @@ impl OpenAIProvider {
                                         &mut emitter,
                                     )
                                     .await,
-                                Ok(response) => Err(AiServiceError::RequestFailed(format!(
-                                    "{}: {}",
-                                    response.status(),
-                                    provider.readResponseText(response).await.unwrap_or_default()
-                                ))),
+                                Ok(response) => {
+                                    let status = response.status();
+                                    match provider.readResponseText(response).await {
+                                        Ok(body) => Err(AiServiceError::RequestFailed(format!("{status}: {body}"))),
+                                        Err(error) => Err(error),
+                                    }
+                                }
                                 Err(error) => Err(error),
                             };
                             match result {
-                                Ok(()) | Err(AiServiceError::RequestCancelled) => break,
+                                Ok(()) => break Ok(()),
+                                Err(AiServiceError::RequestCancelled) => break Err(AiServiceError::RequestCancelled),
                                 Err(error) => {
                                     retryCount += 1;
                                     AppLogger::e(
@@ -2498,25 +2502,19 @@ impl OpenAIProvider {
                                         || retryCount
                                             > super::LlmRetryPolicy::LlmRetryPolicy::MAX_RETRY_ATTEMPTS
                                     {
-                                        if let Some(callback) = on_non_fatal_error.as_ref() {
-                                            callback(format!(
-                                                "provider request failed after {} attempt(s): {}",
-                                                attempt, error
-                                            ));
-                                        }
-                                        break;
+                                        break Err(error);
                                     }
                                     let _ = emitter.emit_rollback(&request_savepoint_id);
                                     if let Some(callback) = on_non_fatal_error.as_ref() {
                                         callback(retry_message(&retry_error_text(&error), retryCount));
                                     }
-                                    if provider.delayRetryOrCancel(retryCount).await.is_err() {
-                                        break;
+                                    if let Err(error) = provider.delayRetryOrCancel(retryCount).await {
+                                        break Err(error);
                                     }
                                 }
                             }
-                        }
-                        producer.close();
+                        };
+                        finish_response_stream(&producer, result);
                     })),
                 )
                 .map_err(|error| AiServiceError::RequestFailed(error.to_string()))?;
@@ -2538,7 +2536,7 @@ impl OpenAIProvider {
                 "openai-response",
                 Box::new(move || {
                     Box::pin(async move {
-                        if let Ok(chunks) = provider
+                        let result = provider
                             .sendNonStreamingPreparedRequest(
                                 api_endpoint,
                                 headers,
@@ -2547,12 +2545,12 @@ impl OpenAIProvider {
                                 on_non_fatal_error,
                             )
                             .await
-                        {
-                            for chunk in chunks {
-                                producer.emit_chunk(chunk);
-                            }
-                        }
-                        producer.close();
+                            .map(|chunks| {
+                                for chunk in chunks {
+                                    producer.emit_chunk(chunk);
+                                }
+                            });
+                        finish_response_stream(&producer, result);
                     })
                 }),
             )
@@ -2800,6 +2798,15 @@ fn emit_new_chunks(
     for chunk in state.chunks.iter().skip(before_len) {
         callback(chunk.clone());
     }
+}
+
+/// Records a final request failure before closing channels; cancellation remains a separate lifecycle.
+fn finish_response_stream(output: &SharedAiResponseStream, result: Result<(), AiServiceError>) {
+    match result {
+        Ok(()) | Err(AiServiceError::RequestCancelled) => {}
+        Err(error) => output.set_terminal_failure(error.to_string()),
+    }
+    output.close();
 }
 
 #[cfg(test)]
