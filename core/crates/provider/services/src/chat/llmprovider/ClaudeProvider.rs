@@ -405,12 +405,18 @@ impl ClaudeProvider {
 
     /// Builds Claude content blocks from text and registered image links.
     fn build_content_array(&self, text: &str) -> Value {
-        if !MediaLinkParser::has_image_links(text) {
-            return json!([{"type": "text", "text": text}]);
+        let text_after_media_removal = if MediaLinkParser::has_media_links(text) {
+            MediaLinkParser::remove_media_links(text).trim().to_string()
+        } else {
+            text.to_string()
+        };
+
+        if !MediaLinkParser::has_image_links(&text_after_media_removal) {
+            return json!([{"type": "text", "text": text_after_media_removal}]);
         }
 
-        let image_links = MediaLinkParser::extract_image_links(text);
-        let text_without_links = MediaLinkParser::remove_image_links(text).trim().to_string();
+        let image_links = MediaLinkParser::extract_image_links(&text_after_media_removal);
+        let text_without_links = MediaLinkParser::remove_image_links(&text_after_media_removal).trim().to_string();
         let mut content_blocks = Vec::new();
         for link in image_links {
             content_blocks.push(json!({
@@ -786,47 +792,9 @@ impl AIService for ClaudeProvider {
         self.set_cancelled(false);
         self.reset_token_counts();
         if request.stream {
-            let event_channel = empty_revisable_event_channel();
-            let streamEventChannel = event_channel.clone();
-            let mut ownedProvider = Some(self.clone());
-            let mut ownedRequest = Some(request);
-            let coldStream = FnStream::new(move |emit| {
-                let request = ownedRequest
-                    .take()
-                    .expect("ClaudeProvider stream must only be collected once");
-                let mut provider = ownedProvider
-                    .take()
-                    .expect("ClaudeProvider stream must only be collected once");
-                let eventChannel = streamEventChannel.clone();
-                Box::pin(async move {
-                    if let Ok(mut responseStream) = provider.send_streaming_message(request).await {
-                        responseStream.collect(emit).await;
-                    }
-                    eventChannel.close();
-                })
-            });
-            return Ok(Box::new(with_event_channel(coldStream, event_channel)));
+            return self.send_streaming_message(request).await;
         }
-        let event_channel = empty_revisable_event_channel();
-        let streamEventChannel = event_channel.clone();
-        let mut ownedProvider = Some(self.clone());
-        let mut ownedRequest = Some(request);
-        let coldStream = FnStream::new(move |emit| {
-            let request = ownedRequest
-                .take()
-                .expect("ClaudeProvider non-stream request must only be collected once");
-            let mut provider = ownedProvider
-                .take()
-                .expect("ClaudeProvider non-stream request must only be collected once");
-            let eventChannel = streamEventChannel.clone();
-            Box::pin(async move {
-                if let Ok(mut responseStream) = provider.send_non_streaming_message(request).await {
-                    responseStream.collect(emit).await;
-                }
-                eventChannel.close();
-            })
-        });
-        Ok(Box::new(with_event_channel(coldStream, event_channel)))
+        self.send_non_streaming_message(request).await
     }
 
     async fn calculate_input_tokens(
@@ -897,28 +865,27 @@ impl ClaudeProvider {
                 retryCount = newRetryCount;
                 continue;
             }
-            match self.process_streaming_response(response).await {
+            let error = match self.process_streaming_response(response).await {
                 Ok(responseStream) => return Ok(responseStream),
                 Err(AiServiceError::RequestCancelled) => {
                     return Err(AiServiceError::RequestCancelled);
                 }
-                Err(error) => {
-                    let errorText = retry_error_text(&error);
-                    if !request.enable_retry {
-                        return Err(error);
-                    }
-                    let newRetryCount = retryCount + 1;
-                    if newRetryCount > maxRetries {
-                        return Err(error);
-                    }
-                    if let Some(on_non_fatal_error) = request.on_non_fatal_error.as_ref() {
-                        on_non_fatal_error(retry_message(&errorText, newRetryCount));
-                    }
-                    self.delayRetryOrCancel(newRetryCount).await?;
-                    retryCount = newRetryCount;
-                    continue;
-                }
+                Err(error) => error,
+            };
+            let errorText = retry_error_text(&error);
+            if !request.enable_retry {
+                return Err(error);
             }
+            let newRetryCount = retryCount + 1;
+            if newRetryCount > maxRetries {
+                return Err(error);
+            }
+            if let Some(on_non_fatal_error) = request.on_non_fatal_error.as_ref() {
+                on_non_fatal_error(retry_message(&errorText, newRetryCount));
+            }
+            self.delayRetryOrCancel(newRetryCount).await?;
+            retryCount = newRetryCount;
+            continue;
         }
     }
 
