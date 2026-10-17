@@ -180,11 +180,6 @@ export async function characterCombineApi(event: ToolPkg.PublicApiEvent<DomainIn
   return dispatchDomain("character.combine", parseDomainPayload("character.combine", event.payload));
 }
 
-/** Validates and executes the character.resetDefault public domain method. */
-export async function characterResetDefaultApi(event: ToolPkg.PublicApiEvent<DomainInput<"character.resetDefault">>): Promise<DomainOutput<"character.resetDefault">> {
-  return dispatchDomain("character.resetDefault", parseDomainPayload("character.resetDefault", event.payload));
-}
-
 /** Validates and executes the character.export public domain method. */
 export async function characterExportApi(event: ToolPkg.PublicApiEvent<DomainInput<"character.export">>): Promise<DomainOutput<"character.export">> {
   return dispatchDomain("character.export", parseDomainPayload("character.export", event.payload));
@@ -476,7 +471,6 @@ export function registerDomainApis(): void {
   ToolPkg.registerApi<DomainInput<"character.delete">, DomainOutput<"character.delete">>({ name: "character.delete", function: characterDeleteApi });
   ToolPkg.registerApi<DomainInput<"character.setActive">, DomainOutput<"character.setActive">>({ name: "character.setActive", function: characterSetActiveApi });
   ToolPkg.registerApi<DomainInput<"character.combine">, DomainOutput<"character.combine">>({ name: "character.combine", function: characterCombineApi });
-  ToolPkg.registerApi<DomainInput<"character.resetDefault">, DomainOutput<"character.resetDefault">>({ name: "character.resetDefault", function: characterResetDefaultApi });
   ToolPkg.registerApi<DomainInput<"character.export">, DomainOutput<"character.export">>({ name: "character.export", function: characterExportApi });
   ToolPkg.registerApi<DomainInput<"character.import">, DomainOutput<"character.import">>({ name: "character.import", function: characterImportApi });
   ToolPkg.registerApi<DomainInput<"character.exportBackup">, DomainOutput<"character.exportBackup">>({ name: "character.exportBackup", function: characterExportBackupApi });

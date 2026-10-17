@@ -138,7 +138,7 @@ function characterText(card: CharacterRecord): string {
     `Tags: ${card.attachedTagIds.join(", ")}`, `Advanced prompt: ${card.advancedCustomPrompt}`, `Marks: ${card.marks}`,
     `Chat model binding: ${card.chatModelBindingMode}`, `Chat model id: ${displayOptional(card.chatModelId)}`,
     `Shared memory mounts: ${card.sharedMemoryMounts.length}`, `Tool access enabled: ${card.toolAccessConfig.enabled}`,
-    `Default: ${card.isDefault}`, `Created at: ${card.createdAt}`, `Updated at: ${card.updatedAt}`,
+    `Created at: ${card.createdAt}`, `Updated at: ${card.updatedAt}`,
   ]);
 }
 /** Reproduces the original detailed group text. */
@@ -158,7 +158,7 @@ export function parseCharacterCommand(args: readonly string[]): CommandInvocatio
       /** Formats the original complete character list and summary lines. */
       return invocation("character.list", {}, cards => result(lines([`Characters: ${cards.length}`, ...cards.map(
         /** Formats one stored character's legacy summary. */
-        card => `- ${card.id} | ${card.name} | default: ${card.isDefault} | tags: ${card.attachedTagIds.join(", ")} | ${card.description}`,
+        card => `- ${card.id} | ${card.name} | tags: ${card.attachedTagIds.join(", ")} | ${card.description}`,
       )]), cards));
     }
     case "show": {
@@ -203,30 +203,25 @@ export function parseCharacterCommand(args: readonly string[]): CommandInvocatio
       /** Prints the exact composed prompt without appending a newline. */
       return invocation("character.combine", parseDomainPayload("character.combine", payload), value => result(value.prompt, value));
     }
-    case "reset-default": {
-      arity(args, 1, 1, CHARACTER_USAGE[10]);
-      /** Returns the actual reset operation status. */
-      return invocation("character.resetDefault", {}, value => result(lines(["Default character reset"]), value));
-    }
     case "export": {
-      arity(args, 3, 3, CHARACTER_USAGE[11]);
+      arity(args, 3, 3, CHARACTER_USAGE[10]);
       const payload = parseDomainPayload("character.export", { id: args[1], format: args[2] });
       /** Prints the domain's original interchange content. */
       return invocation("character.export", payload, value => result(value.content, value));
     }
     case "import": {
-      arity(args, 3, 3, CHARACTER_USAGE[12]);
+      arity(args, 3, 3, CHARACTER_USAGE[11]);
       const payload = parseDomainPayload("character.import", { format: args[1], content: args[2] });
       /** Returns the full character created by the importer. */
       return invocation("character.import", payload, value => result(characterText(value), value));
     }
     case "export-backup": {
-      arity(args, 1, 1, CHARACTER_USAGE[13]);
+      arity(args, 1, 1, CHARACTER_USAGE[12]);
       /** Prints the manager's complete character and prompt-tag backup. */
       return invocation("character.exportBackup", {}, value => result(value.content, value));
     }
     case "import-backup": {
-      arity(args, 2, 2, CHARACTER_USAGE[14]);
+      arity(args, 2, 2, CHARACTER_USAGE[13]);
       /** Returns the manager's actual import counts. */
       return invocation("character.importBackup", { content: args[1] }, value => result(lines([`Imported characters: ${value.new}; updated: ${value.updated}; skipped: ${value.skipped}; total: ${value.total}`]), value));
     }

@@ -111,7 +111,7 @@ export const spaceMergeDescriptor: StorageMergeDescriptor = {
       collection: "cards",
       identityColumn: "id",
       nameColumn: "name",
-      ignoredColumns: ["_revision", "id", "createdAt", "updatedAt"],
+      ignoredColumns: ["_revision", "id", "createdAt", "updatedAt", "isDefault"],
       keyEncoding: "length_prefixed_root",
       matchMode: "content",
       keyReferences: [],

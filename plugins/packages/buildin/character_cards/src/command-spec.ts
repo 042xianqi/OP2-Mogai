@@ -13,7 +13,6 @@ export const CHARACTER_USAGE = [
   "operit2 character delete <id>",
   "operit2 character set-active <id>",
   "operit2 character combine <id> [CHAT|VOICE] [tag-id-csv]",
-  "operit2 character reset-default",
   "operit2 character export <id> <operit|tavern>",
   "operit2 character import <operit|tavern> <json-content>",
   "operit2 character export-backup",

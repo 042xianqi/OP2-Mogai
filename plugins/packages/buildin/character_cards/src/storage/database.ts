@@ -24,8 +24,8 @@ import {
   clone,
   collections,
   equal,
+  loadCharacterState,
   records,
-  stateFromRecords,
   storedValue,
 } from "./records";
 import type { StoredRecord } from "./records";
@@ -99,7 +99,13 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
     }
     const metadata = await database.get("meta", "state");
     if (metadata === null) throw new Error("Character initialization did not publish metadata");
-    assertCharacterState(stateFromRecords(metadata.value, await repository.readRecords()));
+    assertObject(metadata.value, "character metadata");
+    // A reconciled identity space is published once so the allocation floor replicates instead of recurring.
+    // The assembled state shares row objects with the first read, so a fresh read supplies the
+    // pre-reconciliation values the publication diff compares against.
+    const loaded = loadCharacterState(metadata.value, await repository.readRecords());
+    if (loaded.healed)
+      await repository.publish(loaded.state, await repository.readRecords(), [], [], metadata.version, metadata.value);
     return repository;
   }
 
@@ -140,7 +146,8 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
           "Character records changed during the read; operation was not started",
         );
       assertObject(metadata.value, "character metadata");
-      const before = stateFromRecords(metadata.value, rows);
+      const loaded = loadCharacterState(metadata.value, rows);
+      const before = loaded.state;
       const state = clone(before),
         session = new RepositorySession(
           state,
@@ -166,11 +173,13 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
               owner.userDocumentPath.lastIndexOf("/"),
             ),
         );
-      if (!equal(before, state) || documents.length !== 0) {
+      if (!equal(before, state) || documents.length !== 0 || loaded.healed) {
         try {
           await this.publish(
             state,
-            rows,
+            // A reconciled identity space shares row objects with the first read, so the diff
+            // needs a fresh read of the pre-reconciliation values.
+            loaded.healed ? await this.readRecords() : rows,
             documents,
             removed,
             metadata.version,

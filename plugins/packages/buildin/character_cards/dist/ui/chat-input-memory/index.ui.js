@@ -245,7 +245,6 @@ var validators = {
   "character.delete": id,
   "character.setActive": id,
   "character.combine": shape({ id: required(nonblank), promptFunctionType: optional(enumeration("CHAT", "VOICE")), additionalTagIds: optional(identifiers) }),
-  "character.resetDefault": empty,
   "character.export": shape({ id: required(nonblank), format: required(format) }),
   "character.import": shape({ format: required(format), content: required(nonblank) }),
   "character.exportBackup": empty,
@@ -1289,7 +1288,7 @@ var spaceMergeDescriptor = {
       collection: "cards",
       identityColumn: "id",
       nameColumn: "name",
-      ignoredColumns: ["_revision", "id", "createdAt", "updatedAt"],
+      ignoredColumns: ["_revision", "id", "createdAt", "updatedAt", "isDefault"],
       keyEncoding: "length_prefixed_root",
       matchMode: "content",
       keyReferences: [],
@@ -1493,12 +1492,12 @@ function renderMemoryMenu(ctx) {
     });
   }
   function icon(name, color = colors.onSurfaceVariant) {
-    return OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:47827",[name,color],()=>[{ name, size: 16, tint: color }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs));
+    return OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:47805",[name,color],()=>[{ name, size: 16, tint: color }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs));
   }
   function switchRow(key, name, title) {
     if (preferences === null) throw new Error("Memory preferences are not loaded");
     const checked = preferences[key];
-    return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:48051",[{
+    return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:48029",[{
       key: "memory-" + key,
       fillMaxWidth: true,
       paddingHorizontal: 12,
@@ -1507,15 +1506,15 @@ function renderMemoryMenu(ctx) {
       onClick: () => toggle(key)
     },[
       icon(name, checked ? colors.primary : colors.onSurfaceVariant),
-      OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:48358",[],()=>[{ width: 12 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:48394",[{ text: title, style: "bodySmall", color: colors.onSurface, maxLines: 1, overflow: "ellipsis", weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:48521",[{ text: checked ? "\u5F00" : "\u5173", style: "bodySmall", color: colors.primary, fontWeight: "600" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
-      OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:48643",[],()=>[{ width: 8 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:48678",[{ checked, width: 40, height: 28, onCheckedChange: () => toggle(key) }],(...__operitArgs)=>ctx.UI.Switch(...__operitArgs))
+      OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:48336",[],()=>[{ width: 12 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:48372",[{ text: title, style: "bodySmall", color: colors.onSurface, maxLines: 1, overflow: "ellipsis", weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:48499",[{ text: checked ? "\u5F00" : "\u5173", style: "bodySmall", color: colors.primary, fontWeight: "600" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+      OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:48621",[],()=>[{ width: 8 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:48656",[{ checked, width: 40, height: 28, onCheckedChange: () => toggle(key) }],(...__operitArgs)=>ctx.UI.Switch(...__operitArgs))
     ]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs));
   }
-  if (preferences === null) return OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:48811",[load],()=>[{ key: "memory-menu-loading", onLoad: load }],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
-  const children = [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:48889",[{
+  if (preferences === null) return OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:48789",[load],()=>[{ key: "memory-menu-loading", onLoad: load }],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
+  const children = [OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:48867",[{
     key: "memory-section-header",
     fillMaxWidth: true,
     paddingHorizontal: 12,
@@ -1527,26 +1526,26 @@ function renderMemoryMenu(ctx) {
     }
   },[
     icon("DataObjectOutlined", colors.onSurfaceVariant.copy({ alpha: 0.7 })),
-    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:49243",[],()=>[{ width: 12 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
-    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:49277",[],()=>[{ text: "\u8BB0\u5FC6", style: "bodySmall" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
-    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:49340",[],()=>[{ width: 8 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
-    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:49373",[{ text: memorySummary(preferences), style: "bodySmall", color: colors.primary, fontWeight: "600", textAlign: "end", maxLines: 1, overflow: "ellipsis", weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
-    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:49554",[{
+    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:49221",[],()=>[{ width: 12 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
+    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:49255",[],()=>[{ text: "\u8BB0\u5FC6", style: "bodySmall" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:49318",[],()=>[{ width: 8 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:49351",[{ text: memorySummary(preferences), style: "bodySmall", color: colors.primary, fontWeight: "600", textAlign: "end", maxLines: 1, overflow: "ellipsis", weight: 1 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:49532",[{
       key: "memory-info",
       tooltip: "\u8BB0\u5FC6\u72B6\u6001\u8BF4\u660E",
       width: 24,
       height: 28,
       contentPadding: { horizontal: 0, vertical: 0 },
       onClick: showInfo,
-      content: OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:49784",[{ name: "InfoOutline", size: 16, tint: colors.onSurfaceVariant.copy({ alpha: 0.7 }) }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))
+      content: OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:49762",[{ name: "InfoOutline", size: 16, tint: colors.onSurfaceVariant.copy({ alpha: 0.7 }) }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))
     }],(...__operitArgs)=>ctx.UI.IconButton(...__operitArgs)),
-    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:49895",[],()=>[{ width: 6 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
-    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:49928",[{ name: expanded ? "KeyboardArrowUp" : "KeyboardArrowDown", size: 20, tint: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))
+    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:49873",[],()=>[{ width: 6 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:49906",[{ name: expanded ? "KeyboardArrowUp" : "KeyboardArrowDown", size: 20, tint: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))
   ]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs))];
-  if (expanded) children.push(OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:50080",[{ key: "memory-section-children", modifier: ctx.Modifier.padding(12, 0, 8, 4) },[
+  if (expanded) children.push(OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:50058",[{ key: "memory-section-children", modifier: ctx.Modifier.padding(12, 0, 8, 4) },[
     switchRow("userDescriptionEnabled", "AssignmentIndOutlined", "\u63D0\u4F9B\u7528\u6237\u8D44\u6599"),
     switchRow("autoUpdateEnabled", preferences.autoUpdateEnabled ? "Save" : "SaveOutlined", "\u81EA\u52A8\u66F4\u65B0\u8BB0\u5FC6\u5E93"),
-    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:50426",[{
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:50404",[{
       key: "memory-manual",
       fillMaxWidth: true,
       paddingHorizontal: 12,
@@ -1555,8 +1554,8 @@ function renderMemoryMenu(ctx) {
       onClick: !busy && chatId !== null ? manual : void 0
     },[
       icon("SaveOutlined"),
-      OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:50716",[],()=>[{ width: 12 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:50752",[{
+      OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:50694",[],()=>[{ width: 12 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:50730",[{
         text: busy ? "\u6B63\u5728\u66F4\u65B0\u8BB0\u5FC6\u2026" : "\u624B\u52A8\u66F4\u65B0\u8BB0\u5FC6",
         style: "bodySmall",
         maxLines: 2,
@@ -1566,7 +1565,7 @@ function renderMemoryMenu(ctx) {
       }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))
     ]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs))
   ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs)));
-  return OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:51111",[children],()=>[{ key: "memory-section", fillMaxWidth: true },children],(...__operitArgs)=>ctx.UI.Column(...__operitArgs));
+  return OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:51089",[children],()=>[{ key: "memory-section", fillMaxWidth: true },children],(...__operitArgs)=>ctx.UI.Column(...__operitArgs));
 }
 
 // src/ui/chat-input-memory/index.ui.ts

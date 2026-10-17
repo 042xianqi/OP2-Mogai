@@ -233,7 +233,6 @@ var validators = {
   "character.delete": id,
   "character.setActive": id,
   "character.combine": shape({ id: required(nonblank), promptFunctionType: optional(enumeration("CHAT", "VOICE")), additionalTagIds: optional(identifiers) }),
-  "character.resetDefault": empty,
   "character.export": shape({ id: required(nonblank), format: required(format) }),
   "character.import": shape({ format: required(format), content: required(nonblank) }),
   "character.exportBackup": empty,
@@ -322,7 +321,7 @@ function Screen(ctx) {
   function close() {
     return { type: "toolpkg.presentation.cancel", requestId };
   }
-  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/memory-status/index.ui.js:16744",[{
+  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/memory-status/index.ui.js:16709",[{
     key: "memory-status",
     title: "\u8BB0\u5FC6\u72B6\u6001",
     text: input.description,
