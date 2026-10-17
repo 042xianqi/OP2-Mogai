@@ -623,9 +623,6 @@
         "version": {
           "kind": "integer"
         },
-        "nextId": {
-          "kind": "text"
-        },
         "active": {
           "kind": "object",
           "nullable": true,

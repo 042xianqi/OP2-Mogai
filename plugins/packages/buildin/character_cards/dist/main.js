@@ -356,7 +356,7 @@ function assertMemoryValues(value) {
 }
 function assertMemory(value) {
   assertObject(value, "\u8BB0\u5FC6\u8BB0\u5F55");
-  requireDecimal(value.id, "\u8BB0\u5FC6\u6570\u636E\u5E93\u6807\u8BC6", true);
+  requireId(value.id, "\u8BB0\u5FC6\u6570\u636E\u5E93\u6807\u8BC6");
   requireId(value.uuid, "\u8BB0\u5FC6 UUID");
   for (const field2 of ["title", "content", "contentType", "source"]) assertString(value[field2], field2);
   assertNumber(value.credibility, "\u53EF\u4FE1\u5EA6", 0, 1);
@@ -397,7 +397,7 @@ function assertGraph(value) {
   }
   for (const edge of value.edges) {
     assertObject(edge, "\u8BB0\u5FC6\u56FE\u8C31\u5173\u7CFB");
-    requireDecimal(edge.id, "\u56FE\u8C31\u5173\u7CFB\u6807\u8BC6", true);
+    requireId(edge.id, "\u56FE\u8C31\u5173\u7CFB\u6807\u8BC6");
     requireId(edge.sourceId, "\u56FE\u8C31\u6E90\u8282\u70B9 UUID");
     requireId(edge.targetId, "\u56FE\u8C31\u76EE\u6807\u8282\u70B9 UUID");
     assertNullableString(edge.label, "\u56FE\u8C31\u5173\u7CFB\u6807\u9898");
@@ -693,10 +693,8 @@ function nonblank(value, path) {
   text(value, path);
   if (value.trim() === "") throw new Error(`${path} must not be blank`);
 }
-function parseMemoryIdentifier(value, path, positive = true) {
-  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) throw new Error(`${path} must be a canonical decimal string`);
-  const id2 = BigInt(value);
-  if (id2 > 9223372036854775807n || positive && id2 === 0n) throw new Error(`${path} is outside its declared identity range`);
+function parseMemoryIdentifier(value, path, _positive = true) {
+  if (typeof value !== "string" || value.trim() === "" || value !== value.trim() || value.length > 256) throw new Error(`${path} must be a nonblank identity`);
   return value;
 }
 function memoryIdentifier(value, path) {
@@ -1749,9 +1747,6 @@ var collections = {
       version: {
         kind: "integer"
       },
-      nextId: {
-        kind: "text"
-      },
       active: {
         kind: "object",
         nullable: true,
@@ -2488,7 +2483,7 @@ var RelationalDatabase = class _RelationalDatabase {
       if (typeof directory !== "string" || directory.trim() === "")
         throw new Error("Plugin data directory is unavailable");
       const sql = yield Tools.Storage.sqlite.open({
-        path: directory + "/characters-relational.sqlite",
+        path: directory + "/characters-relational-v2.sqlite",
         merge: spaceMergeDescriptor
       });
       for (const root of Object.values(layouts))
@@ -3771,38 +3766,7 @@ function createMemorySpace(ownerKey) {
 }
 function createInitialState(now) {
   const card = createInstalledCharacter(now);
-  return { version: 3, memoryPreferences: { userDescriptionEnabled: true, autoUpdateEnabled: true }, conversationGroups: [], nextId: "1", cards: [card], groups: [], tags: [], stores: [], active: { CharacterCard: { id: card.id } }, owners: [createMemorySpace("character:" + card.id)] };
-}
-function normalizeIdentitySpace(state) {
-  const nextId = typeof state.nextId === "string" && /^[0-9]+$/.test(state.nextId) ? BigInt(state.nextId) : null;
-  if (nextId === null) return false;
-  let highest = -1n;
-  const consider = (value) => {
-    if (typeof value !== "string" || !/^[0-9]+$/.test(value)) return;
-    const parsed = BigInt(value);
-    if (parsed > highest) highest = parsed;
-  };
-  const considerEntity = (value) => {
-    if (typeof value !== "string") return;
-    const match = /^(?:character|group|tag|shared)-([1-9][0-9]*)$/.exec(value);
-    if (match !== null) consider(match[1]);
-  };
-  const each = (records3, visit) => {
-    if (!Array.isArray(records3)) return;
-    for (const record2 of records3) if (record2 !== null && typeof record2 === "object" && !Array.isArray(record2)) visit(record2);
-  };
-  for (const collection of [state.cards, state.groups, state.tags, state.stores])
-    each(collection, (record2) => considerEntity(record2.id));
-  each(state.conversationGroups, (record2) => consider(record2.id));
-  each(state.owners, (owner2) => {
-    for (const field2 of ["memories", "links", "chunks", "candidates", "embeddings"])
-      each(owner2[field2], (record2) => consider(record2.id));
-    const rebuildTask = owner2.rebuildTask;
-    if (rebuildTask !== null && typeof rebuildTask === "object") consider(rebuildTask.id);
-  });
-  if (highest < 0n || nextId > highest || highest === 9223372036854775807n) return false;
-  state.nextId = (highest + 1n).toString();
-  return true;
+  return { version: 4, memoryPreferences: { userDescriptionEnabled: true, autoUpdateEnabled: true }, conversationGroups: [], cards: [card], groups: [], tags: [], stores: [], active: { CharacterCard: { id: card.id } }, owners: [createMemorySpace("character:" + card.id)] };
 }
 function array2(value, label) {
   if (!Array.isArray(value)) throw new Error(label + " must be an array");
@@ -3819,15 +3783,13 @@ function identities(records3, label) {
 }
 function assertCharacterState(value) {
   assertObject(value, "character state");
-  if (value.version !== 3) throw new Error("Unsupported character database version");
-  const fields4 = /* @__PURE__ */ new Set(["memoryPreferences", "version", "nextId", "cards", "groups", "tags", "stores", "active", "owners", "conversationGroups"]);
+  if (value.version !== 4) throw new Error("Unsupported character database version");
+  const fields4 = /* @__PURE__ */ new Set(["memoryPreferences", "version", "cards", "groups", "tags", "stores", "active", "owners", "conversationGroups"]);
   for (const key of Object.keys(value)) if (!fields4.has(key)) throw new Error("Unsupported character state field: " + key);
   assertObject(value.memoryPreferences, "global memory preferences");
   assertBoolean(value.memoryPreferences.userDescriptionEnabled, "user description enabled");
   assertBoolean(value.memoryPreferences.autoUpdateEnabled, "auto update enabled");
-  const nextId = BigInt(requireDecimal(value.nextId, "nextId", true));
   assertConversationGroups(value.conversationGroups);
-  for (const group of value.conversationGroups) if (BigInt(group.id) >= nextId) throw new Error("nextId does not exceed the conversation group identity");
   const cards = value.cards, groups = value.groups, tags = value.tags, stores = value.stores, owners = value.owners;
   array2(cards, "cards");
   array2(groups, "groups");
@@ -3880,10 +3842,6 @@ function assertCharacterState(value) {
     if (!expectedOwners.has(ownerKey) || actualOwners.has(ownerKey)) throw new Error("Invalid or duplicate memory owner: " + ownerKey);
     actualOwners.add(ownerKey);
     assertMemorySpace(owner2);
-    if (owner2.rebuildTask !== null && BigInt(owner2.rebuildTask.id) >= nextId) throw new Error("nextId does not exceed the rebuild task identity");
-    for (const field2 of ["memories", "links", "chunks", "candidates"]) {
-      for (const record2 of owner2[field2]) if (BigInt(record2.id) >= nextId) throw new Error("nextId does not exceed stored identity: " + record2.id);
-    }
   }
   if (actualOwners.size !== expectedOwners.size) throw new Error("Character state is missing an owner memory space");
 }
@@ -3906,8 +3864,8 @@ function assertMemorySpace(value) {
   }
   for (const link2 of value.links) {
     assertObject(link2, "link");
-    requireDecimal(link2.id, "link id", true);
-    const source = requireDecimal(link2.sourceMemoryId, "source memory id", true), target = requireDecimal(link2.targetMemoryId, "target memory id", true);
+    requireId(link2.id, "link id");
+    const source = requireId(link2.sourceMemoryId, "source memory id"), target = requireId(link2.targetMemoryId, "target memory id");
     if (!memoryIds.has(source) || !memoryIds.has(target)) throw new Error("Relationship references a missing memory: " + link2.id);
     if (source === target) throw new Error("Relationship cannot point to itself");
     assertString(link2.type_, "link type");
@@ -3917,7 +3875,7 @@ function assertMemorySpace(value) {
   const indices = /* @__PURE__ */ new Set();
   for (const chunk of value.chunks) {
     assertObject(chunk, "chunk");
-    requireDecimal(chunk.id, "chunk id", true);
+    requireId(chunk.id, "chunk id");
     const memoryUuid = requireId(chunk.memoryUuid, "chunk memory UUID");
     assertInteger(chunk.chunkIndex, "chunk index", 0);
     assertString(chunk.content, "chunk content");
@@ -3930,7 +3888,7 @@ function assertMemorySpace(value) {
   const candidateSources = /* @__PURE__ */ new Set();
   for (const candidate of value.candidates) {
     assertObject(candidate, "candidate");
-    requireDecimal(candidate.id, "candidate id", true);
+    requireId(candidate.id, "candidate id");
     requireId(candidate.chatId, "candidate chat id");
     for (const field2 of ["triggerMessageTimestamp", "triggerVariantIndex", "createdAt", "updatedAt", "attemptCount"]) assertInteger(candidate[field2], field2, 0);
     for (const field2 of ["status", "lastError", "sourceType"]) assertString(candidate[field2], field2);
@@ -3954,7 +3912,7 @@ function assertMemorySpace(value) {
   )) throw new Error("Invalid memory rebuild status");
   if (value.rebuildTask !== null) {
     assertObject(value.rebuildTask, "rebuild task");
-    requireDecimal(value.rebuildTask.id, "rebuild task id", true);
+    requireId(value.rebuildTask.id, "rebuild task id");
     array2(value.rebuildTask.windows, "rebuild windows");
     assertInteger(value.rebuildTask.nextWindow, "rebuild cursor", 0);
     if (value.rebuildTask.windows.length === 0 || value.rebuildTask.nextWindow > value.rebuildTask.windows.length) throw new Error("Invalid rebuild cursor or source plan");
@@ -5654,7 +5612,7 @@ function saveMemory(ownerKey, values, id2, host) {
     let saved;
     if (id2 === null) saved = yield host.createMemory(ownerKey, normalized);
     else {
-      requireDecimal(id2, "\u8BB0\u5FC6\u8BB0\u5F55\u6807\u8BC6", true);
+      requireId(id2, "\u8BB0\u5FC6\u8BB0\u5F55\u6807\u8BC6");
       saved = yield host.updateMemory(ownerKey, id2, normalized);
     }
     assertMemory(saved);
@@ -5923,12 +5881,12 @@ function dispatch(request, host) {
       }
       case "deleteLink":
         yield requireOwner(request.ownerKey, host);
-        requireDecimal(request.linkId, "\u8BB0\u5FC6\u5173\u7CFB\u6807\u8BC6", true);
+        requireId(request.linkId, "\u8BB0\u5FC6\u5173\u7CFB\u6807\u8BC6");
         yield host.deleteLink(request.ownerKey, request.linkId);
         return graph(request.ownerKey, host);
       case "updateLink": {
         yield requireOwner(request.ownerKey, host);
-        requireDecimal(request.linkId, "\u8BB0\u5FC6\u5173\u7CFB\u6807\u8BC6", true);
+        requireId(request.linkId, "\u8BB0\u5FC6\u5173\u7CFB\u6807\u8BC6");
         assertNumber(request.weight, "\u5173\u7CFB\u5F3A\u5EA6", 0, 1);
         assertString(request.description, "\u5173\u7CFB\u63CF\u8FF0");
         yield host.updateLink(request.ownerKey, request.linkId, {
@@ -6159,13 +6117,12 @@ function records2(state) {
   }
   return result2;
 }
-function loadCharacterState(metadata, rows) {
+function stateFromRecords(metadata, rows) {
   assertObject(metadata, "character database metadata");
   if (metadata.migrationStatus === "writing")
     throw new Error("Character migration has not completed");
   const state = {
     version: metadata.version,
-    nextId: metadata.nextId,
     active: metadata.active === null ? { Model: { id: "chat" } } : metadata.active,
     memoryPreferences: metadata.memoryPreferences,
     cards: [],
@@ -6219,9 +6176,8 @@ function loadCharacterState(metadata, rows) {
     }
     entries.push(row.value.record);
   }
-  const healed = normalizeIdentitySpace(state);
   assertCharacterState(state);
-  return { state, healed };
+  return state;
 }
 
 // src/memory-search.ts
@@ -6376,7 +6332,7 @@ function searchMemorySpaceDebug(space, options, config) {
     }
     scores.sort(
       /** Orders actual ranked hits with a stable lossless identity tie breaker. */
-      (left, right) => right.score - left.score || (BigInt(left.memory.id) < BigInt(right.memory.id) ? -1 : BigInt(left.memory.id) > BigInt(right.memory.id) ? 1 : 0)
+      (left, right) => right.score - left.score || (left.memory.id < right.memory.id ? -1 : left.memory.id > right.memory.id ? 1 : 0)
     );
     result2.candidates = scores;
     return result2;
@@ -6463,26 +6419,6 @@ var RepositorySession = class {
     this.state.owners.push(space);
     this.documents.set(ownerKey, { ownerKey, path: this.directory + "/" + space.userDocumentPath, content: "", newDocument: true });
   }
-  /** Allocates lossless plugin-local decimal identities without converting them into Number. */
-  allocate() {
-    const id2 = requireDecimal(this.state.nextId, "nextId", true), next = BigInt(id2) + 1n;
-    if (next > 9223372036854775807n) throw new Error("Plugin identity space is exhausted");
-    this.state.nextId = next.toString();
-    return id2;
-  }
-  /** Advances the counter for an explicitly imported full identity. */
-  reserve(id2) {
-    const value = BigInt(requireDecimal(id2, "imported id", true));
-    if (value >= BigInt(this.state.nextId)) {
-      if (value === 9223372036854775807n) throw new Error("Imported identity exhausts the plugin identity space");
-      this.state.nextId = (value + 1n).toString();
-    }
-  }
-  /** Reserves numeric suffixes from this plugin's explicit entity identity format. */
-  reserveEntity(id2) {
-    const match = /^(character|group|tag|shared)-([1-9][0-9]*)$/.exec(id2);
-    if (match !== null) this.reserve(match[2]);
-  }
   /** Requires an actual owner and its existing complete space. */
   space(ownerKey) {
     const parts = ownerKey.split(":");
@@ -6568,11 +6504,10 @@ var RepositorySession = class {
       return copy(this.state.conversationGroups);
     });
   }
-  /** Restores an explicit full manual-group backup, preserving every field and reserving lossless IDs. */
+  /** Restores an explicit full manual-group backup, preserving every field and identity. */
   restoreConversationGroups(groups) {
     return __async(this, null, function* () {
       assertConversationGroups(groups);
-      for (const group of groups) this.reserve(group.id);
       this.state.conversationGroups = copy(groups);
     });
   }
@@ -6826,10 +6761,10 @@ var RepositorySession = class {
       );
     });
   }
-  /** Allocates a lossless identity for a private persisted job or candidate. */
+  /** Creates one device-independent identity for a private persisted job or candidate. */
   allocateRecordId() {
     return __async(this, null, function* () {
-      return this.allocate();
+      return uuid();
     });
   }
   /** Stores a complete private owner record without shadowing its USER.md content. */
@@ -6838,8 +6773,6 @@ var RepositorySession = class {
       const original = this.space(ownerKey);
       assertMemorySpace(space);
       if (space.ownerKey !== ownerKey || space.userDocumentPath !== original.userDocumentPath) throw new Error("Memory owner identity or USER.md path cannot change");
-      for (const records3 of [space.memories, space.links, space.chunks, space.candidates]) for (const record2 of records3) this.reserve(record2.id);
-      if (space.rebuildTask !== null) this.reserve(space.rebuildTask.id);
       Object.assign(original, copy(space));
     });
   }
@@ -6913,8 +6846,9 @@ var RepositorySession = class {
       incoming.title = requireName(incoming.title, "memory title");
       incoming.folderPath = folder(incoming.folderPath);
       if (incoming.id === "") {
-        incoming.id = this.allocate();
-        if (incoming.uuid === "") incoming.uuid = uuid();
+        const identity3 = incoming.uuid === "" ? uuid() : incoming.uuid;
+        incoming.id = identity3;
+        incoming.uuid = identity3;
         incoming.createdAt = now;
         incoming.updatedAt = now;
         incoming.lastAccessedAt = now;
@@ -6927,7 +6861,7 @@ var RepositorySession = class {
         space.memories.push(incoming);
         return copy(incoming);
       }
-      requireDecimal(incoming.id, "memory id", true);
+      requireId(incoming.id, "memory id");
       const original = get(space.memories, incoming.id, "memory");
       if (incoming.uuid !== original.uuid) throw new Error("An existing memory UUID is immutable");
       incoming.createdAt = original.createdAt;
@@ -6955,7 +6889,7 @@ var RepositorySession = class {
   /** Deletes a memory and all referencing chunks and links in this operation. */
   deleteMemory(ownerKey, id2) {
     return __async(this, null, function* () {
-      requireDecimal(id2, "memory id", true);
+      requireId(id2, "memory id");
       const space = this.space(ownerKey), memory = get(space.memories, id2, "memory");
       space.memories.splice(space.memories.indexOf(memory), 1);
       space.chunks = space.chunks.filter(
@@ -6973,7 +6907,7 @@ var RepositorySession = class {
     return __async(this, null, function* () {
       const space = this.space(ownerKey), destination = folder(folderPath), selected = new Set(ids);
       for (const id2 of selected) {
-        requireDecimal(id2, "memory id", true);
+        requireId(id2, "memory id");
         const memory = get(space.memories, id2, "memory");
         memory.folderPath = destination;
         memory.updatedAt = Date.now();
@@ -6989,7 +6923,7 @@ var RepositorySession = class {
   /** Reads one exact full relationship. */
   readMemoryLink(ownerKey, id2) {
     return __async(this, null, function* () {
-      requireDecimal(id2, "link id", true);
+      requireId(id2, "link id");
       return copy(get(this.space(ownerKey).links, id2, "link"));
     });
   }
@@ -7003,7 +6937,7 @@ var RepositorySession = class {
       assertNumber(values.weight, "link weight", 0, 1);
       assertString(values.description, "link description");
       const type_ = requireName(values.type_, "link type");
-      const saved = { ...copy(values), type_, id: this.allocate() };
+      const saved = { ...copy(values), type_, id: uuid() };
       space.links.push(saved);
       return copy(saved);
     });
@@ -7011,7 +6945,7 @@ var RepositorySession = class {
   /** Writes every editable field of one exact relationship. */
   updateLink(ownerKey, id2, values) {
     return __async(this, null, function* () {
-      const link2 = get(this.space(ownerKey).links, requireDecimal(id2, "link id", true), "link");
+      const link2 = get(this.space(ownerKey).links, requireId(id2, "link id"), "link");
       assertNumber(values.weight, "link weight", 0, 1);
       assertString(values.description, "link description");
       Object.assign(link2, copy(values), { type_: requireName(values.type_, "link type") });
@@ -7021,7 +6955,7 @@ var RepositorySession = class {
   /** Removes one exact relationship. */
   deleteLink(ownerKey, id2) {
     return __async(this, null, function* () {
-      const links = this.space(ownerKey).links, link2 = get(links, requireDecimal(id2, "link id", true), "link");
+      const links = this.space(ownerKey).links, link2 = get(links, requireId(id2, "link id"), "link");
       links.splice(links.indexOf(link2), 1);
     });
   }
@@ -7090,7 +7024,6 @@ var RepositorySession = class {
       const result2 = { new: 0, updated: 0, skipped: 0, total: cards.length };
       for (const tag of tags) {
         assertTag(tag);
-        this.reserveEntity(tag.id);
         const matches = this.state.tags.filter(
           /** Resolves the imported tag by its full stable identity. */
           (existing) => existing.id === tag.id
@@ -7101,7 +7034,6 @@ var RepositorySession = class {
       for (const card of cards) {
         assertCard(card);
         requireId(card.id, "backup character id");
-        this.reserveEntity(card.id);
         const matches = this.state.cards.filter(
           /** Resolves the imported character by exact identity. */
           (existing) => existing.id === card.id
@@ -7124,7 +7056,6 @@ var RepositorySession = class {
       const result2 = { new: 0, updated: 0, skipped: 0, total: groups.length };
       for (const group of groups) {
         assertGroup(group);
-        this.reserveEntity(group.id);
         const matches = this.state.groups.filter(
           /** Resolves each imported group by exact stable identity. */
           (existing) => existing.id === group.id
@@ -7163,14 +7094,14 @@ var RepositorySession = class {
           result2.updatedMemories += 1;
         } else {
           if (strategy === "CREATE_NEW") {
-            value.id = this.allocate();
-            value.uuid = uuid();
+            const identity3 = uuid();
+            value.id = identity3;
+            value.uuid = identity3;
           } else {
             if (space.memories.some(
               /** Rejects an occupied imported identity instead of remapping it silently. */
               (item) => item.id === value.id
             )) throw new Error("Imported memory id is occupied: " + value.id);
-            this.reserve(value.id);
           }
           space.memories.push(value);
           result2.newMemories += 1;
@@ -7181,12 +7112,11 @@ var RepositorySession = class {
           (chunk) => chunk.memoryUuid !== value.uuid
         );
         for (const chunk of imported.chunks) if (chunk.memoryUuid === memory.uuid) {
-          const incoming = { ...copy(chunk), memoryUuid: value.uuid, id: strategy === "CREATE_NEW" ? this.allocate() : chunk.id };
+          const incoming = { ...copy(chunk), memoryUuid: value.uuid, id: strategy === "CREATE_NEW" ? uuid() : chunk.id };
           if (space.chunks.some(
             /** Rejects duplicate chunk identities in the target space. */
             (record2) => record2.id === incoming.id
           )) throw new Error("Imported chunk id is occupied: " + incoming.id);
-          this.reserve(incoming.id);
           space.chunks.push(incoming);
         }
       }
@@ -7198,8 +7128,7 @@ var RepositorySession = class {
           (record2) => record2.id === link2.id
         );
         if (existing !== void 0 && strategy === "SKIP") continue;
-        const incoming = { ...copy(link2), sourceMemoryId: source, targetMemoryId: target, id: strategy === "CREATE_NEW" ? this.allocate() : link2.id };
-        this.reserve(incoming.id);
+        const incoming = { ...copy(link2), sourceMemoryId: source, targetMemoryId: target, id: strategy === "CREATE_NEW" ? uuid() : link2.id };
         if (existing !== void 0 && strategy === "UPDATE") Object.assign(existing, incoming);
         else {
           space.links.push(incoming);
@@ -7211,10 +7140,8 @@ var RepositorySession = class {
       space.rebuildProgress = copy(imported.rebuildProgress);
       space.rebuildTask = copy(imported.rebuildTask);
       space.embeddings = copy(imported.embeddings);
-      if (space.rebuildTask !== null) this.reserve(space.rebuildTask.id);
       for (const candidate of imported.candidates) {
-        const incoming = { ...copy(candidate), id: strategy === "CREATE_NEW" ? this.allocate() : candidate.id };
-        this.reserve(incoming.id);
+        const incoming = { ...copy(candidate), id: strategy === "CREATE_NEW" ? uuid() : candidate.id };
         const existing = space.candidates.find(
           /** Resolves a candidate's actual persistent identity. */
           (record2) => record2.id === incoming.id
@@ -7267,7 +7194,6 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
             expectedVersion: null,
             value: {
               version: state.version,
-              nextId: state.nextId,
               active: "Model" in state.active ? null : storedValue(state.active),
               memoryPreferences: storedValue(state.memoryPreferences)
             }
@@ -7287,10 +7213,7 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
       }
       const metadata = yield database2.get("meta", "state");
       if (metadata === null) throw new Error("Character initialization did not publish metadata");
-      assertObject(metadata.value, "character metadata");
-      const loaded = loadCharacterState(metadata.value, yield repository.readRecords());
-      if (loaded.healed)
-        yield repository.publish(loaded.state, yield repository.readRecords(), [], [], metadata.version, metadata.value);
+      assertCharacterState(stateFromRecords(metadata.value, yield repository.readRecords()));
       return repository;
     });
   }
@@ -7328,8 +7251,7 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
             "Character records changed during the read; operation was not started"
           );
         assertObject(metadata.value, "character metadata");
-        const loaded = loadCharacterState(metadata.value, rows);
-        const before = loaded.state;
+        const before = stateFromRecords(metadata.value, rows);
         const state = clone(before), session = new RepositorySession(
           state,
           this.directory,
@@ -7348,13 +7270,11 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
             owner2.userDocumentPath.lastIndexOf("/")
           )
         );
-        if (!equal(before, state) || documents.length !== 0 || loaded.healed) {
+        if (!equal(before, state) || documents.length !== 0) {
           try {
             yield this.publish(
               state,
-              // A reconciled identity space shares row objects with the first read, so the diff
-              // needs a fresh read of the pre-reconciliation values.
-              loaded.healed ? yield this.readRecords() : rows,
+              rows,
               documents,
               removed,
               metadata.version,
@@ -7615,7 +7535,6 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
         value: {
           ...metadata,
           version: state.version,
-          nextId: state.nextId,
           active: "Model" in state.active ? null : storedValue(state.active),
           memoryPreferences: storedValue(state.memoryPreferences)
         },
@@ -8965,8 +8884,8 @@ var MemoryTools = class {
         }
       }
       return [...scores.values()].sort(
-        /** Preserves original RRF ordering and lossless numeric identity ties. */
-        (left, right) => right.score - left.score || (BigInt(left.chunk.id) < BigInt(right.chunk.id) ? -1 : BigInt(left.chunk.id) > BigInt(right.chunk.id) ? 1 : 0)
+        /** Preserves original RRF ordering and stable identity ties. */
+        (left, right) => right.score - left.score || (left.chunk.id < right.chunk.id ? -1 : left.chunk.id > right.chunk.id ? 1 : 0)
       ).slice(0, count).map(
         /** Returns complete original chunk records rather than a synthetic projection. */
         (item) => item.chunk

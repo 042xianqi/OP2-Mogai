@@ -374,9 +374,9 @@ impl CharacterPluginWriter {
         let existing = self.get(META_COLLECTION, "state")?;
         let mut metadata = match existing {
             Some(entry) => entry["value"].clone(),
-            None => json!({"version":3,"nextId":"1","active":null}),
+            None => json!({"version":4,"active":null}),
         };
-        if metadata["version"] != 3 {
+        if metadata["version"] != 4 {
             return Err("Unsupported character database metadata".to_string());
         }
         if metadata["migrationStatus"] == "writing" && metadata["migrationSource"] != source {
@@ -425,33 +425,15 @@ impl CharacterPluginWriter {
                 owner,
             ));
         }
-        let mut next_id = requiredString(&metadata, "nextId")?
-            .parse::<i64>()
-            .map_err(|error| error.to_string())?;
         let mut identities = BTreeSet::new();
-        for (collection, key, value) in &rows {
+        for (collection, key, _) in &rows {
             if !identities.insert((collection, key)) {
                 return Err(format!("Duplicate imported record: {collection}/{key}"));
-            }
-            let id = if value.get("record").is_some() {
-                &value["record"]["id"]
-            } else {
-                &value["id"]
-            };
-            if let Some(id) = id.as_str() {
-                if id.bytes().all(|byte| byte.is_ascii_digit()) && !id.is_empty() {
-                    let id = id.parse::<i64>().map_err(|error| error.to_string())?;
-                    next_id = next_id.max(
-                        id.checked_add(1)
-                            .ok_or("Character identity space exhausted")?,
-                    );
-                }
             }
         }
         if metadata["active"].is_null() {
             return Err("Character migration has no active selection".to_string());
         }
-        metadata["nextId"] = json!(next_id.to_string());
         metadata["migrationStatus"] = json!("writing");
         metadata["migrationSource"] = json!(source);
         self.commit(vec![self.mutation(
@@ -1421,7 +1403,7 @@ pub fn migrateLegacyCharacters(paths: RuntimeStorePaths) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let relational_exists = storage
         .exists(&format!(
-            "{}/characters-relational.sqlite",
+            "{}/characters-relational-v2.sqlite",
             operit_store::ExtensionStore::ExtensionStore::spaceDataPath(PLUGIN_ID)?
         ))
         .map_err(|error| error.to_string())?;
@@ -1435,11 +1417,11 @@ pub fn migrateLegacyCharacters(paths: RuntimeStorePaths) -> Result<(), String> {
         return Ok(());
     }
     let writer = CharacterPluginWriter::open(defaultRuntimeSqliteHost(), storage.clone())?;
-    // Upgrades completed v3 plugin migrations as well as imports made before these flags
+    // Upgrades completed plugin migrations as well as imports made before these flags
     // became plugin-owned. Never replace a value already saved by the plugin.
     if let Some(entry) = writer.get(META_COLLECTION, "state")? {
         let mut metadata = entry["value"].clone();
-        if !metadata.is_object() || metadata["version"] != 3 {
+        if !metadata.is_object() || metadata["version"] != 4 {
             return Err("Unsupported character database metadata".to_string());
         }
         if metadata.get("memoryPreferences").is_none() && metadata["migrationStatus"] != "writing" {

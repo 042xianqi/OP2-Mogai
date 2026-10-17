@@ -76,7 +76,7 @@ for (const [collection, name] of Object.entries({ memories: "Memory", links: "Me
 }
 collections.embeddings.fields.record.fields.vector = { kind: "vector" };
 collections.meta = { kind: "object", fields: {
-  version: { kind: "integer" }, nextId: { kind: "text" },
+  version: { kind: "integer" },
   active: { kind: "object", nullable: true, fields: {
     CharacterCard: { kind: "object", optional: true, fields: { id: { kind: "text" } } },
     CharacterGroup: { kind: "object", optional: true, fields: { id: { kind: "text" } } },

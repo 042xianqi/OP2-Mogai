@@ -1,6 +1,6 @@
 import type { CharacterRepository } from "./canonical";
 import type { ActivePrompt, BackupImportResult, Card, ChatBinding, CharacterDirectories, CharacterState, ConversationGroupRecord, Group, Memory, MemoryAutoSaveStatus, MemoryGraph, MemoryImportResult, MemoryLink, MemoryLinkUpdate, MemoryLinkValues, MemoryRebuildProgress, MemorySearchConfig, MemorySearchOptions, MemorySettings, MemorySpace, MemoryValues, ModelSummary, Store, Tag, TagValues, ToolCatalog, TtsConfig, UserDocument, UserDocumentWrite } from "./model";
-import { assertBoolean, assertCard, assertConversationGroups, assertGroup, assertMemory, assertMemorySettings, assertMemoryValues, assertNumber, assertSearchConfig, assertSearchOptions, assertString, assertTag, assertTagValues, normalizeNames, requireDecimal, requireId, requireName } from "./validation";
+import { assertBoolean, assertCard, assertConversationGroups, assertGroup, assertMemory, assertMemorySettings, assertMemoryValues, assertNumber, assertSearchConfig, assertSearchOptions, assertString, assertTag, assertTagValues, normalizeNames, requireId, requireName } from "./validation";
 import { clone } from "./storage/records";
 import { createMemorySpace, assertMemorySpace } from "./storage/state";
 import { searchMemorySpace, searchMemorySpaceDebug } from "./memory-search";
@@ -71,25 +71,6 @@ export class RepositorySession implements CharacterRepository {
     const space = createMemorySpace(ownerKey); this.state.owners.push(space);
     this.documents.set(ownerKey, { ownerKey, path: this.directory + "/" + space.userDocumentPath, content: "", newDocument: true });
   }
-  /** Allocates lossless plugin-local decimal identities without converting them into Number. */
-  private allocate(): string {
-    const id = requireDecimal(this.state.nextId, "nextId", true), next = BigInt(id) + 1n;
-    if (next > 9223372036854775807n) throw new Error("Plugin identity space is exhausted");
-    this.state.nextId = next.toString(); return id;
-  }
-  /** Advances the counter for an explicitly imported full identity. */
-  private reserve(id: string): void {
-    const value = BigInt(requireDecimal(id, "imported id", true));
-    if (value >= BigInt(this.state.nextId)) {
-      if (value === 9223372036854775807n) throw new Error("Imported identity exhausts the plugin identity space");
-      this.state.nextId = (value + 1n).toString();
-    }
-  }
-  /** Reserves numeric suffixes from this plugin's explicit entity identity format. */
-  private reserveEntity(id: string): void {
-    const match = /^(character|group|tag|shared)-([1-9][0-9]*)$/.exec(id);
-    if (match !== null) this.reserve(match[2]);
-  }
   /** Requires an actual owner and its existing complete space. */
   private space(ownerKey: string): MemorySpace {
     const parts = ownerKey.split(":");
@@ -147,9 +128,9 @@ export class RepositorySession implements CharacterRepository {
   }
   /** Archived compatibility data only; never used by sidebar projection or live folder operations. */
   async readConversationGroupsForBackup(): Promise<ConversationGroupRecord[]> { return copy(this.state.conversationGroups); }
-  /** Restores an explicit full manual-group backup, preserving every field and reserving lossless IDs. */
+  /** Restores an explicit full manual-group backup, preserving every field and identity. */
   async restoreConversationGroups(groups: ConversationGroupRecord[]): Promise<void> {
-    assertConversationGroups(groups); for (const group of groups) this.reserve(group.id); this.state.conversationGroups = copy(groups);
+    assertConversationGroups(groups); this.state.conversationGroups = copy(groups);
   }
 
   /** Lists complete groups. */
@@ -286,14 +267,12 @@ export class RepositorySession implements CharacterRepository {
     /** Preserves each actual initialized namespace. */
     space => space.ownerKey,
   ); }
-  /** Allocates a lossless identity for a private persisted job or candidate. */
-  async allocateRecordId(): Promise<string> { return this.allocate(); }
+  /** Creates one device-independent identity for a private persisted job or candidate. */
+  async allocateRecordId(): Promise<string> { return uuid(); }
   /** Stores a complete private owner record without shadowing its USER.md content. */
   async writeMemorySpace(ownerKey: string, space: MemorySpace): Promise<void> {
     const original = this.space(ownerKey); assertMemorySpace(space);
     if (space.ownerKey !== ownerKey || space.userDocumentPath !== original.userDocumentPath) throw new Error("Memory owner identity or USER.md path cannot change");
-    for (const records of [space.memories, space.links, space.chunks, space.candidates]) for (const record of records) this.reserve(record.id);
-    if (space.rebuildTask !== null) this.reserve(space.rebuildTask.id);
     Object.assign(original, copy(space));
   }
   /** Reads the complete owner space for full backups. */
@@ -341,7 +320,8 @@ export class RepositorySession implements CharacterRepository {
     const space = this.space(ownerKey), now = Date.now(), incoming = copy(memory);
     incoming.title = requireName(incoming.title, "memory title"); incoming.folderPath = folder(incoming.folderPath);
     if (incoming.id === "") {
-      incoming.id = this.allocate(); if (incoming.uuid === "") incoming.uuid = uuid();
+      const identity = incoming.uuid === "" ? uuid() : incoming.uuid;
+      incoming.id = identity; incoming.uuid = identity;
       incoming.createdAt = now; incoming.updatedAt = now; incoming.lastAccessedAt = now;
       assertMemory(incoming); uniqueName(space.memories.map(
         /** Checks title uniqueness for explicit creation. */
@@ -350,7 +330,7 @@ export class RepositorySession implements CharacterRepository {
       for (const item of space.memories) if (item.uuid === incoming.uuid) throw new Error("Memory UUID already exists");
       space.memories.push(incoming); return copy(incoming);
     }
-    requireDecimal(incoming.id, "memory id", true); const original = get(space.memories, incoming.id, "memory");
+    requireId(incoming.id, "memory id"); const original = get(space.memories, incoming.id, "memory");
     if (incoming.uuid !== original.uuid) throw new Error("An existing memory UUID is immutable");
     incoming.createdAt = original.createdAt; incoming.updatedAt = now; assertMemory(incoming);
     uniqueName(space.memories.map(
@@ -369,7 +349,7 @@ export class RepositorySession implements CharacterRepository {
   }
   /** Deletes a memory and all referencing chunks and links in this operation. */
   async deleteMemory(ownerKey: string, id: string): Promise<void> {
-    requireDecimal(id, "memory id", true); const space = this.space(ownerKey), memory = get(space.memories, id, "memory");
+    requireId(id, "memory id"); const space = this.space(ownerKey), memory = get(space.memories, id, "memory");
     space.memories.splice(space.memories.indexOf(memory), 1);
     space.chunks = space.chunks.filter(
       /** Removes the deleted document's exact UUID chunks. */
@@ -383,26 +363,26 @@ export class RepositorySession implements CharacterRepository {
   /** Moves only explicitly selected existing memories. */
   async moveMemories(ownerKey: string, ids: string[], folderPath: string): Promise<void> {
     const space = this.space(ownerKey), destination = folder(folderPath), selected = new Set(ids);
-    for (const id of selected) { requireDecimal(id, "memory id", true); const memory = get(space.memories, id, "memory"); memory.folderPath = destination; memory.updatedAt = Date.now(); }
+    for (const id of selected) { requireId(id, "memory id"); const memory = get(space.memories, id, "memory"); memory.folderPath = destination; memory.updatedAt = Date.now(); }
   }
   /** Lists full relationships including descriptions. */
   async listMemoryLinks(ownerKey: string): Promise<MemoryLink[]> { return copy(this.space(ownerKey).links); }
   /** Reads one exact full relationship. */
-  async readMemoryLink(ownerKey: string, id: string): Promise<MemoryLink> { requireDecimal(id, "link id", true); return copy(get(this.space(ownerKey).links, id, "link")); }
+  async readMemoryLink(ownerKey: string, id: string): Promise<MemoryLink> { requireId(id, "link id"); return copy(get(this.space(ownerKey).links, id, "link")); }
   /** Creates a relationship only between existing distinct owner-scoped memories. */
   async createLink(ownerKey: string, values: MemoryLinkValues): Promise<MemoryLink> {
     const space = this.space(ownerKey); get(space.memories, values.sourceMemoryId, "source memory"); get(space.memories, values.targetMemoryId, "target memory");
     if (values.sourceMemoryId === values.targetMemoryId) throw new Error("Self relationships are not allowed");
     assertNumber(values.weight, "link weight", 0, 1); assertString(values.description, "link description"); const type_ = requireName(values.type_, "link type");
-    const saved = { ...copy(values), type_, id: this.allocate() }; space.links.push(saved); return copy(saved);
+    const saved = { ...copy(values), type_, id: uuid() }; space.links.push(saved); return copy(saved);
   }
   /** Writes every editable field of one exact relationship. */
   async updateLink(ownerKey: string, id: string, values: MemoryLinkUpdate): Promise<MemoryLink> {
-    const link = get(this.space(ownerKey).links, requireDecimal(id, "link id", true), "link");
+    const link = get(this.space(ownerKey).links, requireId(id, "link id"), "link");
     assertNumber(values.weight, "link weight", 0, 1); assertString(values.description, "link description"); Object.assign(link, copy(values), { type_: requireName(values.type_, "link type") }); return copy(link);
   }
   /** Removes one exact relationship. */
-  async deleteLink(ownerKey: string, id: string): Promise<void> { const links = this.space(ownerKey).links, link = get(links, requireDecimal(id, "link id", true), "link"); links.splice(links.indexOf(link), 1); }
+  async deleteLink(ownerKey: string, id: string): Promise<void> { const links = this.space(ownerKey).links, link = get(links, requireId(id, "link id"), "link"); links.splice(links.indexOf(link), 1); }
   /** Reads complete persisted memory settings. */
   async readMemorySettings(ownerKey: string): Promise<MemorySettings> { return copy(this.space(ownerKey).settings); }
   /** Writes complete memory settings without silently activating unsupported embedding. */
@@ -433,14 +413,14 @@ export class RepositorySession implements CharacterRepository {
   async restoreCharacters(cards: Card[], tags: Tag[]): Promise<BackupImportResult> {
     const result = { new: 0, updated: 0, skipped: 0, total: cards.length };
     for (const tag of tags) {
-      assertTag(tag); this.reserveEntity(tag.id); const matches = this.state.tags.filter(
+      assertTag(tag); const matches = this.state.tags.filter(
         /** Resolves the imported tag by its full stable identity. */
         existing => existing.id === tag.id,
       );
       if (matches.length === 0) this.state.tags.push(copy(tag)); else Object.assign(matches[0], copy(tag));
     }
     for (const card of cards) {
-      assertCard(card); requireId(card.id, "backup character id"); this.reserveEntity(card.id); const matches = this.state.cards.filter(
+      assertCard(card); requireId(card.id, "backup character id"); const matches = this.state.cards.filter(
         /** Resolves the imported character by exact identity. */
         existing => existing.id === card.id,
       );
@@ -453,7 +433,7 @@ export class RepositorySession implements CharacterRepository {
   async restoreGroups(groups: Group[]): Promise<BackupImportResult> {
     const result = { new: 0, updated: 0, skipped: 0, total: groups.length };
     for (const group of groups) {
-      assertGroup(group); this.reserveEntity(group.id); const matches = this.state.groups.filter(
+      assertGroup(group); const matches = this.state.groups.filter(
         /** Resolves each imported group by exact stable identity. */
         existing => existing.id === group.id,
       );
@@ -475,13 +455,12 @@ export class RepositorySession implements CharacterRepository {
       const value = copy(memory);
       if (existing !== undefined && strategy === "UPDATE") { value.id = existing.id; Object.assign(existing, value); result.updatedMemories += 1; }
       else {
-        if (strategy === "CREATE_NEW") { value.id = this.allocate(); value.uuid = uuid(); }
+        if (strategy === "CREATE_NEW") { const identity = uuid(); value.id = identity; value.uuid = identity; }
         else {
           if (space.memories.some(
             /** Rejects an occupied imported identity instead of remapping it silently. */
             item => item.id === value.id,
           )) throw new Error("Imported memory id is occupied: " + value.id);
-          this.reserve(value.id);
         }
         space.memories.push(value); result.newMemories += 1;
       }
@@ -491,12 +470,12 @@ export class RepositorySession implements CharacterRepository {
         chunk => chunk.memoryUuid !== value.uuid,
       );
       for (const chunk of imported.chunks) if (chunk.memoryUuid === memory.uuid) {
-        const incoming = { ...copy(chunk), memoryUuid: value.uuid, id: strategy === "CREATE_NEW" ? this.allocate() : chunk.id };
+        const incoming = { ...copy(chunk), memoryUuid: value.uuid, id: strategy === "CREATE_NEW" ? uuid() : chunk.id };
         if (space.chunks.some(
           /** Rejects duplicate chunk identities in the target space. */
           record => record.id === incoming.id,
         )) throw new Error("Imported chunk id is occupied: " + incoming.id);
-        this.reserve(incoming.id); space.chunks.push(incoming);
+        space.chunks.push(incoming);
       }
     }
     for (const link of imported.links) {
@@ -507,17 +486,14 @@ export class RepositorySession implements CharacterRepository {
         record => record.id === link.id,
       );
       if (existing !== undefined && strategy === "SKIP") continue;
-      const incoming = { ...copy(link), sourceMemoryId: source, targetMemoryId: target, id: strategy === "CREATE_NEW" ? this.allocate() : link.id };
-      this.reserve(incoming.id);
+      const incoming = { ...copy(link), sourceMemoryId: source, targetMemoryId: target, id: strategy === "CREATE_NEW" ? uuid() : link.id };
       if (existing !== undefined && strategy === "UPDATE") Object.assign(existing, incoming);
       else { space.links.push(incoming); result.newLinks += 1; }
     }
     space.settings = copy(imported.settings); space.searchConfig = copy(imported.searchConfig);
     space.rebuildProgress = copy(imported.rebuildProgress); space.rebuildTask = copy(imported.rebuildTask); space.embeddings = copy(imported.embeddings);
-    if (space.rebuildTask !== null) this.reserve(space.rebuildTask.id);
     for (const candidate of imported.candidates) {
-      const incoming = { ...copy(candidate), id: strategy === "CREATE_NEW" ? this.allocate() : candidate.id };
-      this.reserve(incoming.id);
+      const incoming = { ...copy(candidate), id: strategy === "CREATE_NEW" ? uuid() : candidate.id };
       const existing = space.candidates.find(
         /** Resolves a candidate's actual persistent identity. */
         record => record.id === incoming.id,

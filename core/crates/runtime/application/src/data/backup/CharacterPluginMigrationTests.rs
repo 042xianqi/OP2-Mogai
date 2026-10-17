@@ -327,10 +327,6 @@ fn imports_pages_and_reopens_without_replacing_completed_data() {
         entry["value"]["record"]["tags"][0]["id"],
         "9007199254740993"
     );
-    assert_eq!(
-        fixture.writer().get("meta", "state").unwrap().unwrap()["value"]["nextId"],
-        "9007199254740994"
-    );
     fixture
         .writer()
         .import("operit2-v27", CharacterMigrationData::default())
@@ -486,7 +482,7 @@ fn invalid_or_incomplete_import_never_authorizes_cleanup() {
             .unwrap(),
         b"source preferences"
     );
-    let mutation = fixture.writer().mutation("meta", "state", json!({"version":3,"nextId":"1","active":{"CharacterCard":{"id":"legacy"}},"migrationStatus":"writing","migrationSource":"operit2-v27"})).unwrap();
+    let mutation = fixture.writer().mutation("meta", "state", json!({"version":4,"active":{"CharacterCard":{"id":"legacy"}},"migrationStatus":"writing","migrationSource":"operit2-v27"})).unwrap();
     fixture.writer().commit(vec![mutation]).unwrap();
     fixture.writer().import("operit2-v27", data()).unwrap();
     assert_eq!(

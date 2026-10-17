@@ -157,7 +157,7 @@ export async function createDiskHarness(testContext) {
         sql.exec("BEGIN");
         try {
           for (const collection of ["meta", ...schema.collections]) for (const table of codec.tables(codec.layouts[collection])) sql.prepare('DELETE FROM "' + table.name + '"').run();
-          for (const record of [...schema.records(state), { collection: "meta", key: "state", value: { version: state.version, nextId: state.nextId, active: state.active, memoryPreferences: state.memoryPreferences } }]) {
+          for (const record of [...schema.records(state), { collection: "meta", key: "state", value: { version: state.version, active: state.active, memoryPreferences: state.memoryPreferences } }]) {
             for (const [table, rows] of codec.encode(record.collection, record.key, record.value, "test-edit")) for (const row of rows) {
               const columns = Object.keys(row); sql.prepare('INSERT INTO "' + table + '" (' + columns.map(name => '"' + name + '"').join(",") + ') VALUES (' + columns.map(() => "?").join(",") + ")").run(...columns.map(name => Object.prototype.toString.call(row[name]) === "[object Uint8Array]" ? Buffer.from(row[name]) : row[name]));
             }

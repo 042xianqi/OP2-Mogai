@@ -408,7 +408,7 @@
           "name": "link_id",
           "type": "string",
           "required": false,
-          "description": "Lossless decimal-string relationship ID."
+          "description": "Opaque stable relationship identity."
         },
         {
           "name": "source_title",
@@ -456,7 +456,7 @@
           "name": "link_id",
           "type": "string",
           "required": false,
-          "description": "Lossless decimal-string relationship ID."
+          "description": "Opaque stable relationship identity."
         },
         {
           "name": "source_title",
@@ -516,7 +516,7 @@
           "name": "link_id",
           "type": "string",
           "required": false,
-          "description": "Lossless decimal-string relationship ID."
+          "description": "Opaque stable relationship identity."
         },
         {
           "name": "source_title",
@@ -708,7 +708,7 @@ function requireName(value, label) {
 }
 function assertMemory(value) {
   assertObject(value, "\u8BB0\u5FC6\u8BB0\u5F55");
-  requireDecimal(value.id, "\u8BB0\u5FC6\u6570\u636E\u5E93\u6807\u8BC6", true);
+  requireId(value.id, "\u8BB0\u5FC6\u6570\u636E\u5E93\u6807\u8BC6");
   requireId(value.uuid, "\u8BB0\u5FC6 UUID");
   for (const field of ["title", "content", "contentType", "source"]) assertString(value[field], field);
   assertNumber(value.credibility, "\u53EF\u4FE1\u5EA6", 0, 1);
@@ -814,8 +814,8 @@ function assertMemorySpace(value) {
   }
   for (const link of value.links) {
     assertObject(link, "link");
-    requireDecimal(link.id, "link id", true);
-    const source = requireDecimal(link.sourceMemoryId, "source memory id", true), target = requireDecimal(link.targetMemoryId, "target memory id", true);
+    requireId(link.id, "link id");
+    const source = requireId(link.sourceMemoryId, "source memory id"), target = requireId(link.targetMemoryId, "target memory id");
     if (!memoryIds.has(source) || !memoryIds.has(target)) throw new Error("Relationship references a missing memory: " + link.id);
     if (source === target) throw new Error("Relationship cannot point to itself");
     assertString(link.type_, "link type");
@@ -825,7 +825,7 @@ function assertMemorySpace(value) {
   const indices = /* @__PURE__ */ new Set();
   for (const chunk of value.chunks) {
     assertObject(chunk, "chunk");
-    requireDecimal(chunk.id, "chunk id", true);
+    requireId(chunk.id, "chunk id");
     const memoryUuid = requireId(chunk.memoryUuid, "chunk memory UUID");
     assertInteger(chunk.chunkIndex, "chunk index", 0);
     assertString(chunk.content, "chunk content");
@@ -838,7 +838,7 @@ function assertMemorySpace(value) {
   const candidateSources = /* @__PURE__ */ new Set();
   for (const candidate of value.candidates) {
     assertObject(candidate, "candidate");
-    requireDecimal(candidate.id, "candidate id", true);
+    requireId(candidate.id, "candidate id");
     requireId(candidate.chatId, "candidate chat id");
     for (const field of ["triggerMessageTimestamp", "triggerVariantIndex", "createdAt", "updatedAt", "attemptCount"]) assertInteger(candidate[field], field, 0);
     for (const field of ["status", "lastError", "sourceType"]) assertString(candidate[field], field);
@@ -862,7 +862,7 @@ function assertMemorySpace(value) {
   )) throw new Error("Invalid memory rebuild status");
   if (value.rebuildTask !== null) {
     assertObject(value.rebuildTask, "rebuild task");
-    requireDecimal(value.rebuildTask.id, "rebuild task id", true);
+    requireId(value.rebuildTask.id, "rebuild task id");
     array(value.rebuildTask.windows, "rebuild windows");
     assertInteger(value.rebuildTask.nextWindow, "rebuild cursor", 0);
     if (value.rebuildTask.windows.length === 0 || value.rebuildTask.nextWindow > value.rebuildTask.windows.length) throw new Error("Invalid rebuild cursor or source plan");
@@ -954,10 +954,8 @@ function nonblank(value, path) {
   text(value, path);
   if (value.trim() === "") throw new Error(`${path} must not be blank`);
 }
-function parseMemoryIdentifier(value, path, positive = true) {
-  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) throw new Error(`${path} must be a canonical decimal string`);
-  const id2 = BigInt(value);
-  if (id2 > 9223372036854775807n || positive && id2 === 0n) throw new Error(`${path} is outside its declared identity range`);
+function parseMemoryIdentifier(value, path, _positive = true) {
+  if (typeof value !== "string" || value.trim() === "" || value !== value.trim() || value.length > 256) throw new Error(`${path} must be a nonblank identity`);
   return value;
 }
 function memoryIdentifier(value, path) {
@@ -1360,8 +1358,8 @@ var MemoryTools = class {
       }
     }
     return [...scores.values()].sort(
-      /** Preserves original RRF ordering and lossless numeric identity ties. */
-      (left, right) => right.score - left.score || (BigInt(left.chunk.id) < BigInt(right.chunk.id) ? -1 : BigInt(left.chunk.id) > BigInt(right.chunk.id) ? 1 : 0)
+      /** Preserves original RRF ordering and stable identity ties. */
+      (left, right) => right.score - left.score || (left.chunk.id < right.chunk.id ? -1 : left.chunk.id > right.chunk.id ? 1 : 0)
     ).slice(0, count).map(
       /** Returns complete original chunk records rather than a synthetic projection. */
       (item) => item.chunk

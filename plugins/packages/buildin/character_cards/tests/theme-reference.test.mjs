@@ -32,9 +32,9 @@ test("complete character schema rejects absent or malformed themeConfigId withou
   for (const value of [null, "independent-theme-one"]) validation.assertCard(character(value));
 });
 
-/** Existing version-three records require the newly declared complete character field and are never migrated on read. */
-test("version-three file schema rejects a character missing the required independent theme reference", () => {
-  const current = plain(schema.createInitialState(10)); assert.equal(current.version, 3); assert.equal(current.cards[0].themeConfigId, null);
+/** Current version-four records require the newly declared complete character field and are never migrated on read. */
+test("current file schema rejects a character missing the required independent theme reference", () => {
+  const current = plain(schema.createInitialState(10)); assert.equal(current.version, 4); assert.equal(current.cards[0].themeConfigId, null);
   schema.assertCharacterState(current); delete current.cards[0].themeConfigId;
   assert.throws(
     /** Uses the real whole-snapshot validator so absent references cannot be supplied by a reader. */
@@ -140,7 +140,7 @@ test("actual plugin group persistence and backup preserve its own themeConfigId"
 test("version-three strict state rejects groups missing their own required themeConfigId", () => {
   const state = plain(schema.createInitialState(10));
   state.groups.push({ ...plain(drafts.createGroupDraft()), id: "entity-1", name: "Explicit schema group", members: [{ characterCardId: "default", orderIndex: 0 }] });
-  state.nextId = "2"; schema.assertCharacterState(state); delete state.groups[0].themeConfigId;
+  schema.assertCharacterState(state); delete state.groups[0].themeConfigId;
   assert.throws(
     /** Runs the full real schema rather than accepting the record because its members are valid. */
     () => schema.assertCharacterState(state), /group.themeConfigId/,

@@ -14,7 +14,7 @@ function commits(disk) { return disk.calls.filter(call => call.method === "stora
 
 test("new installation stores independent records and reopens without mutations", async t => {
   const disk = await createDiskHarness(t), owner = await open(disk), state = plain(disk.readState());
-  assert.equal(state.version, 3); assert.equal(state.cards.length, 1); assert.equal(state.cards[0].id, "default");
+  assert.equal(state.version, 4); assert.equal(state.cards.length, 1); assert.equal(state.cards[0].id, "default");
   assert.equal(commits(disk).length, 1);
   assert.equal((await disk.entries()).includes("state.json"), false);
   const document = await owner.run(session => session.readUser("character:default")); assert.equal(document.content, "");
@@ -77,7 +77,7 @@ test("owner pages preserve exact int64 identities and more than 1000 independent
   const created = plain(await owner.run(session => session.createMemory("character:default", memory("Template"))));
   const state = plain(disk.readState()); state.owners[0].memories = [];
   for (let index = 0; index < 1005; index += 1) state.owners[0].memories.push({ ...created, id: String(9007199254740993n + BigInt(index)), uuid: "source-" + index });
-  state.nextId = String(9007199254740993n + 1005n); disk.replaceState(state);
+  disk.replaceState(state);
   const reopened = await open(disk), retained = await reopened.run(session => session.listMemories("character:default"));
   assert.equal(retained.length, 1005); assert.equal(retained[0].id, "9007199254740993");
 });

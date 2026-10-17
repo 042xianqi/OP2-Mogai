@@ -188,7 +188,7 @@ export function assertMemoryValues(value: unknown): asserts value is MemoryValue
 /** Validates full repository memories rather than accepting a lossy MemoryInfo projection. */
 export function assertMemory(value: unknown): asserts value is Memory {
   assertObject(value, "记忆记录");
-  requireDecimal(value.id, "记忆数据库标识", true);
+  requireId(value.id, "记忆数据库标识");
   requireId(value.uuid, "记忆 UUID");
   for (const field of ["title", "content", "contentType", "source"] as const) assertString(value[field], field);
   assertNumber(value.credibility, "可信度", 0, 1);
@@ -231,7 +231,7 @@ export function assertGraph(value: unknown): asserts value is MemoryGraph {
   }
   for (const edge of value.edges) {
     assertObject(edge, "记忆图谱关系");
-    requireDecimal(edge.id, "图谱关系标识", true);
+    requireId(edge.id, "图谱关系标识");
     requireId(edge.sourceId, "图谱源节点 UUID");
     requireId(edge.targetId, "图谱目标节点 UUID");
     assertNullableString(edge.label, "图谱关系标题");

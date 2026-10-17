@@ -51,7 +51,6 @@ import {
   assertTag,
   assertTagValues,
   normalizeNames,
-  requireDecimal,
   requireId,
   requireName,
 } from "./validation";
@@ -836,7 +835,7 @@ export async function saveMemory(
   let saved: Memory;
   if (id === null) saved = await host.createMemory(ownerKey, normalized);
   else {
-    requireDecimal(id, "记忆记录标识", true);
+    requireId(id, "记忆记录标识");
     saved = await host.updateMemory(ownerKey, id, normalized);
   }
   assertMemory(saved);
@@ -1138,12 +1137,12 @@ export async function dispatch(
     }
     case "deleteLink":
       await requireOwner(request.ownerKey, host);
-      requireDecimal(request.linkId, "记忆关系标识", true);
+      requireId(request.linkId, "记忆关系标识");
       await host.deleteLink(request.ownerKey, request.linkId);
       return graph(request.ownerKey, host);
     case "updateLink": {
       await requireOwner(request.ownerKey, host);
-      requireDecimal(request.linkId, "记忆关系标识", true);
+      requireId(request.linkId, "记忆关系标识");
       assertNumber(request.weight, "关系强度", 0, 1);
       assertString(request.description, "关系描述");
       await host.updateLink(request.ownerKey, request.linkId, {

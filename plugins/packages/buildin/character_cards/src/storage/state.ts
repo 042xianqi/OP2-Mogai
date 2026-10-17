@@ -2,7 +2,7 @@ import type { CharacterState, MemorySpace, Card } from "../model";
 import { operitDefaultContent } from "../default-character";
 import { createCharacterDraft } from "../drafts";
 import { assertEmbedding } from "../memory-jobs/embeddings";
-import { assertBoolean, assertCard, assertConversationGroups, assertGroup, assertInteger, assertMemory, assertMemoryChatMessage, assertMemorySettings, assertNumber, assertObject, assertSearchConfig, assertString, assertTag, requireDecimal, requireId } from "../validation";
+import { assertBoolean, assertCard, assertConversationGroups, assertGroup, assertInteger, assertMemory, assertMemoryChatMessage, assertMemorySettings, assertNumber, assertObject, assertSearchConfig, assertString, assertTag, requireId } from "../validation";
 
 /** Creates the ordinary card that installation seeds; its fixed id keeps existing owner keys and chat selections valid. */
 export function createInstalledCharacter(now: number): Card {
@@ -23,39 +23,7 @@ export function createMemorySpace(ownerKey: string): MemorySpace {
 /** Creates first-install domain state without reading or migrating Core records. */
 export function createInitialState(now: number): CharacterState {
   const card = createInstalledCharacter(now);
-  return { version: 3, memoryPreferences: { userDescriptionEnabled: true, autoUpdateEnabled: true }, conversationGroups: [], nextId: "1", cards: [card], groups: [], tags: [], stores: [], active: { CharacterCard: { id: card.id } }, owners: [createMemorySpace("character:" + card.id)] };
-}
-/** Raises nextId above every merged identity so records arriving from another device cannot collide with new allocations. */
-export function normalizeIdentitySpace(state: { nextId: unknown; cards?: unknown; groups?: unknown; tags?: unknown; stores?: unknown; conversationGroups?: unknown; owners?: unknown }): boolean {
-  const nextId = typeof state.nextId === "string" && /^[0-9]+$/.test(state.nextId) ? BigInt(state.nextId) : null;
-  if (nextId === null) return false;
-  let highest = -1n;
-  const consider = (value: unknown): void => {
-    if (typeof value !== "string" || !/^[0-9]+$/.test(value)) return;
-    const parsed = BigInt(value);
-    if (parsed > highest) highest = parsed;
-  };
-  const considerEntity = (value: unknown): void => {
-    if (typeof value !== "string") return;
-    const match = /^(?:character|group|tag|shared)-([1-9][0-9]*)$/.exec(value);
-    if (match !== null) consider(match[1]);
-  };
-  const each = (records: unknown, visit: (record: Record<string, unknown>) => void): void => {
-    if (!Array.isArray(records)) return;
-    for (const record of records) if (record !== null && typeof record === "object" && !Array.isArray(record)) visit(record as Record<string, unknown>);
-  };
-  for (const collection of [state.cards, state.groups, state.tags, state.stores])
-    each(collection, record => considerEntity(record.id));
-  each(state.conversationGroups, record => consider(record.id));
-  each(state.owners, owner => {
-    for (const field of ["memories", "links", "chunks", "candidates", "embeddings"])
-      each(owner[field], record => consider(record.id));
-    const rebuildTask = owner.rebuildTask;
-    if (rebuildTask !== null && typeof rebuildTask === "object") consider((rebuildTask as Record<string, unknown>).id);
-  });
-  if (highest < 0n || nextId > highest || highest === 9223372036854775807n) return false;
-  state.nextId = (highest + 1n).toString();
-  return true;
+  return { version: 4, memoryPreferences: { userDescriptionEnabled: true, autoUpdateEnabled: true }, conversationGroups: [], cards: [card], groups: [], tags: [], stores: [], active: { CharacterCard: { id: card.id } }, owners: [createMemorySpace("character:" + card.id)] };
 }
 /** Requires a real array instead of supplying missing persisted records. */
 function array(value: unknown, label: string): asserts value is unknown[] {
@@ -75,15 +43,13 @@ function identities(records: unknown[], label: string): Set<string> {
 /** Validates every record and cross-record reference before reads or record publication. */
 export function assertCharacterState(value: unknown): asserts value is CharacterState {
   assertObject(value, "character state");
-  if (value.version !== 3) throw new Error("Unsupported character database version");
-  const fields = new Set(["memoryPreferences", "version", "nextId", "cards", "groups", "tags", "stores", "active", "owners", "conversationGroups"]);
+  if (value.version !== 4) throw new Error("Unsupported character database version");
+  const fields = new Set(["memoryPreferences", "version", "cards", "groups", "tags", "stores", "active", "owners", "conversationGroups"]);
   for (const key of Object.keys(value)) if (!fields.has(key)) throw new Error("Unsupported character state field: " + key);
   assertObject(value.memoryPreferences, "global memory preferences");
   assertBoolean(value.memoryPreferences.userDescriptionEnabled, "user description enabled");
   assertBoolean(value.memoryPreferences.autoUpdateEnabled, "auto update enabled");
-  const nextId = BigInt(requireDecimal(value.nextId, "nextId", true));
   assertConversationGroups(value.conversationGroups);
-  for (const group of value.conversationGroups) if (BigInt(group.id) >= nextId) throw new Error("nextId does not exceed the conversation group identity");
   const cards = value.cards, groups = value.groups, tags = value.tags, stores = value.stores, owners = value.owners;
   array(cards, "cards"); array(groups, "groups"); array(tags, "tags"); array(stores, "stores"); array(owners, "owners");
   const cardIds = identities(cards, "cards"), groupIds = identities(groups, "groups"), tagIds = identities(tags, "tags"), storeIds = identities(stores, "stores");
@@ -129,10 +95,6 @@ export function assertCharacterState(value: unknown): asserts value is Character
     if (!expectedOwners.has(ownerKey) || actualOwners.has(ownerKey)) throw new Error("Invalid or duplicate memory owner: " + ownerKey);
     actualOwners.add(ownerKey);
     assertMemorySpace(owner);
-    if (owner.rebuildTask !== null && BigInt(owner.rebuildTask.id) >= nextId) throw new Error("nextId does not exceed the rebuild task identity");
-    for (const field of ["memories", "links", "chunks", "candidates"] as const) {
-      for (const record of owner[field]) if (BigInt(record.id) >= nextId) throw new Error("nextId does not exceed stored identity: " + record.id);
-    }
   }
   if (actualOwners.size !== expectedOwners.size) throw new Error("Character state is missing an owner memory space");
 }
@@ -148,15 +110,15 @@ export function assertMemorySpace(value: unknown): asserts value is MemorySpace 
     memoriesByUuid.set(memory.uuid, memory);
   }
   for (const link of value.links) {
-    assertObject(link, "link"); requireDecimal(link.id, "link id", true);
-    const source = requireDecimal(link.sourceMemoryId, "source memory id", true), target = requireDecimal(link.targetMemoryId, "target memory id", true);
+    assertObject(link, "link"); requireId(link.id, "link id");
+    const source = requireId(link.sourceMemoryId, "source memory id"), target = requireId(link.targetMemoryId, "target memory id");
     if (!memoryIds.has(source) || !memoryIds.has(target)) throw new Error("Relationship references a missing memory: " + link.id);
     if (source === target) throw new Error("Relationship cannot point to itself");
     assertString(link.type_, "link type"); assertNumber(link.weight, "link weight", 0, 1); assertString(link.description, "link description");
   }
   const indices = new Set<string>();
   for (const chunk of value.chunks) {
-    assertObject(chunk, "chunk"); requireDecimal(chunk.id, "chunk id", true); const memoryUuid = requireId(chunk.memoryUuid, "chunk memory UUID");
+    assertObject(chunk, "chunk"); requireId(chunk.id, "chunk id"); const memoryUuid = requireId(chunk.memoryUuid, "chunk memory UUID");
     assertInteger(chunk.chunkIndex, "chunk index", 0); assertString(chunk.content, "chunk content");
     const memory = memoriesByUuid.get(memoryUuid);
     if (memory === undefined || !memory.isDocumentNode) throw new Error("Chunk references a missing document memory");
@@ -165,7 +127,7 @@ export function assertMemorySpace(value: unknown): asserts value is MemorySpace 
   }
   const candidateSources = new Set<string>();
   for (const candidate of value.candidates) {
-    assertObject(candidate, "candidate"); requireDecimal(candidate.id, "candidate id", true); requireId(candidate.chatId, "candidate chat id");
+    assertObject(candidate, "candidate"); requireId(candidate.id, "candidate id"); requireId(candidate.chatId, "candidate chat id");
     for (const field of ["triggerMessageTimestamp", "triggerVariantIndex", "createdAt", "updatedAt", "attemptCount"] as const) assertInteger(candidate[field], field, 0);
     for (const field of ["status", "lastError", "sourceType"] as const) assertString(candidate[field], field);
     if (candidate.status !== "pending" && candidate.status !== "processing" && candidate.status !== "failed") throw new Error("Invalid candidate status");
@@ -184,7 +146,7 @@ export function assertMemorySpace(value: unknown): asserts value is MemorySpace 
     status => value.rebuildProgress !== null && typeof value.rebuildProgress === "object" && "status" in value.rebuildProgress && value.rebuildProgress.status === status,
   )) throw new Error("Invalid memory rebuild status");
   if (value.rebuildTask !== null) {
-    assertObject(value.rebuildTask, "rebuild task"); requireDecimal(value.rebuildTask.id, "rebuild task id", true);
+    assertObject(value.rebuildTask, "rebuild task"); requireId(value.rebuildTask.id, "rebuild task id");
     array(value.rebuildTask.windows, "rebuild windows"); assertInteger(value.rebuildTask.nextWindow, "rebuild cursor", 0);
     if (value.rebuildTask.windows.length === 0 || value.rebuildTask.nextWindow > value.rebuildTask.windows.length) throw new Error("Invalid rebuild cursor or source plan");
     let sourceTotal = 0, processedTotal = 0, completedChats = 0, windowIndex = 0;
