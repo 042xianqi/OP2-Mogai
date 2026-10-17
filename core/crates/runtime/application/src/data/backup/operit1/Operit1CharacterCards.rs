@@ -80,6 +80,7 @@ fn buildOperit2CharacterCards(
         let chatModelId = resolveOperit1CharacterChatModelId(parsed, preferences, &id)?;
         let memoryBinding = resolveOperit1CharacterMemoryBinding(parsed, preferences, &id)?;
         cards.push(CharacterCard {
+            chatProviderId: None,
             id: id.clone(),
             name: name.to_string(),
             description: optionalPreferenceString(

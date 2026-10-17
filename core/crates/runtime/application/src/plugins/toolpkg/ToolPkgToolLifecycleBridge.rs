@@ -19,7 +19,7 @@ static TOOL_LIFECYCLE_HOOKS: OnceLock<Mutex<Vec<ToolPkgToolLifecycleHookRegistra
 pub struct ToolPkgToolLifecycleBridge;
 
 impl ToolPkgToolLifecycleBridge {
-    /// Requires the exact registered, enabled package identity before exposing any execution snapshot.
+    /// Requires the exact registered, enabled package identity before exposing any execution data.
     fn requireExecutionOwner(manager: &RuntimePackageManager, owner: &str) -> Result<(), String> {
         if owner.trim().is_empty() || owner.trim() != owner {
             return Err("Tool execution owner must be exact nonblank text".to_string());
@@ -38,16 +38,16 @@ impl ToolPkgToolLifecycleBridge {
         }
     }
 
-    /// Validates the native configuration snapshot even when this registry has no tool-policy hooks.
-    pub fn validateExecutionSnapshot(
+    /// Validates the native execution data even when this registry has no tool-policy hooks.
+    pub fn validateExecutionContext(
         manager: &RuntimePackageManager,
         context: Option<&ToolRuntimeContext>,
     ) -> Result<(), String> {
         if let Some(context) = context {
-            context.validateSnapshot()?;
+            context.validateExecutionContext()?;
             if context.extensionOwner == crate::services::ProviderRuntimeSupportService::MODEL_CONFIGURATION_OWNER {
-                crate::services::ProviderRuntimeSupportService::validateNativeModelExecutionSnapshot(
-                    &context.messageExtension, context.callerParticipantId.as_deref(),
+                crate::services::ProviderRuntimeSupportService::validateNativeModelExecutionData(
+                    &context.executionData, context.callerParticipantId.as_deref(),
                 )?;
             } else {
                 Self::requireExecutionOwner(manager, &context.extensionOwner)?;
@@ -63,11 +63,11 @@ impl ToolPkgToolLifecycleBridge {
         registeredOwner: &str,
     ) -> Result<Value, String> {
         Self::requireExecutionOwner(manager, registeredOwner)?;
-        Self::validateExecutionSnapshot(manager, context)?;
+        Self::validateExecutionContext(manager, context)?;
         match context {
             Some(context) => {
-                let messageExtension = if context.extensionOwner == registeredOwner {
-                    Value::Object(context.messageExtension.clone())
+                let executionData = if context.extensionOwner == registeredOwner {
+                    Value::Object(context.executionData.clone())
                 } else {
                     Value::Null
                 };
@@ -75,7 +75,7 @@ impl ToolPkgToolLifecycleBridge {
                     "chatId": context.callerChatId,
                     "participantId": context.callerParticipantId,
                     "extensionOwner": registeredOwner,
-                    "messageExtension": messageExtension,
+                    "executionData": executionData,
                 }))
             }
             None => Ok(Value::Null),
@@ -138,7 +138,7 @@ impl AIToolHook for ToolLifecycleBridge {
             let manager = RuntimePackageManager::readySnapshot(
                 self.runtime.tool_handler().getOrCreatePackageManager(),
             ).await?;
-            ToolPkgToolLifecycleBridge::validateExecutionSnapshot(&manager, executionContext.as_ref())?;
+            ToolPkgToolLifecycleBridge::validateExecutionContext(&manager, executionContext.as_ref())?;
             let budget = super::ToolPkgPreHookTimeout::ToolPkgPreHookTimeout::fromPreferences();
             for container in manager.getEnabledToolPkgContainerRuntimes() {
                 let ownerContext = ToolPkgToolLifecycleBridge::executionContextForOwner(
@@ -390,7 +390,7 @@ impl ToolPkgToolLifecycleBridge {
             };
             available.push(serde_json::json!({ "catalogEntryId": index.to_string(), "name": entry.target_tool_name, "categoryName": "Hidden tool catalog", "description": entry.description, "parameters": entry.parameter_hints.join("\n"), "activationSource": activation }));
         }
-        Self::validateExecutionSnapshot(manager, Some(context))?;
+        Self::validateExecutionContext(manager, Some(context))?;
         let originalDescriptors = available.clone();
         let budget = super::ToolPkgPreHookTimeout::ToolPkgPreHookTimeout::fromPreferences();
         for container in manager.getEnabledToolPkgContainerRuntimes() {

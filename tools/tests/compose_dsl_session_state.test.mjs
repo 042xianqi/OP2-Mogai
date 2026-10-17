@@ -134,6 +134,46 @@ test('compiled state consumers observe explicit host input updates', () => {
   noSnapshot(response);
 });
 
+test('host input updates automatically await the current root lifecycle in the same command', async () => {
+  const s = session(`module.exports.default = function(ctx) {
+    const [label] = ctx.useState('label', 'initial');
+    const [loaded, setLoaded] = ctx.useState('loaded', 'not loaded');
+    const calls = ctx.useRef('calls', []);
+    globalThis.inputCalls = calls.current;
+    return ctx.UI.Column({ onInputsChanged: async () => {
+      calls.current.push(label);
+      await Promise.resolve();
+      setLoaded('loaded ' + label);
+    } }, ctx.UI.Text({ text: loaded }));
+  };`);
+  s.render();
+  assert.equal(s.context.inputCalls.length, 0, 'Initial mounting belongs to onLoad');
+  const response = await s.render({ __operit_update_inputs: true, __operit_input_state: { label: 'new chat' } });
+  assert.deepEqual(Array.from(s.context.inputCalls), ['new chat']);
+  assert.ok(response.update.upserts.some(node => node.props.text === 'loaded new chat') ||
+    s.events.some(event => event.update?.upserts.some(node => node.props.text === 'loaded new chat')));
+  noSnapshot(response);
+  await s.render({ __operit_update_inputs: true, __operit_input_state: { label: 'second chat' } });
+  assert.deepEqual(Array.from(s.context.inputCalls), ['new chat', 'second chat']);
+});
+
+test('input lifecycle failures reject the input command and keep the live context usable', async () => {
+  const s = session(`module.exports.default = function(ctx) {
+    const [fail] = ctx.useState('fail', false);
+    const [count, setCount] = ctx.useState('count', 0);
+    return ctx.UI.Column({ onInputsChanged: async () => {
+      if (fail) throw Error('input refresh failed');
+      setCount(count + 1);
+    } }, ctx.UI.Text({ text: String(count) }));
+  };`);
+  s.render();
+  await assert.rejects(Promise.resolve().then(() => s.render({ __operit_update_inputs: true,
+    __operit_input_state: { fail: true } })), /input refresh failed/);
+  const response = await s.render({ __operit_update_inputs: true, __operit_input_state: { fail: false } });
+  assert.ok(s.events.some(event => event.update?.upserts.some(node => node.props.text === '1')));
+  noSnapshot(response);
+});
+
 test('pending action survives same-context script reload without cloning its ref or Promise', async () => {
   const s = session(screen); s.render();
   const ref = s.context.captured.ref;
@@ -249,7 +289,7 @@ test('WebView interface replacement keeps method IDs and releases removed method
   assert.throws(() => s.context.__operit_compose_bundle.invokeAction(initial.currentTheme.__actionId), /compose action not found/);
 });
 
-test('actual packaged character-card screen keeps currentTheme callable after HTML path refresh', async () => {
+test('actual packaged character-card screen keeps loadScreen callable after HTML path refresh', async () => {
   const source = readFileSync(new URL('../../plugins/packages/buildin/character_cards/dist/ui/main/index.ui.js', import.meta.url), 'utf8');
   const commands = [];
   const s = session(source);
@@ -259,17 +299,22 @@ test('actual packaged character-card screen keeps currentTheme callable after HT
   };
   s.context.ToolPkg = {
     /** Supplies a fixture resource path without reading personal application data. */
-    async readResource() { return '/fixture/character-memory.html'; }
+    async readResource() { return '/fixture/character-memory.html'; },
+    ipc: { async call(channel, request) {
+      assert.equal(channel, 'character-memory.request');
+      assert.equal(request.action, 'snapshot');
+      return { fixture: true };
+    } },
   };
   s.render({theme:{brightness:'dark', colors:{primary:'#ff102030'}}});
   await s.action('onLoad');
   assert.equal(s.context.__operit_compose_bundle.stateStore['character-memory-html'], '/fixture/character-memory.html');
   const methods = commands[0].payload.object;
   for (let index = 0; index < 5; index++) {
-    const response = await s.context.__operit_dispatch_compose_dsl_action({actionId:methods.currentTheme.__actionId});
-    assert.equal(response.actionResult.brightness, 'dark'); noSnapshot(response);
-    const screenResponse = await s.context.__operit_dispatch_compose_dsl_action({actionId:methods.currentScreen.__actionId, payload:[]});
-    assert.equal(screenResponse.actionResult.input.mode, 'manage');
+    const response = await s.context.__operit_dispatch_compose_dsl_action({actionId:methods.loadScreen.__actionId, payload:[]});
+    assert.equal(response.actionResult.theme.brightness, 'dark'); noSnapshot(response);
+    assert.equal(response.actionResult.screen.input.mode, 'manage');
+    assert.equal(response.actionResult.snapshot.fixture, true);
   }
 });
 

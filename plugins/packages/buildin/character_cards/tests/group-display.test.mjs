@@ -7,7 +7,7 @@ const domain = loadModule("src/domain.ts");
 
 /** Builds a display request with deliberately unavailable execution defaults and no invented model selection. */
 function displayRequest(selection) {
-  return { purpose: "display", chatId: "unpersisted-draft", chatExtension: { version: 1, selection }, messageExtension: null, participantId: null,
+  return { purpose: "display", chatId: "unpersisted-draft", chatExtension: { version: 1, selection }, participantId: null,
     promptFunctionType: "CHAT", defaultModelBinding: { providerId: "", modelId: "" }, defaultTtsConfigId: "" };
 }
 
@@ -28,7 +28,7 @@ test("display: persisted multi-member group returns ordered identities and no ex
   const result = plain(await service.dispatchDomain("chat.configuration.resolve", input));
   assert.deepEqual(result, { contextKey: "group:" + group.id, identity: { title: "Real group", avatarUri: null },
     participants: [{ id: card.id, name: "Second real member", avatarUri: "resources/second.png" }, { id: "default", name: defaultCard.name, avatarUri: defaultCard.avatarUri }], initialMessages: [] });
-  assert.equal(Object.hasOwn(result, "profile"), false); assert.equal(Object.hasOwn(result, "messageExtension"), false);
+  assert.equal(Object.hasOwn(result, "profile"), false); assert.equal(Object.hasOwn(result, "executionData"), false);
   assert.equal(disk.calls.some(
     /** Detects calls outside the real file boundary rather than synthesizing directory results. */
     call => call.method === "models" || call.method === "tts" || call.method === "tools",
@@ -47,8 +47,9 @@ test("display: card with no opening reads its actual identity without a model, T
 test("display: missing purpose and execution-only inputs are rejected before business reads", async () => {
   const request = displayRequest("group:actual-group"), missing = plain(request); delete missing.purpose;
   assert.throws(() => domain.parseChatConfigurationRequest(missing), /purpose/);
-  for (const input of [{ ...request, participantId: "member" }, { ...request, messageExtension: { version: 1 } }]) {
-    assert.throws(() => domain.parseChatConfigurationRequest(input), /Display configuration/);
+  for (const input of [{ ...request, participantId: "member" }, { ...request, executionData: { version: 1 } }]) {
+    assert.throws(() => domain.parseChatConfigurationRequest(input), /Display configuration|not a supported field/);
+    if (input.participantId === null) continue;
     await assert.rejects(() => domain.resolveChatConfiguration(input, {
       /** Rejects execution directory reads during a presentation-only operation. */
       async snapshot() { throw new Error("Unexpected catalog read"); },

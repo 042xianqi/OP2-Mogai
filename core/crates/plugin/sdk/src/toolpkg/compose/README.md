@@ -36,6 +36,9 @@ A command owns its response sink and final revision. Intermediate delivery must 
 the final response is built. Synchronous callbacks render once in their final response;
 asynchronous callbacks can publish intermediate revisions. Node transport IDs are compact
 session-owned handles; keyed occurrence matching and ancestor paths stay inside the runtime.
+Host input updates render the current root and run its `onInputsChanged` callback in the same
+command. The callback uses the normal action pipeline, including awaited asynchronous work,
+intermediate revisions and errors; hosts do not send a second action command for it.
 Detached asynchronous work may keep its listener only while the
 host still owns its pending references. Render and state-flush failures propagate to that
 command; detached failures report through its host sink. They do not become successful empty

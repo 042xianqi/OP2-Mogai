@@ -2,9 +2,7 @@ import type { MemoryQueryRequest, MemoryQueryResult, ChatConfigurationRequest, C
 import { parseDomainPayload, parseMemoryQueryRequest } from "./domain";
 import { MemoryTools } from "./runtime-tools/memory";
 import { dispatchDomain } from "./service-runtime";
-import { findChatBinding, readStoredSnapshot, storeSnapshot, readDraftBinding, commitDraftBinding, abortDraftBinding } from "./chat-storage";
-import type { SnapshotReference } from "./chat-storage";
-import type { MessageMarker } from "./chat-markers";
+import { findChatBinding, readDraftBinding, commitDraftBinding, abortDraftBinding } from "./chat-storage";
 export { onMemoryMessagePersisted, onMemoryInterval, registerMemoryJobHooks } from "./memory-jobs/hooks";
 
 const memoryQueries = new MemoryTools(dispatchDomain);
@@ -13,7 +11,7 @@ const memoryQueries = new MemoryTools(dispatchDomain);
 export async function chatConfigurationResolveApi(event: ToolPkg.PublicApiEvent<ChatConfigurationRequest>): Promise<ChatConfigurationResult> {
   if (event.callerPackage !== "host") throw new Error("chat.configuration.resolve requires an authenticated host caller");
   const request = parseDomainPayload("chat.configuration.resolve", event.payload);
-  if (request.chatId !== null && request.messageExtension === null) {
+  if (request.chatId !== null) {
     const binding = await findChatBinding(request.chatId);
     // A conversation without a role association explicitly uses the ordinary model mode.
     request.chatExtension = { version: 1, selection: binding === null ? "model:chat" : binding.selection };
@@ -48,17 +46,6 @@ export async function chatConfigurationDeleteApi(event: ToolPkg.PublicApiEvent<{
   const result = await dispatchDomain("chat.configuration.binding.delete", input);
   if (result.chatId !== input.chatId || !result.deleted) throw new Error("Character binding deletion was not acknowledged");
   return { deleted: true };
-}
-
-/** Persists a frozen snapshot under the authenticated owner's SQL tables. */
-export async function chatConfigurationSnapshotStoreApi(event: ToolPkg.PublicApiEvent<MessageMarker>): Promise<SnapshotReference> {
-  if (event.callerPackage !== "host") throw new Error("Snapshot storage requires the host caller");
-  return storeSnapshot(event.payload);
-}
-/** Resolves an immutable reference without reading current role settings. */
-export async function chatConfigurationSnapshotReadApi(event: ToolPkg.PublicApiEvent<SnapshotReference>): Promise<MessageMarker> {
-  if (event.callerPackage !== "host") throw new Error("Snapshot reads require the host caller");
-  return readStoredSnapshot(event.payload);
 }
 
 /** Reads the actual binding without changing the current global selection. */
@@ -455,8 +442,6 @@ export function registerDomainApis(): void {
   ToolPkg.registerApi({ name: "chat.configuration.draft.resolve", function: chatConfigurationDraftResolveApi });
   ToolPkg.registerApi({ name: "chat.configuration.draft.commit", function: chatConfigurationDraftCommitApi });
   ToolPkg.registerApi({ name: "chat.configuration.draft.abort", function: chatConfigurationDraftAbortApi });
-  ToolPkg.registerApi({ name: "chat.configuration.snapshot.store", function: chatConfigurationSnapshotStoreApi });
-  ToolPkg.registerApi({ name: "chat.configuration.snapshot.read", function: chatConfigurationSnapshotReadApi });
   ToolPkg.registerApi<MemoryQueryRequest, MemoryQueryResult>({ name: "memory.query", function: memoryQueryApi });
   ToolPkg.registerApi<DomainInput<"memory.searchWithOptions">, DomainOutput<"memory.searchWithOptions">>({ name: "memory.searchWithOptions", function: memorySearchWithOptionsApi });
   ToolPkg.registerApi<DomainInput<"memory.candidate.enqueue">, DomainOutput<"memory.candidate.enqueue">>({ name: "memory.candidate.enqueue", function: memoryCandidateEnqueueApi });

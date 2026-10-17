@@ -38,14 +38,17 @@ function requireComposeResponseSink(runtime) {
 }
 
 /// Builds a response while preserving the caller's navigation delivery policy.
-function buildComposeResponse(bundle, entry, actionResult, includeNavigation, responseSink) {
+function buildComposeResponse(bundle, entry, actionResult, includeNavigation, responseSink, inputsChanged) {
   var renderStarted = bundle.profileStages ? Date.now() : 0;
   var tree = OperitComposeReactive.render(bundle.ctx, entry);
   profileComposeStage(bundle, responseSink, 'js-render-sync', renderStarted, 0);
-  if (isPromise(tree)) {
-    return tree.then(function (resolvedTree) {
-      return wrapComposeResponse(bundle, resolvedTree, actionResult, includeNavigation, responseSink);
-    });
+  /// Uses the just-rendered closure so lifecycle reads observe the new host inputs.
+  function complete(resolvedTree) {
+    var callback = inputsChanged && resolvedTree && resolvedTree.props && resolvedTree.props.onInputsChanged;
+    if (callback && callback.__actionId) {
+      return runComposeAction(bundle, entry, { actionId: callback.__actionId }, responseSink);
+    }
+    return wrapComposeResponse(bundle, resolvedTree, actionResult, includeNavigation, responseSink);
   }
-  return wrapComposeResponse(bundle, tree, actionResult, includeNavigation, responseSink);
+  return isPromise(tree) ? tree.then(complete) : complete(tree);
 }

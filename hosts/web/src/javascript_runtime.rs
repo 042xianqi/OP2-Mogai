@@ -226,12 +226,12 @@ impl HostJavaScriptRuntime for WebHostJavaScriptRuntime {
     fn settleHostJavaScriptPromise(
         &mut self,
         id: u64,
-        value: &serde_json::Value,
+        value: serde_json::Value,
         reject: bool,
     ) -> HostResult<()> {
         self.ensureExecutionActive()?;
         let mut nodes = 0;
-        let (value, reject) = match self.callbackValue(value, 0, &mut nodes) {
+        let (value, reject) = match self.callbackValue(&value, 0, &mut nodes) {
             Ok(value) => (value, reject),
             Err(error) => (
                 self.context

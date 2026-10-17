@@ -9,7 +9,7 @@ const directories = plain(loadModule("tests/host-directories-input.ts").hostDire
 
 /** Builds the actual generic host request without a persisted draft query or Core-owned selection token. */
 function request(purpose, selection, participantId = null) {
-  return { purpose, chatId: "unpersisted-creation-draft", chatExtension: { version: 1, selection }, messageExtension: null, participantId, promptFunctionType: "CHAT",
+  return { purpose, chatId: "unpersisted-creation-draft", chatExtension: { version: 1, selection }, participantId, promptFunctionType: "CHAT",
     defaultModelBinding: { providerId: "fixture-provider-token", modelId: "fixture-model-token" }, defaultTtsConfigId: "fixture-tts-config" };
 }
 
@@ -38,17 +38,17 @@ test("registered configuration: actual main handler resolves a multi-group displ
   await assert.rejects(() => plugin.api("chat.configuration.draft.resolve", request("execution", selection)), /display identity/);
 });
 
-/** A real initial message is authored by an explicit single participant and stores that participant's exact execution snapshot. */
-test("registered configuration: an actual card opening has an explicit author snapshot, never a group member default", async t => {
+/** A real initial message is authored by an explicit single participant and stores only the author identity. */
+test("registered configuration: an actual card opening has an explicit author identity, never a group member default", async t => {
   const disk = await createDiskHarness(t), settings = createHostDirectoriesFixture(disk, directories), plugin = openPlugin(settings.harness);
   const card = await plugin.api("character.create", { values: { name: "Explicit opening author", avatarUri: "actual-author.png", openingStatement: "Actual opening content" } });
   const result = plain(await resolveDraft(plugin, request("display", "card:" + card.id)));
   assert.equal(Object.hasOwn(result, "profile"), false); assert.equal(result.initialMessages.length, 1);
-  const initial = result.initialMessages[0], saved = plain(markers.decodeMessageMarker(initial.messageExtension));
+  const initial = result.initialMessages[0];
   assert.equal(initial.content, card.openingStatement); assert.equal(initial.displayName, card.name);
-  assert.equal(saved.profile.id, card.id); assert.equal(saved.profile.name, card.name); assert.equal(saved.selection, "card:" + card.id);
-  assert.equal(saved.primaryOwnerKey, "character:" + card.id); assert.equal(saved.participants.length, 1);
-  assert.ok(settings.calls.length > 0, "Only an explicitly authored initial message invokes strict execution resolution");
+  assert.deepEqual(initial, { content: card.openingStatement, displayName: card.name, participantId: card.id });
+  assert.equal(settings.calls.length, 0);
+
 });
 
 /** The existing registered resolver keeps its actual authenticated host boundary rather than creating an unguarded parallel provider. */
@@ -77,12 +77,13 @@ test("registered configuration: group prompts preserve each speaker and saved me
   assert.ok(result.profile.introPrompt.includes("Stay in role as " + a.name));
   assert.ok(result.profile.introPrompt.includes("Group participants: " + b.name + ", " + a.name));
   for (const participant of result.participants) assert.ok(participant.introPrompt.includes("Stay in role as " + participant.name));
-  const saved = plain(markers.decodeMessageMarker(result.messageExtension));
+  const saved = plain(markers.decodeExecutionData(result.executionData));
   assert.deepEqual(saved.profile, result.profile); assert.deepEqual(saved.participants, result.participants);
   await plugin.api("character.update", { id: a.id, changes: { name: "Changed current name", characterSetting: "Changed current setting" } });
-  const historical = plain(await plugin.api("chat.configuration.resolve", { ...request("execution", selection, a.id), messageExtension: result.messageExtension }));
-  assert.deepEqual(historical.profile, saved.profile);
-  assert.deepEqual(historical.messageExtension, result.messageExtension);
+  const current = plain(await plugin.api("chat.configuration.resolve", request("execution", selection, a.id)));
+  assert.equal(current.profile.name, "Changed current name");
+  assert.match(current.profile.introPrompt, /Changed current setting/);
+  assert.notDeepEqual(current.profile, saved.profile);
 });
 
 /** Card execution carries only its authored prompt, while a one-member group retains explicit group semantics. */
@@ -97,23 +98,22 @@ test("registered configuration: single cards and single-member groups retain the
   assert.ok(grouped.profile.introPrompt.includes("Group participants: " + card.name));
 });
 
-/** Authenticated generic deletion removes the real binding and leaves historical message snapshots usable. */
+/** Authenticated generic deletion removes the real binding and removes the current binding. */
 test("registered configuration: generic deletion checks its owner, acknowledges real cleanup and preserves history", async t => {
   const disk = await createDiskHarness(t), settings = createHostDirectoriesFixture(disk, directories), plugin = openPlugin(settings.harness);
   const card = await plugin.api("character.create", { values: { name: "Deletion speaker" } });
-  const selection = "card:" + card.id, executed = await committedConfiguration(plugin, selection);
+  const selection = "card:" + card.id; await committedConfiguration(plugin, selection);
   const registered = plugin.apis.get("chat.configuration.delete");
   assert.equal(registered.function, plugin.main.chatConfigurationDeleteApi);
   await assert.rejects(() => registered.function({ callerPackage: "other-owner", payload: { chatId: "unpersisted-creation-draft" } }), /host caller/);
   assert.equal((await plugin.api("chat.configuration.binding.read", { chatId: "unpersisted-creation-draft" })).selection, selection);
   assert.deepEqual(plain(await plugin.api("chat.configuration.delete", { chatId: "unpersisted-creation-draft" })), { deleted: true });
   await assert.rejects(() => plugin.api("chat.configuration.binding.read", { chatId: "unpersisted-creation-draft" }));
-  const historical = plain(await plugin.api("chat.configuration.resolve", { ...request("execution", selection, card.id), messageExtension: executed.messageExtension }));
-  assert.deepEqual(historical.profile, executed.profile);
+  await assert.rejects(() => plugin.api("chat.configuration.resolve", request("execution", selection, card.id)), /Invalid model-only execution participant/);
   assert.deepEqual(plain(await plugin.api("chat.configuration.delete", { chatId: "unpersisted-creation-draft" })), { deleted: true });
 });
 
-/** Existing chats without role associations use a real model profile and keep their own immutable history. */
+/** Existing chats without role associations use a real model profile and read their current model configuration. */
 test("registered configuration: no role association executes the configured model and provider identity", async t => {
   const disk = await createDiskHarness(t), settings = createHostDirectoriesFixture(disk, directories), plugin = openPlugin(settings.harness);
   const input = request("execution", "model:chat");
@@ -121,19 +121,18 @@ test("registered configuration: no role association executes the configured mode
   assert.equal(result.profile.name, input.defaultModelBinding.modelId);
   assert.equal(result.profile.avatarUri, "provider-logo:fixture-provider-type");
   assert.equal(result.profile.introPrompt, ""); assert.equal(result.profile.userPreferencesText, "");
-  assert.deepEqual(result.profile.resources, []); assert.equal(result.messageExtension.primaryOwnerKey, "");
+  assert.deepEqual(result.profile.resources, []); assert.equal(result.executionData.primaryOwnerKey, "");
   assert.deepEqual(result.profile.modelBinding, input.defaultModelBinding);
   const display = plain(await plugin.api("chat.configuration.resolve", { ...input, purpose: "display" }));
   assert.deepEqual(display.identity, { title: result.profile.name, avatarUri: result.profile.avatarUri });
   assert.deepEqual(display.participants, [{ id: "model:chat", name: result.profile.name, avatarUri: result.profile.avatarUri }]);
-  const reference = await plugin.api("chat.configuration.snapshot.store", result.messageExtension);
-  const saved = await plugin.api("chat.configuration.snapshot.read", reference);
+  assert.equal(plugin.apis.has("chat.configuration.snapshot.store"), false);
+  assert.equal(plugin.apis.has("chat.configuration.snapshot.read"), false);
   await plugin.api("activePrompt.setCard", { id: "default" });
   settings.clearCalls();
-  const historical = plain(await plugin.api("chat.configuration.resolve", { ...input, messageExtension: saved }));
-  assert.deepEqual(historical.profile, result.profile); assert.equal(settings.calls.length, 0);
-  const corrupt = plain(saved); corrupt.profile.introPrompt = "Unexpected role prompt"; corrupt.participants[0].introPrompt = corrupt.profile.introPrompt;
-  await assert.rejects(() => plugin.api("chat.configuration.resolve", { ...input, messageExtension: corrupt }), /model-only message snapshot/);
+  const current = plain(await plugin.api("chat.configuration.resolve", input));
+  assert.deepEqual(current.profile, result.profile); assert.ok(settings.calls.length > 0);
+  await assert.rejects(() => plugin.api("chat.configuration.resolve", { ...input, executionData: result.executionData }), /not a supported field/);
   settings.failNext("Models.listSummaries", new Error("Configured model directory rejected"));
   await assert.rejects(() => plugin.api("chat.configuration.resolve", input), /Configured model directory rejected/);
 });

@@ -1840,11 +1840,11 @@ impl JsEngineState {
     fn deliverAsyncCallback(&mut self, callback: JsAsyncCallback) -> Result<(), String> {
         match callback {
             JsAsyncCallback::Promise { requestId, result, reject } => {
-                self.runtime.settleHostJavaScriptPromise(requestId, &result, reject)
+                self.runtime.settleHostJavaScriptPromise(requestId, result, reject)
             }
             JsAsyncCallback::ProfiledToolResult { requestId, result, timing, successful } => {
                 timing.mark("callbackQueueMs").map_err(|error| error.to_string())?;
-                let settled = self.runtime.settleHostJavaScriptPromise(requestId, &result, false);
+                let settled = self.runtime.settleHostJavaScriptPromise(requestId, result, false);
                 timing.mark("callbackSettleMs").map_err(|error| error.to_string())?;
                 timing.log(successful && settled.is_ok());
                 settled

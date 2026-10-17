@@ -343,6 +343,13 @@ impl JsExecutionHost for TestPluginConfigExecutionHost {
                 };
             }
 
+            if request.tool_name == "echo_owned" {
+                return JsToolCallResult {
+                    success: true,
+                    data: JsToolCallResultData::Value(Value::Object(request.parameters.into_iter().collect())),
+                    error: None,
+                };
+            }
             if request.tool_name == "echo" {
                 return JsToolCallResult {
                     success: true,
@@ -3707,6 +3714,71 @@ async fn bridge_roundtrip_benchmark() {
         );
         engine.destroy();
     }
+}
+
+/// Separates strict request snapshots, Promise jobs and complete host round trips.
+/// Run explicitly in release mode; timing is diagnostic, never a correctness assertion.
+#[tokio::test]
+#[ignore = "manual release bridge payload benchmark"]
+async fn bridge_payload_benchmark() {
+    let iterations: usize = std::env::var("OPERIT_JS_BRIDGE_BENCH_ITERATIONS")
+        .expect("set OPERIT_JS_BRIDGE_BENCH_ITERATIONS")
+        .parse().expect("positive iteration count");
+    assert!(iterations > 0);
+    let engine = newTestJsEngine(Arc::new(TestPluginConfigExecutionHost::default()));
+    let script = r#"exports.main = async function(params) {
+        var data = {rows: []}, result;
+        for (var row = 0; row < params.rows; row++)
+            data.rows.push({id: row, name: 'role-' + row, enabled: true,
+                settings: {prompt: 'x'.repeat(64), tags: ['a', 'b', 'c']}});
+        for (var i = 0; i < params.iterations; i++) {
+            if (params.mode === 'input') { __operitHostSnapshotJsonObject(data); result = data; }
+            else if (params.mode === 'snapshot') result = __operitSnapshotJsonObject(data);
+            else if (params.mode === 'promise') result = await Promise.resolve(data);
+            else result = await toolCall(params.mode === 'hostOwned' || params.mode === 'hostReadAll' ? 'echo_owned' : 'echo', data);
+            if (params.mode === 'hostReadAll') {
+                for (var row = 0; row < params.rows; row++) {
+                    var value = result.rows[row];
+                    if (value.id !== row || value.name !== 'role-' + row || value.enabled !== true ||
+                        value.settings.prompt !== 'x'.repeat(64) || value.settings.tags.join(',') !== 'a,b,c')
+                        throw new Error('Payload changed in transit at row ' + row);
+                }
+            }
+        }
+        for (var row = 0; row < params.rows; row++) {
+            var value = result.rows[row];
+            if (value.id !== row || value.name !== 'role-' + row || value.enabled !== true ||
+                value.settings.prompt !== 'x'.repeat(64) || value.settings.tags.join(',') !== 'a,b,c')
+                throw new Error('Payload changed in transit at row ' + row);
+        }
+        return result.rows.length;
+    };"#;
+    let rows: Vec<usize> = std::env::var("OPERIT_JS_BRIDGE_BENCH_ROWS").unwrap_or_else(|_| "0,1,32,256".into())
+        .split(',').map(|value| value.parse().expect("row count")).collect();
+    let modes = std::env::var("OPERIT_JS_BRIDGE_BENCH_MODES").unwrap_or_else(|_| "promise,snapshot,input,host,hostOwned,hostReadAll".into());
+    for rows in rows {
+        for mode in modes.split(',') {
+            let params = BTreeMap::from([
+                ("rows".to_owned(), serde_json::json!(rows)),
+                ("mode".to_owned(), serde_json::json!(mode)),
+                ("iterations".to_owned(), serde_json::json!(iterations)),
+            ]);
+            let mut times = Vec::new();
+            for sample in 0..6 {
+                let started = Instant::now();
+                let output = expect_js_output(engine.execute_script_function(
+                    script, "main", &params, &BTreeMap::new(), None, true, 30, None,
+                ).await, "payload benchmark");
+                assert_eq!(output, rows.to_string());
+                if sample > 0 {
+                    times.push(started.elapsed().as_secs_f64() * 1e6 / iterations as f64);
+                }
+            }
+            times.sort_by(f64::total_cmp);
+            eprintln!("BRIDGE_PAYLOAD rows={rows} mode={mode} median_us_per_call={:.3} samples_us={times:?}", times[2]);
+        }
+    }
+    engine.destroy();
 }
 
 /// Creates an actual immutable SDK execution context without authenticating any owner through JavaScript data.

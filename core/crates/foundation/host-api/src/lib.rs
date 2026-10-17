@@ -2039,10 +2039,12 @@ pub trait HostJavaScriptRuntime {
     ) -> HostResult<()>;
 
     /// Settles a Promise on its owning executor exactly once; cancelled ids are ignored.
+    /// Transfers ownership of the result so the host can reuse its allocations after
+    /// fully materializing the JavaScript value without cloning the Rust tree.
     fn settleHostJavaScriptPromise(
         &mut self,
         id: u64,
-        value: &Value,
+        value: Value,
         reject: bool,
     ) -> HostResult<()>;
 

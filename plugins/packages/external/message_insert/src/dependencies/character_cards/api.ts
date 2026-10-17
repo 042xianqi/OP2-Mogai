@@ -65,7 +65,6 @@ export interface ChatConfigurationRequest {
   purpose: "display" | "execution";
   chatId: string | null;
   chatExtension: JsonObject | null;
-  messageExtension: JsonObject | null;
   participantId: string | null;
   promptFunctionType: "CHAT" | "VOICE";
   defaultModelBinding: ChatModelBinding;
@@ -93,7 +92,7 @@ export interface ChatConfigurationExecutionResult {
   contextKey: string;
   profile: ChatParticipantProfile;
   participants: ChatParticipantProfile[];
-  messageExtension: JsonObject;
+  executionData: JsonObject;
 }
 
 /** Describes presentation identity without resolving a model, speech voice or memory owner. */
@@ -101,7 +100,7 @@ export interface ChatDisplayIdentity { title: string; avatarUri: string | null }
 /** Preserves the plugin-declared presentation order and real participant identity. */
 export interface ChatDisplayParticipant { id: string; name: string; avatarUri: string | null }
 /** Supplies an explicitly authored initial message and its complete immutable participant snapshot. */
-export interface ChatInitialMessage { content: string; displayName: string; messageExtension: JsonObject }
+export interface ChatInitialMessage { content: string; displayName: string; participantId: string }
 /** Returns presentation data only; an empty initial-message array does not select an executor. */
 export interface ChatConfigurationDisplayResult {
   contextKey: string | null;
@@ -116,7 +115,7 @@ export type ChatConfigurationResult = ChatConfigurationDisplayResult | ChatConfi
 export interface CharacterRecord {
   id: string; name: string; description: string; characterSetting: string; openingStatement: string;
   otherContentChat: string; otherContentVoice: string; avatarUri: string | null; attachedTagIds: string[];
-  advancedCustomPrompt: string; marks: string; chatModelBindingMode: string; chatModelId: string | null;
+  advancedCustomPrompt: string; marks: string; chatModelBindingMode: string; chatModelId: string | null; chatProviderId: string | null;
   ttsConfigId: string | null; themeConfigId: string | null; memoryBindingMode: string; sharedMemoryId: string | null;
   sharedMemoryMounts: { sharedMemoryId: string; readable: boolean; writable: boolean }[];
   toolAccessConfig: { enabled: boolean; allowedBuiltinTools: string[]; allowedPackages: string[]; allowedSkills: string[]; allowedMcpServers: string[] };

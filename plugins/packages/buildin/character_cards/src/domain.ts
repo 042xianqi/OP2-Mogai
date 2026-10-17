@@ -2,7 +2,7 @@ import { parseChatSelection } from "./chat-bindings";
 import type { CharacterRepository } from "./canonical";
 import { configurationReadScope } from "./configuration-reads";
 import { combineCharacterPrompt } from "./character-prompt";
-import { decodeChatMarker, decodeMessageMarker, encodeMessageMarker, markerObject } from "./chat-markers";
+import { decodeChatMarker, encodeExecutionData, markerObject } from "./chat-markers";
 import { resolveChatDisplay } from "./group-execution/display";
 import { modelParticipant } from "./model-participant";
 import { withGroupParticipantPrompt } from "./group-execution/prompts";
@@ -284,14 +284,14 @@ export interface ChatConfigurationService extends Pick<CharacterRepository,
 export function parseChatConfigurationRequest(value: unknown): ChatConfigurationRequest {
   shape({
     purpose: required(enumeration("display", "execution")),
-    chatId: required(nullable(nonblank)), chatExtension: required(nullable(markerObject)), messageExtension: required(nullable(markerObject)),
+    chatId: required(nullable(nonblank)), chatExtension: required(nullable(markerObject)),
     participantId: required(nullable(nonblank)), promptFunctionType: required(enumeration("CHAT", "VOICE")),
     defaultModelBinding: required(shape({ providerId: required(text), modelId: required(text) })),
     defaultTtsConfigId: required(text),
   })(value, "chat.configuration.resolve");
   const request = value as ChatConfigurationRequest;
   if (request.purpose === "display") {
-    if (request.participantId !== null || request.messageExtension !== null) throw new Error("Display configuration cannot request an execution participant or message snapshot");
+    if (request.participantId !== null) throw new Error("Display configuration cannot request an execution participant");
   } else {
     nonblank(request.defaultModelBinding.providerId, "execution default provider");
     nonblank(request.defaultModelBinding.modelId, "execution default model");
@@ -380,25 +380,20 @@ async function chatParticipant(
 /** Resolves an explicit execution participant without moving domain selection rules into Core. */
 export async function resolveChatConfiguration(request: ChatConfigurationRequest, service: ChatConfigurationService): Promise<ChatConfigurationResult> {
   const reads = configurationReadScope(service);
-  if (request.purpose === "display") return resolveChatDisplay(request, reads, resolveChatExecution);
+  if (request.purpose === "display") return resolveChatDisplay(request, reads);
   return resolveChatExecution(request, reads);
 }
 
-/** Resolves only an explicitly requested execution or its exact saved historical message snapshot. */
+/** Resolves only an explicitly requested execution from current configuration. */
 export async function resolveChatExecution(request: ChatConfigurationRequest, service: ChatConfigurationService): Promise<ChatConfigurationExecutionResult> {
   if (request.purpose !== "execution") throw new Error("Execution configuration requires purpose execution");
-  if (request.messageExtension !== null) {
-    const marker = decodeMessageMarker(request.messageExtension);
-    if (request.participantId !== null && request.participantId !== marker.profile.id) throw new Error("Historical execution participant does not match the saved message snapshot");
-    return { contextKey: marker.selection, profile: marker.profile, participants: marker.participants, messageExtension: markerObject(request.messageExtension, "historical message extension") };
-  }
   const marker = decodeChatMarker(request.chatExtension);
   const selection = parseChatSelection(marker.selection);
   if (selection.kind === "model") {
     const [models, ttsConfigs] = await Promise.all([service.listModels(), service.listTtsConfigs()]);
     const profile = modelParticipant(request, { models, ttsConfigs }), participants = [profile];
-    const messageExtension = encodeMessageMarker({ version: 1, selection: marker.selection, promptFunctionType: request.promptFunctionType, primaryOwnerKey: "", profile, participants });
-    return { contextKey: marker.selection, profile, participants, messageExtension };
+    const executionData = encodeExecutionData({ version: 1, selection: marker.selection, promptFunctionType: request.promptFunctionType, primaryOwnerKey: "", profile, participants });
+    return { contextKey: marker.selection, profile, participants, executionData };
   }
   let cards: CharacterRecord[];
   if (selection.kind === "card") cards = [await service.getCharacter(selection.id)];
@@ -434,6 +429,6 @@ export async function resolveChatExecution(request: ChatConfigurationRequest, se
   }
   const card = chatRecord(cards, profile.id, "selected participant");
   const primaryOwnerKey = (card.memoryBindingMode === "CHARACTER" ? "character:" + card.id : "shared:" + card.sharedMemoryId);
-  const messageExtension = encodeMessageMarker({ version: 1, selection: marker.selection, promptFunctionType: request.promptFunctionType, primaryOwnerKey, profile, participants });
-  return { contextKey: marker.selection, profile, participants, messageExtension };
+  const executionData = encodeExecutionData({ version: 1, selection: marker.selection, promptFunctionType: request.promptFunctionType, primaryOwnerKey, profile, participants });
+  return { contextKey: marker.selection, profile, participants, executionData };
 }

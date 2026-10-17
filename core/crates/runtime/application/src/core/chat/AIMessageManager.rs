@@ -184,32 +184,19 @@ pub fn logMessageTiming(stage: &str, startTimeMs: MessageTiming, details: Option
 }
 
 impl AIMessageManager {
-    /// Persists the immutable model or plugin snapshot and display identity for one message revision.
-    pub async fn applyConfigurationSnapshot(
-        message: &mut ChatMessage,
-        configuration: &ChatConfigurationResult,
-        handler: &operit_tools::tools::AIToolHandler::AIToolHandler,
-    ) -> Result<(), String> {
-        configuration.validate()?;
-        let api =
-            crate::services::ProviderRuntimeSupportService::ChatConfigurationApi::ready(handler)
-                .await?;
-        let api = if configuration.extensionOwner == crate::services::ProviderRuntimeSupportService::MODEL_CONFIGURATION_OWNER { api.forModelSnapshot() } else { api };
-        if api.extensionOwner() != configuration.extensionOwner {
-            return Err("Configuration snapshot owner changed".into());
-        }
-        let reference = api
-            .storeSnapshot(configuration.messageExtension.clone())
-            .await?;
+    /// Records display identity and the actual author, without persisting execution configuration.
+    pub fn applyConfigurationIdentity(message: &mut ChatMessage, configuration: &ChatConfigurationResult) {
         message.pluginExtensions.insert(
             "host.chat.identity".into(),
-            serde_json::json!({"title": configuration.profile.name, "avatarUri": configuration.profile.avatarUri}),
+            serde_json::json!({
+                "title": configuration.profile.name,
+                "avatarUri": configuration.profile.avatarUri,
+            }),
         );
         message.pluginExtensions.insert(
             configuration.extensionOwner.clone(),
-            serde_json::Value::Object(reference),
+            serde_json::json!({ "participantId": configuration.profile.id }),
         );
-        Ok(())
     }
 
     pub fn initialize() {
@@ -1380,6 +1367,27 @@ fn strip_tag_blocks(text: &str, tag_name: &str) -> String {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn message_identity_contains_no_execution_settings() {
+        let profile = serde_json::json!({
+            "id":"author-id","name":"Display name","avatarUri":null,
+            "introPrompt":"Do not persist this prompt","userPreferencesText":"Private current USER",
+            "openingStatement":"Hello","modelBinding":{"providerId":"provider","modelId":"model"},
+            "ttsConfigId":"current-voice","toolAccess":{"enabled":false,"allowedBuiltinTools":[],"allowedPackages":[],"allowedSkills":[],"allowedMcpServers":[]},"resources":[]
+        });
+        let mut configuration: ChatConfigurationResult = serde_json::from_value(serde_json::json!({
+            "contextKey":"current","profile":profile,"participants":[profile],
+            "executionData":{"profile":profile,"private":"Runtime only"}
+        })).unwrap();
+        configuration.extensionOwner = "configuration-owner".into();
+        let mut message = ChatMessage::new("ai".into());
+        AIMessageManager::applyConfigurationIdentity(&mut message,&configuration);
+        assert_eq!(serde_json::to_value(&message.pluginExtensions).unwrap(),serde_json::json!({
+            "configuration-owner":{"participantId":"author-id"},
+            "host.chat.identity":{"title":"Display name","avatarUri":null}
+        }));
+    }
 
     #[test]
     fn attachment_markup_keeps_the_source_node_and_portable_tool_path() {

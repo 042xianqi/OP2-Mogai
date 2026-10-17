@@ -1136,6 +1136,7 @@ fn synchronized_themes_preserve_independent_identity_records() {
         &history,
         &operations,
         |_, _| true,
+        false,
     )
     .unwrap();
     let manager = target.manager();

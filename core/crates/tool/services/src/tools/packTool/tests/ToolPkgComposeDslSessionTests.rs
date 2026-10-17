@@ -419,14 +419,15 @@ async fn native_character_sidebar_reorder_keeps_every_retained_reference_mounted
     let setup = r#"exports.install = function() {
         ToolPkg.readResource = async function() { return '/fixture/avatar.png'; };
         Tools.Files.readBinary = async function(path) { return {path:path, size:12, contentBase64:'iVBORw0KGgo='}; };
-        ToolPkg.ipc.call = async function(name, request) {
-            if (name !== 'character-sidebar.catalog') throw new Error('Unexpected sidebar IPC: ' + name);
+        let catalogReads = 0;
+        ToolPkg.ipc.on('character-sidebar.catalog', async function(request, meta) {
+            if (meta.channel !== 'character-sidebar.catalog') throw new Error('Unexpected sidebar IPC channel');
             const chats = request.chatSidebar.chats;
-            return {view:'characters', sections:[{id:'card:travel', title:'Travel', avatarUri:null,
+            return {view:'characters', sections:[{id:'card:travel', title:'Travel ' + (++catalogReads), avatarUri:null,
                 kind:'card', selection:'card:travel', chats:chats,
                 conversationGroups:[{id:'1', name:'Group', pinned:true, displayOrder:0, chats:chats.slice(0,2)}],
                 ungroupedChats:chats.slice(2)}]};
-        };
+        });
         return true;
     };"#;
     engine.execute_script_function(setup, "install", &options(), &BTreeMap::new(), None, false, 60, None).await.unwrap();
@@ -469,12 +470,11 @@ async fn native_character_sidebar_reorder_keeps_every_retained_reference_mounted
         let updates = drain(&mut stream);
         for event in &updates { assert!(event.error.is_none(), "{event:?}"); if let Some(update) = &event.update { store.apply(update.clone()).unwrap(); } }
         events.extend(updates);
-        let action = store.root().unwrap().props["onInputsChanged"]["__actionId"].as_str().unwrap().to_string();
-        session.execute(command(&format!("sidebar-refresh-{sample}"), None, Some(action), None)).await;
-        let updates = drain(&mut stream);
-        for event in &updates { assert!(event.error.is_none(), "{event:?}"); if let Some(update) = &event.update { store.apply(update.clone()).unwrap(); } }
-        events.extend(updates);
         let snapshot = store.snapshot().unwrap();
+        assert!(snapshot.upserts.iter().any(|record|
+            record.props.get("text") == Some(&Value::String(format!("Travel {}", sample + 2)))
+        ), "Host input updates must run the sidebar lifecycle without another action command; sample={sample}, texts={:?}",
+            snapshot.upserts.iter().filter_map(|record| record.props.get("text")).collect::<Vec<_>>());
         let nodes: BTreeMap<_, _> = snapshot.upserts.iter().map(|record| (&record.id, record)).collect();
         for record in nodes.values() {
             for child in record.children.iter().chain(record.slots.values().flatten()) {

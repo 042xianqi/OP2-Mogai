@@ -87,10 +87,6 @@ collections.meta = { kind: "object", fields: {
 collections.schema_migrations = { kind: "object", fields: { version: { kind: "integer" } } };
 collections.chat_bindings = { kind: "object", fields: { version: { kind: "integer" }, selection: { kind: "text" } } };
 collections.chat_drafts = collections.chat_bindings;
-collections.message_snapshots = { kind: "object", fields: {
-  version: { kind: "integer" }, selection: { kind: "text" }, promptFunctionType: { kind: "text" }, primaryOwnerKey: { kind: "text" },
-  profile: named("ChatParticipantProfile"), participants: { kind: "array", item: named("ChatParticipantProfile") },
-} };
 const target = new URL("../src/storage/schema.json", import.meta.url);
 writeFileSync(target, JSON.stringify({ version: 2, collections }, null, 2) + "\n");
 console.log("Generated relational storage schema: " + fileURLToPath(target));

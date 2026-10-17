@@ -205,7 +205,7 @@ fn v28_object_adoption_verifies_and_retires_business_records_once() {
 
 /// Requires explicit global flags before any fresh import can publish business data.
 #[test]
-fn core_rows_adopt_legacy_bindings_snapshots_and_only_committed_import_drafts() {
+fn core_rows_keep_authors_and_bindings_without_historical_configuration() {
     let fixture = Fixture::new();
     let writer = fixture.writer();
     writer.import("operit2-v27", data()).unwrap();
@@ -284,14 +284,13 @@ fn core_rows_adopt_legacy_bindings_snapshots_and_only_committed_import_drafts() 
         .unwrap();
     let extensions: Value = serde_json::from_str(&extensions).unwrap();
     assert_eq!(extensions["other.plugin"]["retained"], true);
-    assert_eq!(extensions[PLUGIN_ID]["schemaVersion"], 1);
-    let key = requiredString(&extensions[PLUGIN_ID], "recordId").unwrap();
-    assert_eq!(
-        writer.get("message_snapshots", key).unwrap().unwrap()["value"],
-        snapshot
-    );
+    assert_eq!(extensions[PLUGIN_ID], json!({"participantId":"legacy"}));
+    assert!(extensions.get("host.chat.identity").is_none());
+    assert!(!extensions.to_string().contains("Frozen"));
     adoptCoreConfigurationRows(&database, writer).unwrap();
-    assert_eq!(writer.list("message_snapshots").unwrap().len(), 1);
+    let again: String = database.queryOne("SELECT pluginExtensions FROM messages WHERE chatId='bound'", vec![]).unwrap().unwrap().get(0).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&again).unwrap(), extensions);
+
 }
 
 /// Requires explicit global flags before any fresh import can publish business data.
@@ -1462,4 +1461,67 @@ fn retired_character_keys_do_not_discard_a_mixed_native_transaction() {
     assert!(!isRetiredCharacterPreferenceKey(path, "theme_mode"));
     operation.payload["entries"][1]["key"] = json!("character_group_theme_old_theme_mode");
     assert!(isRetiredCharacterOperation(&operation));
+}
+
+/// Converts released SQL/object references and native inline settings, then removes all old payloads.
+#[test]
+fn configuration_retirement_removes_sql_and_objects_without_rewriting_sync_history() {
+    let fixture = Fixture::new();
+    let writer = fixture.writer();
+    writer.import("operit2-v27", data()).unwrap();
+    let database = SqliteStore::openWithHost(fixture.host.clone(), "runtime/retire-core.sqlite").unwrap();
+    operit_store::db::AppDatabase::createAllTables(&database).unwrap();
+    database.execute("INSERT INTO chats(id,title,createdAt,updatedAt) VALUES('chat','Chat',1,1)", vec![]).unwrap();
+    let relational = SqliteStore::openWithHost(fixture.host.clone(), &format!("{}/characters-relational.sqlite",writer.directory)).unwrap();
+    relational.execute("CREATE TABLE message_snapshots (_key TEXT PRIMARY KEY,profile__id TEXT,secret TEXT)",vec![]).unwrap();
+    relational.execute("CREATE TABLE message_snapshots_participants (_key TEXT PRIMARY KEY,secret TEXT)",vec![]).unwrap();
+    relational.execute("INSERT INTO message_snapshots VALUES('old-sql','legacy','Frozen SQL prompt')",vec![]).unwrap();
+    relational.execute("INSERT INTO _operit_tables VALUES('message_snapshots','{}')",vec![]).unwrap();
+    relational.execute("INSERT INTO _operit_versions VALUES('message_snapshots','old-sql',1,'device',1)",vec![]).unwrap();
+    writer.request(StorageRequest::Commit { handle:writer.handle.clone(), mutations: vec![StorageMutation {
+        collection:"message_snapshots".into(), key:"old-object".into(), value:json!({"profile":{"id":"legacy","introPrompt":"Frozen object prompt"}}),
+        deleted:false,check_version:true,expected_version:None,
+    }]}).unwrap();
+    for (time, extensions) in [
+        (1,json!({PLUGIN_ID:{"recordId":"old-sql","schemaVersion":1},"other.plugin":{"keep":true}})),
+        (2,json!({PLUGIN_ID:{"recordId":"old-object","schemaVersion":1},"host.chat.identity":{"participantId":"legacy"}})),
+        (3,json!({"host.chat.model":{"schemaVersion":1,"profile":{"id":"model:chat","introPrompt":"Frozen native prompt"}},"host.chat.identity":{"title":"Model title","avatarUri":null,"participantId":"model:chat"}})),
+    ] {
+        database.execute("INSERT INTO messages(chatId,sender,roleName,timestamp,orderIndex,pluginExtensions) VALUES('chat','ai','Keep text',?1,?1,?2)",vec![SqliteValue::Integer(time),SqliteValue::Text(extensions.to_string())]).unwrap();
+        database.execute("INSERT INTO message_variants(chatId,messageTimestamp,variantIndex,roleName,pluginExtensions) VALUES('chat',?1,2,'Keep variant',?2)",vec![SqliteValue::Integer(time),SqliteValue::Text(extensions.to_string())]).unwrap();
+    }
+    database.execute("INSERT INTO message_parts(chatId,messageTimestamp,variantIndex,partId,sequence,kind,content,attributesJson) VALUES('chat',1,0,'body',0,'markdown','Keep message body','{}')",vec![]).unwrap();
+    adoptCoreConfigurationRows(&database,writer).unwrap();
+    let body: String = database.queryOne("SELECT content FROM message_parts WHERE partId='body'",vec![]).unwrap().unwrap().get(0).unwrap();
+    assert_eq!(body,"Keep message body");
+    for table in ["messages","message_variants"] {
+        for row in database.queryRows(&format!("SELECT roleName,pluginExtensions FROM {table} ORDER BY rowid"),vec![]).unwrap() {
+            let content: String = row.get(0).unwrap(); assert!(content.starts_with("Keep"));
+            let extensions: Value = serde_json::from_str(&row.get::<_,String>(1).unwrap()).unwrap();
+            let native = extensions.get("host.chat.model").is_some();
+            let id = if native {"model:chat"} else {"legacy"};
+            let owner = if native {"host.chat.model"} else {PLUGIN_ID};
+            assert_eq!(extensions[owner],json!({"participantId":id}));
+            if native {
+                assert_eq!(extensions["host.chat.identity"],json!({"title":"Model title","avatarUri":null}));
+            } else {
+                assert!(extensions.get("host.chat.identity").is_none());
+            }
+            assert!(!extensions.to_string().contains("Frozen"));
+            if native { assert_eq!(extensions["host.chat.identity"]["title"],"Model title"); }
+        }
+    }
+    let object_store = SqliteStore::openWithHost(fixture.host.clone(),&format!("{}/characters.sqlite",writer.directory)).unwrap();
+    let original_journal = object_store.queryRows("SELECT payload FROM _operit_log WHERE payload LIKE '%Frozen object prompt%'",vec![]).unwrap();
+    assert_eq!(original_journal.len(),1);
+    for store in [&relational,&object_store] {
+        assert!(store.queryRows("SELECT name FROM sqlite_master WHERE name GLOB 'message_snapshots*'",vec![]).unwrap().is_empty());
+        for table in ["_operit_values","_operit_versions"] {
+            assert!(store.queryRows(&format!("SELECT key FROM {table} WHERE collection GLOB 'message_snapshots*'"),vec![]).unwrap().is_empty());
+        }
+
+    }
+    adoptCoreConfigurationRows(&database,writer).unwrap();
+    assert!(writer.get("cards","legacy").unwrap().is_some());
+    assert!(writer.list("owners").unwrap().len()>0);
 }

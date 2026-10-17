@@ -65,7 +65,39 @@ struct NativeHostJavaScriptRuntime {
     context: Context,
     promises: NativePromises,
     nextPromiseId: Rc<Cell<u64>>,
+    // Initialized once at creation; None is used only to release persistent JS
+    // handles explicitly before the context/runtime during Drop.
     jsonIntrinsics: Rc<RefCell<Option<JsonIntrinsics>>>,
+}
+
+impl NativeHostJavaScriptRuntime {
+    /// Captures engine intrinsics and installs the required boundary before any script runs.
+    fn new(bootstrap: Arc<HostJavaScriptBootstrap>) -> HostResult<Self> {
+        let runtime =
+            Runtime::new_with_alloc(crate::javascript_allocator::JavaScriptAllocator::default())
+                .map_err(|error| HostError::new(error.to_string()))?;
+        // Only managed workers have the known 16 MiB reservation; caller-owned threads
+        // retain QuickJS's default bound rather than assuming their available stack.
+        if IS_JAVASCRIPT_STATE_THREAD.get() {
+            runtime.set_max_stack_size(JAVASCRIPT_STATE_ENGINE_STACK_BYTES);
+        }
+        let context = Context::full(&runtime).map_err(|error| HostError::new(error.to_string()))?;
+        let jsonIntrinsics = Rc::new(RefCell::new(None));
+        context
+            .with(|ctx| {
+                *jsonIntrinsics.borrow_mut() = Some(JsonIntrinsics::new(&ctx)?);
+                javascript_values::install_owned_snapshot(&ctx, Rc::downgrade(&jsonIntrinsics))
+            })
+            .map_err(|error| HostError::new(error.to_string()))?;
+        Ok(Self {
+            bootstrap,
+            runtime,
+            context,
+            promises: Rc::new(RefCell::new(BTreeMap::new())),
+            nextPromiseId: Rc::new(Cell::new(0)),
+            jsonIntrinsics,
+        })
+    }
 }
 
 impl Drop for NativeHostJavaScriptRuntime {
@@ -156,9 +188,6 @@ impl HostJavaScriptRuntime for NativeHostJavaScriptRuntime {
         let intrinsics = self.jsonIntrinsics.clone();
         self.context.with(|ctx| {
             let result = (|| {
-                if intrinsics.borrow().is_none() {
-                    *intrinsics.borrow_mut() = Some(JsonIntrinsics::new(&ctx)?);
-                }
                 let function: Function = ctx.globals().get(name)?;
                 let profile = name == "__operitExecuteScriptFunction" && arguments.get(6) == Some(&JsonValue::Bool(true)) && std::env::var_os("OPERIT_PROFILE_COMPOSE_STAGES").is_some();
                 let started = profile.then(std::time::Instant::now);
@@ -206,9 +235,6 @@ impl HostJavaScriptRuntime for NativeHostJavaScriptRuntime {
         let intrinsics = self.jsonIntrinsics.clone();
         self.context
             .with(|ctx| {
-                if intrinsics.borrow().is_none() {
-                    *intrinsics.borrow_mut() = Some(JsonIntrinsics::new(&ctx)?);
-                }
                 let function = structuredFunction(
                     ctx.clone(),
                     promises,
@@ -226,19 +252,24 @@ impl HostJavaScriptRuntime for NativeHostJavaScriptRuntime {
     fn settleHostJavaScriptPromise(
         &mut self,
         id: u64,
-        value: &JsonValue,
+        value: JsonValue,
         reject: bool,
     ) -> HostResult<()> {
         let pending = self.promises.borrow_mut().remove(&id);
         let Some(pending) = pending else {
             return Ok(());
         };
-        self.context
+        let mut converted = false;
+        let result = self
+            .context
             .with(|ctx| {
                 // A failed result conversion must still settle the Promise rather
                 // than removing its handle and leaving the JS await pending forever.
-                let value = match javascript_values::to_js(&ctx, value).catch(&ctx) {
-                    Ok(value) => value,
+                let value = match javascript_values::to_js(&ctx, &value).catch(&ctx) {
+                    Ok(value) => {
+                        converted = true;
+                        value
+                    }
                     Err(error) => {
                         pending
                             .reject
@@ -254,7 +285,13 @@ impl HostJavaScriptRuntime for NativeHostJavaScriptRuntime {
                 };
                 function.restore(&ctx)?.call::<_, ()>((value,))
             })
-            .map_err(|error| HostError::new(error.to_string()))
+            .map_err(|error| HostError::new(error.to_string()));
+        if converted {
+            if let Some(intrinsics) = self.jsonIntrinsics.borrow().as_ref() {
+                intrinsics.recycle_result(value);
+            }
+        }
+        result
     }
 
     /// Removes only the native Promise handles belonging to the cancelled scope.
@@ -274,9 +311,6 @@ impl HostJavaScriptRuntime for NativeHostJavaScriptRuntime {
         let intrinsics = self.jsonIntrinsics.clone();
         self.context
             .with(|ctx| {
-                if intrinsics.borrow().is_none() {
-                    *intrinsics.borrow_mut() = Some(JsonIntrinsics::new(&ctx)?);
-                }
                 let intrinsics = Rc::downgrade(&intrinsics);
                 let profile = name == "__operitNativeSendStructuredIntermediate"
                     && std::env::var_os("OPERIT_PROFILE_COMPOSE_STAGES").is_some();
@@ -365,21 +399,9 @@ impl NativeHostJavaScriptRuntimeHost {
 impl HostJavaScriptRuntimeHost for NativeHostJavaScriptRuntimeHost {
     /// Creates one native QuickJS runtime on its owning thread.
     fn createHostJavaScriptRuntime(&self) -> HostResult<Box<dyn HostJavaScriptRuntime>> {
-        let runtime = Runtime::new().map_err(|error| HostError::new(error.to_string()))?;
-        // Only managed workers have the known 16 MiB reservation; caller-owned threads
-        // retain QuickJS's default bound rather than assuming their available stack.
-        if IS_JAVASCRIPT_STATE_THREAD.get() {
-            runtime.set_max_stack_size(JAVASCRIPT_STATE_ENGINE_STACK_BYTES);
-        }
-        let context = Context::full(&runtime).map_err(|error| HostError::new(error.to_string()))?;
-        Ok(Box::new(NativeHostJavaScriptRuntime {
-            bootstrap: self.bootstrap.clone(),
-            runtime,
-            context,
-            promises: Rc::new(RefCell::new(BTreeMap::new())),
-            nextPromiseId: Rc::new(Cell::new(0)),
-            jsonIntrinsics: Rc::new(RefCell::new(None)),
-        }))
+        Ok(Box::new(NativeHostJavaScriptRuntime::new(
+            self.bootstrap.clone(),
+        )?))
     }
 
     /// Creates one affine JavaScript state on a dedicated native thread.
@@ -414,7 +436,10 @@ impl HostJavaScriptRuntimeHost for NativeHostJavaScriptRuntimeHost {
                     match request {
                         NativeJavaScriptStateRequest::Enqueue { task, interrupt } => {
                             if let Err(error) = task(state.as_mut(), interrupt) {
-                                operit_host_api::logHostError("JavaScriptRuntime", &error.to_string());
+                                operit_host_api::logHostError(
+                                    "JavaScriptRuntime",
+                                    &error.to_string(),
+                                );
                             }
                         }
                         NativeJavaScriptStateRequest::Execute {
@@ -493,7 +518,8 @@ impl HostJavaScriptRuntimeHost for NativeHostJavaScriptRuntimeHost {
     ) -> HostResult<()> {
         let worker = self.stateWorker(handle)?;
         let interrupt = HostJavaScriptExecutionInterrupt::new(timeoutMillis)?;
-        worker.send(NativeJavaScriptStateRequest::Enqueue { task, interrupt })
+        worker
+            .send(NativeJavaScriptStateRequest::Enqueue { task, interrupt })
             .map_err(|error| HostError::new(error.to_string()))
     }
 
@@ -562,7 +588,11 @@ fn synchronousFunction<'js>(
             if let Some(started) = started {
                 let duration = started.elapsed().as_secs_f64() * 1000.0;
                 let call = values.first().and_then(JsonValue::as_str).unwrap_or("");
-                let revision = values.get(1).and_then(|value| value.pointer("/response/update/revision")).and_then(JsonValue::as_u64).unwrap_or(0);
+                let revision = values
+                    .get(1)
+                    .and_then(|value| value.pointer("/response/update/revision"))
+                    .and_then(JsonValue::as_u64)
+                    .unwrap_or(0);
                 let line = format!("event=compose_pipeline_stage stage=js-to-rust durationMs={duration:.3} wallMicros={} call={call} revision={revision}\n",
                     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_micros());
                 let _ = std::io::Write::write_all(&mut std::io::stderr().lock(), line.as_bytes());
@@ -642,16 +672,7 @@ mod bridge_tests {
 
     /// Creates an isolated native runtime for the required host contract tests.
     fn runtime() -> NativeHostJavaScriptRuntime {
-        let runtime = Runtime::new().unwrap();
-        let context = Context::full(&runtime).unwrap();
-        NativeHostJavaScriptRuntime {
-            bootstrap: Arc::new(HostJavaScriptBootstrap::default()),
-            runtime,
-            context,
-            promises: Rc::new(RefCell::new(BTreeMap::new())),
-            nextPromiseId: Rc::new(Cell::new(0)),
-            jsonIntrinsics: Rc::new(RefCell::new(None)),
-        }
+        NativeHostJavaScriptRuntime::new(Arc::new(HostJavaScriptBootstrap::default())).unwrap()
     }
 
     /// Keeps mutable globals and host bindings independent across contexts sharing compiled bytes.
@@ -852,21 +873,21 @@ mod bridge_tests {
         runtime
             .settleHostJavaScriptPromise(
                 requests[0].0,
-                &serde_json::json!({"cancelled":true}),
+                serde_json::json!({"cancelled":true}),
                 false,
             )
             .unwrap();
         runtime
             .settleHostJavaScriptPromise(
                 requests[1].0,
-                &serde_json::json!({"success":false,"message":"business"}),
+                serde_json::json!({"success":false,"message":"business"}),
                 false,
             )
             .unwrap();
         runtime
             .settleHostJavaScriptPromise(
                 requests[1].0,
-                &serde_json::json!({"duplicate":true}),
+                serde_json::json!({"duplicate":true}),
                 false,
             )
             .unwrap();
@@ -927,7 +948,7 @@ mod bridge_tests {
             result = serde_json::json!({"child":result});
         }
         runtime
-            .settleHostJavaScriptPromise(id.load(Ordering::Relaxed), &result, false)
+            .settleHostJavaScriptPromise(id.load(Ordering::Relaxed), result, false)
             .unwrap();
         runtime.executePendingHostJavaScriptJobs().unwrap();
         assert!(runtime

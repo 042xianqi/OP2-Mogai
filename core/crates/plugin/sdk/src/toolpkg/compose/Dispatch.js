@@ -19,6 +19,11 @@ function dispatchComposeDslAction(actionRequest) {
   if (activeCallRuntime) {
     bundle.setCallRuntime(activeCallRuntime);
   }
+  return runComposeAction(bundle, entry, request, responseSink);
+}
+
+/// Runs a UI callback under its existing command sink, including input lifecycle callbacks.
+function runComposeAction(bundle, entry, request, responseSink) {
   var actionId = String(request.__action_id || request.actionId || '').trim();
   if (!actionId) {
     throw new Error('compose action id is required');

@@ -319,7 +319,7 @@ impl CharacterPluginWriter {
         Ok(())
     }
 
-    /// Persists one idempotent binding or historical snapshot through the shared typed writer.
+    /// Persists one idempotent current binding or domain record through the shared typed writer.
     pub fn adoptRecord(&self, collection: &str, key: &str, value: Value) -> Result<(), String> {
         let expected = self.relational.comparisonValue(collection, &value)?;
         let existing = self.relational.get(collection, key)?;
@@ -1145,6 +1145,7 @@ fn legacyPreferences(paths: &RuntimeStorePaths) -> Result<CharacterMigrationData
             &[
                 ("avatarUri", "avatar_uri"),
                 ("chatModelId", "chat_model_id"),
+                ("chatProviderId", "chat_provider_id"),
                 ("ttsConfigId", "tts_config_id"),
                 ("sharedMemoryId", "shared_memory_id"),
             ],
@@ -1323,7 +1324,65 @@ fn reconcileDeletedChatBindings(
     Ok(())
 }
 
-/// Converts legacy bindings and frozen message snapshots before removing their Core payloads.
+/// Names every physical table belonging to the removed historical configuration collection.
+fn retiredConfigurationCollection(name: &str) -> bool {
+    name == "message_snapshots" || name.starts_with("message_snapshots_")
+}
+
+/// Removes retired business tables, object records and row metadata.
+/// Called only after Core references have been reduced to author identities.
+fn eraseHistoricalConfigurations(store: &SqliteStore) -> Result<(), String> {
+    store.transaction(|tx| {
+        for row in tx.queryRows("SELECT name FROM sqlite_master WHERE type='table'", vec![])? {
+            let name: String = row.get(0)?;
+            if retiredConfigurationCollection(&name) {
+                tx.execute(&format!("DROP TABLE \"{}\"", name.replace('"', "\"\"")), vec![])?;
+            }
+        }
+        for table in ["_operit_tables", "_operit_values", "_operit_dirty", "_operit_versions", "_operit_merge_map", "_operit_merge_names"] {
+            let column = if table == "_operit_tables" { "name" } else { "collection" };
+            tx.execute(&format!("DELETE FROM {table} WHERE {column}='message_snapshots' OR {column} GLOB 'message_snapshots_*'"), vec![])?;
+        }
+        // Replication operations are immutable: retain their payloads so duplicate
+        // delivery continues to validate against the original operation identity.
+        Ok(())
+    }).map_err(|error| error.to_string())
+}
+
+/// Retains only the author of an old native model message, including pending synchronization rows.
+fn discardHistoricalModelConfigurations(database: &SqliteStore) -> Result<(), String> {
+    for table in ["messages", "message_variants", "sync_sql_message_rows", "sync_sql_message_variant_rows"] {
+        for row in database.queryRows(&format!("SELECT rowid,pluginExtensions FROM {table}"), vec![]).map_err(|error| error.to_string())? {
+            let row_id: i64 = row.get(0).map_err(|error| error.to_string())?;
+            let mut extensions: BTreeMap<String, Value> = serde_json::from_str(&row.get::<_, String>(1).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+            let Some(old) = extensions.remove("host.chat.model") else { continue };
+            let id = old["participantId"].as_str().or_else(|| old["profile"]["id"].as_str()).unwrap_or("model:chat");
+            attachMessageAuthor(&mut extensions, "host.chat.model", id);
+            let encoded = serde_json::to_string(&extensions).map_err(|error| error.to_string())?;
+            if encoded == row.get::<_, String>(1).map_err(|error| error.to_string())? { continue; }
+            database.execute(&format!("UPDATE {table} SET pluginExtensions=?1 WHERE rowid=?2"), vec![SqliteValue::Text(encoded), SqliteValue::Integer(row_id)]).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Adds an author without retaining or reintroducing model, prompt, voice or permission settings.
+fn attachMessageAuthor(extensions: &mut BTreeMap<String, Value>, owner: &str, id: &str) {
+    extensions.insert(owner.into(), json!({"participantId":id}));
+    // Author identity belongs to the authenticated owner namespace. The Flutter
+    // display contract remains exactly { title, avatarUri }; do not create an
+    // incomplete display object for legacy messages that had none.
+    if let Some(Value::Object(identity)) = extensions.get_mut("host.chat.identity") {
+        identity.remove("participantId");
+        if identity.is_empty() {
+            extensions.remove("host.chat.identity");
+        } else if identity.get("title").and_then(Value::as_str).is_some() {
+            identity.entry("avatarUri").or_insert(Value::Null);
+        }
+    }
+}
+
+/// Adopts current chat bindings and reduces old message configuration to author identity.
 fn adoptCoreExtensions(
     paths: RuntimeStorePaths,
     writer: &CharacterPluginWriter,
@@ -1350,6 +1409,20 @@ fn adoptCoreConfigurationRows(
         .into_iter()
         .map(|entry| entry["value"].clone())
         .collect::<Vec<_>>();
+    // Read only author IDs from retired storage before dropping it; never decode old execution settings.
+    let retired_store = SqliteStore::openWithHost(writer.sqlite.clone(), &format!("{}/characters-relational.sqlite", writer.directory)).map_err(|error| error.to_string())?;
+    let mut authors = BTreeMap::<String, String>::new();
+    let exists = retired_store.queryOne("SELECT name FROM sqlite_master WHERE type='table' AND name='message_snapshots'", vec![]).map_err(|error| error.to_string())?.is_some();
+    if exists {
+        for row in retired_store.queryRows("SELECT _key,profile__id FROM message_snapshots", vec![]).map_err(|error| error.to_string())? {
+            authors.insert(row.get(0).map_err(|error| error.to_string())?, row.get(1).map_err(|error| error.to_string())?);
+        }
+    }
+    for entry in writer.legacyList("message_snapshots")? {
+        if let Some(id) = entry["value"]["profile"]["id"].as_str() {
+            authors.entry(requiredString(&entry, "key")?.into()).or_insert_with(|| id.into());
+        }
+    }
     for table in [
         "chats",
         "sync_sql_chat_rows",
@@ -1393,15 +1466,19 @@ fn adoptCoreConfigurationRows(
                 }
                 "sync_sql_chat_rows" => {}
                 _ => {
-                    if value.get("schemaVersion") == Some(&json!(1)) {
-                        continue;
+                    let author = value["participantId"].as_str()
+                        .or_else(|| value["profile"]["id"].as_str())
+                        .or_else(|| value["recordId"].as_str().and_then(|key| authors.get(key).map(String::as_str)))
+                        .or_else(|| value["selection"].as_str().and_then(|selection| selection.strip_prefix("card:")));
+                    if let Some(id) = author.filter(|id| !id.trim().is_empty()) {
+                        attachMessageAuthor(&mut extensions, PLUGIN_ID, id);
                     }
-                    let key = format!("migration:{table}:{row_id}");
-                    writer.adoptRecord("message_snapshots", &key, value)?;
-                    extensions.insert(PLUGIN_ID.into(), json!({"recordId":key,"schemaVersion":1}));
+                    // Unattributed legacy messages stay unattributed; never guess a group author.
+
                 }
             }
             let encoded = serde_json::to_string(&extensions).map_err(|error| error.to_string())?;
+            if encoded == row.get::<_, String>(1).map_err(|error| error.to_string())? { continue; }
             database
                 .execute(
                     &format!("UPDATE {table} SET pluginExtensions=?1 WHERE rowid=?2"),
@@ -1410,6 +1487,10 @@ fn adoptCoreConfigurationRows(
                 .map_err(|error| error.to_string())?;
         }
     }
+    discardHistoricalModelConfigurations(database)?;
+    eraseHistoricalConfigurations(&retired_store)?;
+    let object_store = SqliteStore::openWithHost(writer.sqlite.clone(), &format!("{}/characters.sqlite", writer.directory)).map_err(|error| error.to_string())?;
+    eraseHistoricalConfigurations(&object_store)?;
     database.execute(
         "UPDATE sync_sql_operations SET schemaVersion=8 WHERE domain='chat' AND schemaVersion=7",
         Vec::new(),
@@ -1441,6 +1522,7 @@ pub fn migrateLegacyCharacters(paths: RuntimeStorePaths) -> Result<(), String> {
     if !source_exists && !database_exists && !relational_exists {
         let database = operit_store::db::AppDatabase::AppDatabase::getDatabase(paths)
             .map_err(|error| error.to_string())?;
+        discardHistoricalModelConfigurations(database.store())?;
         database.store().execute(
             "UPDATE sync_sql_operations SET schemaVersion=8 WHERE domain='chat' AND schemaVersion=7",
             Vec::new(),

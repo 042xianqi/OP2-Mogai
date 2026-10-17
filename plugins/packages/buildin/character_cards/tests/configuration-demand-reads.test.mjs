@@ -27,7 +27,7 @@ async function environment(t) {
 
 /** Supplies the exact public execution contract with explicit model and speech defaults. */
 function request(selection, extra = {}) {
-  return { purpose: "execution", chatId: null, chatExtension: { version: 1, selection }, messageExtension: null, participantId: null,
+  return { purpose: "execution", chatId: null, chatExtension: { version: 1, selection }, participantId: null,
     promptFunctionType: "CHAT", defaultModelBinding: { providerId: directoryInput.models[0].providerId, modelId: directoryInput.models[0].modelId },
     defaultTtsConfigId: directoryInput.ttsConfigs[0].id, ...extra };
 }
@@ -55,7 +55,7 @@ function reads(disk, table) {
 test("configuration reads: an untagged character uses 12 storage queries and no unrelated directories", async t => {
   const h = await environment(t), result = plain(await h.resolve(request("card:default")));
   assert.equal(result.profile.id, "default");
-  assert.equal(result.messageExtension.primaryOwnerKey, "character:default");
+  assert.equal(result.executionData.primaryOwnerKey, "character:default");
   assert.deepEqual(h.calls, ["models", "tts"]);
   assert.equal(queries(h.disk).length, 12);
   assert.deepEqual(reads(h.disk, "cards").map(
@@ -86,7 +86,8 @@ test("configuration reads: an authored opening reuses its display character read
   const result = plain(await h.resolve(request("card:" + card.id, { purpose: "display" })));
   assert.equal(result.initialMessages[0].content, "Hello");
   assert.equal(reads(h.disk, "cards").length, 1);
-  assert.deepEqual(h.calls, ["models", "tts"]);
+  assert.deepEqual(h.calls, []);
+  assert.deepEqual(result.initialMessages[0], { content: "Hello", displayName: "Opening author", participantId: card.id });
 });
 
 /** Group members share only demanded dependencies and retain prompt, resource and member ordering. */
@@ -105,7 +106,7 @@ test("configuration reads: group members reuse exact tags, stores and catalogs w
     participant => participant.id,
   ), [b.id, a.id]);
   assert.ok(result.profile.introPrompt.startsWith("Setting A\n\nVoice A\n\nExact tag content\n\nAdvanced A"));
-  assert.equal(result.messageExtension.primaryOwnerKey, "shared:" + store.id);
+  assert.equal(result.executionData.primaryOwnerKey, "shared:" + store.id);
   assert.deepEqual(result.profile.resources, [{ key: "shared:" + store.id, readable: true, writable: true }]);
   assert.equal(reads(h.disk, "cards").length, 2);
   assert.equal(reads(h.disk, "groups").length, 1);
@@ -154,20 +155,19 @@ test("configuration reads: exact model, speech, tag and shared-library validatio
   await assert.rejects(() => h.resolve(input), /Shared memory not found: removed-store/);
 });
 
-/** Historical execution still uses the saved snapshot and enforces the current privacy flag. */
-test("configuration reads: history reads only live privacy flags and retains its saved configuration", async t => {
-  const h = await environment(t), saved = plain(await h.resolve(request("card:default")));
+/** Every resolution uses current configuration and performs no SQL mutations after initialization. */
+test("configuration reads: current role and privacy settings are used without any writes", async t => {
+  const h = await environment(t);
+  await h.resolve(request("card:default"));
+  await h.service.dispatchDomain("character.update", { id: "default", changes: { characterSetting: "Current changed prompt" } });
   await h.service.dispatch({ action: "writeGlobalMemoryPreference", key: "userDescriptionEnabled", value: false });
   h.reset();
-  saved.messageExtension.profile.userPreferencesText = "Saved private profile";
-  saved.messageExtension.participants[0].userPreferencesText = "Saved private profile";
-  const result = plain(await h.resolve(request("card:removed", { chatExtension: null, messageExtension: saved.messageExtension })));
-  assert.equal(result.profile.id, "default");
+  const result = plain(await h.resolve(request("card:default", { participantId: "default" })));
+  assert.match(result.profile.introPrompt, /Current changed prompt/);
   assert.equal(result.profile.userPreferencesText, "");
-  assert.equal(result.participants[0].userPreferencesText, "");
-  assert.deepEqual(result.messageExtension, saved.messageExtension);
-  assert.deepEqual(h.calls, []);
-  assert.equal(queries(h.disk).length, 1);
+  assert.equal(h.disk.calls.filter(call => ["storage.execute", "storage.transaction", "storage.commit"].includes(call.method)).length, 0);
+  assert.equal(reads(h.disk, "cards").length, 1);
+  await assert.rejects(async () => h.resolve({ ...request("card:default"), executionData: result.executionData }), /not a supported field/);
 });
 
 /** A privacy change during file IO must still be applied after all participant reads finish. */

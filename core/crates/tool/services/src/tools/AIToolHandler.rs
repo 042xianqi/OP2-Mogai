@@ -2250,7 +2250,7 @@ mod tests {
         let turn = ToolRuntimeContext {
             callerChatId: Some("direct-in-ai-turn".into()), callerParticipantId: None,
             workspacePath: None, workspaceFolders: Vec::new(), toolExposureMode: ToolExposureMode::CLI,
-            extensionOwner: "configuration-owner".into(), messageExtension: Default::default(),
+            extensionOwner: "configuration-owner".into(), executionData: Default::default(),
         };
         let host = ToolExecutionManager::scopeToolRuntimeContext(turn.clone(), async {
             fixture.handler.capture_tool_invocation_host()
@@ -2310,7 +2310,7 @@ mod tests {
         fixture.handler.registerSharedTool("pipeline_probe".into(), Arc::new(SharedProbe::default()), ToolRegistrationVisibility::INTERNAL);
         let turn = ToolRuntimeContext { callerChatId: Some("chat-A".into()), callerParticipantId:None,
             workspacePath:None,workspaceFolders:Vec::new(),toolExposureMode:ToolExposureMode::FULL,
-            extensionOwner:"configuration-owner".into(),messageExtension:json!({"saved":null}).as_object().unwrap().clone() };
+            extensionOwner:"configuration-owner".into(), executionData: Default::default() };
         let a = ToolExecutionManager::scopeToolRuntimeContext(turn.clone(), async {
             ToolInvocationContext::capture(fixture.handler.clone()).withHook("outer-hook")
                 .scope(async { fixture.handler.capture_tool_invocation_host() }).await
@@ -2417,7 +2417,7 @@ mod tests {
         });
         let turn = ToolRuntimeContext { callerChatId:Some("chat".into()),callerParticipantId:None,
             workspacePath:None,workspaceFolders:Vec::new(),toolExposureMode:ToolExposureMode::CLI,
-            extensionOwner:"config-owner".into(),messageExtension:Default::default() };
+            extensionOwner:"config-owner".into(), executionData: Default::default() };
         let request = ToolCall { name:"proxy".into(),parameters:BTreeMap::from([
             ("tool_name".into(),Value::String("pipeline_probe".into())),("params".into(),json!({"nullable":null}))
         ]) };

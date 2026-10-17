@@ -41,7 +41,7 @@ test("typed extensions require exact targets and a native engine-bound actual ow
   }
   assert.match(generator, /Tools\[\\"Chat\\"\] = __operitToolPkgApi\.namespace\(\\"Tools\.Chat\\"/);
   assert.match(generator, /return toolCall\(/);
-  assert.match(engine, /host\.for_toolpkg_execution_context\(context\)\?/);
+  assert.match(engine, /host\.for_toolpkg_execution_context\(context\)\.map_err\(JsExecutionError::invalid_request\)\?/);
   assert.match(engine, /"__operitNativeCallToolStructured"/);
   assert.doesNotMatch(engine, /__operitNativeChatExtensionAsync/);
   assert.doesNotMatch(handler, /RuntimeToolExecutor|RuntimeToolRequest|executeRuntimeOperation/);
@@ -196,14 +196,14 @@ test("configuration resolves owner-scoped extensions and requires a native-owned
   const request = schema.slice(schema.indexOf("pub struct ChatConfigurationRequest"), schema.indexOf("pub struct ChatResourceRoute"));
   assert.doesNotMatch(request, /pub selection\s*:|ChatConfigurationBinding/);
   assert.match(request, /chatExtension: Option<JsonObject>/);
-  assert.match(request, /messageExtension: Option<JsonObject>/);
+  assert.doesNotMatch(request, /messageExtension:|executionData:/);
   const result = schema.slice(schema.indexOf("pub struct ChatConfigurationResult"), schema.indexOf("impl ChatConfigurationResult"));
-  assert.match(result, /pub messageExtension: JsonObject/);
+  assert.match(result, /pub executionData: JsonObject/);
   assert.match(result, /#\[serde\(skip\)\]\s*pub extensionOwner: String/);
   assert.doesNotMatch(runtime, /ChatConfigurationBinding|chat\.configuration\.binding|pub async fn (?:readBinding|writeBinding|deleteBinding)/);
   const normal = runtime.slice(runtime.indexOf("pub async fn resolve("), runtime.indexOf("pub async fn resolveDraft("));
   const draft = runtime.slice(runtime.indexOf("pub async fn resolveDraft("), runtime.indexOf("async fn invokeResolve("));
-  assert.match(normal, /readChatExtension\(&self\.ownerPackage, &target\)/);
+  assert.match(normal, /self\.invokeResolve\(request\)\.await/);
   assert.doesNotMatch(normal, /resolveDraft|unwrap_or_default/);
   assert.doesNotMatch(draft, /readChatExtension|ChatHistoryManager/);
   assert.match(runtime, /result\.extensionOwner = owner\.to_string\(\)/);
@@ -211,7 +211,7 @@ test("configuration resolves owner-scoped extensions and requires a native-owned
   assert.match(schema, /fn authenticated_descriptor\(raw: Value\)/);
 });
 /** Checks the shared route schema against its actual production constructor and target-side configuration consumer. */
-test("Core route resumes the exact native-owned snapshot with matching generic fields", () => {
+test("Core route resumes its author through current configuration without carrying frozen settings", () => {
   const support = source("core/crates/tool/services/src/runtime_support.rs");
   const processing = source("core/crates/runtime/application/src/services/core/MessageProcessingDelegate.rs");
   const core = source("core/crates/runtime/application/src/services/ChatServiceCore.rs");
@@ -225,8 +225,8 @@ test("Core route resumes the exact native-owned snapshot with matching generic f
   assert.doesNotMatch(declaration[1], /roleCardId|roleName|groupOrchestrationMode|groupParticipantNamesText|enableMemoryAutoUpdate/);
   assert.match(constructor[1], /participantId:\s*completionContextConfiguration\.profile\.id\.clone\(\)/);
   assert.match(constructor[1], /extensionOwner:\s*completionContextConfiguration\.extensionOwner\.clone\(\)/);
-  assert.match(constructor[1], /messageExtension:\s*completionContextConfiguration\.messageExtension\.clone\(\)/);
+  assert.doesNotMatch(constructor[1], /messageExtension:|executionData:/);
   assert.match(core, /api\.extensionOwner\(\) != resumeContext\.extensionOwner/);
-  assert.match(core, /messageExtension:\s*Some\(resumeContext\.messageExtension\.clone\(\)\)/);
+  assert.doesNotMatch(core, /resumeContext\.(messageExtension|executionData)/);
   assert.match(core, /participantId:\s*Some\(resumeContext\.participantId\.clone\(\)\)/);
 });
