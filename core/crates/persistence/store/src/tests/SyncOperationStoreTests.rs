@@ -1064,6 +1064,96 @@ fn compact_preferences_preserves_other_origins_and_edits_after_entry_replacement
     );
 }
 
+/// Removes legacy preference history once a later native migration snapshot
+/// covers the same keys, keeping paged synchronization applicable to migrated peers.
+#[test]
+fn compact_preferences_drops_legacy_history_covered_by_native_migration() {
+    let path = "runtime/config/preferences/user_preferences.preferences.json";
+    let mut legacy = preferenceOperation("device-a", 1, json!([]));
+    legacy.payload = json!({
+        "storagePath": path,
+        "key": "theme_mode",
+        "value": "dark",
+        "encrypted": false,
+    });
+    let native = SyncOperation {
+        opId: "device-a:2".into(),
+        originDeviceId: "device-a".into(),
+        sequence: 2,
+        domain: "preferences".into(),
+        entityType: "user_preferences".into(),
+        entityId: "migration".into(),
+        operation: "transaction".into(),
+        semantics: SyncOperationSemantics::Transaction,
+        payload: json!({
+            "storagePath": path,
+            "encrypted": false,
+            "formatVersion": 2,
+            "schemaVersion": 3,
+            "migrationSnapshot": true,
+            "entries": [{"key": "theme_mode", "operation": "set", "value": "light"}],
+        }),
+        createdAt: 2,
+        schemaVersion: 3,
+    };
+
+    let compacted = compactSyncOperations(vec![legacy, native.clone()]);
+    assert_eq!(compacted, vec![native]);
+}
+
+/// Does not treat an ordinary native edit as an old migration boundary when
+/// another legacy key still needs to be covered by the later full snapshot.
+#[test]
+fn compact_preferences_waits_for_unmarked_full_migration_snapshot() {
+    let path = "runtime/config/preferences/user_preferences.preferences.json";
+    let mut legacyTheme = preferenceOperation("device-a", 1, json!([]));
+    legacyTheme.payload = json!({
+        "storagePath": path,
+        "key": "theme_mode",
+        "value": "dark",
+        "encrypted": false,
+    });
+    let mut legacyFont = preferenceOperation("device-a", 2, json!([]));
+    legacyFont.payload = json!({
+        "storagePath": path,
+        "key": "font_type",
+        "value": "system",
+        "encrypted": false,
+    });
+
+    let mut ordinaryNativeEdit = preferenceOperation("device-a", 3, json!([]));
+    ordinaryNativeEdit.payload = json!({
+        "storagePath": path,
+        "key": "theme_mode",
+        "value": "light",
+        "encrypted": false,
+        "formatVersion": 2,
+        "schemaVersion": 2,
+    });
+
+    let mut migration = preferenceOperation("device-a", 4, json!([]));
+    migration.operation = "transaction".into();
+    migration.semantics = SyncOperationSemantics::Transaction;
+    migration.payload = json!({
+        "storagePath": path,
+        "encrypted": false,
+        "formatVersion": 2,
+        "schemaVersion": 2,
+        "entries": [
+            {"key": "theme_mode", "operation": "set", "value": "light"},
+            {"key": "font_type", "operation": "set", "value": "system"},
+        ],
+    });
+
+    let compacted = compactSyncOperations(vec![
+        legacyTheme,
+        legacyFont,
+        ordinaryNativeEdit.clone(),
+        migration.clone(),
+    ]);
+    assert_eq!(compacted, vec![ordinaryNativeEdit, migration]);
+}
+
 
 /// Builds a raw journal with one corrupt middle line and verifies reads skip it.
 #[test]

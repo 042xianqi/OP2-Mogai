@@ -1480,6 +1480,7 @@ fn preference_migration_sync_initializes_the_receiving_schema() {
         .unwrap();
     assert_eq!(operations.len(), 1);
     assert_eq!(operations[0].payload["schemaVersion"], 2);
+    assert_eq!(operations[0].payload["migrationSnapshot"], true);
     assert!(operations[0].payload["entries"]
         .as_array()
         .unwrap()

@@ -464,7 +464,7 @@ impl RuntimePackageManager {
             let (runtime, declaration) = prepared?;
             let contextKey = format!("toolpkg_main:{}", runtime.packageName);
             let (engine, _lease) = manager
-                .leaseToolPkgExecutionEngine(&contextKey, &runtime.packageName)?;
+                .leaseToolPkgMainExecutionEngine(&runtime.packageName)?;
             let script = reader.mainScript(&runtime)?;
             if !manager
                 .findToolPkgExecutionEngine(&contextKey, &runtime.packageName)
@@ -691,6 +691,14 @@ impl RuntimePackageManager {
     #[allow(non_snake_case)]
     pub(crate) fn toolPkgManager(&self) -> &ToolPkgManager {
         self.pluginPackageManager.toolPkgManager()
+    }
+
+    /// Captures teardown independently of the package-manager lock: destroying a
+    /// worker can complete host calls which consult that same manager.
+    #[allow(non_snake_case)]
+    pub fn executionEngineShutdown(&self) -> impl Fn() + Send + Sync + 'static {
+        let manager = self.toolPkgManager().clone();
+        move || manager.shutdownExecutionEngines()
     }
 
     /// Returns the SDK-owned ToolPkg manager for mutation.

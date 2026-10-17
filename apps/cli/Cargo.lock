@@ -2720,6 +2720,7 @@ dependencies = [
  "operit-host-api",
  "operit-link",
  "operit-peer-link",
+ "operit-rslink-runtime",
  "operit-runtime",
  "operit-store",
  "operit-tools",
@@ -2760,6 +2761,7 @@ dependencies = [
  "json5",
  "operit-host-api",
  "operit-plugin-sdk-codegen",
+ "operit-plugin-sdk-macros",
  "operit-plugin-theme",
  "regex",
  "rquickjs",
@@ -2801,6 +2803,14 @@ dependencies = [
  "operit-host-api",
  "operit-link",
  "operit-plugin-sdk-ipc",
+]
+
+[[package]]
+name = "operit-plugin-sdk-macros"
+version = "2.0.0-preview.15"
+dependencies = [
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -3041,6 +3051,7 @@ dependencies = [
  "operit-plugin-sdk",
  "operit-plugin-sdk-codegen",
  "operit-route-macros",
+ "operit-rslink-runtime",
  "operit-store",
  "operit-util",
  "quickjs-wasm-rs",

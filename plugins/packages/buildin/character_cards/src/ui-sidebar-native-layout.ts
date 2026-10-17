@@ -189,6 +189,6 @@ export function nativeSidebarLazyItems(ctx: ComposeDslContext, current: CurrentS
     key: 'sidebar-conversation-rows',
     itemCount: builders.length,
     itemExtent: legacySidebarMetrics.chatHeight,
-    initialItemCount: 12,
+    initialItemCount: 24,
   }, index => builders[index]());
 }

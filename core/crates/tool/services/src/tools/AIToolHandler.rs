@@ -1034,7 +1034,7 @@ impl AIToolHandler {
         let request = &resolved;
         let tool = request.toLegacyTool();
         let tool = &tool;
-        let isAiInvocation = matches!(policy, ToolExecutionPolicy::Ai { .. } | ToolExecutionPolicy::Device);
+        let isAiInvocation = matches!(policy, ToolExecutionPolicy::Ai { .. });
         let logExecution = if isAiInvocation {
             ChainLogger::info
         } else {
@@ -1291,7 +1291,7 @@ impl JsExecutionHost for AIToolHandler {
         Ok(json!({ "tools": tools }))
     }
 
-    /// Executes an SDK JavaScript tool request through the registered Operit tool chain.
+    /// Executes a direct SDK request without AI interception, permissions or lifecycle hooks.
     fn execute_tool_call(
         &self,
         mut request: JsToolCallRequest,
@@ -1300,31 +1300,9 @@ impl JsExecutionHost for AIToolHandler {
             self.deviceTransportScope.bind(&self.runtimeSupport());
             request.parameters.insert("__transport_owner".into(), serde_json::Value::String(self.deviceTransportScope.id.clone()));
         }
-        if request.device.as_ref().is_some_and(|device| device.action == operit_plugin_sdk::javascript::JsDeviceToolAction::Transport)
-            && !matches!(request.parameters.get("op").and_then(serde_json::Value::as_str), Some("open" | "call")) {
-            return self.runtimeSupport().executeDeviceTool(request, None);
-        }
-        if let Some(device) = &request.device {
-            if !matches!(
-                device.action,
-                operit_plugin_sdk::javascript::JsDeviceToolAction::Execute
-                    | operit_plugin_sdk::javascript::JsDeviceToolAction::Port
-                    | operit_plugin_sdk::javascript::JsDeviceToolAction::Transport
-            ) {
-                return self.runtimeSupport().executeDeviceTool(request, None);
-            }
-            let host = self.clone();
-            let tool = crate::tools::DeviceTools::tool_from_request(&request);
-            // Mirrors the AI path: interception hooks read the invocation scope, so the
-            // device path must capture and install one before the JS host awaits it.
-            let context = ToolInvocationContext::capture(self.clone());
-            let preflight = Box::pin(async move {
-                match context.scope(host.checkToolInterception(&tool)).await? {
-                    AIToolHookDecision::Block(reason) => Err(reason),
-                    _ => Ok(()),
-                }
-            });
-            return self.runtimeSupport().executeDeviceTool(request, Some(preflight));
+        // Device selection changes transport only, never the direct SDK admission policy.
+        if request.device.is_some() {
+            return self.runtimeSupport().executeDeviceTool(request);
         }
         let host = self.clone();
         Box::pin(async move {
@@ -2212,9 +2190,9 @@ mod tests {
             parameters: serde_json::from_value(parameters).unwrap(), device: None }
     }
 
-    /// Proves AI and JS share lifecycle admission while only AI asks permission for the same executor.
+    /// Proves AI admission remains active while the same executor is direct and hook-free for JS.
     #[tokio::test]
-    async fn ai_and_js_share_one_lifecycle_but_not_ai_permissions() {
+    async fn ai_and_js_share_executors_but_not_lifecycle_or_permissions() {
         let mut fixture = PipelineFixture::new();
         let probe = Arc::new(SharedProbe::default());
         let hooks = Arc::new(LifecycleProbe::default());
@@ -2242,6 +2220,48 @@ mod tests {
         assert_eq!(probe.accessCalls.load(Ordering::SeqCst), 1);
         assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
         assert_eq!(approvals.load(Ordering::SeqCst), 1);
+        assert!(hooks.take().is_empty());
+        fixture.handler.getToolPermissionSystem().saveAiPermissionMode(AiPermissionMode::Full).unwrap();
+        let request = probeRequest(payload);
+        let allowed = fixture.handler.executeToolInvocation(
+            &ToolCall { name: request.qualified_tool_name(), parameters: request.parameters },
+            ToolExecutionPolicy::Ai { exposure: ToolExposureMode::FULL },
+        ).await.unwrap();
+        assert!(allowed[0].success);
+        assert_eq!(hooks.take(), ["requested", "intercept", "started", "result", "finished"]);
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(probe.accessCalls.load(Ordering::SeqCst), 2);
+        assert_eq!(approvals.load(Ordering::SeqCst), 1);
+    }
+
+    /// A captured AI turn must not promote direct JS requests into AI admission.
+    #[tokio::test]
+    async fn js_tools_in_ai_turn_skip_all_lifecycle_and_permissions() {
+        let mut fixture = PipelineFixture::new();
+        let hooks = Arc::new(LifecycleProbe::default());
+        let probe = Arc::new(SharedProbe::default());
+        fixture.handler.addToolHook(hooks.clone());
+        fixture.handler.registerSharedTool("pipeline_probe".into(), probe.clone(), ToolRegistrationVisibility::INTERNAL);
+        fixture.handler.getToolPermissionSystem().setAsyncPermissionRequester(|_, _, _| async {
+            panic!("Direct JS must never request AI approval");
+        });
+        let turn = ToolRuntimeContext {
+            callerChatId: Some("direct-in-ai-turn".into()), callerParticipantId: None,
+            workspacePath: None, workspaceFolders: Vec::new(), toolExposureMode: ToolExposureMode::CLI,
+            extensionOwner: "configuration-owner".into(), messageExtension: Default::default(),
+        };
+        let host = ToolExecutionManager::scopeToolRuntimeContext(turn.clone(), async {
+            fixture.handler.capture_tool_invocation_host()
+        }).await;
+        for payload in [json!({"value":null}), json!({"value":42})] {
+            let result = host.execute_tool_call(probeRequest(payload.clone())).await;
+            assert!(result.success, "{:?}", result.error);
+            let JsToolCallResultData::Value(value) = result.data else { panic!("Expected structured JSON") };
+            assert_eq!(value["turn"], serde_json::to_value(&turn).unwrap());
+            assert_eq!(value["parameters"], payload);
+        }
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(probe.accessCalls.load(Ordering::SeqCst), 0);
         assert!(hooks.take().is_empty());
     }
 

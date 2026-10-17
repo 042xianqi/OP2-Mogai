@@ -221,11 +221,14 @@ test('expanding chat previews materializes one window without catalog IO', async
   const data = catalog(chats);
   data.sections[0].conversationGroups = []; data.sections[0].ungroupedChats = chats;
   const screen = mount(context(chats), data);
-  const loaded = await screen.load(), calls = screen.calls.length, before = screen.events.length;
-  const expanded = await screen.click(loaded.tree, 'sidebar-preview-ungrouped:card:travel');
+  const loaded = await screen.load(), calls = screen.calls.length;
+  const preview = await screen.dispatch(loaded.tree.props.viewport.onRangeChanged,
+    { firstIndex: 0, lastIndex: loaded.tree.props.viewport.itemCount });
+  const before = screen.events.length;
+  const expanded = await screen.click(preview.tree, 'sidebar-preview-ungrouped:card:travel');
   const targets = composeNodes(expanded.tree, node => node.type === 'DragTarget');
   const visibleChats = composeNodes(expanded.tree, node => /^sidebar-chat-c\d+$/.test(node.props.key ?? '')).length;
-  assert.equal(visibleChats, 10);
+  assert.equal(visibleChats, 22);
   assert.equal(expanded.tree.props.viewport.itemCount, chats.length + 3);
   assert.ok(targets.every(node => node.props.acceptedData === undefined));
   assert.equal(targets.reduce((count, node) => count + (node.props.excludedData?.length ?? 0), 0), visibleChats);
@@ -241,6 +244,11 @@ test('expanding chat previews materializes one window without catalog IO', async
   assert.equal(composeNodes(collapsed.tree, node => /^sidebar-chat-c\d+$/.test(node.props.key ?? '')).length, 4);
   assert.equal(screen.calls.length, calls);
   assert.ok(JSON.stringify(screen.events.at(-1).response.update).length < chats.length * 250, 'Collapse must transmit compact removal handles');
+  const again = await screen.click(collapsed.tree, 'sidebar-preview-ungrouped:card:travel');
+  assert.equal(again.tree.props.viewport.firstIndex, 0, 'Re-expansion must not restore the old bottom window');
+  assert.equal(composeNodes(again.tree, node => /^sidebar-chat-c\d+$/.test(node.props.key ?? '')).length, 22);
+  assert.ok(keyedNode(again.tree, 'sidebar-chat-c0'), 'Top rows must arrive in the expansion commit');
+  assert.equal(screen.calls.length, calls);
 });
 
 test('obsolete sidebar browser files, registration and archive builder are removed', async () => {

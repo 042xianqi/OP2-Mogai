@@ -135,11 +135,10 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
         if let Some(runtime)=self.deviceToolRuntime.get() {runtime.close_transports(owner);}
     }
 
-    fn executeDeviceTool(&self, request: operit_plugin_sdk::javascript::JsToolCallRequest,
-        preflight: Option<operit_tools::tools::DeviceTools::DeviceToolPreflight>)
+    fn executeDeviceTool(&self, request: operit_plugin_sdk::javascript::JsToolCallRequest)
         -> operit_plugin_sdk::javascript::JsExecutionCompletion<operit_plugin_sdk::javascript::JsToolCallResult> {
         match self.deviceToolRuntime.get() {
-            Some(runtime) => runtime.dispatch_with_preflight(request, preflight),
+            Some(runtime) => runtime.dispatch(request),
             None => Box::pin(async { operit_tools::tools::DeviceTools::failure("Device tool routing is not initialized") }),
         }
     }

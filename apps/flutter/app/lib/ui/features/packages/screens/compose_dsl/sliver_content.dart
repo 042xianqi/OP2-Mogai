@@ -74,15 +74,11 @@ class _ComposeDslSliverContentState extends State<_ComposeDslSliverContent> {
       _pendingRange = null;
       return;
     }
-    final range = (
-      firstIndex: math.max(0, (start / extent).floor() - 2),
-      lastIndex: math.min(window.itemCount, (end / extent).ceil() + 2),
+    _pendingRange = window.rangeToRequest(
+      (start / extent).floor(),
+      (end / extent).ceil(),
+      _windowItemCount,
     );
-    _pendingRange =
-        range.firstIndex >= window.firstIndex &&
-            range.lastIndex <= window.firstIndex + _windowItemCount
-        ? null
-        : range;
     _scheduleRange();
   }
 

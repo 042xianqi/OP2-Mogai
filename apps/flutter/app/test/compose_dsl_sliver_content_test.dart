@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:operit2/core/logging/ClientLogger.dart';
@@ -44,6 +46,7 @@ Widget _surface(
   ScrollController controller, {
   String? error,
   List<String>? actions,
+  Future<Object?> Function(String, [Object?])? onAction,
 }) => MaterialApp(
   home: Scaffold(
     body: Center(
@@ -62,10 +65,12 @@ Widget _surface(
                 packageName: 'fixture.sliver',
                 routeInstanceId: 'sliver-test',
                 executionContextKey: 'sliver-test',
-                dispatchAction: (id, [payload]) async {
-                  actions?.add(id);
-                  return null;
-                },
+                dispatchAction:
+                    onAction ??
+                    (id, [payload]) async {
+                      actions?.add(id);
+                      return null;
+                    },
                 runtimeOptionsProvider: () => {},
               ),
             ),
@@ -89,6 +94,91 @@ int _mountedChats() => find
 /// Verifies viewport ownership, item virtualization, and independent modal lifetime.
 void main() {
   setUpAll(ClientLogger.initialize);
+
+  testWidgets(
+    'expansion retains the static toolbar and rows during async work',
+    (tester) async {
+      final controller = ScrollController();
+      final expanded = ValueNotifier(false);
+      final reply = Completer<void>();
+      addTearDown(controller.dispose);
+      addTearDown(expanded.dispose);
+      final ranges = <Map>[];
+      Map<String, Object?> tree() => {
+        'type': 'LazyColumn',
+        'props': {
+          'key': 'sidebar',
+          'viewport': {
+            'firstIndex': 0,
+            'itemCount': expanded.value ? 203 : 7,
+            'itemExtent': 34,
+            'staticItemCount': 1,
+            'onRangeChanged': {'__actionId': 'range'},
+          },
+        },
+        'children': [
+          {
+            'type': 'Text',
+            'props': {'key': 'toolbar', 'text': '新建对话'},
+          },
+          for (var index = 0; index < (expanded.value ? 24 : 7); index++)
+            {
+              'type': 'Row',
+              'props': {
+                'key': 'chat-$index',
+                'height': 34,
+                if (index == 6) 'onClick': {'__actionId': 'expand'},
+              },
+              'children': [
+                {
+                  'type': 'Text',
+                  'props': {'text': index == 6 ? '展开更多' : 'Chat $index'},
+                },
+              ],
+            },
+        ],
+      };
+      await tester.pumpWidget(
+        ValueListenableBuilder<bool>(
+          valueListenable: expanded,
+          builder: (context, value, child) => _surface(
+            tree(),
+            controller,
+            onAction: (id, [payload]) async {
+              if (id == 'expand') {
+                await reply.future;
+                expanded.value = true;
+              } else {
+                ranges.add(payload! as Map);
+              }
+              return null;
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final toolbar = tester.element(find.text('新建对话'));
+      final firstRow = tester.element(find.text('Chat 0'));
+      final position = controller.position;
+      await tester.tap(find.text('展开更多'));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(tester.element(find.text('Chat 0')), same(firstRow));
+      expect(tester.element(find.text('新建对话')), same(toolbar));
+      expect(ranges, isEmpty);
+      reply.complete();
+      await tester.pumpAndSettle();
+      expect(find.text('Chat 8'), findsOneWidget);
+      expect(tester.element(find.text('Chat 0')), same(firstRow));
+      expect(tester.element(find.text('新建对话')), same(toolbar));
+      expect(controller.position, same(position));
+      expect(
+        ranges,
+        isEmpty,
+        reason: 'The expansion commit already covers the viewport',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'sliver presentation preserves rows and root loading across action errors',

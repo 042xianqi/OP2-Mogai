@@ -121,7 +121,7 @@ async fn leaseEngine(
         })
         .await?;
     let (_, lease) =
-        manager.leaseToolPkgExecutionEngine(&format!("toolpkg_main:{package}"), package)?;
+        manager.leaseToolPkgMainExecutionEngine(package)?;
     Ok(lease)
 }
 

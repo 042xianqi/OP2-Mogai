@@ -2,6 +2,10 @@
 
 part of '../ToolPkgUiLauncherScreen.dart';
 
+/// Keeps enough materialized rows ahead of a fast scroll to hide JS round-trip latency.
+const int _composeLazyPrefetchItems = 8;
+const int _composeLazyRefillItems = 2;
+
 /// Describes the fixed-extent window delivered by the page's lazyItems helper.
 class _ComposeLazyWindow {
   /// Retains validated viewport metadata and its existing action identity.
@@ -18,6 +22,23 @@ class _ComposeLazyWindow {
   final double itemExtent;
   final String actionId;
   final int staticItemCount;
+
+  /// Refills in batches while keeping nearby scrolling inside the delivered nodes.
+  ({int firstIndex, int lastIndex})? rangeToRequest(
+    int first,
+    int last,
+    int loadedCount,
+  ) {
+    final neededFirst = math.max(0, first - _composeLazyRefillItems);
+    final neededLast = math.min(itemCount, last + _composeLazyRefillItems);
+    if (neededFirst >= firstIndex && neededLast <= firstIndex + loadedCount) {
+      return null;
+    }
+    return (
+      firstIndex: math.max(0, first - _composeLazyPrefetchItems),
+      lastIndex: math.min(itemCount, last + _composeLazyPrefetchItems),
+    );
+  }
 
   /// Rejects inconsistent window metadata before constructing a Flutter sliver.
   factory _ComposeLazyWindow.parse(Object? raw, int childCount) {
@@ -138,7 +159,7 @@ class _ComposeLazyListState extends State<_ComposeLazyList> {
   double _itemExtent(_ComposeLazyWindow window) =>
       window.itemExtent * MediaQuery.textScalerOf(context).scale(14) / 14;
 
-  /// Serializes range actions and preloads two items on either side of the visible interval.
+  /// Serializes range actions and preloads a buffered interval around the viewport.
   Future<void> _requestRange() async {
     final window = widget.window;
     if (window == null || _rangeInFlight || window.itemCount == 0) return;
@@ -147,24 +168,20 @@ class _ComposeLazyListState extends State<_ComposeLazyList> {
     final offset = position.pixels.clamp(0.0, position.maxScrollExtent);
     final first = math.min(
       window.itemCount,
-      math.max(0, (offset / extent).floor() - 2),
+      math.max(0, (offset / extent).floor()),
     );
     final last = math.min(
       window.itemCount,
-      ((offset + position.viewportDimension) / extent).ceil() + 2,
+      ((offset + position.viewportDimension) / extent).ceil(),
     );
-    if (first >= window.firstIndex &&
-        last <= window.firstIndex + widget.nodes.length) {
-      return;
-    }
-    final range = (firstIndex: first, lastIndex: last);
-    if (range == _lastRequested) return;
+    final range = window.rangeToRequest(first, last, widget.nodes.length);
+    if (range == null || range == _lastRequested) return;
     _lastRequested = range;
     _rangeInFlight = true;
     try {
       await widget.onAction(window.actionId, {
-        'firstIndex': first,
-        'lastIndex': last,
+        'firstIndex': range.firstIndex,
+        'lastIndex': range.lastIndex,
       });
     } finally {
       _rangeInFlight = false;
@@ -247,7 +264,9 @@ class _ComposeLazyListState extends State<_ComposeLazyList> {
             reverse: widget.reverse,
             shrinkWrap: !bounded,
             itemExtent: window == null ? null : _itemExtent(window),
-            cacheExtent: window == null ? null : 0,
+            cacheExtent: window == null
+                ? null
+                : _itemExtent(window) * _composeLazyPrefetchItems,
             childrenDelegate: SliverChildBuilderDelegate(
               (context, index) => _item(context, index, itemCount),
               childCount: itemCount,

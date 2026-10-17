@@ -1981,6 +1981,8 @@ struct PreferencesSyncEntryPayload {
     formatVersion: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     schemaVersion: Option<u32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    migrationSnapshot: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     jsonPath: Vec<PreferencesSyncJsonPathSegment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2005,6 +2007,8 @@ struct PreferencesSyncTransactionPayload {
     formatVersion: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     schemaVersion: Option<u32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    migrationSnapshot: bool,
     entries: Vec<PreferencesTransactionMutation>,
 }
 
@@ -2108,6 +2112,7 @@ impl PreferencesSyncedEntry {
                     encrypted: payload.encrypted,
                     formatVersion: 2,
                     schemaVersion: payload.schemaVersion,
+                    migrationSnapshot: payload.migrationSnapshot,
                     jsonPath: Vec::new(),
                     jsonMutation: None,
                 };
@@ -2208,6 +2213,7 @@ impl PreferencesSyncedEntry {
                     encrypted,
                     formatVersion: 2,
                     schemaVersion: None,
+                    migrationSnapshot: false,
                     jsonPath: Vec::new(),
                     jsonMutation: None,
                 })?,
@@ -3279,6 +3285,7 @@ impl PreferencesDataStore {
                     encrypted: self.encryption.is_some(),
                     formatVersion: 2,
                     schemaVersion,
+                    migrationSnapshot: fullSnapshot,
                     jsonPath: Vec::new(),
                     jsonMutation: None,
                 })?,
@@ -3295,6 +3302,7 @@ impl PreferencesDataStore {
                     encrypted: self.encryption.is_some(),
                     formatVersion: 2,
                     schemaVersion,
+                    migrationSnapshot: fullSnapshot,
                     entries,
                 })?,
             }

@@ -334,6 +334,8 @@ async fn invokeToolPkgIpcMeasured(
             "ToolPkg IPC main context key is invalid: {targetContextKey}"
         ));
     }
+    // Accepted main aliases must resolve to the single container-owned realm.
+    let targetContextKey = if isMainTarget { mainContextKey } else { targetContextKey };
     timing.mark("validationMs")?;
     let (manager, scriptPath, scriptRead, publicMethod) = RuntimePackageManager::withReadyObserved(
         toolHandler.getOrCreatePackageManager(),
@@ -380,7 +382,7 @@ async fn invokeToolPkgIpcMeasured(
     .await?;
     let (engine, _lease) = if isMainTarget {
         let (engine, lease) = manager
-            .leaseToolPkgExecutionEngine(&targetContextKey, &packageTarget)?;
+            .leaseToolPkgMainExecutionEngine(&packageTarget)?;
         (engine, Some(lease))
     } else {
         let engine = manager

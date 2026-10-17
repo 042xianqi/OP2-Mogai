@@ -2256,7 +2256,7 @@ function selectorView(ctx, input, state, controller) {
   else {
     const options = state.data.options;
     const items = ctx.lazyItems(
-      { key: "selector-records", itemCount: options.length, itemExtent: 56, initialItemCount: 12 },
+      { key: "selector-records", itemCount: options.length, itemExtent: 56, initialItemCount: 24 },
       /** Builds one keyed row only when it enters the materialized viewport window. */
       (index) => OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/selection/index.ui.js:84867",[{ key: "selector-item:" + options[index].key, fillMaxWidth: true },[
         selectorRow(ctx, options[index], state, controller),

@@ -15,7 +15,10 @@ import file_selector_ios
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     if AppleRuntimeChannel.dataRescueRequested || ProcessInfo.processInfo.arguments.contains("--data-rescue") {
-      FileSelectorPlugin.register(with: engineBridge.pluginRegistry.registrar(forPlugin: "FileSelectorPlugin"))
+      // The iOS plugin registry returns an optional registrar.
+      if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "FileSelectorPlugin") {
+        FileSelectorPlugin.register(with: registrar)
+      }
     } else {
       GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     }

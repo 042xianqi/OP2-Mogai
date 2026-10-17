@@ -1660,14 +1660,134 @@ pub fn compactSyncOperations(operations: Vec<SyncOperation>) -> Vec<SyncOperatio
                 .or_insert(operation.sequence);
         }
     }
+    let migratedPreferenceKeys = preferenceKeysCoveredByNativeMigration(&operations);
     operations
         .into_iter()
         .filter(|operation| {
+            if operation.domain == "preferences"
+                && legacyPreferenceOperationSuperseded(operation, &migratedPreferenceKeys)
+            {
+                return false;
+            }
             operation.domain == "preferences"
                 || operation.semantics == SyncOperationSemantics::Transaction
                 || latestSequences.get(&syncEntityKey(operation)) == Some(&operation.sequence)
         })
         .collect()
+}
+
+/// Returns preference keys whose legacy history is replaced by a later schema
+/// migration snapshot. New snapshots carry an explicit marker. Older journals
+/// did not carry that marker, so the compatibility boundary is the earliest
+/// native operation that covers every key present in the legacy history for a
+/// storage path. This also handles ordinary native edits that preceded the
+/// old, unmarked migration snapshot.
+fn preferenceKeysCoveredByNativeMigration(
+    operations: &[SyncOperation],
+) -> BTreeMap<(String, String), SyncOperationOrder> {
+    let mut covered = BTreeMap::new();
+    let mut legacyKeysByPath = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut nativeOperationsByPath = BTreeMap::<String, Vec<&SyncOperation>>::new();
+    for operation in operations.iter().filter(|operation| operation.domain == "preferences") {
+        let Some(path) = operation.payload.get("storagePath").and_then(Value::as_str) else {
+            continue;
+        };
+        if operation.payload.get("formatVersion").and_then(Value::as_u64) == Some(2) {
+            if operation
+                .payload
+                .get("migrationSnapshot")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                addCoveredPreferenceKeys(&mut covered, path, operation);
+            } else {
+                nativeOperationsByPath
+                    .entry(path.to_string())
+                    .or_default()
+                    .push(operation);
+            }
+        } else {
+            legacyKeysByPath
+                .entry(path.to_string())
+                .or_default()
+                .extend(preferenceOperationKeys(operation));
+        }
+    }
+    for (path, legacyKeys) in legacyKeysByPath {
+        let Some(nativeOperations) = nativeOperationsByPath.get(&path) else {
+            continue;
+        };
+        let migration = nativeOperations
+            .iter()
+            .filter(|operation| {
+                let nativeKeys = preferenceOperationKeys(operation);
+                legacyKeys
+                    .iter()
+                    .all(|key| nativeKeys.iter().any(|nativeKey| nativeKey == key))
+            })
+            .min_by_key(|operation| SyncOperationOrder::fromOperation(operation));
+        if let Some(operation) = migration {
+            addCoveredPreferenceKeys(&mut covered, &path, operation);
+        }
+    }
+    covered
+}
+
+/// Adds every root key carried by one migration snapshot to the compatibility map.
+fn addCoveredPreferenceKeys(
+    covered: &mut BTreeMap<(String, String), SyncOperationOrder>,
+    path: &str,
+    operation: &SyncOperation,
+) {
+    let order = SyncOperationOrder::fromOperation(operation);
+    for key in preferenceOperationKeys(operation) {
+        covered
+            .entry((path.to_string(), key))
+            .and_modify(|current| {
+                if *current < order {
+                    *current = order.clone();
+                }
+            })
+            .or_insert_with(|| order.clone());
+    }
+}
+
+/// Extracts root preference keys from either a single mutation or a transaction.
+fn preferenceOperationKeys(operation: &SyncOperation) -> Vec<String> {
+    if let Some(entries) = operation.payload.get("entries").and_then(Value::as_array) {
+        return entries
+            .iter()
+            .filter_map(|entry| entry.get("key").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect();
+    }
+    operation
+        .payload
+        .get("key")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .into_iter()
+        .collect()
+}
+
+/// Drops a legacy operation only when every key in it has a later native value.
+fn legacyPreferenceOperationSuperseded(
+    operation: &SyncOperation,
+    migratedKeys: &BTreeMap<(String, String), SyncOperationOrder>,
+) -> bool {
+    if operation.payload.get("formatVersion").is_some() {
+        return false;
+    }
+    let Some(path) = operation.payload.get("storagePath").and_then(Value::as_str) else {
+        return false;
+    };
+    let keys = preferenceOperationKeys(operation);
+    !keys.is_empty()
+        && keys.iter().all(|key| {
+            migratedKeys
+                .get(&(path.to_string(), key.clone()))
+                .is_some_and(|migration| *migration > SyncOperationOrder::fromOperation(operation))
+        })
 }
 
 /// Builds the origin-scoped identity used for operation-log compaction.
