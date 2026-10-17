@@ -1173,6 +1173,63 @@ pub(super) fn ensure_test_runtime_root() {
     setDefaultRuntimeStorageHost(host);
 }
 
+/// Keeps large hot calls on source handles and preserves the module's mutable state.
+#[test]
+fn registered_script_hot_calls_transfer_only_handles_without_hashing() {
+    let mut state = newTestJsEngineState(None);
+    state.evalJavaScriptVoid(r#"
+        globalThis.__sourceRegistrations = 0;
+        globalThis.__sourceInvocations = 0;
+        const registerSource = __operitRegisterScriptSource;
+        __operitRegisterScriptSource = function(id, text) {
+            globalThis.__sourceRegistrations += 1;
+            return registerSource(id, text);
+        };
+        const invokeSource = __operitExecuteScriptFunction;
+        __operitExecuteScriptFunction = function() {
+            if (typeof arguments[2] !== 'string' || arguments[2].length > 32) {
+                throw new Error('Invocation transferred source text instead of its handle');
+            }
+            globalThis.__sourceInvocations += 1;
+            return invokeSource.apply(this, arguments);
+        };
+    "#).unwrap();
+    let script = format!("/*{}*/ let calls = 0; exports.count = () => ++calls;", "x".repeat(524_000));
+    for index in 1..=10 {
+        let output = state.execute_script_function_on_current_thread(
+            super::JsTextResourceSource::ExecutionHost,
+            &script, "count", &testParams(), &BTreeMap::new(), None, true, 60, None,
+        );
+        assert_eq!(expect_js_output(output, "registered source counter"), index.to_string());
+        if index == 1 {
+            state.evalJavaScriptVoid(r#"
+                __operitNativeHashText = function() { throw new Error('Hot call rescanned source'); };
+            "#).unwrap();
+        }
+    }
+    state.evalJavaScriptVoid(r#"
+        if (__sourceRegistrations !== 1 || __sourceInvocations !== 10) {
+            throw new Error('Source registration or invocation count changed');
+        }
+    "#).unwrap();
+}
+
+/// Distinguishes equal-length legacy fingerprint collisions and restores each source's own state.
+#[test]
+fn registered_script_replacement_preserves_exact_source_identity() {
+    let mut state = newTestJsEngineState(None);
+    let first = "let count = 0; exports.read = () => 'Aa:' + ++count;";
+    let second = "let count = 0; exports.read = () => 'BB:' + ++count;";
+    assert_eq!(super::javaScriptSourceFingerprint(first), super::javaScriptSourceFingerprint(second));
+    for (script, expected) in [(first, "\"Aa:1\""), (second, "\"BB:1\""), (first, "\"Aa:2\"")] {
+        let output = state.execute_script_function_on_current_thread(
+            super::JsTextResourceSource::ExecutionHost,
+            script, "read", &testParams(), &BTreeMap::new(), None, true, 60, None,
+        );
+        assert_eq!(expect_js_output(output, "source replacement"), expected);
+    }
+}
+
 #[test]
 fn execute_promise_script_repeatedly_on_same_engine() {
     let mut state = newTestJsEngineState(None);
@@ -4545,4 +4602,94 @@ async fn collector_owned_execution_has_no_wall_deadline_and_cancels_cleanly() {
     );
     assert!(tokio::time::timeout(Duration::from_secs(2),spinning).await.unwrap().is_err());
     engine.destroy();
+}
+
+
+/// Queues continuations without blocking, preserving the original affine owner and FIFO order.
+#[test]
+fn host_notification_queue_preserves_affinity_and_order() {
+    let host = NativeHostJavaScriptRuntimeHost::new();
+    let (owner_sender, owner_receiver) = std::sync::mpsc::channel();
+    let handle = host.createHostJavaScriptRuntimeState("notification-test", Box::new(move || {
+        owner_sender.send(std::thread::current().id()).unwrap();
+        Ok(Box::new(Vec::<usize>::new()))
+    })).unwrap();
+    let owner = owner_receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (started_sender, started_receiver) = std::sync::mpsc::channel();
+    let (release_sender, release_receiver) = std::sync::mpsc::channel();
+    host.enqueueHostJavaScriptRuntimeStateTask(handle, 10_000, Box::new(move |state, _| {
+        assert_eq!(std::thread::current().id(), owner);
+        started_sender.send(()).unwrap();
+        release_receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        state.downcast_mut::<Vec<usize>>().unwrap().push(1);
+        Ok(Box::new(()))
+    })).unwrap();
+    started_receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    host.enqueueHostJavaScriptRuntimeStateTask(handle, 10_000, Box::new(move |state, _| {
+        assert_eq!(std::thread::current().id(), owner);
+        state.downcast_mut::<Vec<usize>>().unwrap().push(2);
+        Ok(Box::new(()))
+    })).unwrap();
+    release_sender.send(()).unwrap();
+    let result = host.executeHostJavaScriptRuntimeStateTask(handle, 10_000, Box::new(move |state, _| {
+        assert_eq!(std::thread::current().id(), owner);
+        Ok(Box::new(state.downcast_ref::<Vec<usize>>().unwrap().clone()))
+    })).unwrap();
+    assert_eq!(*result.downcast::<Vec<usize>>().unwrap(), [1, 2]);
+    host.destroyHostJavaScriptRuntimeState(handle).unwrap();
+    assert!(host.enqueueHostJavaScriptRuntimeStateTask(handle, 1_000, Box::new(|_, _| Ok(Box::new(())))).is_err());
+}
+
+
+/// Completes an owner-lifetime call when its Host discards the queued start before execution.
+#[tokio::test(flavor = "current_thread")]
+async fn discarded_queued_start_finishes_without_a_wall_deadline() {
+    use operit_host_api::{
+        HostJavaScriptRuntime, HostJavaScriptRuntimeStateFactory,
+        HostJavaScriptRuntimeStateHandle, HostJavaScriptRuntimeStateTask,
+        HostJavaScriptRuntimeStateOutput, HostJavaScriptRuntimeStateAsyncTask,
+        HostJavaScriptRuntimeStateOutputFuture,
+    };
+
+    struct DiscardQueuedHost(Arc<dyn HostJavaScriptRuntimeHost>);
+
+    impl HostJavaScriptRuntimeHost for DiscardQueuedHost {
+        /// Keeps runtime creation on the real native Host.
+        fn createHostJavaScriptRuntime(&self) -> HostResult<Box<dyn HostJavaScriptRuntime>> {
+            self.0.createHostJavaScriptRuntime()
+        }
+        /// Keeps state creation on the real native Host.
+        fn createHostJavaScriptRuntimeState(&self, name: &str, factory: HostJavaScriptRuntimeStateFactory) -> HostResult<HostJavaScriptRuntimeStateHandle> {
+            self.0.createHostJavaScriptRuntimeState(name, factory)
+        }
+        /// Preserves synchronous lifecycle operations on the existing state.
+        fn executeHostJavaScriptRuntimeStateTask(&self, handle: HostJavaScriptRuntimeStateHandle, timeout: u64, task: HostJavaScriptRuntimeStateTask) -> HostResult<HostJavaScriptRuntimeStateOutput> {
+            self.0.executeHostJavaScriptRuntimeStateTask(handle, timeout, task)
+        }
+        /// Models destruction after admission but before the owner runs the queued start.
+        fn enqueueHostJavaScriptRuntimeStateTask(&self, _: HostJavaScriptRuntimeStateHandle, _: u64, task: HostJavaScriptRuntimeStateTask) -> HostResult<()> {
+            drop(task);
+            Ok(())
+        }
+        /// Preserves real cancellation and cleanup operations.
+        fn executeHostJavaScriptRuntimeStateAsyncTask(&self, handle: HostJavaScriptRuntimeStateHandle, timeout: u64, task: HostJavaScriptRuntimeStateAsyncTask) -> HostJavaScriptRuntimeStateOutputFuture {
+            self.0.executeHostJavaScriptRuntimeStateAsyncTask(handle, timeout, task)
+        }
+        /// Releases the same native state during cleanup.
+        fn destroyHostJavaScriptRuntimeState(&self, handle: HostJavaScriptRuntimeStateHandle) -> HostResult<()> {
+            self.0.destroyHostJavaScriptRuntimeState(handle)
+        }
+    }
+
+    let engine = newTestToolPkgRegistrationEngine();
+    let mut worker = engine.worker.clone();
+    worker.runtimeHost = Arc::new(DiscardQueuedHost(worker.runtimeHost.clone()));
+    let result = tokio::time::timeout(Duration::from_secs(2), worker.execute_script_function_async(
+        "exports.run = function() { return true; };".into(), "run".into(),
+        BTreeMap::new(), BTreeMap::new(), None, false, Duration::from_secs(60), 60,
+        None, None, false, true,
+    )).await;
+    engine.destroy();
+    let error = result.expect("A discarded start must disconnect without a wall-clock timer").unwrap_err();
+    assert_eq!(error.kind, JsExecutionErrorKind::WorkerUnavailable);
 }

@@ -100,9 +100,9 @@ test("draft resolver consumes supplied chatExtension and returns a complete pers
   assert.deepEqual(result.profile.modelBinding, { providerId: "controlled-provider", modelId: "controlled-model" });
   assert.equal(result.profile.ttsConfigId, "controlled-voice");
   assert.deepEqual(plain(markers.decodeMessageMarker(result.messageExtension)).profile, result.profile);
-  assert.deepEqual(calls.sort(), ["models", "tools", "tts"]);
+  assert.deepEqual(calls.sort(), ["models", "tts"]);
   await assert.rejects(() => service.dispatchDomain("chat.configuration.resolve", request(null, null)), /./);
-  await assert.rejects(() => service.dispatchDomain("chat.configuration.resolve", request({ version: 1, selection: "card:missing" }, null)), /exactly one stored record/);
+  await assert.rejects(() => service.dispatchDomain("chat.configuration.resolve", request({ version: 1, selection: "card:missing" }, null)), /Character not found: missing/);
 });
 
 /** Rejects the removed Core selection field and every absent mandatory extension field at the public domain boundary. */

@@ -2178,6 +2178,14 @@ pub trait HostJavaScriptRuntimeHost: Send + Sync {
         task: HostJavaScriptRuntimeStateTask,
     ) -> HostResult<HostJavaScriptRuntimeStateOutput>;
 
+    /// Enqueues a finite synchronous continuation directly on its owner without waiting for completion.
+    fn enqueueHostJavaScriptRuntimeStateTask(
+        &self,
+        handle: HostJavaScriptRuntimeStateHandle,
+        timeoutMillis: u64,
+        task: HostJavaScriptRuntimeStateTask,
+    ) -> HostResult<()>;
+
     /// Executes one asynchronous operation against an affine JavaScript runtime state.
     fn executeHostJavaScriptRuntimeStateAsyncTask(
         &self,

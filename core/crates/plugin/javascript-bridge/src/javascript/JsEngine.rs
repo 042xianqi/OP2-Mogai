@@ -203,6 +203,7 @@ fn completeScriptExecution(
 
 /// Owns the arguments only until a call has been started on its affine JS thread.
 struct JsScriptRequest {
+    submittedAtMs: u128,
     executionHost: Option<Arc<dyn JsExecutionHost>>,
     callId: String,
     script: String,
@@ -261,6 +262,7 @@ struct JsEngineState {
     composeDslTextResources: Option<Arc<ToolPkgTextResources>>,
     detachedCallContexts: BTreeMap<String, JsCallContext>,
     pendingScriptExecutions: BTreeMap<String, JsPendingScriptExecution>,
+    registeredScriptSources: BTreeMap<String, String>,
     jsEnvironmentInitialized: bool,
     packageBinding: Arc<OnceLock<JsPackageBinding>>,
 }
@@ -304,7 +306,6 @@ impl JsEngineWorker {
         let requested = Arc::new(AtomicBool::new(false));
         let alive = Arc::new(AtomicBool::new(true));
         let wakeRuntimeHost = runtimeHost.clone();
-        let wakeScheduler = defaultHostRuntimeTaskSchedulerHost();
         let wakeSlot = backgroundWake.clone();
         let wakeAlive = alive.clone();
         let wake: JsBackgroundWake = Arc::new(move || {
@@ -316,61 +317,37 @@ impl JsEngineWorker {
                 return;
             }
             let taskRuntimeHost = wakeRuntimeHost.clone();
-            let taskScheduler = wakeScheduler.clone();
             let taskScheduled = scheduled.clone();
             let taskRequested = requested.clone();
             let taskWakeSlot = wakeSlot.clone();
             let taskAlive = wakeAlive.clone();
-            let task: operit_host_api::HostRuntimeAsyncTask = Box::new(move || {
-                Box::pin(async move {
-                    if !taskAlive.load(Ordering::Acquire) {
-                        return;
+            let task: operit_host_api::HostJavaScriptRuntimeStateTask = Box::new(move |state, interrupt| {
+                if !taskAlive.load(Ordering::Acquire) {
+                    return Ok(Box::new(()));
+                }
+                taskRequested.store(false, Ordering::Release);
+                let result = state.downcast_mut::<JsEngineState>()
+                    .ok_or_else(|| HostError::new("Invalid JavaScript runtime state"))
+                    .and_then(|state| state.advanceJavaScriptExecutions(interrupt)
+                        .map_err(|error| HostError::new(error.to_string())));
+                if let Err(error) = result {
+                    if taskAlive.load(Ordering::Acquire) {
+                        AppLogger::e(TAG, &format!("detached JavaScript execution failed: {error}"));
                     }
-                    taskRequested.store(false, Ordering::Release);
-                    let result = taskRuntimeHost
-                        .executeHostJavaScriptRuntimeStateAsyncTask(
-                            stateHandle,
-                            60_000,
-                            Box::new(move |state, interrupt| {
-                                Box::pin(async move {
-                                    let state =
-                                        state.downcast_mut::<JsEngineState>().ok_or_else(|| {
-                                            HostError::new(
-                                                "JavaScript runtime state type does not match",
-                                            )
-                                        })?;
-                                    state
-                                        .advanceJavaScriptExecutions(interrupt)
-                                        .map_err(|error| HostError::new(error.to_string()))?;
-                                    Ok(Box::new(()) as HostJavaScriptRuntimeStateOutput)
-                                })
-                            }),
-                        )
-                        .await;
-                    if let Err(error) = result {
-                        if !taskAlive.load(Ordering::Acquire) {
-                            return;
-                        }
-                        AppLogger::e(
-                            TAG,
-                            &format!("detached JavaScript execution failed: {error}"),
-                        );
+                }
+                taskScheduled.store(false, Ordering::Release);
+                if taskRequested.swap(false, Ordering::AcqRel) {
+                    if let Some(wake) = taskWakeSlot.lock()
+                        .expect("background wake mutex poisoned").clone()
+                    {
+                        wake();
                     }
-                    taskScheduled.store(false, Ordering::Release);
-                    if taskRequested.swap(false, Ordering::AcqRel) {
-                        if let Some(wake) = taskWakeSlot
-                            .lock()
-                            .expect("background wake mutex poisoned")
-                            .clone()
-                        {
-                            wake();
-                        }
-                    }
-                })
+                }
+                Ok(Box::new(()))
             });
-            if let Err(error) =
-                taskScheduler.scheduleHostRuntimeCooperativeAsyncTask("operit-js-detached", task)
-            {
+            if let Err(error) = taskRuntimeHost.enqueueHostJavaScriptRuntimeStateTask(
+                stateHandle, 60_000, task,
+            ) {
                 scheduled.store(false, Ordering::Release);
                 AppLogger::e(
                     TAG,
@@ -478,6 +455,7 @@ impl JsEngineWorker {
                 cancelled: cancelled.clone(),
             };
             let request = JsScriptRequest {
+                submittedAtMs: currentTimeMillisU128(),
                 executionHost,
                 callId,
                 script,
@@ -523,39 +501,36 @@ impl JsEngineWorker {
                     .map_err(javaScriptExecutionErrorFromHost)?;
             }
             let completionForStart = completion.clone();
-            defaultHostRuntimeTaskSchedulerHost()
-                .scheduleHostRuntimeAsyncTask(
-                    "operit-js-request",
-                    Box::new(move || {
-                        Box::pin(async move {
-                            let result = async {
-                                if let Some(timing) = &request.ipcTiming {
-                                    timing.mark("schedulerWaitMs").map_err(javaScriptExecutionErrorFromHost)?;
-                                }
-                                if !worker.alive.load(Ordering::Acquire) {
-                                    return Err(JsExecutionError::worker_unavailable(
-                                        "JavaScript runtime was destroyed",
-                                    ));
-                                }
-                                worker
-                                    .executeScriptStepAsync(
-                                        JsScriptRequestStep::Start(request),
-                                        match deadlineMillis {
-                                            Some(deadline) => remainingScriptRequestMillis(deadline, timeoutSec)?,
-                                            None => u64::try_from(timeout.as_millis()).map_err(|_| JsExecutionError::invalid_request("JavaScript CPU slice exceeds host range"))?,
-                                        },
-                                        timeoutSec,
-                                    )
-                                    .await
-                            }
-                            .await;
-                            if let Err(error) = result {
-                                completeScriptExecution(&completionForStart, Err(error));
-                            }
-                        })
-                    }),
-                )
-                .map_err(javaScriptExecutionErrorFromHost)?;
+            let timingForStart = request.ipcTiming.clone();
+            let aliveForStart = worker.alive.clone();
+            let timeoutMillis = match deadlineMillis {
+                Some(deadline) => remainingScriptRequestMillis(deadline, timeoutSec)?,
+                None => u64::try_from(timeout.as_millis()).map_err(|_| {
+                    JsExecutionError::invalid_request("JavaScript CPU slice exceeds host range")
+                })?,
+            };
+            let task = scriptRequestStepTask(JsScriptRequestStep::Start(request), timeoutSec);
+            worker.runtimeHost.enqueueHostJavaScriptRuntimeStateTask(
+                worker.stateHandle, timeoutMillis,
+                Box::new(move |state, interrupt| {
+                    let result = (|| {
+                        if let Some(timing) = &timingForStart {
+                            timing.mark("schedulerWaitMs").map_err(javaScriptExecutionErrorFromHost)?;
+                        }
+                        if !aliveForStart.load(Ordering::Acquire) {
+                            return Err(JsExecutionError::worker_unavailable("JavaScript runtime was destroyed"));
+                        }
+                        let output = task(state, interrupt).map_err(javaScriptExecutionErrorFromHost)?;
+                        downcastJavaScriptStateOutput::<()>(output)
+                    })();
+                    if let Err(error) = result {
+                        completeScriptExecution(&completionForStart, Err(error));
+                    }
+                    Ok(Box::new(()))
+                }),
+            ).map_err(javaScriptExecutionErrorFromHost)?;
+            // The queued task owns completion; dropping an unstarted task must disconnect its caller.
+            drop(completion);
             let result = receiver.await.map_err(|_| {
                 JsExecutionError::worker_unavailable(
                     "JavaScript execution completion channel disconnected",
@@ -1137,6 +1112,7 @@ impl JsEngineState {
             composeDslTextResources: None,
             detachedCallContexts: BTreeMap::new(),
             pendingScriptExecutions: BTreeMap::new(),
+            registeredScriptSources: BTreeMap::new(),
             jsEnvironmentInitialized: false,
             packageBinding,
         };
@@ -1145,6 +1121,23 @@ impl JsEngineState {
         // script deadline. An interrupted partial bootstrap cannot be retried safely.
         state.initJavaScriptEnvironment()?;
         Ok(state)
+    }
+
+    /// Registers immutable source once per realm, using exact native content equality for reuse.
+    #[allow(non_snake_case)]
+    fn registerScriptSource(&mut self, script: &str) -> Result<String, String> {
+        if let Some(sourceId) = self.registeredScriptSources.get(script) {
+            return Ok(sourceId.clone());
+        }
+        let sourceId = format!("source_{}", self.registeredScriptSources.len());
+        self.runtime
+            .callHostJavaScriptFunction(
+                "__operitRegisterScriptSource",
+                &[Value::String(sourceId.clone()), Value::String(script.to_string())],
+            )
+            .map_err(|error| error.to_string())?;
+        self.registeredScriptSources.insert(script.to_string(), sourceId.clone());
+        Ok(sourceId)
     }
 
     /// Installs every active owner so callbacks advanced by another call retain their context.
@@ -1174,6 +1167,7 @@ impl JsEngineState {
         step: JsScriptRequestStep,
         interrupt: HostJavaScriptExecutionInterrupt,
     ) -> JsExecutionResult<()> {
+        let _logBatch = AppLogger::batch_file_writes();
         if let JsScriptRequestStep::Start(request) = &step {
             if let Some(timing) = &request.ipcTiming {
                 timing.mark("engineQueueMs").map_err(javaScriptExecutionErrorFromHost)?;
@@ -1211,7 +1205,9 @@ impl JsEngineState {
         &mut self,
         request: JsScriptRequest,
     ) -> JsExecutionResult<JsPendingScriptExecution> {
+        let startedAtMs = currentTimeMillisU128();
         let JsScriptRequest {
+            submittedAtMs,
             executionHost,
             callId,
             script,
@@ -1290,18 +1286,32 @@ impl JsEngineState {
                     .insert("__operit_package_lang".to_string(), Value::String(language));
             }
             clearNativeExecutionSession(&callId);
-            if let Err(error) = self.runtime.callHostJavaScriptFunction(
+            let invokeAtMs = currentTimeMillisU128();
+            let scriptBytes = script.len();
+            let sourceCount = self.registeredScriptSources.len();
+            let sourceId = self.registerScriptSource(&script).map_err(JsExecutionError::runtime)?;
+            let sourceRegistered = self.registeredScriptSources.len() != sourceCount;
+            let invocation = self.runtime.callHostJavaScriptFunction(
                 "__operitExecuteScriptFunction",
                 &[
                     Value::String(callId.clone()),
                     Value::Object(effectiveParams.into_iter().collect()),
-                    Value::String(script),
-                    Value::String(functionName),
+                    Value::String(sourceId),
+                    Value::String(functionName.clone()),
                     Value::from(timeoutSec),
                     Value::from(10000),
                     Value::Bool(useComposeDslTextResources),
                 ],
-            ) {
+            );
+            let completedAtMs = currentTimeMillisU128();
+            AppLogger::d("JsExecutionTiming", &format!(
+                "kind=js_start callId={} function={} scriptBytes={} sourceRegistered={} queueMs={} initializeMs={} invokeMs={}",
+                callId, functionName, scriptBytes, sourceRegistered,
+                startedAtMs.saturating_sub(submittedAtMs),
+                invokeAtMs.saturating_sub(startedAtMs),
+                completedAtMs.saturating_sub(invokeAtMs),
+            ));
+            if let Err(error) = invocation {
                 self.cancelJavaScriptExecution(&callId);
                 return Err(JsExecutionError::runtime(error.to_string()));
             }
@@ -1590,6 +1600,7 @@ impl JsEngineState {
         &mut self,
         hostInterrupt: HostJavaScriptExecutionInterrupt,
     ) -> JsExecutionResult<()> {
+        let _logBatch = AppLogger::batch_file_writes();
         // Bound continuations by active request deadlines, including CPU-bound Promise jobs.
         let now = currentTimeMillisU128();
         let timeoutMillis =
@@ -1865,13 +1876,14 @@ impl JsEngineState {
         functionName: &str,
         timeoutSec: u64,
     ) -> Result<(), String> {
+        let sourceId = self.registerScriptSource(script)?;
         self.runtime
             .callHostJavaScriptFunction(
                 "__operitExecuteScriptFunction",
                 &[
                     Value::String(callId.to_string()),
                     Value::Object(params.into_iter().collect()),
-                    Value::String(script.to_string()),
+                    Value::String(sourceId),
                     Value::String(functionName.to_string()),
                     Value::from(timeoutSec),
                     Value::from(10_000u64),

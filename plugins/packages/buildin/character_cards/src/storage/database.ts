@@ -35,6 +35,7 @@ import {
   assertBoolean,
   assertCard,
   assertGroup,
+  assertInteger,
   assertObject,
   assertString,
   assertTag,
@@ -294,6 +295,46 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
       assertGroup(row.value);
       return row.value;
     });
+  }
+
+  /** Reads one attached prompt tag without scanning the tag directory. */
+  getTag(id: string): Promise<Tag> {
+    requireId(id, "标签标识");
+    return this.readConsistent(async () => {
+      const row = await this.database.get<Tag>("tags", id);
+      if (row === null) throw new Error("Tag not found: " + id);
+      assertTag(row.value);
+      return row.value;
+    });
+  }
+
+  /** Reads one referenced shared library without scanning unrelated stores. */
+  getStore(id: string): Promise<Store> {
+    requireId(id, "共享记忆库标识");
+    return this.readConsistent(async () => {
+      const row = await this.database.get<Store>("stores", id);
+      if (row === null) throw new Error("Shared memory not found: " + id);
+      assertObject(row.value, "共享记忆库");
+      requireId(row.value.id, "共享记忆库标识");
+      assertString(row.value.name, "共享记忆库名称");
+      assertInteger(row.value.createdAt, "记忆库创建时间", 0);
+      assertInteger(row.value.updatedAt, "记忆库修改时间", 0);
+      return row.value;
+    });
+  }
+
+  /** Reads the actual model directory only when model validation needs it. */
+  listModels(): ReturnType<CharacterDirectories["listModels"]> {
+    this.requirePublicationReady();
+    if (this.directories === null) throw new Error("External directory readers are unavailable");
+    return this.directories.listModels();
+  }
+
+  /** Reads the actual speech directory only when speech validation needs it. */
+  listTtsConfigs(): ReturnType<CharacterDirectories["listTtsConfigs"]> {
+    this.requirePublicationReady();
+    if (this.directories === null) throw new Error("External directory readers are unavailable");
+    return this.directories.listTtsConfigs();
   }
 
   private async readMetadata(): Promise<Pick<Snapshot, "active" | "memoryPreferences">> {

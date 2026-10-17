@@ -64,13 +64,13 @@ test("display: stale group references propagate their actual read failure and ne
   const service = {
     /** Rejects any attempt to read execution catalogs. */
     async snapshot() { throw new Error("Catalogs must not be read"); },
-    /** Returns only explicitly controlled reference records and preserves the exact missing-record error. */
-    async dispatchDomain(operation, input) {
-      calls.push(operation);
-      if (operation === "group.get") return { id: input.id, name: "Reference group", members: [{ characterCardId: "removed", orderIndex: 0 }] };
-      if (operation === "character.get") throw removed;
-      throw new Error("Unexpected operation " + operation);
+    /** Returns only the explicitly controlled group record. */
+    async getGroup(id) {
+      calls.push("group.get");
+      return { id, name: "Reference group", members: [{ characterCardId: "removed", orderIndex: 0 }] };
     },
+    /** Preserves the exact missing-record failure from the keyed character read. */
+    async getCharacter() { calls.push("character.get"); throw removed; },
   };
   await assert.rejects(() => domain.resolveChatConfiguration(displayRequest("group:one"), service),
     /** Requires the same failure object rather than a rewritten default-role error. */

@@ -1,9 +1,12 @@
-import { requireChatSelection } from "./chat-bindings";
+import { parseChatSelection } from "./chat-bindings";
+import type { CharacterRepository } from "./canonical";
+import { configurationReadScope } from "./configuration-reads";
+import { combineCharacterPrompt } from "./character-prompt";
 import { decodeChatMarker, decodeMessageMarker, encodeMessageMarker, markerObject } from "./chat-markers";
 import { resolveChatDisplay } from "./group-execution/display";
 import { modelParticipant } from "./model-participant";
 import { withGroupParticipantPrompt } from "./group-execution/prompts";
-import type { MemoryQueryRequest, JsonValue, ChatConfigurationExecutionResult, ChatConfigurationRequest, ChatConfigurationResult, ChatParticipantProfile, CharacterRecord, DomainInput, DomainOperation, DomainOutput, SnapshotRecord } from "./api";
+import type { MemoryQueryRequest, JsonValue, ChatConfigurationExecutionResult, ChatConfigurationRequest, ChatConfigurationResult, ChatParticipantProfile, CharacterRecord, DomainInput, DomainOperation, DomainOutput } from "./api";
 export type { DomainInput, DomainOperation, DomainOutput, DomainOperations } from "./api";
 
 type Validator = (value: unknown, path: string) => void;
@@ -270,10 +273,9 @@ export function jsonValue(value: unknown, path = "result"): JsonValue {
 }
 
 /** Exposes only the shared business service operations used by resolved chat configuration. */
-export interface ChatConfigurationService {
-  readGlobalMemoryPreferences(): Promise<import("./model").GlobalMemoryPreferences>;
-  /** Reads the real persisted plugin directory. */
-  snapshot(): Promise<SnapshotRecord>;
+export interface ChatConfigurationService extends Pick<CharacterRepository,
+  "getCharacter" | "getGroup" | "getTag" | "getStore" | "listModels" | "listTtsConfigs" | "readGlobalMemoryPreferences"
+> {
   /** Calls a typed business operation without invoking another command. */
   dispatchDomain<K extends DomainOperation>(operation: K, input: DomainInput<K>): Promise<DomainOutput<K>>;
 }
@@ -312,16 +314,17 @@ function chatRecord<T extends { id: string }>(records: T[], id: string, kind: st
 
 /** Resolves model, voice, prompt and resource policy exclusively from complete plugin records. */
 async function chatParticipant(
-  card: CharacterRecord, request: ChatConfigurationRequest, directory: SnapshotRecord, service: ChatConfigurationService,
+  card: CharacterRecord, request: ChatConfigurationRequest, service: ChatConfigurationService,
 ): Promise<ChatParticipantProfile> {
   nonblank(card.name, "profile.name");
+  const models = await service.listModels();
   let modelBinding: ChatConfigurationRequest["defaultModelBinding"];
   switch (card.chatModelBindingMode) {
     case "FOLLOW_GLOBAL": modelBinding = { ...request.defaultModelBinding }; break;
     case "FIXED_MODEL": {
       nonblank(card.chatModelId, "profile.fixedModelId");
       nonblank(card.chatProviderId, "Fixed model provider must be explicitly selected");
-      const candidates = directory.models.filter(
+      const candidates = models.filter(
         /** Resolves the exact provider-scoped model selected by the user. */
         model => model.providerId === card.chatProviderId && model.modelId === card.chatModelId,
       );
@@ -333,20 +336,20 @@ async function chatParticipant(
     }
     default: throw new Error("Invalid model binding mode: " + card.chatModelBindingMode);
   }
-  const resolvedModels = directory.models.filter(
+  const resolvedModels = models.filter(
     /** Requires the actual configured provider/model pair. */
     model => model.providerId === modelBinding.providerId && model.modelId === modelBinding.modelId,
   );
   if (resolvedModels.length !== 1) throw new Error("Model binding unavailable or duplicated: " + modelBinding.providerId + "/" + modelBinding.modelId);
   const ttsConfigId = card.ttsConfigId === null ? request.defaultTtsConfigId : card.ttsConfigId;
   nonblank(ttsConfigId, "profile.ttsConfigId");
-  chatRecord(directory.ttsConfigs, ttsConfigId, "TTS configuration");
+  chatRecord(await service.listTtsConfigs(), ttsConfigId, "TTS configuration");
   let primary: string;
   switch (card.memoryBindingMode) {
     case "CHARACTER": primary = "character:" + card.id; break;
     case "SHARED":
       nonblank(card.sharedMemoryId, "profile.sharedMemoryId");
-      chatRecord(directory.stores, card.sharedMemoryId as string, "shared memory");
+      await service.getStore(card.sharedMemoryId as string);
       primary = "shared:" + card.sharedMemoryId;
       break;
     default: throw new Error("Invalid memory binding mode: " + card.memoryBindingMode);
@@ -354,17 +357,17 @@ async function chatParticipant(
   const routes = new Map<string, { key: string; readable: boolean; writable: boolean }>();
   routes.set(primary, { key: primary, readable: true, writable: true });
   for (const mount of card.sharedMemoryMounts) {
-    chatRecord(directory.stores, mount.sharedMemoryId, "mounted shared memory");
+    await service.getStore(mount.sharedMemoryId);
     const key = "shared:" + mount.sharedMemoryId;
     const existing = routes.get(key);
     routes.set(key, { key, readable: mount.readable || existing?.readable === true, writable: mount.writable || existing?.writable === true });
   }
-  const prompt = await service.dispatchDomain("character.combine", { id: card.id, promptFunctionType: request.promptFunctionType, additionalTagIds: [] });
+  const prompt = await combineCharacterPrompt(card, [], request.promptFunctionType, service);
   const userPreferencesText = (await service.readGlobalMemoryPreferences()).userDescriptionEnabled
     ? (await service.dispatchDomain("memory.user.read", { ownerKey: primary })).content : "";
   return {
     id: card.id, name: card.name, avatarUri: card.avatarUri,
-    introPrompt: prompt.prompt, userPreferencesText,
+    introPrompt: prompt, userPreferencesText,
     openingStatement: card.openingStatement, modelBinding, ttsConfigId,
     toolAccess: { ...card.toolAccessConfig,
       allowedBuiltinTools: [...card.toolAccessConfig.allowedBuiltinTools], allowedPackages: [...card.toolAccessConfig.allowedPackages],
@@ -376,8 +379,9 @@ async function chatParticipant(
 
 /** Resolves an explicit execution participant without moving domain selection rules into Core. */
 export async function resolveChatConfiguration(request: ChatConfigurationRequest, service: ChatConfigurationService): Promise<ChatConfigurationResult> {
-  if (request.purpose === "display") return resolveChatDisplay(request, service, resolveChatExecution);
-  return resolveChatExecution(request, service);
+  const reads = configurationReadScope(service);
+  if (request.purpose === "display") return resolveChatDisplay(request, reads, resolveChatExecution);
+  return resolveChatExecution(request, reads);
 }
 
 /** Resolves only an explicitly requested execution or its exact saved historical message snapshot. */
@@ -389,37 +393,37 @@ export async function resolveChatExecution(request: ChatConfigurationRequest, se
     return { contextKey: marker.selection, profile: marker.profile, participants: marker.participants, messageExtension: markerObject(request.messageExtension, "historical message extension") };
   }
   const marker = decodeChatMarker(request.chatExtension);
-  const directory = await service.snapshot();
-  const selection = requireChatSelection(marker.selection, directory.cards, directory.groups);
+  const selection = parseChatSelection(marker.selection);
   if (selection.kind === "model") {
-    const profile = modelParticipant(request, directory), participants = [profile];
+    const [models, ttsConfigs] = await Promise.all([service.listModels(), service.listTtsConfigs()]);
+    const profile = modelParticipant(request, { models, ttsConfigs }), participants = [profile];
     const messageExtension = encodeMessageMarker({ version: 1, selection: marker.selection, promptFunctionType: request.promptFunctionType, primaryOwnerKey: "", profile, participants });
     return { contextKey: marker.selection, profile, participants, messageExtension };
   }
   let cards: CharacterRecord[];
-  if (selection.kind === "card") cards = [chatRecord(directory.cards, selection.id, "character")];
+  if (selection.kind === "card") cards = [await service.getCharacter(selection.id)];
   else {
-    const group = chatRecord(directory.groups, selection.id, "group");
+    const group = await service.getGroup(selection.id);
     const members = [...group.members].sort(
       /** Preserves the persisted participant order without planning turns in Core. */
       (left, right) => left.orderIndex - right.orderIndex,
     );
     if (members.length === 0) throw new Error("Selected group has no participants: " + group.id);
     const ids = new Set<string>();
-    cards = members.map(
+    cards = await Promise.all(members.map(
       /** Rejects duplicate or deleted group members before producing any execution profile. */
       member => {
         if (ids.has(member.characterCardId)) throw new Error("Duplicate group participant: " + member.characterCardId);
         ids.add(member.characterCardId);
-        return chatRecord(directory.cards, member.characterCardId, "group participant");
+        return service.getCharacter(member.characterCardId);
       },
-    );
+    ));
   }
   if (request.participantId === null && cards.length !== 1) throw new Error("A planned conversation requires an explicit execution participant");
   if (request.participantId !== null) chatRecord(cards, request.participantId, "selected participant");
   const participants: ChatParticipantProfile[] = [];
   for (const card of cards) {
-    const participant = await chatParticipant(card, request, directory, service);
+    const participant = await chatParticipant(card, request, service);
     participants.push(selection.kind === "group" ? withGroupParticipantPrompt(participant, cards) : participant);
   }
   let profile: ChatParticipantProfile;
@@ -428,8 +432,8 @@ export async function resolveChatExecution(request: ChatConfigurationRequest, se
     if (participants.length !== 1) throw new Error("A planned conversation requires an explicit execution participant");
     profile = participants[0];
   }
-  const owner = await service.dispatchDomain("memory.resolveOwner", { characterId: profile.id });
-  const primaryOwnerKey = (owner.kind === "CHARACTER" ? "character:" : "shared:") + owner.id;
+  const card = chatRecord(cards, profile.id, "selected participant");
+  const primaryOwnerKey = (card.memoryBindingMode === "CHARACTER" ? "character:" + card.id : "shared:" + card.sharedMemoryId);
   const messageExtension = encodeMessageMarker({ version: 1, selection: marker.selection, promptFunctionType: request.promptFunctionType, primaryOwnerKey, profile, participants });
   return { contextKey: marker.selection, profile, participants, messageExtension };
 }

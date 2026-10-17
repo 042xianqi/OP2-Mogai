@@ -24,7 +24,7 @@ export async function orderedGroupParticipants(group: GroupRecord, service: Chat
   for (const member of members) {
     if (ids.has(member.characterCardId)) throw new Error("Duplicate group participant: " + member.characterCardId);
     ids.add(member.characterCardId);
-    const card = await service.dispatchDomain("character.get", { id: member.characterCardId });
+    const card = await service.getCharacter(member.characterCardId);
     if (card.id !== member.characterCardId) throw new Error("Group participant read returned a different identity");
     participants.push(identity(card));
   }
@@ -38,15 +38,15 @@ export async function resolveChatDisplay(
   if (request.purpose !== "display" || request.participantId !== null || request.messageExtension !== null) throw new Error("Display configuration cannot request an execution participant or message snapshot");
   const marker = decodeChatMarker(request.chatExtension), selection = parseChatSelection(marker.selection);
   if (selection.kind === "model") {
-    const participant = modelIdentity(request, await service.snapshot());
+    const participant = modelIdentity(request, { models: await service.listModels() });
     return { contextKey: marker.selection, identity: { title: participant.name, avatarUri: participant.avatarUri }, participants: [participant], initialMessages: [] };
   }
   if (selection.kind === "group") {
-    const group = await service.dispatchDomain("group.get", { id: selection.id });
+    const group = await service.getGroup(selection.id);
     if (group.id !== selection.id || group.name.trim().length === 0) throw new Error("Display group identity is invalid");
     return { contextKey: marker.selection, identity: { title: group.name, avatarUri: null }, participants: await orderedGroupParticipants(group, service), initialMessages: [] };
   }
-  const card = await service.dispatchDomain("character.get", { id: selection.id });
+  const card = await service.getCharacter(selection.id);
   if (card.id !== selection.id) throw new Error("Display character read returned a different identity");
   const result: ChatConfigurationDisplayResult = { contextKey: marker.selection, identity: { title: card.name, avatarUri: card.avatarUri }, participants: [identity(card)], initialMessages: [] };
   if (card.openingStatement.trim().length !== 0) {

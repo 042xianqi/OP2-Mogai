@@ -842,6 +842,23 @@ impl PluginStorageSession {
         if !storage.exists(&database.path)? || !ownsFile(storage.clone(), &database.path)? {
             return Err(failure("Storage database has been removed"));
         }
+        let request = match request {
+            StorageRequest::Query { statement, .. } => {
+                if database.kind != StorageKind::Sqlite {
+                    return Err(failure("SQL access requires a SQLite handle"));
+                }
+                validateStatement(&statement, true, database.sync)?;
+                let rows = database.store.queryRows(
+                    &statement.sql,
+                    statement.params.into_iter().map(sqlValue).collect::<Result<Vec<_>, _>>()?,
+                )?;
+                return Ok(StorageResponse::Query(rows.into_iter().map(|row| StorageSqlRow {
+                    columns: row.columns,
+                    values: row.values.into_iter().map(wireValue).collect(),
+                }).collect()));
+            }
+            request => request,
+        };
         let mutating = matches!(
             &request,
             StorageRequest::Execute { .. }
@@ -850,12 +867,6 @@ impl PluginStorageSession {
                 | StorageRequest::Commit { .. }
         );
         let result = database.store.transaction(|tx| match request {
-            StorageRequest::Query {statement,..} => {
-                if database.kind != StorageKind::Sqlite { return Err(failure("SQL access requires a SQLite handle")); }
-                validateStatement(&statement,true,database.sync)?;
-                let rows = tx.queryRows(&statement.sql,statement.params.into_iter().map(sqlValue).collect::<Result<Vec<_>,_>>()?)?;
-                Ok(StorageResponse::Query(rows.into_iter().map(|row| StorageSqlRow { columns: row.columns, values: row.values.into_iter().map(wireValue).collect() }).collect()))
-            }
             StorageRequest::Execute {statement,..} => executeStatements(&database, tx, vec![statement]).map(StorageResponse::Execute),
             StorageRequest::Transaction {statements, when_absent, ..} => {
                 if let Some(identity) = when_absent {
@@ -899,7 +910,7 @@ impl PluginStorageSession {
                 })).collect::<Result<Vec<_>, SqliteStoreError>>().map(StorageResponse::List)
             }
             StorageRequest::Commit {mutations,..} => commitValues(&database,tx,mutations).map(StorageResponse::Commit),
-            StorageRequest::Open {..} | StorageRequest::Close {..} => unreachable!(),
+            StorageRequest::Open {..} | StorageRequest::Close {..} | StorageRequest::Query {..} => unreachable!(),
         })?;
         if mutating {
             publishSyncMutation();

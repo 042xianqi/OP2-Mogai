@@ -98,7 +98,18 @@ const handlers: DomainHandlers = {
   "memory.candidate.enqueue": (input, repository) => enqueueCandidate(input, repository),
   /** Resolves chat configuration using this operation's existing repository snapshot. */
   "chat.configuration.resolve": (input, repository) => resolveConfiguration(input, {
-    snapshot: () => snapshot(repository),
+    /** Reads only the requested character. */
+    getCharacter: (id) => repository.getCharacter(id),
+    /** Reads only the requested group. */
+    getGroup: (id) => repository.getGroup(id),
+    /** Reads only a referenced tag. */
+    getTag: (id) => repository.getTag(id),
+    /** Reads only a referenced shared library. */
+    getStore: (id) => repository.getStore(id),
+    /** Reads only the model directory. */
+    listModels: () => repository.listModels(),
+    /** Reads only the speech directory. */
+    listTtsConfigs: () => repository.listTtsConfigs(),
     readGlobalMemoryPreferences: () => repository.readGlobalMemoryPreferences(),
     dispatchDomain: <K extends DomainOperation>(operation: K, payload: DomainInput<K>) => executeDomain(operation, payload, repository),
   }),

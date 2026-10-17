@@ -527,6 +527,30 @@ impl HostJavaScriptRuntimeHost for WebHostJavaScriptRuntimeHost {
         task(lease.state.as_mut().expect("JavaScript state lease must own its state").as_mut(), interrupt)
     }
 
+    /// Posts one finite continuation through the browser event loop and the existing state lease.
+    fn enqueueHostJavaScriptRuntimeStateTask(
+        &self,
+        handle: HostJavaScriptRuntimeStateHandle,
+        timeoutMillis: u64,
+        task: HostJavaScriptRuntimeStateTask,
+    ) -> HostResult<()> {
+        JAVASCRIPT_STATE_LOCKS.with(|locks| {
+            if locks.borrow().contains_key(&handle.id) { Ok(()) } else {
+                Err(HostError::new(format!("JavaScript runtime state does not exist: {}", handle.id)))
+            }
+        })?;
+        let pending = self.executeHostJavaScriptRuntimeStateAsyncTask(
+            handle, timeoutMillis,
+            Box::new(move |state, interrupt| Box::pin(std::future::ready(task(state, interrupt)))),
+        );
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Err(error) = pending.await {
+                operit_host_api::logHostError("JavaScriptRuntime", &error.to_string());
+            }
+        });
+        Ok(())
+    }
+
     /// Executes one asynchronous operation against a browser-affine JavaScript state.
     fn executeHostJavaScriptRuntimeStateAsyncTask(
         &self,

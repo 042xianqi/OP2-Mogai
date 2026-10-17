@@ -32,6 +32,10 @@ thread_local! {
 }
 
 enum NativeJavaScriptStateRequest {
+    Enqueue {
+        task: HostJavaScriptRuntimeStateTask,
+        interrupt: HostJavaScriptExecutionInterrupt,
+    },
     Execute {
         task: HostJavaScriptRuntimeStateTask,
         interrupt: HostJavaScriptExecutionInterrupt,
@@ -408,6 +412,11 @@ impl HostJavaScriptRuntimeHost for NativeHostJavaScriptRuntimeHost {
                     .expect("native JavaScript state executor must start");
                 for request in requestReceiver {
                     match request {
+                        NativeJavaScriptStateRequest::Enqueue { task, interrupt } => {
+                            if let Err(error) = task(state.as_mut(), interrupt) {
+                                operit_host_api::logHostError("JavaScriptRuntime", &error.to_string());
+                            }
+                        }
                         NativeJavaScriptStateRequest::Execute {
                             task,
                             interrupt,
@@ -473,6 +482,19 @@ impl HostJavaScriptRuntimeHost for NativeHostJavaScriptRuntimeHost {
                 "JavaScript runtime state worker disconnected",
             )),
         }
+    }
+
+    /// Posts directly to the existing affine owner without a pool task or completion channel.
+    fn enqueueHostJavaScriptRuntimeStateTask(
+        &self,
+        handle: HostJavaScriptRuntimeStateHandle,
+        timeoutMillis: u64,
+        task: HostJavaScriptRuntimeStateTask,
+    ) -> HostResult<()> {
+        let worker = self.stateWorker(handle)?;
+        let interrupt = HostJavaScriptExecutionInterrupt::new(timeoutMillis)?;
+        worker.send(NativeJavaScriptStateRequest::Enqueue { task, interrupt })
+            .map_err(|error| HostError::new(error.to_string()))
     }
 
     /// Executes one asynchronous operation on a native JavaScript state thread.

@@ -1024,16 +1024,18 @@ impl AIToolHandler {
         policy: ToolExecutionPolicy,
     ) -> Result<Vec<ToolResult>, String> {
         let context = ToolInvocationContext::capture(self.clone());
-        context.clone().scope(self.executeInvocationInContext(request, policy, &context)).await
+        operit_util::AppLogger::AppLogger::batch_future_file_writes(
+            context.clone().scope(self.executeInvocationInContext(request, policy, &context)),
+        ).await
     }
 
     /// Executes under the native caller context and dispatches lifecycle hooks only for AI requests.
     async fn executeInvocationInContext(&mut self, request: &ToolCall, policy: ToolExecutionPolicy, context: &ToolInvocationContext) -> Result<Vec<ToolResult>, String> {
-        let entryTool = request.toLegacyTool();
+        let entryRequest = request;
         let resolved = request.resolveTarget(context)?;
         let request = &resolved;
-        let tool = request.toLegacyTool();
-        let tool = &tool;
+        let legacyTool = std::sync::OnceLock::new();
+        let tool = || legacyTool.get_or_init(|| request.toLegacyTool());
         let isAiInvocation = matches!(policy, ToolExecutionPolicy::Ai { .. });
         let logExecution = if isAiInvocation {
             ChainLogger::info
@@ -1043,9 +1045,9 @@ impl AIToolHandler {
         let _lifecycle = if isAiInvocation {
             let lifecycle = ToolInvocationLifecycle {
                 context: context.clone(),
-                tool: tool.clone(),
+                tool: tool().clone(),
             };
-            self.notifyToolCallRequested(tool);
+            self.notifyToolCallRequested(tool());
             Some(lifecycle)
         } else {
             None
@@ -1054,36 +1056,36 @@ impl AIToolHandler {
         logExecution(
             TOOL_CHAIN,
             "tool.execute.request",
-            &[("tool", tool.name.clone()), ("policy", format!("{policy:?}"))],
+            &[("tool", request.name.clone()), ("policy", format!("{policy:?}"))],
         );
         let execution = async {
             if let ToolExecutionPolicy::Ai { exposure } = &policy {
-                if let Some(denied) = ToolExecutionManager::buildToolExposureDeniedResult(&entryTool, exposure.clone()) {
+                if let Some(denied) = ToolExecutionManager::buildToolExposureDeniedResult(&entryRequest.toLegacyTool(), exposure.clone()) {
                     return Ok(vec![denied]);
                 }
             }
             if isAiInvocation {
-                let interception = self.checkToolInterception(tool).await?;
+                let interception = self.checkToolInterception(tool()).await?;
                 if let AIToolHookDecision::Block(_) = interception {
-                    return Ok(vec![Self::toolInterceptionResult(tool, interception)]);
+                    return Ok(vec![Self::toolInterceptionResult(tool(), interception)]);
                 }
             }
-            if !self.getToolExecutorOrActivate(&tool.name).await? {
-                return Ok(vec![Self::failedInvocation(tool, format!("Tool not found: {}", tool.name))]);
+            if !self.getToolExecutorOrActivate(&request.name).await? {
+                return Ok(vec![Self::failedInvocation(tool(), format!("Tool not found: {}", request.name))]);
             }
-            let mut executor = self.takeToolExecutorForExecution(&tool.name).await
-                .ok_or_else(|| format!("Registered executor disappeared: {}", tool.name))?;
+            let mut executor = self.takeToolExecutorForExecution(&request.name).await
+                .ok_or_else(|| format!("Registered executor disappeared: {}", request.name))?;
             let prepared = match executor.prepare(request, context, isAiInvocation) {
                 Ok(prepared) => prepared,
-                Err(error) => return Ok(vec![Self::failedInvocation(tool, format!("Invalid tool invocation: {error}"))]),
+                Err(error) => return Ok(vec![Self::failedInvocation(tool(), format!("Invalid tool invocation: {error}"))]),
             };
             if isAiInvocation {
                 if let Some(access) = prepared.access {
-                    if let Err(denied) = self.executeAccessPreflightAsync(tool, access).await {
+                    if let Err(denied) = self.executeAccessPreflightAsync(tool(), access).await {
                         return Ok(vec![denied]);
                     }
                 }
-                self.notifyToolExecutionStarted(tool);
+                self.notifyToolExecutionStarted(tool());
             }
             let collected = prepared.invoke.await;
             if let Some(name) = BuiltinToolName::from_name(&request.name) {
@@ -1096,7 +1098,7 @@ impl AIToolHandler {
                 }
             }
             if collected.is_empty() {
-                return Err(format!("Tool executor returned no results: {}", tool.name));
+                return Err(format!("Tool executor returned no results: {}", request.name));
             }
             Ok(collected)
         }.await;
@@ -1104,21 +1106,21 @@ impl AIToolHandler {
             Ok(results) => {
                 if isAiInvocation {
                     for result in results {
-                        self.notifyToolExecutionResult(tool, result);
+                        self.notifyToolExecutionResult(tool(), result);
                     }
                 }
                 logExecution(
                     TOOL_CHAIN,
                     "tool.execute.completed",
-                    &[("tool", tool.name.clone()), ("resultCount", results.len().to_string()),
+                    &[("tool", request.name.clone()), ("resultCount", results.len().to_string()),
                       ("elapsedMs", operit_host_api::TimeUtils::currentTimeMillis().saturating_sub(startMs).to_string())],
                 );
             }
             Err(error) => {
                 if isAiInvocation {
-                    self.notifyToolExecutionError(tool, error);
+                    self.notifyToolExecutionError(tool(), error);
                 }
-                ChainLogger::error(TOOL_CHAIN, "tool.execute.error", &[("tool", tool.name.clone()), ("error", error.clone())]);
+                ChainLogger::error(TOOL_CHAIN, "tool.execute.error", &[("tool", request.name.clone()), ("error", error.clone())]);
             }
         }
         execution
@@ -1328,8 +1330,8 @@ impl JsExecutionHost for AIToolHandler {
                     serde_json::Value::Number(serde_json::Number::from(data.value)),
                 ),
                 data => JsToolCallResultData::Value(
-                    serde_json::from_str(&data.toJson())
-                        .expect("ToolResultData JSON conversion must succeed"),
+                    serde_json::to_value(data)
+                        .expect("ToolResultData structured conversion must succeed"),
                 ),
             };
             JsToolCallResult {

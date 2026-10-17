@@ -20,12 +20,13 @@ void main() {
   testWidgets(
     'container main realm survives repeated send preparation',
     (tester) async {
-      expect(Platform.isMacOS, isTrue);
       final support = await getApplicationSupportDirectory();
       final parent = await Directory(
         '${support.path}/plugin-send-performance',
       ).create(recursive: true);
       final directory = await parent.createTemp('run-');
+      // ignore: avoid_print
+      print('PLUGIN_SEND_RUNTIME ${directory.path}');
       await platformCoreProxy.setRuntimeStorageRoots(
         '${directory.path}/runtime',
         '${directory.path}/workspace',
@@ -113,10 +114,14 @@ void main() {
       }
       // A local OpenAI protocol fixture measures the complete production send path
       // without credentials, network variance or a live model's generation time.
+      final runtimeTraceFile = File(
+        '${directory.path}/runtime/logs/operit.log',
+      );
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => server.close(force: true));
       Stopwatch? sendWatch;
       Completer<double>? requestBoundary;
+      int? requestTraceEnd;
       server.listen((request) async {
         final body = await utf8.decoder.bind(request).join();
         final payload = jsonDecode(body) as Map<String, Object?>;
@@ -124,7 +129,9 @@ void main() {
             body.contains('isolated-send-probe-') &&
             requestBoundary != null &&
             !requestBoundary.isCompleted) {
-          requestBoundary.complete(sendWatch!.elapsedMicroseconds / 1000);
+          final receivedMs = sendWatch!.elapsedMicroseconds / 1000;
+          requestTraceEnd = await runtimeTraceFile.length();
+          requestBoundary.complete(receivedMs);
         }
         request.response.headers.contentType = ContentType(
           'text',
@@ -222,6 +229,8 @@ void main() {
               package: {'version': 1, 'selection': 'card:${card['id']}'},
             },
           );
+          final traceOffset = await runtimeTraceFile.length();
+          requestTraceEnd = null;
           requestBoundary = Completer<double>();
           sendWatch = Stopwatch()..start();
           await clients.chatRuntimeHolderMain.sendUserMessage(
@@ -259,12 +268,22 @@ void main() {
                 ),
               )
               .timeout(const Duration(seconds: 30));
+          final persistedMs = sendWatch.elapsedMicroseconds / 1000;
+          final policyTiming = _toolPolicyTiming(
+            await _readTraceRange(
+              runtimeTraceFile,
+              traceOffset,
+              requestTraceEnd!,
+            ),
+          );
           samples.add({
             'stage': 'full-send-local-fixture',
+            'chatId': chatId,
             'sample': sample,
             'worldbookEnabled': worldbookEnabled,
             'toHttpReceivedMs': toHttp,
-            'toReplyPersistedMs': sendWatch.elapsedMicroseconds / 1000,
+            'toReplyPersistedMs': persistedMs,
+            'toolPromptPolicy': policyTiming,
           });
         }
       }
@@ -291,7 +310,8 @@ void main() {
       );
       final report = <String, Object?>{
         'scope':
-            'macOS production QJS, CoreLink, tools and SQLite; isolated storage; first-use and retained-realm samples; full sends with/without real worldbook hooks (empty entries) use a local SSE fixture, no live model',
+            'production QJS, CoreLink, tools and SQLite; isolated storage; first-use and retained-realm samples; full sends with/without real worldbook hooks (empty entries) use a local SSE fixture, no live model',
+        'hostPlatform': Platform.operatingSystem,
         'runtimeRoot': directory.path,
         'samples': samples,
       };
@@ -302,4 +322,74 @@ void main() {
     },
     timeout: const Timeout(Duration(minutes: 3)),
   );
+}
+
+/// Reads the preparation interval ending before the fixture returns its first response.
+Future<String> _readTraceRange(File file, int offset, int end) async {
+  final reader = await file.open();
+  try {
+    await reader.setPosition(offset);
+    return utf8.decode(await reader.read(end - offset));
+  } finally {
+    await reader.close();
+  }
+}
+
+/// Reports all five real policy invocations and rejects changes to dispatch or source reuse.
+Map<String, Object?> _toolPolicyTiming(String trace) {
+  final hooks = RegExp(
+    r'ToolPkgTiming: kind=hook package=com\.operit\.character_cards function=toolPromptPolicy stage=(\S+) prepareMs=(\d+) executeMs=(\d+) totalMs=(\d+) success=(true|false)',
+  ).allMatches(trace).toList();
+  final entries = RegExp(
+    r'JsExecutionTiming: kind=js_start callId=(\S+) function=toolPromptPolicy scriptBytes=(\d+) sourceRegistered=(true|false) queueMs=(\d+) initializeMs=(\d+) invokeMs=(\d+)',
+  ).allMatches(trace).toList();
+  expect(hooks, hasLength(5));
+  expect(entries, hasLength(5));
+  expect(
+    hooks.map((match) => match.group(1)),
+    orderedEquals(const [
+      'build_tool_prompt',
+      'before_compose_tool_prompt',
+      'filter_tool_prompt_items',
+      'after_compose_tool_prompt',
+      'filter_tool_call_tools',
+    ]),
+  );
+  for (final match in hooks) {
+    expect(match.group(5), 'true');
+  }
+  for (final match in entries) {
+    expect(
+      match.group(3),
+      'false',
+      reason: 'Each call must reuse its registered main source',
+    );
+  }
+  return {
+    'calls': hooks.length,
+    'prepareMs': hooks.fold<int>(
+      0,
+      (sum, match) => sum + int.parse(match.group(2)!),
+    ),
+    'executeMs': hooks.fold<int>(
+      0,
+      (sum, match) => sum + int.parse(match.group(3)!),
+    ),
+    'totalMs': hooks.fold<int>(
+      0,
+      (sum, match) => sum + int.parse(match.group(4)!),
+    ),
+    'queueMs': entries.fold<int>(
+      0,
+      (sum, match) => sum + int.parse(match.group(4)!),
+    ),
+    'initializeMs': entries.fold<int>(
+      0,
+      (sum, match) => sum + int.parse(match.group(5)!),
+    ),
+    'entryMs': entries.fold<int>(
+      0,
+      (sum, match) => sum + int.parse(match.group(6)!),
+    ),
+  };
 }
