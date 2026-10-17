@@ -223,11 +223,12 @@ function schemaVersion(entry: Storage.ListedEntry | null): number {
 /** Runs the character owner migration table using one explicit switch per released schema version. */
 export async function migrateCharacterSchema(
   database: RelationalDatabase,
-  models: readonly { providerId: string; modelId: string }[],
+  readModels: () => Promise<readonly { providerId: string; modelId: string }[]>,
 ): Promise<void> {
   await database.migrateSchema("character", characterSchemaVersion, async version => {
     switch (version) {
       case 1: {
+        const models = await readModels();
         const mutations: RelationalMutation[] = [];
         for (const entry of await database.read("cards")) {
           const card = entry.value as Record<string, Storage.Value>;
@@ -600,7 +601,7 @@ export class RelationalDatabase {
     return new RelationalDatabase(sql);
   }
   /** Reads a collection as typed records with all child rows from the same guarded operation snapshot. */
-  async read(collection: string, key?: string): Promise<Storage.ListedEntry[]> {
+  async read<T = Storage.Value>(collection: string, key?: string): Promise<Storage.ListedEntry<T>[]> {
     const root = layouts[collection];
     if (root === undefined)
       throw new Error("Unknown relational collection: " + collection);
@@ -625,16 +626,16 @@ export class RelationalDatabase {
       return {
         key: row._key,
         version: row._revision,
-        value: decodeLayout(root, row, relations),
+        value: decodeLayout(root, row, relations) as T,
       };
     });
   }
   /** Reads one exact root identity and its declared child relations. */
-  async get(
+  async get<T = Storage.Value>(
     collection: string,
     key: string,
-  ): Promise<Storage.ListedEntry | null> {
-    const rows = await this.read(collection, key);
+  ): Promise<Storage.ListedEntry<T> | null> {
+    const rows = await this.read<T>(collection, key);
     return rows.length === 0 ? null : rows[0];
   }
   /** Writes guarded roots and their relations atomically through the host journal. */

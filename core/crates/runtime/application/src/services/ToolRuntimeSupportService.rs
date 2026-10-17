@@ -648,6 +648,18 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
         input: Option<serde_json::Value>,
     ) -> ToolRuntimeSupportFuture<'a, Result<String, String>> {
         Box::pin(async move {
+            // Creating an unopened conversation only needs the shared record manager
+            // and publication flows. Do not reserve every chat runtime while plugins run.
+            if !setAsCurrentChat {
+                let (mut history, service) = {
+                    let mut holder = self.chatRuntimeHolder.lock().await;
+                    let core = holder.getCore(ChatRuntimeSlot::MAIN);
+                    let service = core.enhancedAiService.clone()
+                        .ok_or_else(|| "Chat creation requires an initialized AI runtime".to_string())?;
+                    (core.chatHistoryDelegate.clone_for_core(), service)
+                };
+                return history.createNewChat(&service, false, sourceChatId, input).await;
+            }
             let mut holder = self.chatRuntimeHolder.lock().await;
             let chatId = holder
                 .getCore(ChatRuntimeSlot::MAIN)

@@ -2203,11 +2203,12 @@ function schemaVersion(entry) {
     throw new Error("Invalid character schema migration version");
   return version2;
 }
-function migrateCharacterSchema(database2, models) {
+function migrateCharacterSchema(database2, readModels) {
   return __async(this, null, function* () {
     yield database2.migrateSchema("character", characterSchemaVersion, (version2) => __async(null, null, function* () {
       switch (version2) {
         case 1: {
+          const models = yield readModels();
           const mutations = [];
           for (const entry of yield database2.read("cards")) {
             const card = entry.value;
@@ -3643,115 +3644,98 @@ function processCandidates(ownerKey, candidates, owner2) {
   });
 }
 var MemoryJobRunner = class {
-  /** Receives the same sole repository owner used by UI, commands and public APIs. */
   constructor(owner2) {
     this.owner = owner2;
-    this.busy = false;
-    this.waiters = [];
+    this.running = null;
   }
-  /** Serializes genuine interval invocations without launching overlapping extraction batches. */
-  acquire() {
-    return __async(this, null, function* () {
-      if (!this.busy) {
-        this.busy = true;
-        return;
-      }
-      yield new Promise(
-        /** Parks only this invocation until the previous interval work completes. */
-        (resolve) => this.waiters.push(resolve)
-      );
-    });
-  }
-  /** Releases one waiting interval while retaining the same runtime owner. */
-  release() {
-    const next = this.waiters.shift();
-    if (next === void 0) this.busy = false;
-    else next();
-  }
-  /** Advances actual rebuild windows and due pending candidates through existing interval hooks. */
+  /** Shares the active pass and its failure instead of queuing obsolete timer notifications. */
   tick() {
+    if (this.running === null) {
+      this.running = this.runTick().finally(() => {
+        this.running = null;
+      });
+    }
+    return this.running;
+  }
+  /** Advances persisted rebuild windows and due candidates once. */
+  runTick() {
     return __async(this, null, function* () {
-      yield this.acquire();
-      try {
-        const keys = yield this.owner.run(
-          /** Enumerates only genuine initialized memory spaces. */
-          (repository) => repository.listMemoryOwnerKeys()
-        ), report = { owners: keys.length, rebuildWindows: 0, candidateBatches: 0 };
-        for (const ownerKey of keys) {
-          const taskId = yield this.owner.run(
-            /** Reads a persisted runnable rebuild identity without fabricating a job. */
-            (repository) => __async(this, null, function* () {
-              const space = yield repository.readMemorySpace(ownerKey);
-              return space.rebuildTask !== null && (space.rebuildProgress.status === "preparing" || space.rebuildProgress.status === "running") ? space.rebuildTask.id : null;
-            })
-          );
-          if (taskId !== null) {
-            yield processRebuildWindow(ownerKey, taskId, this.owner);
-            report.rebuildWindows += 1;
-          }
-          const batches = yield this.owner.run(
-            /** Claims only due pending records; failed attempts are never automatically retried. */
-            (repository) => __async(this, null, function* () {
-              if (!(yield repository.readGlobalMemoryPreferences()).autoUpdateEnabled) return [];
-              const space = yield repository.readMemorySpace(ownerKey), now = Date.now();
-              if (space.settings.autoSaveIntervalMinutes === 0 || now < space.settings.nextAutoSaveRunAtMs) return [];
-              const pending = space.candidates.filter(
-                /** Selects genuinely pending records, not terminal failures. */
-                (candidate) => candidate.status === "pending"
-              );
-              const batches2 = [];
-              if (pending.length >= 5) {
-                const grouped = /* @__PURE__ */ new Map();
-                for (const candidate of pending) {
-                  const list = grouped.get(candidate.chatId);
-                  if (list === void 0) grouped.set(candidate.chatId, [candidate]);
-                  else list.push(candidate);
-                }
-                for (const records3 of grouped.values()) {
-                  const capped = records3.slice(0, 20);
-                  for (const sourceType of ["selected_user_message", "reply_finalized_auto"]) {
-                    const batch = capped.filter(
-                      /** Preserves the original selected/automatic source partition. */
-                      (candidate) => candidate.sourceType === sourceType
-                    );
-                    if (batch.length !== 0) batches2.push(batch);
-                  }
+      const keys = yield this.owner.run(
+        /** Enumerates only genuine initialized memory spaces. */
+        (repository) => repository.listMemoryOwnerKeys()
+      ), report = { owners: keys.length, rebuildWindows: 0, candidateBatches: 0 };
+      for (const ownerKey of keys) {
+        const taskId = yield this.owner.run(
+          /** Reads a persisted runnable rebuild identity without fabricating a job. */
+          (repository) => __async(this, null, function* () {
+            const space = yield repository.readMemorySpace(ownerKey);
+            return space.rebuildTask !== null && (space.rebuildProgress.status === "preparing" || space.rebuildProgress.status === "running") ? space.rebuildTask.id : null;
+          })
+        );
+        if (taskId !== null) {
+          yield processRebuildWindow(ownerKey, taskId, this.owner);
+          report.rebuildWindows += 1;
+        }
+        const batches = yield this.owner.run(
+          /** Claims only due pending records; failed attempts are never automatically retried. */
+          (repository) => __async(this, null, function* () {
+            if (!(yield repository.readGlobalMemoryPreferences()).autoUpdateEnabled) return [];
+            const space = yield repository.readMemorySpace(ownerKey), now = Date.now();
+            if (space.settings.autoSaveIntervalMinutes === 0 || now < space.settings.nextAutoSaveRunAtMs) return [];
+            const pending = space.candidates.filter(
+              /** Selects genuinely pending records, not terminal failures. */
+              (candidate) => candidate.status === "pending"
+            );
+            const batches2 = [];
+            if (pending.length >= 5) {
+              const grouped = /* @__PURE__ */ new Map();
+              for (const candidate of pending) {
+                const list = grouped.get(candidate.chatId);
+                if (list === void 0) grouped.set(candidate.chatId, [candidate]);
+                else list.push(candidate);
+              }
+              for (const records3 of grouped.values()) {
+                const capped = records3.slice(0, 20);
+                for (const sourceType of ["selected_user_message", "reply_finalized_auto"]) {
+                  const batch = capped.filter(
+                    /** Preserves the original selected/automatic source partition. */
+                    (candidate) => candidate.sourceType === sourceType
+                  );
+                  if (batch.length !== 0) batches2.push(batch);
                 }
               }
-              space.settings.nextAutoSaveRunAtMs = now + space.settings.autoSaveIntervalMinutes * 6e4;
+            }
+            space.settings.nextAutoSaveRunAtMs = now + space.settings.autoSaveIntervalMinutes * 6e4;
+            yield repository.writeMemorySpace(ownerKey, space);
+            return batches2;
+          })
+        );
+        for (const batch of batches) {
+          const claimed = yield this.owner.run(
+            /** Claims only the next actual batch so a failure leaves later sources genuinely pending. */
+            (repository) => __async(this, null, function* () {
+              if (!(yield repository.readGlobalMemoryPreferences()).autoUpdateEnabled) return false;
+              const space = yield repository.readMemorySpace(ownerKey), ids = /* @__PURE__ */ new Set();
+              for (const candidate of batch) ids.add(candidate.id);
+              let count = 0;
+              for (const candidate of space.candidates) if (ids.has(candidate.id)) {
+                if (candidate.status !== "pending") throw new Error("Candidate is no longer pending: " + candidate.id);
+                candidate.status = "processing";
+                candidate.attemptCount += 1;
+                candidate.updatedAt = Date.now();
+                count += 1;
+              }
+              if (count !== batch.length) throw new Error("A selected candidate no longer exists");
               yield repository.writeMemorySpace(ownerKey, space);
-              return batches2;
+              return true;
             })
           );
-          for (const batch of batches) {
-            const claimed = yield this.owner.run(
-              /** Claims only the next actual batch so a failure leaves later sources genuinely pending. */
-              (repository) => __async(this, null, function* () {
-                if (!(yield repository.readGlobalMemoryPreferences()).autoUpdateEnabled) return false;
-                const space = yield repository.readMemorySpace(ownerKey), ids = /* @__PURE__ */ new Set();
-                for (const candidate of batch) ids.add(candidate.id);
-                let count = 0;
-                for (const candidate of space.candidates) if (ids.has(candidate.id)) {
-                  if (candidate.status !== "pending") throw new Error("Candidate is no longer pending: " + candidate.id);
-                  candidate.status = "processing";
-                  candidate.attemptCount += 1;
-                  candidate.updatedAt = Date.now();
-                  count += 1;
-                }
-                if (count !== batch.length) throw new Error("A selected candidate no longer exists");
-                yield repository.writeMemorySpace(ownerKey, space);
-                return true;
-              })
-            );
-            if (!claimed) break;
-            yield processCandidates(ownerKey, batch, this.owner);
-            report.candidateBatches += 1;
-          }
+          if (!claimed) break;
+          yield processCandidates(ownerKey, batch, this.owner);
+          report.candidateBatches += 1;
         }
-        return report;
-      } finally {
-        this.release();
       }
+      return report;
     });
   }
 };
@@ -4334,6 +4318,17 @@ function activateForChat(input, host) {
     return { characterCardName: input.characterCardName, characterGroupId: input.characterGroupId, updated: true };
   });
 }
+function resolveConfiguration(input, service) {
+  return __async(this, null, function* () {
+    const result2 = yield resolveChatConfiguration(input, service);
+    if (!("profile" in result2) || (yield service.readGlobalMemoryPreferences()).userDescriptionEnabled) return result2;
+    return {
+      ...result2,
+      profile: { ...result2.profile, userPreferencesText: "" },
+      participants: result2.participants.map((profile) => ({ ...profile, userPreferencesText: "" }))
+    };
+  });
+}
 var handlers = {
   /** Keeps full-filter searches and provider embedding persistence on the same serialized service. */
   "memory.searchWithOptions": (input, repository) => __async(null, null, function* () {
@@ -4358,23 +4353,11 @@ var handlers = {
   "memory.embeddings.rebuild": (input, repository) => rebuildMemoryEmbeddings(input.ownerKey, repository),
   /** Enqueues only actual persisted message sources and genuine bound owners. */
   "memory.candidate.enqueue": (input, repository) => enqueueCandidate(input, repository),
-  /** Resolves binding, catalogs, prompt and USER.md from one serialized repository operation. */
-  "chat.configuration.resolve": (input, repository) => __async(null, null, function* () {
-    const result2 = yield resolveChatConfiguration(input, {
-      /** Reads the same in-flight directory without reacquiring the publisher. */
-      snapshot: () => snapshot(repository),
-      readGlobalMemoryPreferences: () => repository.readGlobalMemoryPreferences(),
-      /** Executes nested resolution reads on this exact snapshot without another service. */
-      dispatchDomain: (operation, payload) => executeDomain(operation, payload, repository)
-    });
-    if ("profile" in result2 && !(yield repository.readGlobalMemoryPreferences()).userDescriptionEnabled) {
-      return {
-        ...result2,
-        profile: { ...result2.profile, userPreferencesText: "" },
-        participants: result2.participants.map((profile) => ({ ...profile, userPreferencesText: "" }))
-      };
-    }
-    return result2;
+  /** Resolves chat configuration using this operation's existing repository snapshot. */
+  "chat.configuration.resolve": (input, repository) => resolveConfiguration(input, {
+    snapshot: () => snapshot(repository),
+    readGlobalMemoryPreferences: () => repository.readGlobalMemoryPreferences(),
+    dispatchDomain: (operation, payload) => executeDomain(operation, payload, repository)
   }),
   /** Requires the chat's persisted selection rather than global active state. */
   "chat.configuration.binding.read": (input, repository) => repository.readChatBinding(input.chatId),
@@ -5040,6 +5023,8 @@ function createCharacterCardsService(owner2, configurations = independentConfigu
     if (request.action === "listThemeChoices")
       return readThemeChoices(configurations);
     switch (request.action) {
+      case "snapshot":
+        return owner2.readConfigurationSnapshot();
       case "listMemoryChats":
         return listMemoryChats(request.ownerKey, owner2);
       case "readGlobalMemoryPreferences":
@@ -5072,20 +5057,50 @@ function createCharacterCardsService(owner2, configurations = independentConfigu
       )
     );
   }
-  return {
+  const service = {
     /** Runs the private job scheduler without constructing another store or business service. */
     runMemoryJobs: () => jobs.tick(),
     /** Reads only the metadata flags needed by prompt composition. */
     readGlobalMemoryPreferences: () => owner2.readGlobalMemoryPreferences(),
     /** Preserves action-specific results through the shared service dispatcher. */
     dispatch: dispatchRequest,
-    /** Reads one consistent domain snapshot through the same operation queue. */
-    snapshot: () => owner2.run(snapshot),
-    /** Preserves the same repository queue and integrity checks as full snapshots. */
+    /** Reads configuration records without loading memory data. */
+    snapshot: () => owner2.readConfigurationSnapshot(),
+    /** Reads role presentation without entering the editing queue. */
     sidebarDirectory: () => owner2.readSidebarDirectory(),
-    /** Keeps every real selection alias and sidebar binding on the same awaited application sequence. */
+    /** Routes reads directly and keeps mutations in the editing transaction. */
     dispatchDomain(operation, input) {
       switch (operation) {
+        case "snapshot":
+          return owner2.readConfigurationSnapshot();
+        case "chat.configuration.resolve":
+          return resolveConfiguration(parseDomainPayload("chat.configuration.resolve", input), service);
+        case "character.combine": {
+          const { id: id2, promptFunctionType = "CHAT", additionalTagIds = [] } = parseDomainPayload("character.combine", input);
+          return combinePrompts(id2, additionalTagIds, promptFunctionType, owner2).then((prompt) => ({ id: id2, promptFunctionType, additionalTagIds, prompt }));
+        }
+        case "memory.resolveOwner": {
+          const { characterId } = parseDomainPayload("memory.resolveOwner", input);
+          return resolveMemoryOwner(characterId, owner2).then(parseOwner);
+        }
+        case "tag.list":
+          return owner2.listTags();
+        case "memory.shared.list":
+          return owner2.listStores();
+        case "activePrompt.get":
+          return owner2.readActive();
+        case "character.list":
+          return owner2.listCharacters();
+        case "group.list":
+          return owner2.listGroups();
+        case "character.get": {
+          const { id: id2 } = parseDomainPayload("character.get", input);
+          return owner2.getCharacter(id2);
+        }
+        case "group.get": {
+          const { id: id2 } = parseDomainPayload("group.get", input);
+          return owner2.getGroup(id2);
+        }
         case "memory.chat.list":
           return listMemoryChats(
             parseDomainPayload("memory.chat.list", input).ownerKey,
@@ -5135,6 +5150,7 @@ function createCharacterCardsService(owner2, configurations = independentConfigu
       );
     }
   };
+  return service;
 }
 function records(value, check, label) {
   if (!Array.isArray(value)) throw new Error(`${label} \u8FD4\u56DE\u683C\u5F0F\u4E0D\u6B63\u786E`);
@@ -7263,7 +7279,9 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
           }
         }
       } else {
-        yield migrateCharacterSchema(database2, directories === null ? [] : yield directories.listModels());
+        yield migrateCharacterSchema(database2, () => __async(null, null, function* () {
+          return directories === null ? [] : directories.listModels();
+        }));
       }
       const metadata = yield database2.get("meta", "state");
       if (metadata === null) throw new Error("Character initialization did not publish metadata");
@@ -7345,50 +7363,137 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
       }
     });
   }
-  /** Reads only complete role presentation records under the shared operation queue. */
-  readSidebarDirectory() {
+  requirePublicationReady() {
+    if (this.publicationFailure !== null) throw this.publicationFailure.error;
+  }
+  /** Retries only overlapping commits; readers never reserve the editing queue. */
+  readConsistent(read) {
     return __async(this, null, function* () {
-      yield this.acquire();
-      try {
-        if (this.publicationFailure !== null) throw this.publicationFailure.error;
-        const metadata = yield this.database.get("meta", "state");
-        if (metadata === null)
-          throw new Error("Character database metadata disappeared");
-        assertObject(metadata.value, "character metadata");
-        if (metadata.value.migrationStatus === "writing")
-          throw new Error("Character migration has not completed");
-        const result2 = yield Promise.allSettled([
-          this.database.read("cards"),
-          this.database.read("groups")
-        ]);
-        const cards = [], groups = [];
-        for (const read of result2)
-          if (read.status === "rejected") throw read.reason;
-        if (result2[0].status === "fulfilled") {
-          for (const row of result2[0].value) {
-            assertCard(row.value);
-            cards.push(row.value);
-          }
+      for (let attempt = 0; attempt < 3; attempt++) {
+        this.requirePublicationReady();
+        const before = yield this.database.get("meta", "state");
+        if (before === null) throw new Error("Character database metadata disappeared");
+        assertObject(before.value, "character metadata");
+        if (before.value.migrationStatus === "writing") throw new Error("Character migration has not completed");
+        let result2;
+        let failure2 = null;
+        try {
+          result2 = yield read();
+        } catch (error) {
+          failure2 = { error };
         }
-        if (result2[1].status === "fulfilled") {
-          for (const row of result2[1].value) {
-            assertGroup(row.value);
-            groups.push(row.value);
-          }
-        }
-        const ids = new Set(cards.map((card) => card.id));
-        for (const group of groups)
-          for (const member2 of group.members) {
-            if (!ids.has(member2.characterCardId))
-              throw new Error("Missing group member: " + member2.characterCardId);
-          }
-        const checked = yield this.database.get("meta", "state");
-        if (checked === null || checked.version !== metadata.version)
-          throw new Error("Character directory changed during the read");
-        return { cards, groups };
-      } finally {
-        this.release();
+        const after = yield this.database.get("meta", "state");
+        this.requirePublicationReady();
+        if (after === null) throw new Error("Character database metadata disappeared");
+        if (before.version !== after.version) continue;
+        if (failure2 !== null) throw failure2.error;
+        return result2;
       }
+      throw new Error("Character records kept changing during the read; retry the operation");
+    });
+  }
+  /** Reads role presentation independently of memory editing and background jobs. */
+  readSidebarDirectory() {
+    return this.readConsistent(() => __async(this, null, function* () {
+      const [cards, groups] = yield Promise.all([this.readCharacters(), this.readGroups()]);
+      const ids = new Set(cards.map((card) => card.id));
+      for (const group of groups)
+        for (const member2 of group.members)
+          if (!ids.has(member2.characterCardId)) throw new Error("Missing group member: " + member2.characterCardId);
+      return { cards, groups };
+    }));
+  }
+  readActive() {
+    this.requirePublicationReady();
+    return this.readMetadata().then((metadata) => metadata.active);
+  }
+  /** Reads configuration records only; memory content and vectors remain in their own queries. */
+  readConfigurationSnapshot() {
+    if (this.directories === null) throw new Error("External directory readers are unavailable");
+    const directories = this.directories;
+    return this.readConsistent(() => __async(this, null, function* () {
+      const [cards, groups, stores, tags, models, ttsConfigs, toolCatalog, metadata] = yield Promise.all([
+        this.readCharacters(),
+        this.readGroups(),
+        this.database.read("stores").then((rows) => rows.map((row) => row.value)),
+        this.readTags(),
+        Promise.resolve().then(() => directories.listModels()),
+        Promise.resolve().then(() => directories.listTtsConfigs()),
+        Promise.resolve().then(() => directories.readToolCatalog()),
+        this.readMetadata()
+      ]);
+      return { cards, groups, stores, tags, models, ttsConfigs, toolCatalog, ...metadata };
+    }));
+  }
+  listCharacters() {
+    return this.readConsistent(() => this.readCharacters());
+  }
+  listGroups() {
+    return this.readConsistent(() => this.readGroups());
+  }
+  listStores() {
+    return this.readConsistent(() => __async(this, null, function* () {
+      return (yield this.database.read("stores")).map((row) => row.value);
+    }));
+  }
+  listTags() {
+    return this.readConsistent(() => this.readTags());
+  }
+  readCharacters() {
+    return __async(this, null, function* () {
+      return (yield this.database.read("cards")).map((row) => {
+        assertCard(row.value);
+        return row.value;
+      });
+    });
+  }
+  readGroups() {
+    return __async(this, null, function* () {
+      return (yield this.database.read("groups")).map((row) => {
+        assertGroup(row.value);
+        return row.value;
+      });
+    });
+  }
+  readTags() {
+    return __async(this, null, function* () {
+      return (yield this.database.read("tags")).map((row) => {
+        assertTag(row.value);
+        return row.value;
+      });
+    });
+  }
+  getCharacter(id2) {
+    requireId(id2, "\u89D2\u8272\u5361\u6807\u8BC6");
+    return this.readConsistent(() => __async(this, null, function* () {
+      const row = yield this.database.get("cards", id2);
+      if (row === null) throw new Error("Character not found: " + id2);
+      assertCard(row.value);
+      return row.value;
+    }));
+  }
+  getGroup(id2) {
+    requireId(id2, "\u7FA4\u7EC4\u6807\u8BC6");
+    return this.readConsistent(() => __async(this, null, function* () {
+      const row = yield this.database.get("groups", id2);
+      if (row === null) throw new Error("Group not found: " + id2);
+      assertGroup(row.value);
+      return row.value;
+    }));
+  }
+  readMetadata() {
+    return __async(this, null, function* () {
+      const row = yield this.database.get("meta", "state");
+      if (row === null) throw new Error("Character database metadata disappeared");
+      assertObject(row.value, "character metadata");
+      if (row.value.migrationStatus === "writing") throw new Error("Character migration has not completed");
+      assertObject(row.value.memoryPreferences, "global memory preferences");
+      assertBoolean(row.value.memoryPreferences.userDescriptionEnabled, "user description enabled");
+      assertBoolean(row.value.memoryPreferences.autoUpdateEnabled, "memory auto update enabled");
+      return {
+        active: row.value.active ?? { Model: { id: "chat" } },
+        memoryPreferences: row.value.memoryPreferences
+      };
     });
   }
   /** Reads memory settings without loading bodies, vectors or job relations. */
@@ -7407,29 +7512,10 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
       return config;
     });
   }
-  /** Reads global behavior flags directly from metadata without loading any owner records. */
   readGlobalMemoryPreferences() {
     return __async(this, null, function* () {
-      yield this.acquire();
-      try {
-        if (this.publicationFailure !== null) throw this.publicationFailure.error;
-        const entry = yield this.database.get("meta", "state");
-        if (entry === null)
-          throw new Error("Character database metadata disappeared");
-        assertObject(entry.value, "character metadata");
-        if (entry.value.migrationStatus === "writing")
-          throw new Error("Character migration has not completed");
-        const flags = entry.value.memoryPreferences;
-        assertObject(flags, "global memory preferences");
-        assertBoolean(flags.userDescriptionEnabled, "user description enabled");
-        assertBoolean(flags.autoUpdateEnabled, "memory auto update enabled");
-        return {
-          userDescriptionEnabled: flags.userDescriptionEnabled,
-          autoUpdateEnabled: flags.autoUpdateEnabled
-        };
-      } finally {
-        this.release();
-      }
+      this.requirePublicationReady();
+      return (yield this.readMetadata()).memoryPreferences;
     });
   }
   /** Reads the selected owner's actual USER.md document. */
@@ -7456,29 +7542,20 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
       throw new Error("Invalid owner document path");
     return this.directory + "/" + row.userDocumentPath;
   }
-  /** Serializes one indexed owner query with domain mutations and checks migration readiness. */
+  /** Reads one owner directly; file IO never occupies the full-state editing queue. */
   readOwnerMetadata(ownerKey, action) {
     return __async(this, null, function* () {
       requireId(ownerKey, "memory owner");
-      yield this.acquire();
-      try {
-        if (this.publicationFailure !== null) throw this.publicationFailure.error;
-        const rows = yield this.database.sql.query(
-          `SELECT o.* FROM "owners" o JOIN "meta" state ON state."_key" = 'state'
-        WHERE o."_key" = ? AND (state."migrationStatus__state" = 0 OR state."migrationStatus" = 'complete')
-        AND (EXISTS (SELECT 1 FROM "cards" c WHERE 'character:' || c."id" = o."ownerKey")
-          OR EXISTS (SELECT 1 FROM "stores" s WHERE 'shared:' || s."id" = o."ownerKey"))`,
-          [ownerKey]
-        );
-        if (rows.length !== 1 || rows[0].ownerKey !== ownerKey) {
-          throw new Error(
-            "Memory owner is missing or its migration is incomplete: " + ownerKey
-          );
-        }
-        return yield action(rows[0]);
-      } finally {
-        this.release();
-      }
+      if (this.publicationFailure !== null) throw this.publicationFailure.error;
+      const rows = yield this.database.sql.query(
+        `SELECT o.* FROM "owners" o JOIN "meta" state ON state."_key" = 'state'
+      WHERE o."_key" = ? AND (state."migrationStatus__state" = 0 OR state."migrationStatus" = 'complete')
+      AND (EXISTS (SELECT 1 FROM "cards" c WHERE 'character:' || c."id" = o."ownerKey")
+        OR EXISTS (SELECT 1 FROM "stores" s WHERE 'shared:' || s."id" = o."ownerKey"))`,
+        [ownerKey]
+      );
+      if (rows.length !== 1) throw new Error("Memory owner is missing or its migration is incomplete: " + ownerKey);
+      return action(rows[0]);
     });
   }
   /** Serializes domain sessions within this execution while exact host versions guard other executions. */
@@ -9806,8 +9883,14 @@ function readActiveSelection() {
 }
 function requireSelection(selection) {
   return __async(this, null, function* () {
-    const [cards, groups] = yield Promise.all([dispatchDomain2("character.list", {}), dispatchDomain2("group.list", {})]);
-    requireChatSelection(selection, cards, groups);
+    const selected = parseChatSelection(selection);
+    if (selected.kind === "card") {
+      yield dispatchDomain2("character.get", { id: selected.id });
+    } else if (selected.kind === "group") {
+      const group = yield dispatchDomain2("group.get", { id: selected.id });
+      if (group.members.length === 0) throw new Error("A bound chat group must have actual participants: " + group.id);
+      yield Promise.all(group.members.map((member2) => dispatchDomain2("character.get", { id: member2.characterCardId })));
+    }
   });
 }
 function beforeChatCreate(event) {
