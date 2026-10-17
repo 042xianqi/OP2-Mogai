@@ -17,6 +17,74 @@ class _ComposeDslSliverContent extends StatefulWidget {
 
 class _ComposeDslSliverContentState extends State<_ComposeDslSliverContent> {
   final Set<_ComposeDslNode> _dependencies = {};
+  _ComposeLazyWindow? _window;
+  int _windowItemCount = 0;
+  ({int firstIndex, int lastIndex})? _pendingRange;
+  ({int firstIndex, int lastIndex})? _lastRequestedRange;
+  bool _rangeScheduled = false;
+  bool _rangeInFlight = false;
+
+  /// Coalesces layout requests, keeping the latest viewport during an action.
+  void _scheduleRange() {
+    if (_rangeScheduled || _rangeInFlight || _pendingRange == null) return;
+    _rangeScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      _rangeScheduled = false;
+      if (!mounted) return;
+      final window = _window;
+      final range = _pendingRange;
+      _pendingRange = null;
+      if (window == null || range == null || range == _lastRequestedRange) {
+        return;
+      }
+      if (range.firstIndex >= window.firstIndex &&
+          range.lastIndex <= window.firstIndex + _windowItemCount) {
+        return;
+      }
+      _lastRequestedRange = range;
+      _rangeInFlight = true;
+      try {
+        await widget.renderer.onAction(window.actionId, {
+          'firstIndex': range.firstIndex,
+          'lastIndex': range.lastIndex,
+        });
+      } finally {
+        _rangeInFlight = false;
+        if (mounted) _scheduleRange();
+      }
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  /// Uses this sliver's cache interval, already relative to its static prefix.
+  void _requestRange(
+    SliverConstraints constraints,
+    _ComposeLazyWindow window,
+    double extent,
+  ) {
+    final start = math.max(
+      0.0,
+      constraints.scrollOffset + constraints.cacheOrigin,
+    );
+    final end = math.min(
+      window.itemCount * extent,
+      start + constraints.remainingCacheExtent,
+    );
+    if (end <= start) {
+      _pendingRange = null;
+      return;
+    }
+    final range = (
+      firstIndex: math.max(0, (start / extent).floor() - 2),
+      lastIndex: math.min(window.itemCount, (end / extent).ceil() + 2),
+    );
+    _pendingRange =
+        range.firstIndex >= window.firstIndex &&
+            range.lastIndex <= window.firstIndex + _windowItemCount
+        ? null
+        : range;
+    _scheduleRange();
+  }
 
   /// Reads the live root without reconstructing a snapshot of its descendants.
   _ComposeDslNode get node => widget.renderer.node;
@@ -60,17 +128,15 @@ class _ComposeDslSliverContentState extends State<_ComposeDslSliverContent> {
     }
   }
 
-  /// Preserves box roots and exposes static lazy-column items to the owning viewport.
+  /// Projects static prefixes and fixed-extent windows into the owning viewport.
   Widget _sliverContent() {
     if (node.type != 'LazyColumn') {
       return SliverToBoxAdapter(child: widget.renderer);
     }
-    if (node.props['viewport'] != null ||
-        node.props['reverseLayout'] == true ||
+    if (node.props['reverseLayout'] == true ||
         node.props['autoScrollToEnd'] == true) {
       throw StateError(
-        'Embedded LazyColumn content uses the parent viewport and scroll direction; '
-        'independent viewport windows and automatic scrolling are unsupported.',
+        'Embedded LazyColumn content cannot reverse or auto-scroll its parent viewport.',
       );
     }
     final items = <_ComposeDslNode>[];
@@ -86,14 +152,39 @@ class _ComposeDslSliverContentState extends State<_ComposeDslSliverContent> {
         items.add(child);
       }
     }
-    final indices = <Object, int>{};
-    for (var index = 0; index < items.length; index++) {
-      final key = items[index].props['key'];
+    final window = node.props['viewport'] == null
+        ? null
+        : _ComposeLazyWindow.parse(node.props['viewport'], items.length);
+    if (_window?.firstIndex != window?.firstIndex ||
+        _window?.itemCount != window?.itemCount ||
+        _window?.itemExtent != window?.itemExtent ||
+        _window?.staticItemCount != window?.staticItemCount) {
+      _lastRequestedRange = null;
+      _pendingRange = null;
+    }
+    _window = window;
+    final staticItemCount = window?.staticItemCount ?? items.length;
+    _windowItemCount = items.length - staticItemCount;
+    final staticItems = items.take(staticItemCount).toList(growable: false);
+    final windowItems = items.skip(staticItemCount).toList(growable: false);
+    final staticIndices = <Object, int>{};
+    for (var index = 0; index < staticItems.length; index++) {
+      final key = staticItems[index].props['key'];
       if (key != null) {
-        if (indices.containsKey(key)) {
+        if (staticIndices.containsKey(key)) {
           throw StateError('Duplicate Compose list key: $key');
         }
-        indices[key] = index;
+        staticIndices[key] = index;
+      }
+    }
+    final windowIndices = <Object, int>{};
+    for (var index = 0; index < windowItems.length; index++) {
+      final key = windowItems[index].props['key'];
+      if (key != null) {
+        if (windowIndices.containsKey(key)) {
+          throw StateError('Duplicate Compose list key: $key');
+        }
+        windowIndices[key] = window == null ? index : window.firstIndex + index;
       }
     }
     final spacing = _number(node.props['spacing']) ?? 0;
@@ -111,10 +202,65 @@ class _ComposeDslSliverContentState extends State<_ComposeDslSliverContent> {
         padding = padding.add(_edgeInsets(operation['args'] as List<Object?>));
       }
     }
+    Widget listItem(
+      _ComposeDslNode child,
+      String path, {
+      required bool addSpacing,
+    }) => KeyedSubtree(
+      key: child.props['key'] == null ? null : ValueKey(child.props['key']),
+      child: Padding(
+        padding: EdgeInsets.only(bottom: addSpacing ? spacing : 0.0),
+        child: Align(
+          alignment: alignment,
+          heightFactor: 1,
+          child: _sliverItem(child, path),
+        ),
+      ),
+    );
+    final staticSliver = SliverList(
+      delegate: SliverChildBuilderDelegate(
+        (context, index) => listItem(
+          staticItems[index],
+          'content/$index',
+          addSpacing:
+              index + 1 < staticItems.length || (window?.itemCount ?? 0) > 0,
+        ),
+        childCount: staticItems.length,
+        findChildIndexCallback: (key) =>
+            key is ValueKey ? staticIndices[key.value] : null,
+      ),
+    );
+    final extent = window == null
+        ? 0.0
+        : window.itemExtent * MediaQuery.textScalerOf(context).scale(14) / 14;
+    final lazySliver = window == null
+        ? null
+        : SliverLayoutBuilder(
+            builder: (context, constraints) {
+              _requestRange(constraints, window, extent);
+              return SliverFixedExtentList(
+                itemExtent: extent,
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    final local = index - window.firstIndex;
+                    if (local < 0 || local >= windowItems.length) {
+                      return const SizedBox.shrink();
+                    }
+                    return listItem(
+                      windowItems[local],
+                      'content/${staticItemCount + index}',
+                      addSpacing: index + 1 < window.itemCount,
+                    );
+                  },
+                  childCount: window.itemCount,
+                  findChildIndexCallback: (key) =>
+                      key is ValueKey ? windowIndices[key.value] : null,
+                ),
+              );
+            },
+          );
     return SliverMainAxisGroup(
       slivers: [
-        // Modal nodes own routes and must stay mounted even when the user is
-        // scrolling far from the row that opened them.
         for (var index = 0; index < dialogs.length; index++)
           SliverToBoxAdapter(
             key: dialogs[index].props['key'] == null
@@ -128,28 +274,7 @@ class _ComposeDslSliverContentState extends State<_ComposeDslSliverContent> {
         SliverPadding(
           key: const ValueKey('compose-sliver-items'),
           padding: padding,
-          sliver: SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) => KeyedSubtree(
-                key: items[index].props['key'] == null
-                    ? null
-                    : ValueKey(items[index].props['key']),
-                child: Padding(
-                  padding: EdgeInsets.only(
-                    bottom: index + 1 < items.length ? spacing : 0,
-                  ),
-                  child: Align(
-                    alignment: alignment,
-                    heightFactor: 1,
-                    child: _sliverItem(items[index], 'content/$index'),
-                  ),
-                ),
-              ),
-              childCount: items.length,
-              findChildIndexCallback: (key) =>
-                  key is ValueKey ? indices[key.value] : null,
-            ),
-          ),
+          sliver: SliverMainAxisGroup(slivers: [staticSliver, ?lazySliver]),
         ),
       ],
     );

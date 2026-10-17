@@ -2695,6 +2695,8 @@ pub struct ComposeLazyViewport {
     pub itemCount: u32,
     /// Unscaled main-axis item extent; Flutter applies the current text scale.
     pub itemExtent: f64,
+    /// Number of eager items before the windowed items in a sliver host.
+    pub staticItemCount: Option<u32>,
     /// Requests the next materialized range through normal action dispatch.
     pub onRangeChanged: Arc<dyn Fn(ComposeLazyRange) -> () + Send + Sync>,
 }

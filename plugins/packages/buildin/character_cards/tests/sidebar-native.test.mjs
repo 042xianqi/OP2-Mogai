@@ -216,7 +216,7 @@ test('native previews retain current pinned and streaming rows, and search finds
 });
 
 /** Checks transport growth and backend isolation through the actual compiled sidebar and SDK. */
-test('expanding chat previews sends linear drag filters and a single commit without catalog IO', async () => {
+test('expanding chat previews materializes one window without catalog IO', async () => {
   const chats = Array.from({ length: 200 }, (_, i) => summary('c' + i, { group: null }));
   const data = catalog(chats);
   data.sections[0].conversationGroups = []; data.sections[0].ungroupedChats = chats;
@@ -224,16 +224,20 @@ test('expanding chat previews sends linear drag filters and a single commit with
   const loaded = await screen.load(), calls = screen.calls.length, before = screen.events.length;
   const expanded = await screen.click(loaded.tree, 'sidebar-preview-ungrouped:card:travel');
   const targets = composeNodes(expanded.tree, node => node.type === 'DragTarget');
-  assert.equal(composeNodes(expanded.tree, node => /^sidebar-chat-c\d+$/.test(node.props.key ?? '')).length, chats.length);
+  const visibleChats = composeNodes(expanded.tree, node => /^sidebar-chat-c\d+$/.test(node.props.key ?? '')).length;
+  assert.equal(visibleChats, 10);
+  assert.equal(expanded.tree.props.viewport.itemCount, chats.length + 3);
   assert.ok(targets.every(node => node.props.acceptedData === undefined));
-  assert.equal(targets.reduce((count, node) => count + (node.props.excludedData?.length ?? 0), 0), chats.length);
+  assert.equal(targets.reduce((count, node) => count + (node.props.excludedData?.length ?? 0), 0), visibleChats);
   assert.ok(targets.every(node => node.props.acceptedTypes.length === 1));
   assert.equal(screen.calls.length, calls, 'Local expansion must not read authoritative catalogs or resources');
   assert.equal(screen.events.length - before, 1, 'A synchronous toggle must render only its final commit');
   const update = screen.events[before].response.update;
   assert.ok(update.upserts.every(node => node.id.length < 12), 'Transport handles must not carry ancestor paths');
   assert.ok(JSON.stringify(update).length < chats.length * 6500, 'Expanded updates must stay within a linear per-chat transport budget');
-  const collapsed = await screen.click(expanded.tree, 'sidebar-preview-ungrouped:card:travel');
+  const end = await screen.dispatch(expanded.tree.props.viewport.onRangeChanged, { firstIndex: 190, lastIndex: 203 });
+  assert.ok(keyedNode(end.tree, 'sidebar-chat-c199'));
+  const collapsed = await screen.click(end.tree, 'sidebar-preview-ungrouped:card:travel');
   assert.equal(composeNodes(collapsed.tree, node => /^sidebar-chat-c\d+$/.test(node.props.key ?? '')).length, 4);
   assert.equal(screen.calls.length, calls);
   assert.ok(JSON.stringify(screen.events.at(-1).response.update).length < chats.length * 250, 'Collapse must transmit compact removal handles');
@@ -493,11 +497,18 @@ test('native custom avatars carry paths without reading their contents', async (
   const screen = mount(context(chats), data, { readBinary: async () => {
     reads++; throw new Error('Native DSL must leave image reads to the host');
   } });
-  const { tree } = await screen.load();
+  let { tree } = await screen.load();
   assert.equal(reads, 0);
-  for (let i = 0; i < 17; i++) {
-    assert.equal(keyedNode(tree, 'sidebar-avatar-card:avatar-' + i).props.uri, '/test/avatar-' + i + '.png');
+  const avatars = new Map();
+  for (let firstIndex = 0; firstIndex < tree.props.viewport.itemCount; firstIndex += 12) {
+    ({ tree } = await screen.dispatch(tree.props.viewport.onRangeChanged, {
+      firstIndex, lastIndex: Math.min(firstIndex + 12, tree.props.viewport.itemCount),
+    }));
+    for (const node of composeNodes(tree, node => node.type === 'Image')) avatars.set(node.props.key, node.props.uri);
   }
+  assert.equal(avatars.size, 17);
+  assert.equal(reads, 0);
+  for (let i = 0; i < 17; i++) assert.equal(avatars.get('sidebar-avatar-card:avatar-' + i), '/test/avatar-' + i + '.png');
 });
 
 
@@ -539,12 +550,18 @@ test('twenty default avatars serialize resource paths without any binary reads',
   const screen = mount(context(chats), data, { readBinary: async () => {
     reads++; throw new Error('Unexpected binary read');
   } });
-  const { tree } = await screen.load();
-  const avatars = composeNodes(tree, node => node.type === 'Image');
-  assert.equal(avatars.length, 20);
+  let { tree } = await screen.load();
+  const avatars = new Map();
+  for (let firstIndex = 0; firstIndex < tree.props.viewport.itemCount; firstIndex += 12) {
+    ({ tree } = await screen.dispatch(tree.props.viewport.onRangeChanged, {
+      firstIndex, lastIndex: Math.min(firstIndex + 12, tree.props.viewport.itemCount),
+    }));
+    for (const node of composeNodes(tree, node => node.type === 'Image')) avatars.set(node.props.key, node.props.uri);
+  }
+  assert.equal(avatars.size, 20);
   assert.equal(reads, 0);
   assert.equal(screen.calls.filter(call => call.resource).length, 1);
-  for (const avatar of avatars) assert.equal(avatar.props.uri, '/app/data/cache/toolpkg_resource_exports/operit-avatar.png');
+  for (const uri of avatars.values()) assert.equal(uri, '/app/data/cache/toolpkg_resource_exports/operit-avatar.png');
 });
 
 

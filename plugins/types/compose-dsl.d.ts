@@ -3412,6 +3412,10 @@ export interface ComposeLazyViewport {
    */
   itemExtent: number;
   /**
+   * Number of eager items before the windowed items in a sliver host.
+   */
+  staticItemCount?: number;
+  /**
    * Requests the next materialized range through normal action dispatch.
    */
   onRangeChanged: (arg0: ComposeLazyRange) => void;

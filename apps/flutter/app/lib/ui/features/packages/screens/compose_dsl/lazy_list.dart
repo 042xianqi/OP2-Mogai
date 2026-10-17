@@ -10,12 +10,14 @@ class _ComposeLazyWindow {
     this.itemCount,
     this.itemExtent,
     this.actionId,
+    this.staticItemCount,
   );
 
   final int firstIndex;
   final int itemCount;
   final double itemExtent;
   final String actionId;
+  final int staticItemCount;
 
   /// Rejects inconsistent window metadata before constructing a Flutter sliver.
   factory _ComposeLazyWindow.parse(Object? raw, int childCount) {
@@ -25,6 +27,7 @@ class _ComposeLazyWindow {
     final first = raw['firstIndex'];
     final count = raw['itemCount'];
     final extent = raw['itemExtent'];
+    final staticCount = raw['staticItemCount'] ?? 0;
     if (first is! num ||
         !first.isFinite ||
         first != first.toInt() ||
@@ -32,7 +35,14 @@ class _ComposeLazyWindow {
         count is! num ||
         !count.isFinite ||
         count != count.toInt() ||
-        count < first + childCount ||
+        count < 0 ||
+        first > count ||
+        staticCount is! num ||
+        !staticCount.isFinite ||
+        staticCount != staticCount.toInt() ||
+        staticCount < 0 ||
+        staticCount > childCount ||
+        count < first + childCount - staticCount ||
         extent is! num ||
         !extent.isFinite ||
         extent <= 0) {
@@ -45,6 +55,7 @@ class _ComposeLazyWindow {
       count.toInt(),
       extent.toDouble(),
       _requiredActionId(raw['onRangeChanged'], 'viewport.onRangeChanged'),
+      staticCount.toInt(),
     );
   }
 }
@@ -98,7 +109,8 @@ class _ComposeLazyListState extends State<_ComposeLazyList> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.window?.itemCount != widget.window?.itemCount ||
         oldWidget.window?.actionId != widget.window?.actionId ||
-        oldWidget.window?.itemExtent != widget.window?.itemExtent) {
+        oldWidget.window?.itemExtent != widget.window?.itemExtent ||
+        oldWidget.window?.staticItemCount != widget.window?.staticItemCount) {
       _lastRequested = null;
     }
   }
@@ -197,6 +209,11 @@ class _ComposeLazyListState extends State<_ComposeLazyList> {
   Widget build(BuildContext context) {
     _scheduleLayout();
     final window = widget.window;
+    if ((window?.staticItemCount ?? 0) > 0) {
+      throw StateError(
+        'Compose lazy lists with a static prefix must use the sliver host.',
+      );
+    }
     final itemCount = window == null ? widget.nodes.length : window.itemCount;
     final firstIndex = window == null ? 0 : window.firstIndex;
     final indices = <Object, int>{};
