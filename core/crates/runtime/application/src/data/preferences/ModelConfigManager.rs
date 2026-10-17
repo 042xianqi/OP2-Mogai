@@ -925,7 +925,12 @@ impl ModelConfigManager {
             })
             .collect::<Vec<_>>();
         for (key, value) in records {
-            let mut record = value;
+            let (mut record, wasEncodedString) = match value {
+                serde_json::Value::String(encoded) => {
+                    (serde_json::from_str::<serde_json::Value>(&encoded)?, true)
+                }
+                record => (record, false),
+            };
             let mut changed = false;
             for field in ["providerTypeId", "providerType"] {
                 let removed = record
@@ -943,7 +948,12 @@ impl ModelConfigManager {
                 }
             }
             if changed {
-                preferences.set(&stringPreferencesKey(&key), record);
+                let migrated = if wasEncodedString {
+                    serde_json::Value::String(serde_json::to_string(&record)?)
+                } else {
+                    record
+                };
+                preferences.set(&stringPreferencesKey(&key), migrated);
             }
         }
         Ok(())
