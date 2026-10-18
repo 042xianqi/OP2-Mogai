@@ -547,8 +547,7 @@ export async function saveCharacter(
   assertBoolean(create, "角色新建标识");
   let value = normalizedCharacter(card);
   if (create) {
-    if (value.isDefault) throw new Error("不能新建默认角色卡");
-    value = { ...value, id: "", createdAt: 0, updatedAt: 0 };
+    value = { ...value, id: "", isDefault: false, createdAt: 0, updatedAt: 0 };
   } else {
     const id = requireId(value.id, "角色卡标识");
     const original = await host.getCharacter(id);
@@ -992,7 +991,6 @@ export async function dispatch(
       const id = requireId(request.id, "角色卡标识");
       const card = await host.getCharacter(id);
       assertCard(card);
-      if (card.isDefault) throw new Error("默认角色卡不能删除");
       await host.deleteCharacter(id);
       return snapshot(host);
     }

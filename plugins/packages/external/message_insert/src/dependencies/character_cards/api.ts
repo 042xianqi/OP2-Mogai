@@ -116,7 +116,7 @@ export type ChatConfigurationResult = ChatConfigurationDisplayResult | ChatConfi
 export interface CharacterRecord {
   id: string; name: string; description: string; characterSetting: string; openingStatement: string;
   otherContentChat: string; otherContentVoice: string; avatarUri: string | null; attachedTagIds: string[];
-  advancedCustomPrompt: string; marks: string; chatModelBindingMode: string; chatModelId: string | null;
+  advancedCustomPrompt: string; marks: string; chatModelBindingMode: string; chatModelId: string | null; chatProviderId: string | null;
   ttsConfigId: string | null; themeConfigId: string | null; memoryBindingMode: string; sharedMemoryId: string | null;
   sharedMemoryMounts: { sharedMemoryId: string; readable: boolean; writable: boolean }[];
   toolAccessConfig: { enabled: boolean; allowedBuiltinTools: string[]; allowedPackages: string[]; allowedSkills: string[]; allowedMcpServers: string[] };
@@ -237,7 +237,6 @@ export interface DomainOperations {
   "character.delete": { input: IdParams; output: { id: string; deleted: boolean } };
   "character.setActive": { input: IdParams; output: ActivationResult };
   "character.combine": { input: { id: string; promptFunctionType?: "CHAT" | "VOICE"; additionalTagIds?: string[] }; output: { id: string; promptFunctionType: "CHAT" | "VOICE"; additionalTagIds: string[]; prompt: string } };
-  "character.resetDefault": { input: EmptyParams; output: { defaultCharacterReset: boolean } };
   "character.export": { input: { id: string; format: CharacterFormat }; output: { id: string; format: CharacterFormat; content: string } };
   "character.import": { input: { format: CharacterFormat; content: string }; output: CharacterRecord };
   "character.exportBackup": { input: EmptyParams; output: { content: string } };
@@ -337,8 +336,6 @@ export const characterCards = {
     setActive: (payload: IdParams): Promise<ActivationResult> => call("character.setActive", payload),
     /** Combines the character prompt and selected tags. */
     combine: (payload: DomainInput<"character.combine">): Promise<DomainOutput<"character.combine">> => call("character.combine", payload),
-    /** Resets the built-in character. */
-    resetDefault: (): Promise<DomainOutput<"character.resetDefault">> => call("character.resetDefault", {}),
     /** Exports an explicitly selected character format. */
     export: (payload: DomainInput<"character.export">): Promise<DomainOutput<"character.export">> => call("character.export", payload),
     /** Imports an explicitly selected character format. */

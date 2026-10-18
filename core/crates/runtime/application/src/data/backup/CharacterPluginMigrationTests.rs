@@ -125,6 +125,7 @@ fn v28_object_adoption_verifies_and_retires_business_records_once() {
         .unwrap();
     let mut card = serde_json::to_value(&data().cards[0]).unwrap();
     card["themeConfigId"] = Value::Null;
+    card["chatProviderId"] = Value::Null;
     let mut source_memory = memory(12);
     let expected_card = card.clone();
     let expected_memory = source_memory.2.clone();
@@ -848,6 +849,7 @@ fn migrates_card_and_group_themes_without_changing_other_bindings() {
     });
     source.active = Some(json!({"CharacterGroup":{"id":"group"}}));
     let mut expected_card = serde_json::to_value(&source.cards[0]).unwrap();
+    expected_card["chatProviderId"] = Value::Null;
     let mut expected_group = serde_json::to_value(&source.groups[0]).unwrap();
     let expected_tag = serde_json::to_value(&source.tags[0]).unwrap();
     fixture.writer().import("operit2-v27", source).unwrap();

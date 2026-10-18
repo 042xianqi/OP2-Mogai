@@ -391,25 +391,12 @@ impl CharacterPluginWriter {
             metadata["active"] = active;
         }
         let mut rows = data.records;
-        let imported_ids = data
-            .cards
-            .iter()
-            .map(|card| card.id.clone())
-            .collect::<BTreeSet<_>>();
-        if data.cards.iter().filter(|card| card.isDefault).count() != 1 {
-            return Err("Imported characters must have exactly one default".to_string());
-        }
-        for entry in self.list("cards")? {
-            let mut card = entry["value"].clone();
-            let id = requiredString(&card, "id")?.to_string();
-            if card["isDefault"] == true && !imported_ids.contains(&id) {
-                card["isDefault"] = json!(false);
-                rows.push(("cards".to_string(), id, card));
-            }
-        }
+        // The installed and imported cards are ordinary records; a historical default flag is inert.
         for card in data.cards {
             let mut value = serde_json::to_value(&card).map_err(|error| error.to_string())?;
             value["themeConfigId"] = Value::Null;
+            // The legacy record predates the provider link; the plugin derives it from the model binding.
+            value["chatProviderId"] = Value::Null;
             rows.push(("cards".to_string(), card.id, value));
         }
         for group in data.groups {

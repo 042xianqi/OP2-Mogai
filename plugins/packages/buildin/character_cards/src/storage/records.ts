@@ -2,7 +2,7 @@ import type { Storage } from "../../../../../types/storage";
 import type { CharacterState } from "../model";
 
 import { assertObject, requireId } from "../validation";
-import { assertCharacterState } from "./state";
+import { assertCharacterState, normalizeIdentitySpace } from "./state";
 
 export const collections = [
   "cards",
@@ -125,11 +125,11 @@ export function records(state: CharacterState): StoredRecord[] {
   return result;
 }
 
-/** Reconstructs a validated operation snapshot from separately persisted host records. */
-export function stateFromRecords(
+/** Assembles one complete state, reconciles merged numeric identities, then validates it. */
+export function loadCharacterState(
   metadata: Storage.Value,
   rows: StoredRecord[],
-): CharacterState {
+): { state: CharacterState; healed: boolean } {
   assertObject(metadata, "character database metadata");
   if (metadata.migrationStatus === "writing")
     throw new Error("Character migration has not completed");
@@ -194,6 +194,12 @@ export function stateFromRecords(
     }
     entries.push(row.value.record);
   }
+  const healed = normalizeIdentitySpace(state);
   assertCharacterState(state);
-  return state;
+  return { state, healed };
+}
+
+/** Reconstructs a validated operation snapshot from separately persisted host records. */
+export function stateFromRecords(metadata: Storage.Value, rows: StoredRecord[]): CharacterState {
+  return loadCharacterState(metadata, rows).state;
 }

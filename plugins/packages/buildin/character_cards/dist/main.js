@@ -66,7 +66,6 @@ __export(main_exports, {
   characterImportApi: () => characterImportApi,
   characterImportBackupApi: () => characterImportBackupApi,
   characterListApi: () => characterListApi,
-  characterResetDefaultApi: () => characterResetDefaultApi,
   characterSetActiveApi: () => characterSetActiveApi,
   characterUpdateApi: () => characterUpdateApi,
   chatConfigurationBindingDeleteApi: () => chatConfigurationBindingDeleteApi,
@@ -861,7 +860,6 @@ var validators = {
   "character.delete": id,
   "character.setActive": id,
   "character.combine": shape({ id: required(nonblank), promptFunctionType: optional(enumeration("CHAT", "VOICE")), additionalTagIds: optional(identifiers) }),
-  "character.resetDefault": empty,
   "character.export": shape({ id: required(nonblank), format: required(format) }),
   "character.import": shape({ format: required(format), content: required(nonblank) }),
   "character.exportBackup": empty,
@@ -2100,7 +2098,7 @@ var spaceMergeDescriptor = {
       collection: "cards",
       identityColumn: "id",
       nameColumn: "name",
-      ignoredColumns: ["_revision", "id", "createdAt", "updatedAt"],
+      ignoredColumns: ["_revision", "id", "createdAt", "updatedAt", "isDefault"],
       keyEncoding: "length_prefixed_root",
       matchMode: "content",
       keyReferences: [],
@@ -3750,8 +3748,8 @@ var operitDefaultContent = {
 };
 
 // src/storage/state.ts
-function createDefaultCharacter(now) {
-  return { ...createCharacterDraft(), ...operitDefaultContent, id: "default", isDefault: true, createdAt: now, updatedAt: now };
+function createInstalledCharacter(now) {
+  return { ...createCharacterDraft(), ...operitDefaultContent, id: "default", isDefault: false, createdAt: now, updatedAt: now };
 }
 function userDocumentPath(ownerKey) {
   return "owners/" + encodeURIComponent(ownerKey) + "/USER.md";
@@ -3772,7 +3770,39 @@ function createMemorySpace(ownerKey) {
   };
 }
 function createInitialState(now) {
-  return { version: 3, memoryPreferences: { userDescriptionEnabled: true, autoUpdateEnabled: true }, conversationGroups: [], nextId: "1", cards: [createDefaultCharacter(now)], groups: [], tags: [], stores: [], active: { CharacterCard: { id: "default" } }, owners: [createMemorySpace("character:default")] };
+  const card = createInstalledCharacter(now);
+  return { version: 3, memoryPreferences: { userDescriptionEnabled: true, autoUpdateEnabled: true }, conversationGroups: [], nextId: "1", cards: [card], groups: [], tags: [], stores: [], active: { CharacterCard: { id: card.id } }, owners: [createMemorySpace("character:" + card.id)] };
+}
+function normalizeIdentitySpace(state) {
+  const nextId = typeof state.nextId === "string" && /^[0-9]+$/.test(state.nextId) ? BigInt(state.nextId) : null;
+  if (nextId === null) return false;
+  let highest = -1n;
+  const consider = (value) => {
+    if (typeof value !== "string" || !/^[0-9]+$/.test(value)) return;
+    const parsed = BigInt(value);
+    if (parsed > highest) highest = parsed;
+  };
+  const considerEntity = (value) => {
+    if (typeof value !== "string") return;
+    const match = /^(?:character|group|tag|shared)-([1-9][0-9]*)$/.exec(value);
+    if (match !== null) consider(match[1]);
+  };
+  const each = (records3, visit) => {
+    if (!Array.isArray(records3)) return;
+    for (const record2 of records3) if (record2 !== null && typeof record2 === "object" && !Array.isArray(record2)) visit(record2);
+  };
+  for (const collection of [state.cards, state.groups, state.tags, state.stores])
+    each(collection, (record2) => considerEntity(record2.id));
+  each(state.conversationGroups, (record2) => consider(record2.id));
+  each(state.owners, (owner2) => {
+    for (const field2 of ["memories", "links", "chunks", "candidates", "embeddings"])
+      each(owner2[field2], (record2) => consider(record2.id));
+    const rebuildTask = owner2.rebuildTask;
+    if (rebuildTask !== null && typeof rebuildTask === "object") consider(rebuildTask.id);
+  });
+  if (highest < 0n || nextId > highest || highest === 9223372036854775807n) return false;
+  state.nextId = (highest + 1n).toString();
+  return true;
 }
 function array2(value, label) {
   if (!Array.isArray(value)) throw new Error(label + " must be an array");
@@ -3805,11 +3835,9 @@ function assertCharacterState(value) {
   array2(stores, "stores");
   array2(owners, "owners");
   const cardIds = identities(cards, "cards"), groupIds = identities(groups, "groups"), tagIds = identities(tags, "tags"), storeIds = identities(stores, "stores");
-  let defaultCount = 0;
   for (const card of cards) {
     assertCard(card);
     requireId(card.id, "card id");
-    if (card.isDefault) defaultCount += 1;
     for (const id2 of card.attachedTagIds) if (!tagIds.has(id2)) throw new Error("Missing attached tag: " + id2);
     if (card.chatModelBindingMode !== "FOLLOW_GLOBAL" && card.chatModelBindingMode !== "FIXED_MODEL") throw new Error("Invalid model binding mode");
     if (card.chatModelBindingMode === "FIXED_MODEL") requireId(card.chatModelId, "fixed model id");
@@ -3817,7 +3845,6 @@ function assertCharacterState(value) {
     if (card.memoryBindingMode === "SHARED" && !storeIds.has(requireId(card.sharedMemoryId, "shared memory id"))) throw new Error("Missing primary shared library");
     for (const mount2 of card.sharedMemoryMounts) if (!storeIds.has(mount2.sharedMemoryId)) throw new Error("Missing shared memory mount: " + mount2.sharedMemoryId);
   }
-  if (defaultCount !== 1) throw new Error("Character state must contain exactly one default character");
   for (const group of groups) {
     assertGroup(group);
     const members2 = /* @__PURE__ */ new Set();
@@ -4280,7 +4307,6 @@ function deleteCharacter(id2, host) {
     requireId(id2, "\u89D2\u8272\u5361\u6807\u8BC6");
     const card = yield host.getCharacter(id2);
     assertCard(card);
-    if (card.isDefault) throw new Error("\u9ED8\u8BA4\u89D2\u8272\u5361\u4E0D\u80FD\u5220\u9664");
     yield host.deleteCharacter(id2);
     return { id: id2, deleted: true };
   });
@@ -4401,12 +4427,6 @@ var handlers = {
     const options = { promptFunctionType: "CHAT", additionalTagIds: [], ...input };
     const prompt = yield combinePrompts(input.id, options.additionalTagIds, options.promptFunctionType, host);
     return { id: input.id, promptFunctionType: options.promptFunctionType, additionalTagIds: options.additionalTagIds, prompt };
-  }),
-  /** Resets the canonical default character through its established manager operation. */
-  "character.resetDefault": (_input, host) => __async(null, null, function* () {
-    const card = yield host.resetDefaultCharacter();
-    assertCard(card);
-    return { defaultCharacterReset: true };
   }),
   /** Serializes the plugin-owned character interchange representation. */
   "character.export": (input, host) => __async(null, null, function* () {
@@ -5390,8 +5410,7 @@ function saveCharacter(card, create, tagChanges, host) {
     assertBoolean(create, "\u89D2\u8272\u65B0\u5EFA\u6807\u8BC6");
     let value = normalizedCharacter(card);
     if (create) {
-      if (value.isDefault) throw new Error("\u4E0D\u80FD\u65B0\u5EFA\u9ED8\u8BA4\u89D2\u8272\u5361");
-      value = { ...value, id: "", createdAt: 0, updatedAt: 0 };
+      value = { ...value, id: "", isDefault: false, createdAt: 0, updatedAt: 0 };
     } else {
       const id2 = requireId(value.id, "\u89D2\u8272\u5361\u6807\u8BC6");
       const original = yield host.getCharacter(id2);
@@ -5761,7 +5780,6 @@ function dispatch(request, host) {
         const id2 = requireId(request.id, "\u89D2\u8272\u5361\u6807\u8BC6");
         const card = yield host.getCharacter(id2);
         assertCard(card);
-        if (card.isDefault) throw new Error("\u9ED8\u8BA4\u89D2\u8272\u5361\u4E0D\u80FD\u5220\u9664");
         yield host.deleteCharacter(id2);
         return snapshot(host);
       }
@@ -6141,7 +6159,7 @@ function records2(state) {
   }
   return result2;
 }
-function stateFromRecords(metadata, rows) {
+function loadCharacterState(metadata, rows) {
   assertObject(metadata, "character database metadata");
   if (metadata.migrationStatus === "writing")
     throw new Error("Character migration has not completed");
@@ -6201,8 +6219,9 @@ function stateFromRecords(metadata, rows) {
     }
     entries.push(row.value.record);
   }
+  const healed = normalizeIdentitySpace(state);
   assertCharacterState(state);
-  return state;
+  return { state, healed };
 }
 
 // src/memory-search.ts
@@ -6501,8 +6520,7 @@ var RepositorySession = class {
       assertCard(card);
       const name = requireName(card.name, "character name");
       uniqueName(this.state.cards, name, "");
-      if (card.isDefault) throw new Error("Only the installed product default can be a default character");
-      const now = Date.now(), saved = { ...copy(card), id: uuid(), name, createdAt: now, updatedAt: now };
+      const now = Date.now(), saved = { ...copy(card), id: uuid(), name, isDefault: false, createdAt: now, updatedAt: now };
       this.state.cards.push(saved);
       this.addSpace("character:" + saved.id);
       return copy(saved);
@@ -6519,11 +6537,10 @@ var RepositorySession = class {
       return copy(original);
     });
   }
-  /** Removes a non-active non-default character and all of its owned records. */
+  /** Removes a non-active character and all of its owned records. */
   deleteCharacter(id2) {
     return __async(this, null, function* () {
       const card = get(this.state.cards, id2, "character");
-      if (card.isDefault) throw new Error("The default character cannot be deleted");
       if ("CharacterCard" in this.state.active && this.state.active.CharacterCard.id === id2) throw new Error("Select another character before deleting the active character");
       yield this.requireUnboundSelection("card:" + id2);
       for (const group of this.state.groups) for (const member2 of group.members) if (member2.characterCardId === id2) yield this.requireUnboundSelection("group:" + group.id);
@@ -6543,21 +6560,6 @@ var RepositorySession = class {
           group.updatedAt = Date.now();
         }
       }
-    });
-  }
-  /** Performs the explicit reset command against the genuine product default. */
-  resetDefaultCharacter() {
-    return __async(this, null, function* () {
-      const defaults = this.state.cards.filter(
-        /** Identifies the one persisted default character. */
-        (card) => card.isDefault
-      );
-      if (defaults.length !== 1) throw new Error("The product default character is missing or ambiguous");
-      const original = defaults[0], reset = createDefaultCharacter(Date.now());
-      reset.id = original.id;
-      reset.createdAt = original.createdAt;
-      Object.assign(original, reset);
-      return copy(original);
     });
   }
   /** Archived compatibility data only; never used by sidebar projection or live folder operations. */
@@ -7285,7 +7287,10 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
       }
       const metadata = yield database2.get("meta", "state");
       if (metadata === null) throw new Error("Character initialization did not publish metadata");
-      assertCharacterState(stateFromRecords(metadata.value, yield repository.readRecords()));
+      assertObject(metadata.value, "character metadata");
+      const loaded = loadCharacterState(metadata.value, yield repository.readRecords());
+      if (loaded.healed)
+        yield repository.publish(loaded.state, yield repository.readRecords(), [], [], metadata.version, metadata.value);
       return repository;
     });
   }
@@ -7323,7 +7328,8 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
             "Character records changed during the read; operation was not started"
           );
         assertObject(metadata.value, "character metadata");
-        const before = stateFromRecords(metadata.value, rows);
+        const loaded = loadCharacterState(metadata.value, rows);
+        const before = loaded.state;
         const state = clone(before), session = new RepositorySession(
           state,
           this.directory,
@@ -7342,11 +7348,13 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
             owner2.userDocumentPath.lastIndexOf("/")
           )
         );
-        if (!equal(before, state) || documents.length !== 0) {
+        if (!equal(before, state) || documents.length !== 0 || loaded.healed) {
           try {
             yield this.publish(
               state,
-              rows,
+              // A reconciled identity space shares row objects with the first read, so the diff
+              // needs a fresh read of the pre-reconciliation values.
+              loaded.healed ? yield this.readRecords() : rows,
               documents,
               removed,
               metadata.version,
@@ -7914,7 +7922,6 @@ var CHARACTER_USAGE = [
   "operit2 character delete <id>",
   "operit2 character set-active <id>",
   "operit2 character combine <id> [CHAT|VOICE] [tag-id-csv]",
-  "operit2 character reset-default",
   "operit2 character export <id> <operit|tavern>",
   "operit2 character import <operit|tavern> <json-content>",
   "operit2 character export-backup",
@@ -8180,7 +8187,6 @@ function characterText(card) {
     `Chat model id: ${displayOptional(card.chatModelId)}`,
     `Shared memory mounts: ${card.sharedMemoryMounts.length}`,
     `Tool access enabled: ${card.toolAccessConfig.enabled}`,
-    `Default: ${card.isDefault}`,
     `Created at: ${card.createdAt}`,
     `Updated at: ${card.updatedAt}`
   ]);
@@ -8198,7 +8204,7 @@ function parseCharacterCommand(args) {
       arity(args, 1, 1, CHARACTER_USAGE[0]);
       return invocation("character.list", {}, (cards) => result(lines([`Characters: ${cards.length}`, ...cards.map(
         /** Formats one stored character's legacy summary. */
-        (card) => `- ${card.id} | ${card.name} | default: ${card.isDefault} | tags: ${card.attachedTagIds.join(", ")} | ${card.description}`
+        (card) => `- ${card.id} | ${card.name} | tags: ${card.attachedTagIds.join(", ")} | ${card.description}`
       )]), cards));
     }
     case "show": {
@@ -8237,26 +8243,22 @@ function parseCharacterCommand(args) {
       if (args.length === 4) payload.additionalTagIds = csv(args[3]);
       return invocation("character.combine", parseDomainPayload("character.combine", payload), (value) => result(value.prompt, value));
     }
-    case "reset-default": {
-      arity(args, 1, 1, CHARACTER_USAGE[10]);
-      return invocation("character.resetDefault", {}, (value) => result(lines(["Default character reset"]), value));
-    }
     case "export": {
-      arity(args, 3, 3, CHARACTER_USAGE[11]);
+      arity(args, 3, 3, CHARACTER_USAGE[10]);
       const payload = parseDomainPayload("character.export", { id: args[1], format: args[2] });
       return invocation("character.export", payload, (value) => result(value.content, value));
     }
     case "import": {
-      arity(args, 3, 3, CHARACTER_USAGE[12]);
+      arity(args, 3, 3, CHARACTER_USAGE[11]);
       const payload = parseDomainPayload("character.import", { format: args[1], content: args[2] });
       return invocation("character.import", payload, (value) => result(characterText(value), value));
     }
     case "export-backup": {
-      arity(args, 1, 1, CHARACTER_USAGE[13]);
+      arity(args, 1, 1, CHARACTER_USAGE[12]);
       return invocation("character.exportBackup", {}, (value) => result(value.content, value));
     }
     case "import-backup": {
-      arity(args, 2, 2, CHARACTER_USAGE[14]);
+      arity(args, 2, 2, CHARACTER_USAGE[13]);
       return invocation("character.importBackup", { content: args[1] }, (value) => result(lines([`Imported characters: ${value.new}; updated: ${value.updated}; skipped: ${value.skipped}; total: ${value.total}`]), value));
     }
     default:
@@ -9457,11 +9459,6 @@ function characterCombineApi(event) {
     return dispatchDomain2("character.combine", parseDomainPayload("character.combine", event.payload));
   });
 }
-function characterResetDefaultApi(event) {
-  return __async(this, null, function* () {
-    return dispatchDomain2("character.resetDefault", parseDomainPayload("character.resetDefault", event.payload));
-  });
-}
 function characterExportApi(event) {
   return __async(this, null, function* () {
     return dispatchDomain2("character.export", parseDomainPayload("character.export", event.payload));
@@ -9752,7 +9749,6 @@ function registerDomainApis() {
   ToolPkg.registerApi({ name: "character.delete", function: characterDeleteApi });
   ToolPkg.registerApi({ name: "character.setActive", function: characterSetActiveApi });
   ToolPkg.registerApi({ name: "character.combine", function: characterCombineApi });
-  ToolPkg.registerApi({ name: "character.resetDefault", function: characterResetDefaultApi });
   ToolPkg.registerApi({ name: "character.export", function: characterExportApi });
   ToolPkg.registerApi({ name: "character.import", function: characterImportApi });
   ToolPkg.registerApi({ name: "character.exportBackup", function: characterExportBackupApi });

@@ -4,9 +4,9 @@ import { createCharacterDraft } from "../drafts";
 import { assertEmbedding } from "../memory-jobs/embeddings";
 import { assertBoolean, assertCard, assertConversationGroups, assertGroup, assertInteger, assertMemory, assertMemoryChatMessage, assertMemorySettings, assertNumber, assertObject, assertSearchConfig, assertString, assertTag, requireDecimal, requireId } from "../validation";
 
-/** Creates the actual product default on first installation or explicit reset only. */
-export function createDefaultCharacter(now: number): Card {
-  return { ...createCharacterDraft(), ...operitDefaultContent, id: "default", isDefault: true, createdAt: now, updatedAt: now };
+/** Creates the ordinary card that installation seeds; its fixed id keeps existing owner keys and chat selections valid. */
+export function createInstalledCharacter(now: number): Card {
+  return { ...createCharacterDraft(), ...operitDefaultContent, id: "default", isDefault: false, createdAt: now, updatedAt: now };
 }
 /** Resolves this plugin's real owner document path without permitting identity traversal. */
 export function userDocumentPath(ownerKey: string): string { return "owners/" + encodeURIComponent(ownerKey) + "/USER.md"; }
@@ -22,7 +22,40 @@ export function createMemorySpace(ownerKey: string): MemorySpace {
 }
 /** Creates first-install domain state without reading or migrating Core records. */
 export function createInitialState(now: number): CharacterState {
-  return { version: 3, memoryPreferences: { userDescriptionEnabled: true, autoUpdateEnabled: true }, conversationGroups: [], nextId: "1", cards: [createDefaultCharacter(now)], groups: [], tags: [], stores: [], active: { CharacterCard: { id: "default" } }, owners: [createMemorySpace("character:default")] };
+  const card = createInstalledCharacter(now);
+  return { version: 3, memoryPreferences: { userDescriptionEnabled: true, autoUpdateEnabled: true }, conversationGroups: [], nextId: "1", cards: [card], groups: [], tags: [], stores: [], active: { CharacterCard: { id: card.id } }, owners: [createMemorySpace("character:" + card.id)] };
+}
+/** Raises nextId above every merged identity so records arriving from another device cannot collide with new allocations. */
+export function normalizeIdentitySpace(state: { nextId: unknown; cards?: unknown; groups?: unknown; tags?: unknown; stores?: unknown; conversationGroups?: unknown; owners?: unknown }): boolean {
+  const nextId = typeof state.nextId === "string" && /^[0-9]+$/.test(state.nextId) ? BigInt(state.nextId) : null;
+  if (nextId === null) return false;
+  let highest = -1n;
+  const consider = (value: unknown): void => {
+    if (typeof value !== "string" || !/^[0-9]+$/.test(value)) return;
+    const parsed = BigInt(value);
+    if (parsed > highest) highest = parsed;
+  };
+  const considerEntity = (value: unknown): void => {
+    if (typeof value !== "string") return;
+    const match = /^(?:character|group|tag|shared)-([1-9][0-9]*)$/.exec(value);
+    if (match !== null) consider(match[1]);
+  };
+  const each = (records: unknown, visit: (record: Record<string, unknown>) => void): void => {
+    if (!Array.isArray(records)) return;
+    for (const record of records) if (record !== null && typeof record === "object" && !Array.isArray(record)) visit(record as Record<string, unknown>);
+  };
+  for (const collection of [state.cards, state.groups, state.tags, state.stores])
+    each(collection, record => considerEntity(record.id));
+  each(state.conversationGroups, record => consider(record.id));
+  each(state.owners, owner => {
+    for (const field of ["memories", "links", "chunks", "candidates", "embeddings"])
+      each(owner[field], record => consider(record.id));
+    const rebuildTask = owner.rebuildTask;
+    if (rebuildTask !== null && typeof rebuildTask === "object") consider((rebuildTask as Record<string, unknown>).id);
+  });
+  if (highest < 0n || nextId > highest || highest === 9223372036854775807n) return false;
+  state.nextId = (highest + 1n).toString();
+  return true;
 }
 /** Requires a real array instead of supplying missing persisted records. */
 function array(value: unknown, label: string): asserts value is unknown[] {
@@ -54,11 +87,9 @@ export function assertCharacterState(value: unknown): asserts value is Character
   const cards = value.cards, groups = value.groups, tags = value.tags, stores = value.stores, owners = value.owners;
   array(cards, "cards"); array(groups, "groups"); array(tags, "tags"); array(stores, "stores"); array(owners, "owners");
   const cardIds = identities(cards, "cards"), groupIds = identities(groups, "groups"), tagIds = identities(tags, "tags"), storeIds = identities(stores, "stores");
-  let defaultCount = 0;
   for (const card of cards) {
     assertCard(card);
     requireId(card.id, "card id");
-    if (card.isDefault) defaultCount += 1;
     for (const id of card.attachedTagIds) if (!tagIds.has(id)) throw new Error("Missing attached tag: " + id);
     if (card.chatModelBindingMode !== "FOLLOW_GLOBAL" && card.chatModelBindingMode !== "FIXED_MODEL") throw new Error("Invalid model binding mode");
     if (card.chatModelBindingMode === "FIXED_MODEL") requireId(card.chatModelId, "fixed model id");
@@ -66,7 +97,6 @@ export function assertCharacterState(value: unknown): asserts value is Character
     if (card.memoryBindingMode === "SHARED" && !storeIds.has(requireId(card.sharedMemoryId, "shared memory id"))) throw new Error("Missing primary shared library");
     for (const mount of card.sharedMemoryMounts) if (!storeIds.has(mount.sharedMemoryId)) throw new Error("Missing shared memory mount: " + mount.sharedMemoryId);
   }
-  if (defaultCount !== 1) throw new Error("Character state must contain exactly one default character");
   for (const group of groups) {
     assertGroup(group);
     const members = new Set<string>();

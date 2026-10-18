@@ -2,7 +2,7 @@ import type { CharacterRepository } from "./canonical";
 import type { ActivePrompt, BackupImportResult, Card, ChatBinding, CharacterDirectories, CharacterState, ConversationGroupRecord, Group, Memory, MemoryAutoSaveStatus, MemoryGraph, MemoryImportResult, MemoryLink, MemoryLinkUpdate, MemoryLinkValues, MemoryRebuildProgress, MemorySearchConfig, MemorySearchOptions, MemorySettings, MemorySpace, MemoryValues, ModelSummary, Store, Tag, TagValues, ToolCatalog, TtsConfig, UserDocument, UserDocumentWrite } from "./model";
 import { assertBoolean, assertCard, assertConversationGroups, assertGroup, assertMemory, assertMemorySettings, assertMemoryValues, assertNumber, assertSearchConfig, assertSearchOptions, assertString, assertTag, assertTagValues, normalizeNames, requireDecimal, requireId, requireName } from "./validation";
 import { clone } from "./storage/records";
-import { createDefaultCharacter, createMemorySpace, assertMemorySpace } from "./storage/state";
+import { createMemorySpace, assertMemorySpace } from "./storage/state";
 import { searchMemorySpace, searchMemorySpaceDebug } from "./memory-search";
 import { requireChatSelection } from "./chat-bindings";
 import { deleteChatBinding, listChatBindings, readChatBinding, writeChatBinding } from "./chat-storage";
@@ -116,8 +116,7 @@ export class RepositorySession implements CharacterRepository {
   /** Creates all character fields and its genuine initialized memory space. */
   async createCharacter(card: Card): Promise<Card> {
     assertCard(card); const name = requireName(card.name, "character name"); uniqueName(this.state.cards, name, "");
-    if (card.isDefault) throw new Error("Only the installed product default can be a default character");
-    const now = Date.now(), saved = { ...copy(card), id: uuid(), name, createdAt: now, updatedAt: now };
+    const now = Date.now(), saved = { ...copy(card), id: uuid(), name, isDefault: false, createdAt: now, updatedAt: now };
     this.state.cards.push(saved); this.addSpace("character:" + saved.id); return copy(saved);
   }
   /** Writes the full editable character while preserving its stable creation identity. */
@@ -127,10 +126,9 @@ export class RepositorySession implements CharacterRepository {
     const saved = { ...copy(card), name, isDefault: original.isDefault, createdAt: original.createdAt, updatedAt: Date.now() };
     Object.assign(original, saved); return copy(original);
   }
-  /** Removes a non-active non-default character and all of its owned records. */
+  /** Removes a non-active character and all of its owned records. */
   async deleteCharacter(id: string): Promise<void> {
     const card = get(this.state.cards, id, "character");
-    if (card.isDefault) throw new Error("The default character cannot be deleted");
     if ("CharacterCard" in this.state.active && this.state.active.CharacterCard.id === id) throw new Error("Select another character before deleting the active character");
     await this.requireUnboundSelection("card:" + id);
     for (const group of this.state.groups) for (const member of group.members) if (member.characterCardId === id) await this.requireUnboundSelection("group:" + group.id);
@@ -146,16 +144,6 @@ export class RepositorySession implements CharacterRepository {
       );
       if (members.length !== group.members.length) { group.members = members; group.updatedAt = Date.now(); }
     }
-  }
-  /** Performs the explicit reset command against the genuine product default. */
-  async resetDefaultCharacter(): Promise<Card> {
-    const defaults = this.state.cards.filter(
-      /** Identifies the one persisted default character. */
-      card => card.isDefault,
-    );
-    if (defaults.length !== 1) throw new Error("The product default character is missing or ambiguous");
-    const original = defaults[0], reset = createDefaultCharacter(Date.now());
-    reset.id = original.id; reset.createdAt = original.createdAt; Object.assign(original, reset); return copy(original);
   }
   /** Archived compatibility data only; never used by sidebar projection or live folder operations. */
   async readConversationGroupsForBackup(): Promise<ConversationGroupRecord[]> { return copy(this.state.conversationGroups); }

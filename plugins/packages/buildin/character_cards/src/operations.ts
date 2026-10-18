@@ -31,7 +31,6 @@ function findMemory(items: Memory[], title: string): Memory {
 /** Converts canonical deletion lifecycle completion to the public activation-independent result. */
 async function deleteCharacter(id: string, host: CharacterRepository): Promise<{ id: string; deleted: boolean }> {
   requireId(id, "角色卡标识"); const card = await host.getCharacter(id); assertCard(card);
-  if (card.isDefault) throw new Error("默认角色卡不能删除");
   await host.deleteCharacter(id); return { id, deleted: true };
 }
 
@@ -128,8 +127,6 @@ const handlers: DomainHandlers = {
     const prompt = await combinePrompts(input.id, options.additionalTagIds, options.promptFunctionType, host);
     return { id: input.id, promptFunctionType: options.promptFunctionType, additionalTagIds: options.additionalTagIds, prompt };
   },
-  /** Resets the canonical default character through its established manager operation. */
-  "character.resetDefault": async (_input, host) => { const card = await host.resetDefaultCharacter(); assertCard(card); return { defaultCharacterReset: true }; },
   /** Serializes the plugin-owned character interchange representation. */
   "character.export": async (input, host) => { const card = await host.getCharacter(input.id), tags = await host.listTags(); return { id: input.id, format: input.format, content: encodeCharacterExport(card, input.format, tags) }; },
   /** Parses and stages interchange imports in the plugin before full canonical persistence. */
