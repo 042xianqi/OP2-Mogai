@@ -221,3 +221,53 @@ fn root_overlap_is_an_explicit_error() {
     let mut session = NativeRescueSession::open(fixture.0.join("runtime"), None).unwrap();
     assert!(session.execute(json!({"operation":"configure","roots":roots})).is_err());
 }
+
+/// Allows vetted platform prefixes to be links while keeping rescue behavior intact.
+#[test]
+#[cfg(unix)]
+fn platform_symlinked_ancestors_keep_startup_and_maintenance_available() {
+    use std::os::unix::fs::symlink;
+    let fixture = Fixture::new();
+    let application = fixture.0.join("application");
+    fs::create_dir_all(application.join("runtime")).unwrap();
+    fs::create_dir_all(application.join("workspaces")).unwrap();
+    let alias = fixture.0.join("alias");
+    symlink(&application, &alias).unwrap();
+    if let Err(error) = StorageLease::acquire(&alias.join("runtime"), false) {
+        panic!("a symlinked platform prefix must not block startup: {error}");
+    }
+    let mut session = NativeRescueSession::open(alias.join("runtime"), None).unwrap();
+    session.execute(json!({"operation":"configure","roots":{
+        "runtimeRoot": alias.join("runtime"),
+        "workspaceRoot": alias.join("workspaces")
+    }})).unwrap();
+    let archive = session.execute(json!({"operation":"export","password":PASSWORD})).unwrap();
+    assert!(Path::new(archive["fileReference"].as_str().unwrap()).is_file());
+}
+
+/// Continues to reject a redirected root and link components inside an accepted root.
+#[test]
+#[cfg(unix)]
+fn direct_links_are_still_rejected_at_the_rescue_boundary() {
+    use std::os::unix::fs::symlink;
+    let fixture = Fixture::new();
+    fixture.write("runtime/file", b"payload");
+    let linked_root = fixture.0.join("linked-runtime");
+    symlink(fixture.0.join("runtime"), &linked_root).unwrap();
+    let mut linked = NativeRescueSession::open(fixture.0.join("runtime"), None).unwrap();
+    let error = linked.execute(json!({"operation":"configure","roots":{
+        "runtimeRoot": linked_root.clone(),
+        "workspaceRoot": fixture.0.join("workspaces")
+    }})).unwrap_err();
+    assert!(error.starts_with("Filesystem links are not accepted at the rescue boundary:"), "{error}");
+    drop(linked);
+    match NativeRescueSession::open(linked_root.clone(), None) {
+        Ok(_) => panic!("a redirected default runtime root must be rejected"),
+        Err(error) => assert!(error.starts_with("Filesystem links are not accepted at the rescue boundary:"), "{error}"),
+    }
+
+    let mut session = NativeRescueSession::open(fixture.0.join("runtime"), None).unwrap();
+    symlink(&fixture.0, fixture.0.join("runtime/escape")).unwrap();
+    let error = session.execute(json!({"operation":"configure","roots":fixture.roots()})).unwrap_err();
+    assert!(error.starts_with("Filesystem links require an explicit archival policy:"), "{error}");
+}
