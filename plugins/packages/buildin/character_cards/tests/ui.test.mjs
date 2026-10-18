@@ -633,7 +633,7 @@ function plain(value) { return JSON.parse(JSON.stringify(value)); }
 
 /** Runs the current main bundle with native file IO and explicit readonly directory fixtures, never fixture storage. */
 async function fileBackedPlugin(t, bundle, uiScripts = undefined, settings = null) {
-  const disk = await createDiskHarness(t), readonly = fixture(), native = createNativeChatHost(new Map([["chat-dom", { extension: null }]])), hostCalls = native.calls, records = native.records;
+  const disk = await createDiskHarness(t, { legacyIdentity: "default" }), readonly = fixture(), native = createNativeChatHost(new Map([["chat-dom", { extension: null }]])), hostCalls = native.calls, records = native.records;
   const apis = new Map(), channels = new Map(), commands = new Map(), routes = [], navigation = [], appHooks = [], messageHooks = [], hostHooks = [], chatLifecycleHooks = [], toolLifecycleHooks = [], toolPromptHooks = [];
   const tools = { Files: disk.files, Storage: disk.storage, Models: {
     /** Supplies only the explicitly labelled readonly model directory required by the actual service. */
@@ -1030,7 +1030,7 @@ test("installed plugin artifacts launch management and the independent V1 text a
 /** Both management pages use the full viewport for scrolling without an inner title or refresh header. */
 test("character and memory scroll use the full viewport without a title or refresh header", async () => {
   const data = fixture();
-  for (let i = 0; i < 24; i++) data.snapshot.cards.push({ ...data.snapshot.cards[1], id: "scroll-" + i, name: "滚动角色 " + i, isDefault: false });
+  for (let i = 0; i < 24; i++) data.snapshot.cards.push({ ...data.snapshot.cards[1], id: "scroll-" + i, name: "滚动角色 " + i });
   const ui = await page(800, 500, data);
   for (const document of [origin, origin + "/memory"]) {
     await ui.page.goto(document);

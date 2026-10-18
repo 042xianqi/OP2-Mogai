@@ -563,7 +563,7 @@ export async function saveCharacter(
   assertBoolean(create, "角色新建标识");
   let value = normalizedCharacter(card);
   if (create) {
-    value = { ...value, id: "", isDefault: false, createdAt: 0, updatedAt: 0 };
+    value = { ...value, id: "", createdAt: 0, updatedAt: 0 };
   } else {
     const id = requireId(value.id, "角色卡标识");
     const original = await host.getCharacter(id);
@@ -571,7 +571,6 @@ export async function saveCharacter(
     value = {
       ...value,
       id: original.id,
-      isDefault: original.isDefault,
       createdAt: original.createdAt,
     };
   }
@@ -732,7 +731,7 @@ export function parseOwner(ownerKey: string): MemoryOwner {
   throw new Error("记忆库命名空间无效");
 }
 
-/** Matches the original menu's explicit-card and active-card memory owner rules entirely in the plugin. */
+/** Resolves memory only from an explicitly bound character without assuming an installation card. */
 async function menuMemoryOwner(
   chatId: string,
   host: CharacterRepository,
@@ -743,12 +742,7 @@ async function menuMemoryOwner(
     binding === null ? null : parseChatSelection(binding.selection);
   if (selection?.kind === "model") throw new Error("Model-only conversations have no role memory owner");
   if (selection?.kind === "card") return resolveMemoryOwner(selection.id, host);
-  const active = await host.readActive();
-  if ("Model" in active) throw new Error("Model-only selection has no role memory owner");
-  return resolveMemoryOwner(
-    "CharacterCard" in active ? active.CharacterCard.id : "default",
-    host,
-  );
+  throw new Error("Select a character memory owner for this conversation");
 }
 
 /** Requires the selected owner to exist in the canonical character or shared store registry. */

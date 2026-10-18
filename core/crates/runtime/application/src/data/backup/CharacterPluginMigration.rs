@@ -1,5 +1,5 @@
 //! One removable migration boundary for Core v27 and Operit1 character and memory data.
-//! Domain records use the same typed Host SQL tables as the plugin.
+//! Configuration uses native plugin preferences; memory objects use their separate storage owner.
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -7,7 +7,7 @@ use super::CharacterPluginLegacyData::*;
 use crate::data::preferences::ThemeConfigManager::{ThemeConfig, ThemeConfigManager};
 use crate::data::preferences::ThemePreferenceSnapshot::readLegacyCharacterThemeSnapshot;
 use operit_host_api::PluginStorage::{
-    StorageKind, StorageMutation, StorageRequest, StorageResponse,
+    StorageKind, StorageMutation, StorageRequest, StorageResponse, StoragePreferenceEdit,
 };
 use operit_host_api::{RuntimeSqliteHost, RuntimeStorageHost};
 use operit_store::PluginStorage::PluginStorageSession;
@@ -50,12 +50,12 @@ pub struct CharacterMigrationData {
 
 /// Uses the production Host storage dispatcher for bounded and version-checked migration writes.
 pub struct CharacterPluginWriter {
-    relational: super::CharacterRelationalStorage::CharacterRelationalStorage,
     session: PluginStorageSession,
     sqlite: Arc<dyn RuntimeSqliteHost>,
     storage: Arc<dyn RuntimeStorageHost>,
     device_id: String,
     handle: String,
+    preferences: BTreeMap<String, String>,
     pub directory: String,
 }
 
@@ -75,9 +75,12 @@ impl CharacterPluginWriter {
                 sqlite.clone(),
                 storage.clone(),
                 StorageRequest::Open {
-                    path: format!("{directory}/characters.sqlite"),
+                    path: format!("{directory}/memory.sqlite"),
                     kind: StorageKind::Objects,
-                    merge: None,
+                    merge: Some(serde_json::from_str(include_str!(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../../../../plugins/packages/buildin/character_cards/src/storage/memory-merge.json"
+                    ))).map_err(|error| error.to_string())?),
                 },
                 &device_id,
             )
@@ -86,22 +89,26 @@ impl CharacterPluginWriter {
             return Err("Storage open returned a different operation result".to_string());
         };
         let handle = response.handle;
-        let relational = super::CharacterRelationalStorage::CharacterRelationalStorage::open(
-            sqlite.clone(),
-            storage.clone(),
-            device_id.clone(),
-            &directory,
-        )?;
+        let declarations: BTreeMap<String, operit_host_api::PluginStorage::StoragePreferencesMergeDescriptor> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"), "/../../../../plugins/packages/buildin/character_cards/src/storage/merge.json"
+        ))).map_err(|error| error.to_string())?;
+        let mut preferences = BTreeMap::new();
+        for (name, merge) in declarations {
+            let response = session.requestPreferences(storage.clone(), StorageRequest::OpenPreferences {
+                path: format!("{directory}/{name}.preferences.json"), merge: Some(merge),
+            }).map_err(|error| error.to_string())?;
+            let StorageResponse::Open(response) = response else { return Err("Preference open returned an unexpected result".into()); };
+            preferences.insert(name, response.handle);
+        }
         let result = Self {
-            relational,
             session,
             sqlite,
             storage,
             device_id,
             handle,
+            preferences,
             directory,
         };
-        result.adoptObjectRecords()?;
         Ok(result)
     }
 
@@ -118,34 +125,46 @@ impl CharacterPluginWriter {
             .and_then(|response| serde_json::to_value(response).map_err(|error| error.to_string()))
     }
 
-    /// Reads an exact object entry, preserving the distinction between absence and a stored value.
-    pub fn get(&self, collection: &str, key: &str) -> Result<Option<Value>, String> {
-        if collection != "imports" {
-            return self.relational.get(collection, key);
-        }
-        self.legacyGet(collection, key)
+    /// Selects a plugin-owned JSON file and key independently of memory objects.
+    fn preferenceLocation(&self, collection: &str, key: &str) -> Option<(&str, String)> {
+        let (owner, key) = match collection {
+            "cards" | "groups" | "tags" | "stores" | "conversationGroups" => (collection, format!("record_{key}")),
+            "meta" => ("meta", key.to_string()),
+            "imports" => ("meta", format!("import_{key}")),
+            "chat_bindings" => ("chats", format!("binding_{key}")),
+            "chat_drafts" => ("chats", format!("draft_{key}")),
+            _ => return None,
+        };
+        Some((self.preferences.get(owner).expect("declared preference owner"), key))
     }
 
-    /// Reads only the explicitly selected legacy source or migration provenance.
-    fn legacyGet(&self, collection: &str, key: &str) -> Result<Option<Value>, String> {
+    /// Reads an exact object entry, preserving the distinction between absence and a stored value.
+    pub fn get(&self, collection: &str, key: &str) -> Result<Option<Value>, String> {
+        if let Some((handle, key)) = self.preferenceLocation(collection, key) {
+            let snapshot = self.request(StorageRequest::PreferencesData { handle: handle.into() })?;
+            return snapshot["values"].get(&key).map(|value| {
+                Ok(json!({"value":value,"version":serde_json::to_string(value).map_err(|error| error.to_string())?}))
+            }).transpose();
+        }
         let entry = self.request(StorageRequest::Get {
-            handle: self.handle.clone(),
-            collection: collection.to_string(),
-            key: key.to_string(),
+            handle: self.handle.clone(), collection: collection.into(), key: key.into(),
         })?;
         Ok((!entry.is_null()).then_some(entry))
     }
 
     /// Enumerates bounded pages without reading or rewriting whole collection files.
     pub fn list(&self, collection: &str) -> Result<Vec<Value>, String> {
-        if collection != "imports" {
-            return self.relational.list(collection);
+        if let Some((handle, prefix)) = self.preferenceLocation(collection, "") {
+            let snapshot = self.request(StorageRequest::PreferencesData { handle: handle.into() })?;
+            let values = snapshot["values"].as_object().ok_or("Preference data returned invalid values")?;
+            let mut result = Vec::new();
+            for (key, value) in values {
+                if let Some(key) = key.strip_prefix(&prefix) {
+                    result.push(json!({"key":key,"value":value,"version":serde_json::to_string(value).map_err(|error| error.to_string())?}));
+                }
+            }
+            return Ok(result);
         }
-        self.legacyList(collection)
-    }
-
-    /// Reads the released objects source during its one-time schema adoption.
-    fn legacyList(&self, collection: &str) -> Result<Vec<Value>, String> {
         let mut result = Vec::new();
         let mut after = None;
         loop {
@@ -190,156 +209,61 @@ impl CharacterPluginWriter {
         })
     }
 
-    /// Commits one bounded migration transaction through the plugin storage journal.
+    /// Publishes each preference owner through its native edit and memory through its own object transaction.
     fn commit(&self, mutations: Vec<StorageMutation>) -> Result<(), String> {
+        let mut owners: BTreeMap<String, Vec<(String, StorageMutation)>> = BTreeMap::new();
+        let mut memory = Vec::new();
         for mutation in mutations {
-            if mutation.collection == "imports" {
-                self.request(StorageRequest::Commit {
-                    handle: self.handle.clone(),
-                    mutations: vec![mutation],
-                })?;
-            } else {
-                if mutation.deleted {
-                    return Err("Migration cannot delete a relational business record".into());
-                }
-                self.relational.put(&[(
-                    mutation.collection,
-                    mutation.key,
-                    mutation.value,
-                    mutation.expected_version,
-                )])?;
-            }
+            if let Some((handle, key)) = self.preferenceLocation(&mutation.collection, &mutation.key) {
+                owners.entry(handle.into()).or_default().push((key, mutation));
+            } else { memory.push(mutation); }
         }
+        for (handle, mutations) in owners {
+            let started = self.request(StorageRequest::PreferencesBeginEdit { handle: handle.clone() })?;
+            let token = requiredString(&started, "token")?.to_string();
+            let values = started["snapshot"]["values"].as_object().ok_or("Preference edit returned invalid values")?;
+            let edits = (|| {
+                let mut edits = Vec::new();
+                for (key, mutation) in mutations {
+                    let current = values.get(&key).map(serde_json::to_string).transpose().map_err(|error| error.to_string())?;
+                    if mutation.check_version && current != mutation.expected_version { return Err(format!("Preference import edit conflict: {key}")); }
+                    edits.push(if mutation.deleted { StoragePreferenceEdit::Remove { key } } else { StoragePreferenceEdit::Set { key, value: mutation.value } });
+                }
+                Ok(edits)
+            })();
+            let edits = match edits {
+                Ok(edits) => edits,
+                Err(error) => {
+                    self.request(StorageRequest::PreferencesCancelEdit { handle, token })?;
+                    return Err(error);
+                }
+            };
+            let schema_version = started["snapshot"]["schemaVersion"].as_u64().ok_or("Preference schema version is missing")? as u32;
+            self.request(StorageRequest::PreferencesFinishEdit { handle, token, edits, schema_version })?;
+        }
+        if !memory.is_empty() { self.request(StorageRequest::Commit { handle: self.handle.clone(), mutations: memory })?; }
         Ok(())
     }
 
-    /// Adopts released v28 object records once, verifies every value, and retains source provenance.
-    fn adoptObjectRecords(&self) -> Result<(), String> {
-        const MARKER: &str = "objects-to-relational-v1";
-        if self.legacyGet("imports", MARKER)?.is_some() {
-            return self.removeAdoptedObjectRecords();
-        }
-        for collection in [
-            "cards",
-            "groups",
-            "tags",
-            "stores",
-            "conversationGroups",
-            "owners",
-            "memories",
-            "links",
-            "chunks",
-            "candidates",
-            "embeddings",
-            "meta",
-        ] {
-            for entry in self.legacyList(collection)? {
-                let key = requiredString(&entry, "key")?;
-                let expected = self
-                    .relational
-                    .comparisonValue(collection, &entry["value"])?;
-                let existing = self.relational.get(collection, key)?;
-                match existing {
-                    Some(existing) => {
-                        if existing["value"] != expected {
-                            return Err(format!(
-                                "Interrupted relational adoption differs at {collection}/{key}"
-                            ));
-                        }
-                    }
-                    None => self.relational.put(&[(
-                        collection.into(),
-                        key.into(),
-                        entry["value"].clone(),
-                        None,
-                    )])?,
-                }
-                let checked = self
-                    .relational
-                    .get(collection, key)?
-                    .ok_or("Adopted relational record missing")?;
-                if checked["value"] != expected {
-                    return Err(format!(
-                        "Relational adoption verification failed at {collection}/{key}"
-                    ));
-                }
-            }
-        }
-        self.request(StorageRequest::Commit {
-            handle: self.handle.clone(),
-            mutations: vec![StorageMutation {
-                collection: "imports".into(),
-                key: MARKER.into(),
-                value: json!({"complete":true}),
-                deleted: false,
-                check_version: true,
-                expected_version: None,
-            }],
-        })?;
-        self.removeAdoptedObjectRecords()
+    /// Removes one exact imported object without overwriting concurrent plugin edits.
+    fn remove(&self, collection: &str, key: &str, version: &str) -> Result<(), String> {
+        self.commit(vec![StorageMutation {
+            collection: collection.into(), key: key.into(), value: Value::Null,
+            deleted: true, check_version: true, expected_version: Some(version.into()),
+        }])
     }
 
-    /// Removes verified business sources while retaining migration provenance and exact source versions.
-    fn removeAdoptedObjectRecords(&self) -> Result<(), String> {
-        for collection in [
-            "cards",
-            "groups",
-            "tags",
-            "stores",
-            "conversationGroups",
-            "owners",
-            "memories",
-            "links",
-            "chunks",
-            "candidates",
-            "embeddings",
-            "meta",
-        ] {
-            let records = self.legacyList(collection)?;
-            for page in records.chunks(1000) {
-                let mutations = page
-                    .iter()
-                    .map(|entry| {
-                        Ok(StorageMutation {
-                            collection: collection.into(),
-                            key: requiredString(entry, "key")?.into(),
-                            value: Value::Null,
-                            deleted: true,
-                            check_version: true,
-                            expected_version: Some(requiredString(entry, "version")?.into()),
-                        })
-                    })
-                    .collect::<Result<Vec<_>, String>>()?;
-                self.request(StorageRequest::Commit {
-                    handle: self.handle.clone(),
-                    mutations,
-                })?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Persists one idempotent current binding or domain record through the shared typed writer.
+    /// Adopts one complete JSON object and verifies its exact source payload.
     pub fn adoptRecord(&self, collection: &str, key: &str, value: Value) -> Result<(), String> {
-        let expected = self.relational.comparisonValue(collection, &value)?;
-        let existing = self.relational.get(collection, key)?;
-        if let Some(existing) = existing {
-            if existing["value"] != expected {
-                return Err(format!("Migration would replace {collection}/{key}"));
+        if let Some(existing) = self.get(collection, key)? {
+            if existing["value"] != value {
+                return Err(format!("Import would replace {collection}/{key}"));
             }
             return Ok(());
         }
-        self.relational
-            .put(&[(collection.into(), key.into(), value.clone(), None)])?;
-        if self
-            .relational
-            .get(collection, key)?
-            .ok_or("Migrated record missing")?["value"]
-            != expected
-        {
-            return Err(format!(
-                "Migrated relational record verification failed: {collection}/{key}"
-            ));
+        self.commit(vec![self.mutation(collection, key, value.clone())?])?;
+        if self.get(collection, key)?.ok_or("Imported record missing")?["value"] != value {
+            return Err(format!("Imported JSON verification failed: {collection}/{key}"));
         }
         Ok(())
     }
@@ -349,6 +273,10 @@ impl CharacterPluginWriter {
     pub fn import(&self, source: &str, mut data: CharacterMigrationData) -> Result<(), String> {
         if self.get("imports", source)?.is_some() {
             return Ok(());
+        }
+        let work = PreferencesDataStore::newWithStorage(self.storage.clone(), format!("{}/migration.preferences.json", self.directory));
+        if work.data().map_err(|error| error.to_string())?.get(&stringPreferencesKey("plan")).is_some() {
+            return Err("Character legacy import is incomplete in TypeScript".into());
         }
         let dropped = dropUnresolvableRecords(&mut data);
         if dropped != DroppedLegacyRecords::default() {
@@ -374,11 +302,10 @@ impl CharacterPluginWriter {
         let existing = self.get(META_COLLECTION, "state")?;
         let mut metadata = match existing {
             Some(entry) => entry["value"].clone(),
-            None => json!({"version":4,"active":null}),
+            None => json!({"version":1,"active":null}),
         };
-        if metadata["version"] != 4 {
-            return Err("Unsupported character database metadata".to_string());
-        }
+        if metadata["version"] != 1 { return Err("Unsupported character schema version".into()); }
+        metadata["legacyImportPending"] = json!(true);
         if metadata["migrationStatus"] == "writing" && metadata["migrationSource"] != source {
             return Err("Another character migration is incomplete".to_string());
         }
@@ -391,9 +318,10 @@ impl CharacterPluginWriter {
             metadata["active"] = active;
         }
         let mut rows = data.records;
-        // The installed and imported cards are ordinary records; a historical default flag is inert.
+        // Released identities remain stable; the new plugin has no privileged default-card field.
         for card in data.cards {
             let mut value = serde_json::to_value(&card).map_err(|error| error.to_string())?;
+            value.as_object_mut().ok_or("Character must be an object")?.remove("isDefault");
             value["themeConfigId"] = Value::Null;
             // The legacy record predates the provider link; the plugin derives it from the model binding.
             value["chatProviderId"] = Value::Null;
@@ -484,7 +412,7 @@ impl CharacterPluginWriter {
                 let entry = self
                     .get(collection, key)?
                     .ok_or("Migrated record is missing")?;
-                if entry["value"] != self.relational.comparisonValue(collection, expected)? {
+                if entry["value"] != *expected {
                     return Err(format!(
                         "Migrated record verification failed: {collection}/{key}"
                     ));
@@ -506,6 +434,9 @@ impl CharacterPluginWriter {
 impl Drop for CharacterPluginWriter {
     /// Releases the retained migration handle independently of its database's persistent lifetime.
     fn drop(&mut self) {
+        for handle in self.preferences.values() {
+            let _ = self.request(StorageRequest::Close { handle: handle.clone() });
+        }
         let _ = self.request(StorageRequest::Close {
             handle: self.handle.clone(),
         });
@@ -1222,16 +1153,10 @@ pub fn resolveBinding(cards: &[Value], groups: &[Value], old: &Value) -> Result<
         }
         format!("group:{id}")
     } else {
-        let matches: Vec<_> = match old["characterCardName"]
-            .as_str()
-            .filter(|name| !name.is_empty())
-        {
-            Some(name) => cards.iter().filter(|card| card["name"] == name).collect(),
-            None => cards
-                .iter()
-                .filter(|card| card["isDefault"] == true)
-                .collect(),
+        let Some(name) = old["characterCardName"].as_str().filter(|name| !name.is_empty()) else {
+            return Ok(json!({"version":1,"selection":"model:chat"}));
         };
+        let matches: Vec<_> = cards.iter().filter(|card| card["name"] == name).collect();
         if matches.len() != 1 {
             return Err(format!(
                 "Legacy character binding is missing or ambiguous: {old}"
@@ -1266,9 +1191,7 @@ fn reconcileChatDrafts(
                 writer.adoptRecord("chat_bindings", id, draft["value"].clone())?;
             }
         }
-        writer
-            .relational
-            .delete("chat_drafts", id, requiredString(&draft, "version")?)?;
+        writer.remove("chat_drafts", id, requiredString(&draft, "version")?)?;
     }
     Ok(())
 }
@@ -1285,60 +1208,7 @@ fn reconcileDeletedChatBindings(
     for row in deleted {
         let id: String = row.get(0).map_err(|error| error.to_string())?;
         if let Some(binding) = writer.get("chat_bindings", &id)? {
-            writer
-                .relational
-                .delete("chat_bindings", &id, requiredString(&binding, "version")?)?;
-        }
-    }
-    Ok(())
-}
-
-/// Names every physical table belonging to the removed historical configuration collection.
-fn retiredConfigurationCollection(name: &str) -> bool {
-    name == "message_snapshots" || name.starts_with("message_snapshots_")
-}
-
-/// Removes retired business tables, object records and row metadata.
-/// Called only after Core references have been reduced to author identities.
-fn eraseHistoricalConfigurations(store: &SqliteStore) -> Result<(), String> {
-    store.transaction(|tx| {
-        let tables = tx
-            .queryRows("SELECT name FROM sqlite_master WHERE type='table'", vec![])?
-            .into_iter()
-            .map(|row| row.get::<_, String>(0))
-            .collect::<Result<BTreeSet<_>, _>>()?;
-        for name in &tables {
-            if retiredConfigurationCollection(name) {
-                tx.execute(&format!("DROP TABLE \"{}\"", name.replace('"', "\"\"")), vec![])?;
-            }
-        }
-        // A released v27 upgrade has never opened the retired plugin database.
-        // Empty and partially initialized stores have no complete metadata schema.
-        for table in ["_operit_tables", "_operit_values", "_operit_dirty", "_operit_versions", "_operit_merge_map", "_operit_merge_names"] {
-            if !tables.contains(table) {
-                continue;
-            }
-            let column = if table == "_operit_tables" { "name" } else { "collection" };
-            tx.execute(&format!("DELETE FROM {table} WHERE {column}='message_snapshots' OR {column} GLOB 'message_snapshots_*'"), vec![])?;
-        }
-        // Replication operations are immutable: retain their payloads so duplicate
-        // delivery continues to validate against the original operation identity.
-        Ok(())
-    }).map_err(|error| error.to_string())
-}
-
-/// Retains only the author of an old native model message, including pending synchronization rows.
-fn discardHistoricalModelConfigurations(database: &SqliteStore) -> Result<(), String> {
-    for table in ["messages", "message_variants", "sync_sql_message_rows", "sync_sql_message_variant_rows"] {
-        for row in database.queryRows(&format!("SELECT rowid,pluginExtensions FROM {table}"), vec![]).map_err(|error| error.to_string())? {
-            let row_id: i64 = row.get(0).map_err(|error| error.to_string())?;
-            let mut extensions: BTreeMap<String, Value> = serde_json::from_str(&row.get::<_, String>(1).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
-            let Some(old) = extensions.remove("host.chat.model") else { continue };
-            let id = old["participantId"].as_str().or_else(|| old["profile"]["id"].as_str()).unwrap_or("model:chat");
-            attachMessageAuthor(&mut extensions, "host.chat.model", id);
-            let encoded = serde_json::to_string(&extensions).map_err(|error| error.to_string())?;
-            if encoded == row.get::<_, String>(1).map_err(|error| error.to_string())? { continue; }
-            database.execute(&format!("UPDATE {table} SET pluginExtensions=?1 WHERE rowid=?2"), vec![SqliteValue::Text(encoded), SqliteValue::Integer(row_id)]).map_err(|error| error.to_string())?;
+            writer.remove("chat_bindings", &id, requiredString(&binding, "version")?)?;
         }
     }
     Ok(())
@@ -1387,31 +1257,6 @@ fn adoptCoreConfigurationRows(
         .into_iter()
         .map(|entry| entry["value"].clone())
         .collect::<Vec<_>>();
-    // Read only author IDs from retired storage before dropping it; never decode old execution settings.
-    // A fresh or already-retired profile has no legacy database, and opening it would create an empty file.
-    let retired_path = format!("{}/characters-relational.sqlite", writer.directory);
-    let retired_store = if writer.storage.exists(&retired_path).map_err(|error| error.to_string())? {
-        Some(SqliteStore::openWithHost(writer.sqlite.clone(), &retired_path).map_err(|error| error.to_string())?)
-    } else {
-        None
-    };
-    let mut authors = BTreeMap::<String, String>::new();
-    if let Some(store) = retired_store.as_ref() {
-        let exists = store
-            .queryOne("SELECT name FROM sqlite_master WHERE type='table' AND name='message_snapshots'", vec![])
-            .map_err(|error| error.to_string())?
-            .is_some();
-        if exists {
-            for row in store.queryRows("SELECT _key,profile__id FROM message_snapshots", vec![]).map_err(|error| error.to_string())? {
-                authors.insert(row.get(0).map_err(|error| error.to_string())?, row.get(1).map_err(|error| error.to_string())?);
-            }
-        }
-    }
-    for entry in writer.legacyList("message_snapshots")? {
-        if let Some(id) = entry["value"]["profile"]["id"].as_str() {
-            authors.entry(requiredString(&entry, "key")?.into()).or_insert_with(|| id.into());
-        }
-    }
     for table in [
         "chats",
         "sync_sql_chat_rows",
@@ -1433,37 +1278,18 @@ fn adoptCoreConfigurationRows(
             let mut extensions: BTreeMap<String, Value> =
                 serde_json::from_str(&row.get::<_, String>(1).map_err(|error| error.to_string())?)
                     .map_err(|error| error.to_string())?;
-            let legacy = extensions.remove(LEGACY_BINDING_NAMESPACE);
-            let stored = extensions.remove(PLUGIN_ID);
-            if legacy.is_none() && stored.is_none() {
-                continue;
-            }
-            if legacy.is_some() && stored.is_some() {
-                return Err("Migration has conflicting character namespaces".into());
-            }
-            let value = match (legacy, stored) {
-                (Some(legacy), None) => resolveBinding(&cards, &groups, &legacy)?,
-                (None, Some(stored)) => stored,
-                _ => unreachable!("Character namespace presence was checked"),
-            };
+            let Some(legacy) = extensions.remove(LEGACY_BINDING_NAMESPACE) else { continue; };
+            let value = resolveBinding(&cards, &groups, &legacy)?;
             match table {
                 "chats" => {
                     let id: String = row.get(2).map_err(|error| error.to_string())?;
-                    if value.get("schemaVersion") != Some(&json!(1)) {
-                        writer.adoptRecord("chat_bindings", &id, value)?;
-                    }
+                    writer.adoptRecord("chat_bindings", &id, value)?;
                 }
                 "sync_sql_chat_rows" => {}
                 _ => {
-                    let author = value["participantId"].as_str()
-                        .or_else(|| value["profile"]["id"].as_str())
-                        .or_else(|| value["recordId"].as_str().and_then(|key| authors.get(key).map(String::as_str)))
-                        .or_else(|| value["selection"].as_str().and_then(|selection| selection.strip_prefix("card:")));
-                    if let Some(id) = author.filter(|id| !id.trim().is_empty()) {
+                    if let Some(id) = value["selection"].as_str().and_then(|selection| selection.strip_prefix("card:")) {
                         attachMessageAuthor(&mut extensions, PLUGIN_ID, id);
                     }
-                    // Unattributed legacy messages stay unattributed; never guess a group author.
-
                 }
             }
             let encoded = serde_json::to_string(&extensions).map_err(|error| error.to_string())?;
@@ -1476,12 +1302,6 @@ fn adoptCoreConfigurationRows(
                 .map_err(|error| error.to_string())?;
         }
     }
-    discardHistoricalModelConfigurations(database)?;
-    if let Some(retired_store) = &retired_store {
-        eraseHistoricalConfigurations(retired_store)?;
-    }
-    let object_store = SqliteStore::openWithHost(writer.sqlite.clone(), &format!("{}/characters.sqlite", writer.directory)).map_err(|error| error.to_string())?;
-    eraseHistoricalConfigurations(&object_store)?;
     database.execute(
         "UPDATE sync_sql_operations SET schemaVersion=8 WHERE domain='chat' AND schemaVersion=7",
         Vec::new(),
@@ -1493,7 +1313,7 @@ fn adoptCoreConfigurationRows(
 pub fn migrateLegacyCharacters(paths: RuntimeStorePaths) -> Result<(), String> {
     let storage = defaultRuntimeStorageHost();
     let database_path = format!(
-        "{}/characters.sqlite",
+        "{}/meta.preferences.json",
         operit_store::ExtensionStore::ExtensionStore::spaceDataPath(PLUGIN_ID)?
     );
     let source_exists = storage
@@ -1504,16 +1324,9 @@ pub fn migrateLegacyCharacters(paths: RuntimeStorePaths) -> Result<(), String> {
     let database_exists = storage
         .exists(&database_path)
         .map_err(|error| error.to_string())?;
-    let relational_exists = storage
-        .exists(&format!(
-            "{}/characters-relational-v2.sqlite",
-            operit_store::ExtensionStore::ExtensionStore::spaceDataPath(PLUGIN_ID)?
-        ))
-        .map_err(|error| error.to_string())?;
-    if !source_exists && !database_exists && !relational_exists {
+    if !source_exists && !database_exists {
         let database = operit_store::db::AppDatabase::AppDatabase::getDatabase(paths)
             .map_err(|error| error.to_string())?;
-        discardHistoricalModelConfigurations(database.store())?;
         database.store().execute(
             "UPDATE sync_sql_operations SET schemaVersion=8 WHERE domain='chat' AND schemaVersion=7",
             Vec::new(),
@@ -1521,18 +1334,6 @@ pub fn migrateLegacyCharacters(paths: RuntimeStorePaths) -> Result<(), String> {
         return Ok(());
     }
     let writer = CharacterPluginWriter::open(defaultRuntimeSqliteHost(), storage.clone())?;
-    // Upgrades completed plugin migrations as well as imports made before these flags
-    // became plugin-owned. Never replace a value already saved by the plugin.
-    if let Some(entry) = writer.get(META_COLLECTION, "state")? {
-        let mut metadata = entry["value"].clone();
-        if !metadata.is_object() || metadata["version"] != 4 {
-            return Err("Unsupported character database metadata".to_string());
-        }
-        if metadata.get("memoryPreferences").is_none() && metadata["migrationStatus"] != "writing" {
-            metadata["memoryPreferences"] = legacyGlobalMemoryPreferences(&paths)?;
-            writer.commit(vec![writer.mutation(META_COLLECTION, "state", metadata)?])?;
-        }
-    }
     if !source_exists && writer.get("imports", "operit2-v27")?.is_none() {
         return adoptCoreExtensions(paths, &writer);
     }
@@ -1801,14 +1602,14 @@ impl CharacterPluginWriter {
         targets: &[(String, String)],
         clean_preferences: bool,
     ) -> Result<(), String> {
-        let marker_key = format!("{source}:themes-v1");
+        let marker_key = format!("{source}:themes");
         let plan: ThemeMigrationPlan = match self.get("imports", &marker_key)? {
             Some(entry) if entry["value"]["complete"] == true => return Ok(()),
             Some(entry) => {
                 serde_json::from_value(entry["value"].clone()).map_err(|error| error.to_string())?
             }
             None => {
-                let plan = self.planThemes(source, source_preferences, targets)?;
+                let plan = self.planThemes(source_preferences, targets)?;
                 self.commit(vec![self.mutation(
                     "imports",
                     &marker_key,
@@ -1919,7 +1720,6 @@ impl CharacterPluginWriter {
     /// Decodes the released sparse theme schema using its declared initial values and exact target IDs.
     fn planThemes(
         &self,
-        source: &str,
         preferences: &Preferences,
         targets: &[(String, String)],
     ) -> Result<ThemeMigrationPlan, String> {
@@ -1946,7 +1746,8 @@ impl CharacterPluginWriter {
             let (snapshot, entries) = readLegacyCharacterThemeSnapshot(preferences, &prefix)
                 .map_err(|error| error.to_string())?;
             let config = ThemeConfig {
-                id: format!("legacy-theme:{source}:{collection}:{id}"),
+                // Persist the allocated identity in the plan before publishing either owner.
+                id: uuid::Uuid::new_v4().to_string(),
                 name: requiredString(role, "name")?.to_string(),
                 snapshot,
                 createdAt: role["createdAt"]
@@ -1995,37 +1796,14 @@ impl CharacterPluginWriter {
         Ok(plan)
     }
 
-    /// Recovers the Core migration's original card IDs from its exact cleanup manifest, excluding later cards.
+    /// Imports themes for the exact role identities declared by the user-upgrade manifest.
     pub fn migrateCoreThemes(&self) -> Result<(), String> {
         let marker = self
             .get("imports", "operit2-v27")?
             .ok_or("Core character import is missing")?;
-        let cleanup = marker["value"]["cleanupPaths"]
-            .as_array()
-            .ok_or("Core cleanup manifest is missing")?;
-        let mut targets = Vec::new();
-        if let Some(declared) = marker["value"].get("themeTargets") {
-            targets =
-                serde_json::from_value(declared.clone()).map_err(|error| error.to_string())?;
-        } else {
-            // Upgrade the completed pre-theme migration manifest using its original owner paths.
-            for entry in self.list("cards")? {
-                let id = requiredString(&entry["value"], "id")?;
-                let root = legacyMemoryRoot(&format!("character:{id}"))?;
-                if cleanup
-                    .iter()
-                    .any(|path| path.as_str() == Some(root.as_str()))
-                {
-                    targets.push(("cards".to_string(), id.to_string()));
-                }
-            }
-            for entry in self.list("groups")? {
-                targets.push((
-                    "groups".to_string(),
-                    requiredString(&entry["value"], "id")?.to_string(),
-                ));
-            }
-        }
+        let targets: Vec<(String, String)> = serde_json::from_value(
+            marker["value"]["themeTargets"].clone(),
+        ).map_err(|error| error.to_string())?;
         let preferences =
             crate::data::preferences::UserPreferencesManager::UserPreferencesManager::store(
                 self.storage.clone(),

@@ -121,7 +121,7 @@ const characterFields: Fields = {
   advancedCustomPrompt: optional(text), marks: optional(text), chatModelBindingMode: optional(enumeration("FOLLOW_GLOBAL", "FIXED_MODEL")),
   chatModelId: optional(nullable(text)), chatProviderId: optional(nullable(text)), ttsConfigId: optional(nullable(text)), themeConfigId: optional(nullable(text)), memoryBindingMode: optional(enumeration("CHARACTER", "SHARED")),
   sharedMemoryId: optional(nullable(text)), sharedMemoryMounts: optional(array(mount)), toolAccessConfig: optional(toolAccess),
-  isDefault: optional(boolean), createdAt: optional(integer), updatedAt: optional(integer),
+  createdAt: optional(integer), updatedAt: optional(integer),
 };
 const groupFields: Fields = { name: optional(nonblank), description: optional(text), themeConfigId: optional(nullable(text)), members: optional(array(member)), createdAt: optional(integer), updatedAt: optional(integer) };
 const tagFields: Fields = { name: optional(nonblank), description: optional(text), promptContent: optional(text), tagType: optional(enumeration("TONE", "CHARACTER", "FUNCTION", "CUSTOM")), createdAt: optional(integer), updatedAt: optional(integer) };

@@ -23,7 +23,6 @@ export interface Card {
   sharedMemoryId: string | null;
   sharedMemoryMounts: SharedMemoryMount[];
   toolAccessConfig: ToolAccessConfig;
-  isDefault: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -161,7 +160,7 @@ export interface Memory {
   tags: { id: string; name: string }[];
   properties: { id: string; key: string; value: string }[];
 }
-/** Preserves the complete DocumentChunk serde record, including its lossless SQLite identity. */
+/** Preserves a complete document chunk with a plugin-owned UUID identity. */
 export interface DocumentChunk { id: string; memoryUuid: string; chunkIndex: number; content: string }
 /** Persists one exact owner-scoped message revision candidate and its durable execution metadata. */
 export interface MemoryCandidate {
@@ -336,7 +335,7 @@ export interface MemoryJobWindow { chatId: string; chatTitle: string; messages: 
 /** Persists the private rebuild cursor in the same authoritative owner snapshot. */
 export interface MemoryRebuildTask { id: string; windows: MemoryJobWindow[]; nextWindow: number }
 /** Stores a real provider embedding, keyed by exact configured source and input text. */
-export interface MemoryEmbedding { endpoint: string; model: string; text: string; vector: number[]; updatedAt: number }
+export interface MemoryEmbedding { id: string; endpoint: string; model: string; text: string; vector: number[]; updatedAt: number }
 /** Reports actual committed domain operations for a manual or background extraction. */
 export interface MemoryExtractionResult { ownerKey: string; created: number; updated: number; merged: number; links: number; profileUpdated: boolean }
 
@@ -394,7 +393,7 @@ export interface MemorySpace {
 }
 /** Owns the file schema for this plugin only; no runtime-wide storage schema is imposed. */
 export interface CharacterState {
-  version: 4;
+  version: 1;
   memoryPreferences: GlobalMemoryPreferences;
   cards: Card[];
   groups: Group[];

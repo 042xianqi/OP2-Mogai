@@ -14,6 +14,8 @@ mod core_proxy;
 mod error;
 mod mdns;
 mod rescue;
+#[cfg(test)]
+mod profile_migration_acceptance_tests;
 mod tui;
 
 pub(crate) use bootstrap::{

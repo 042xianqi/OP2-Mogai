@@ -1,12 +1,13 @@
 import type { CharacterState, MemorySpace, Card } from "../model";
+import { uuid } from "../identity";
 import { operitDefaultContent } from "../default-character";
 import { createCharacterDraft } from "../drafts";
 import { assertEmbedding } from "../memory-jobs/embeddings";
 import { assertBoolean, assertCard, assertConversationGroups, assertGroup, assertInteger, assertMemory, assertMemoryChatMessage, assertMemorySettings, assertNumber, assertObject, assertSearchConfig, assertString, assertTag, requireId } from "../validation";
 
-/** Creates the ordinary card that installation seeds; its fixed id keeps existing owner keys and chat selections valid. */
+/** Creates an ordinary installation card with its own UUID and editable template content. */
 export function createInstalledCharacter(now: number): Card {
-  return { ...createCharacterDraft(), ...operitDefaultContent, id: "default", isDefault: false, createdAt: now, updatedAt: now };
+  return { ...createCharacterDraft(), ...operitDefaultContent, id: uuid(), createdAt: now, updatedAt: now };
 }
 /** Resolves this plugin's real owner document path without permitting identity traversal. */
 export function userDocumentPath(ownerKey: string): string { return "owners/" + encodeURIComponent(ownerKey) + "/USER.md"; }
@@ -23,7 +24,7 @@ export function createMemorySpace(ownerKey: string): MemorySpace {
 /** Creates first-install domain state without reading or migrating Core records. */
 export function createInitialState(now: number): CharacterState {
   const card = createInstalledCharacter(now);
-  return { version: 4, memoryPreferences: { userDescriptionEnabled: true, autoUpdateEnabled: true }, conversationGroups: [], cards: [card], groups: [], tags: [], stores: [], active: { CharacterCard: { id: card.id } }, owners: [createMemorySpace("character:" + card.id)] };
+  return { version: 1, memoryPreferences: { userDescriptionEnabled: true, autoUpdateEnabled: true }, conversationGroups: [], cards: [card], groups: [], tags: [], stores: [], active: { CharacterCard: { id: card.id } }, owners: [createMemorySpace("character:" + card.id)] };
 }
 /** Requires a real array instead of supplying missing persisted records. */
 function array(value: unknown, label: string): asserts value is unknown[] {
@@ -43,7 +44,7 @@ function identities(records: unknown[], label: string): Set<string> {
 /** Validates every record and cross-record reference before reads or record publication. */
 export function assertCharacterState(value: unknown): asserts value is CharacterState {
   assertObject(value, "character state");
-  if (value.version !== 4) throw new Error("Unsupported character database version");
+  if (value.version !== 1) throw new Error("Unsupported character database version");
   const fields = new Set(["memoryPreferences", "version", "cards", "groups", "tags", "stores", "active", "owners", "conversationGroups"]);
   for (const key of Object.keys(value)) if (!fields.has(key)) throw new Error("Unsupported character state field: " + key);
   assertObject(value.memoryPreferences, "global memory preferences");

@@ -52,6 +52,7 @@ pub struct NativeRescueSession {
 impl NativeRescueSession {
     /// Opens exclusive maintenance access without parsing the startup configuration.
     pub fn open(default_runtime: PathBuf, secret_store: Option<Arc<dyn HostSecretStore>>) -> Result<Self, String> {
+        let default_runtime = absolute_root(&default_runtime)?;
         let lease = StorageLease::acquire(&default_runtime, true)?;
         Ok(Self { _lease: lease, default_runtime, secret_store, service: None })
     }
@@ -770,7 +771,7 @@ fn is_storage_link(metadata: &std::fs::Metadata) -> bool {
     false
 }
 
-/// Validates an absolute data directory independently of business bootstrap parsing.
+/// Resolves ancestor aliases into a physical data root while rejecting links at the root itself.
 fn absolute_root(path: &Path) -> Result<PathBuf, String> {
     if !path.is_absolute() || path.components().any(|part| matches!(part, std::path::Component::ParentDir | std::path::Component::CurDir)) {
         return Err("Data roots must be normalized absolute directories".into());

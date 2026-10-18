@@ -78,7 +78,6 @@ function characterField(field: string, raw: string): CharacterChanges {
     case "avatarUri": case "chatProviderId": case "chatModelId": case "ttsConfigId": case "sharedMemoryId": value = optionalIdentifier(raw); break;
     case "attachedTagIds": value = csv(raw); break;
     case "sharedMemoryMounts": case "toolAccessConfig": value = json(raw, field); break;
-    case "isDefault": value = bool(raw, field); break;
     case "createdAt": case "updatedAt": value = integer(raw, field); break;
     default: throw new Error(`unsupported character field: ${field}`);
   }
