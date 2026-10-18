@@ -1301,13 +1301,16 @@ mod tests {
         });
         host.writeBytes(path, &serde_json::to_vec(&legacy).unwrap())
             .unwrap();
+        let expectedMigrationStep = std::cell::Cell::new(3u32);
         let store = CoreNodeStateStore::newWithStorage(host, path).withSchema(
             ModelConfigManager::PREFERENCES_VERSION,
             |version, preferences| {
                 assert_eq!(
-                    version, 3,
-                    "an existing file must not execute initialization"
+                    version,
+                    expectedMigrationStep.get(),
+                    "an existing file must run its migrations in order"
                 );
+                expectedMigrationStep.set(version + 1);
                 ModelConfigManager::migratePreferences(version, preferences)
             },
         );
@@ -1412,10 +1415,16 @@ mod tests {
         });
         host.writeBytes(path, &serde_json::to_vec(&legacy).unwrap())
             .unwrap();
+        let expectedMigrationStep = std::cell::Cell::new(3u32);
         let store = CoreNodeStateStore::newWithStorage(host, path).withSchema(
             ModelConfigManager::PREFERENCES_VERSION,
             |version, preferences| {
-                assert_eq!(version, 3, "an older file starts at its own arm");
+                assert_eq!(
+                    version,
+                    expectedMigrationStep.get(),
+                    "an older file must run its migrations in order"
+                );
+                expectedMigrationStep.set(version + 1);
                 ModelConfigManager::migratePreferences(version, preferences)
             },
         );
