@@ -672,7 +672,23 @@ impl SyncOperationStore {
         domains: &[String],
         limit: usize,
     ) -> Result<Vec<SyncOperation>, SyncOperationStoreError> {
-        self.operationsSinceWithExportPolicy(clock, domains, limit, true)
+        self.operationsSinceWithBudget(clock, domains, limit, usize::MAX)
+    }
+
+    /// Returns one byte-bounded page of operations newer than the provided clock.
+    ///
+    /// The page is cut after compaction, so a single large preference payload
+    /// cannot grow the exported page past the budget. The first operation is
+    /// always kept: the send path reports an operation that cannot fit any
+    /// message instead of stalling the pass here.
+    pub fn operationsSinceWithBudget(
+        &self,
+        clock: &SyncClock,
+        domains: &[String],
+        limit: usize,
+        maxBytes: usize,
+    ) -> Result<Vec<SyncOperation>, SyncOperationStoreError> {
+        self.operationsSinceWithExportPolicy(clock, domains, limit, true, maxBytes)
     }
 
     /// Reads local preference provenance without treating an export boundary as a conflict boundary.
@@ -682,6 +698,7 @@ impl SyncOperationStore {
             &["preferences".to_owned()],
             usize::MAX,
             false,
+            usize::MAX,
         )
     }
 
@@ -692,6 +709,7 @@ impl SyncOperationStore {
         domains: &[String],
         limit: usize,
         applyExportFloors: bool,
+        maxBytes: usize,
     ) -> Result<Vec<SyncOperation>, SyncOperationStoreError> {
         let domainSet = domains.iter().cloned().collect::<BTreeSet<_>>();
         let exportFloors = if applyExportFloors {
@@ -813,7 +831,7 @@ impl SyncOperationStore {
         });
         let mut out = compactSyncOperations(out);
         out.truncate(limit);
-        Ok(out)
+        Ok(boundSyncOperationPage(out, maxBytes))
     }
 
     /// Reads the local vector clock from storage.
@@ -1651,6 +1669,29 @@ struct SyncEntityKey {
     domain: String,
     entityType: String,
     entityId: String,
+}
+
+/// Cuts one ordered operation page at a serialized-byte budget.
+///
+/// Callers pass an already compacted, count-bounded page; this bounds what one
+/// store contributes to a merged synchronization page. The first operation is
+/// always kept so one oversized record cannot stall the export.
+pub fn boundSyncOperationPage(    operations: Vec<SyncOperation>,
+    maxBytes: usize,
+) -> Vec<SyncOperation> {
+    let mut page = Vec::new();
+    let mut bytes = 0usize;
+    for operation in operations {
+        let size = serde_json::to_vec(&operation)
+            .map(|encoded| encoded.len())
+            .unwrap_or(0);
+        if !page.is_empty() && bytes.saturating_add(size) > maxBytes {
+            break;
+        }
+        bytes = bytes.saturating_add(size);
+        page.push(operation);
+    }
+    page
 }
 
 /// Preserves preference history for identity replay and compacts other replaceable entity states.

@@ -39,7 +39,7 @@ use operit_store::RuntimeStorageHost::{
 };
 use operit_store::RuntimeStorePaths::RuntimeStorePaths;
 use operit_store::SyncOperationStore::{
-    compactSyncOperations, SyncClock, SyncOperation, SyncOperationStore,
+    boundSyncOperationPage, compactSyncOperations, SyncClock, SyncOperation, SyncOperationStore,
 };
 use operit_tools::files::PathMapper::PathMapper;
 use operit_tools::files::VisualFileSystem::VisualFileSystem;
@@ -854,7 +854,12 @@ impl OperitApplication {
         let clock: SyncClock = serde_json::from_value(clock).map_err(|error| error.to_string())?;
         let store = self.runtimeSyncOperationStore()?;
         let mut operations = store
-            .operationsSince(&clock, &domains, limit)
+            .operationsSinceWithBudget(
+                &clock,
+                &domains,
+                limit,
+                operit_store::SyncOperationStore::DEFAULT_SYNC_PAGE_BYTES,
+            )
             .map_err(|error| error.to_string())?;
         let sqlStore = SqlChatSyncStore::default().map_err(|error| error.to_string())?;
         operations.extend(
@@ -887,21 +892,10 @@ impl OperitApplication {
         // hundreds of KiB, so a count-only page has no memory ceiling. The first
         // operation always travels even when it alone exceeds the budget; the
         // send path reports an operation that cannot fit any message.
-        let mut page = Vec::new();
-        let mut pageBytes = 0usize;
-        for operation in operations {
-            let bytes = serde_json::to_vec(&operation)
-                .map(|encoded| encoded.len())
-                .unwrap_or(0);
-            if !page.is_empty()
-                && pageBytes.saturating_add(bytes)
-                    > operit_store::SyncOperationStore::DEFAULT_SYNC_PAGE_BYTES
-            {
-                break;
-            }
-            pageBytes = pageBytes.saturating_add(bytes);
-            page.push(operation);
-        }
+        let page = boundSyncOperationPage(
+            operations,
+            operit_store::SyncOperationStore::DEFAULT_SYNC_PAGE_BYTES,
+        );
         serde_json::to_value(page).map_err(|error| error.to_string())
     }
 
