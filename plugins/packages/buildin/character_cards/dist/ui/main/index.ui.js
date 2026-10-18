@@ -1522,6 +1522,17 @@ function createUiScreenSession(presentation) {
   };
 }
 
+// src/host-path.ts
+function hostFilePath(path, platform) {
+  const normalized = path.replace(/\\/g, "/");
+  if (normalized.startsWith("/app/") || normalized.startsWith("/mnt/")) return normalized;
+  if (platform === "windows" && /^[a-z]:\//i.test(normalized)) return `/mnt/windows/${normalized[0].toLowerCase()}/${normalized.slice(3)}`;
+  if (!normalized.startsWith("/")) return null;
+  if (platform === "macos" || platform === "linux") return `/mnt/${platform}${normalized}`;
+  if (platform === "android") return `/mnt/android/root${normalized}`;
+  return null;
+}
+
 // src/image-source.ts
 function readAvatarImport(path) {
   return __async(this, null, function* () {
@@ -1535,12 +1546,9 @@ function readAvatarImport(path) {
   });
 }
 function pickedImagePath(path, platform) {
-  const normalized = path.replace(/\\/g, "/");
-  if (normalized.startsWith("/app/") || normalized.startsWith("/mnt/")) return normalized;
-  if (platform === "windows" && /^[a-z]:\//i.test(normalized)) return `/mnt/windows/${normalized[0].toLowerCase()}/${normalized.slice(3)}`;
-  if (!normalized.startsWith("/")) throw new Error("\u9009\u62E9\u5668\u6CA1\u6709\u8FD4\u56DE\u53EF\u8BFB\u53D6\u7684\u6587\u4EF6\u8DEF\u5F84");
-  if (platform === "macos" || platform === "linux") return `/mnt/${platform}${normalized}`;
-  if (platform === "android") return `/mnt/android/root${normalized}`;
+  const mapped = hostFilePath(path, platform);
+  if (mapped !== null) return mapped;
+  if (!path.replace(/\\/g, "/").startsWith("/")) throw new Error("\u9009\u62E9\u5668\u6CA1\u6709\u8FD4\u56DE\u53EF\u8BFB\u53D6\u7684\u6587\u4EF6\u8DEF\u5F84");
   throw new Error("\u5F53\u524D\u5E73\u53F0\u4E0D\u652F\u6301\u5BFC\u5165\u6B64\u56FE\u7247\u8DEF\u5F84");
 }
 
@@ -1550,11 +1558,11 @@ function renderEntityPreview(ctx, input) {
   const entity = input.card ?? input.group;
   if (entity === null) return [];
   const card = input.card;
-  const selectable = (key, value, subdued = false) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:56223",[key,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:56258",[value,subdued ? colors.onSurfaceVariant : colors.onSurface],__operitUiTemplate_56258)],__operitUiTemplate_56223);
-  const pill = (key, label) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:56422",[key,colors.primaryContainer.copy({ alpha: 0.38 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:56609",[label,colors.onPrimaryContainer],__operitUiTemplate_56609)],__operitUiTemplate_56422);
+  const selectable = (key, value, subdued = false) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:56448",[key,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:56483",[value,subdued ? colors.onSurfaceVariant : colors.onSurface],__operitUiTemplate_56483)],__operitUiTemplate_56448);
+  const pill = (key, label) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:56647",[key,colors.primaryContainer.copy({ alpha: 0.38 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:56834",[label,colors.onPrimaryContainer],__operitUiTemplate_56834)],__operitUiTemplate_56647);
   const attachedTags = card === null ? [] : input.tags.filter((tag) => card.attachedTagIds.includes(tag.id));
-  const identity2 = OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:56826",[[
-    OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:56934",[card === null ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57035",[colors.primaryContainer.copy({ alpha: 0.48 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57204",[colors.primary],__operitUiTemplate_57204)],__operitUiTemplate_57035) : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57279",[{
+  const identity2 = OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57051",[[
+    OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57159",[card === null ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57260",[colors.primaryContainer.copy({ alpha: 0.48 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57429",[colors.primary],__operitUiTemplate_57429)],__operitUiTemplate_57260) : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57504",[{
         key: "entity-avatar",
         ...card.avatarUri === null ? { path: input.avatar ?? void 0 } : { uri: card.avatarUri },
         width: 72,
@@ -1562,22 +1570,22 @@ function renderEntityPreview(ctx, input) {
         contentScale: "crop",
         contentDescription: card.name,
         modifier: ctx.Modifier.clip({ cornerRadius: 20 })
-      }],__operitUiTemplate_57279),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57603",[[
-        OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57654",[entity.name],__operitUiTemplate_57654),
-        ...card === null ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57823",[input.group.members.length + " \u4F4D\u89D2\u8272",colors.onSurfaceVariant],__operitUiTemplate_57823)] : []
-      ]],__operitUiTemplate_57603)],__operitUiTemplate_56934),
+      }],__operitUiTemplate_57504),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57828",[[
+        OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:57879",[entity.name],__operitUiTemplate_57879),
+        ...card === null ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58048",[input.group.members.length + " \u4F4D\u89D2\u8272",colors.onSurfaceVariant],__operitUiTemplate_58048)] : []
+      ]],__operitUiTemplate_57828)],__operitUiTemplate_57159),
     ...entity.description.trim() === "" ? [] : [selectable("entity-preview-description", entity.description, true)],
-    ...attachedTags.length === 0 ? [] : [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58132",[attachedTags.map((tag) => pill("entity-preview-tag-" + tag.id, tag.name))],__operitUiTemplate_58132)]
-  ]],__operitUiTemplate_56826);
+    ...attachedTags.length === 0 ? [] : [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58357",[attachedTags.map((tag) => pill("entity-preview-tag-" + tag.id, tag.name))],__operitUiTemplate_58357)]
+  ]],__operitUiTemplate_57051);
   const contentSection = (key, title, value, quote = false) => value.trim() === "" ? [] : [
-    OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58384",["entity-preview-" + key,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58481",[{
+    OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58609",["entity-preview-" + key,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58706",[{
         fillMaxWidth: true,
         spacing: 10,
         ...quote ? { padding: 18, backgroundColor: colors.primaryContainer.copy({ alpha: 0.22 }), backgroundShape: { cornerRadius: 16 } } : {}
-      },OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58708",[[
-          ...quote ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58808",[colors.primary],__operitUiTemplate_58808)] : [],
-          OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58894",[title,quote ? colors.primary : colors.onSurfaceVariant],__operitUiTemplate_58894)
-        ]],__operitUiTemplate_58708),selectable("entity-preview-" + key + "-text", value)],__operitUiTemplate_58481)],__operitUiTemplate_58384)
+      },OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:58933",[[
+          ...quote ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59033",[colors.primary],__operitUiTemplate_59033)] : [],
+          OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:59119",[title,quote ? colors.primary : colors.onSurfaceVariant],__operitUiTemplate_59119)
+        ]],__operitUiTemplate_58933),selectable("entity-preview-" + key + "-text", value)],__operitUiTemplate_58706)],__operitUiTemplate_58609)
   ];
   const themeLabel = entity.themeConfigId === null ? "\u8DDF\u968F\u5F53\u524D\u4E3B\u9898" : input.themeError !== "" ? "\u4E3B\u9898\u540D\u79F0\u6682\u65F6\u65E0\u6CD5\u8BFB\u53D6" : input.themes === null ? "\u6B63\u5728\u8BFB\u53D6\u4E3B\u9898\u540D\u79F0\u2026" : input.themes.find((theme) => theme.id === entity.themeConfigId)?.label ?? "\u4E3B\u9898\u914D\u7F6E\u5DF2\u4E0D\u53EF\u7528";
   const rows = [];
@@ -1613,22 +1621,22 @@ function renderEntityPreview(ctx, input) {
     rows.push({ key: "tools", label: "\u5DE5\u5177\u8BBF\u95EE", value: !policy.enabled ? "\u8DDF\u968F\u5168\u5C40\u5DE5\u5177\u914D\u7F6E" : toolNames.length === 0 ? "\u672A\u5141\u8BB8\u4EFB\u4F55\u5DE5\u5177\u6765\u6E90" : toolNames.join("\u3001") });
   } else {
     const members = [...input.group.members].sort((a, b) => a.orderIndex - b.orderIndex);
-    contents.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:62715",[[
-      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:62824",[colors.onSurfaceVariant],__operitUiTemplate_62824),
-      ...members.length === 0 ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:62980",[colors.onSurfaceVariant],__operitUiTemplate_62980)] : members.map((member2, index) => {
+    contents.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:62940",[[
+      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:63049",[colors.onSurfaceVariant],__operitUiTemplate_63049),
+      ...members.length === 0 ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:63205",[colors.onSurfaceVariant],__operitUiTemplate_63205)] : members.map((member2, index) => {
         const record2 = input.snapshot.cards.find((card2) => card2.id === member2.characterCardId);
-        return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:63247",["entity-preview-member-" + member2.characterCardId,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:63414",[String(index + 1).padStart(2, "0"),colors.onSurfaceVariant],__operitUiTemplate_63414),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:63537",[{ width: 40, height: 40, ...record2?.avatarUri == null ? { path: input.avatar ?? void 0 } : { uri: record2.avatarUri }, contentScale: "crop", contentDescription: record2?.name ?? "\u89D2\u8272\u5DF2\u79FB\u9664", modifier: ctx.Modifier.clip({ cornerRadius: 12 }) }],__operitUiTemplate_63537),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:63827",[[
-            OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:63882",[record2?.name ?? "\u89D2\u8272\u5DF2\u79FB\u9664"],__operitUiTemplate_63882),
-            ...record2?.description.trim() ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64062",[record2.description,colors.onSurfaceVariant],__operitUiTemplate_64062)] : []
-          ]],__operitUiTemplate_63827)],__operitUiTemplate_63247);
+        return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:63472",["entity-preview-member-" + member2.characterCardId,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:63639",[String(index + 1).padStart(2, "0"),colors.onSurfaceVariant],__operitUiTemplate_63639),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:63762",[{ width: 40, height: 40, ...record2?.avatarUri == null ? { path: input.avatar ?? void 0 } : { uri: record2.avatarUri }, contentScale: "crop", contentDescription: record2?.name ?? "\u89D2\u8272\u5DF2\u79FB\u9664", modifier: ctx.Modifier.clip({ cornerRadius: 12 }) }],__operitUiTemplate_63762),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64052",[[
+            OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64107",[record2?.name ?? "\u89D2\u8272\u5DF2\u79FB\u9664"],__operitUiTemplate_64107),
+            ...record2?.description.trim() ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64287",[record2.description,colors.onSurfaceVariant],__operitUiTemplate_64287)] : []
+          ]],__operitUiTemplate_64052)],__operitUiTemplate_63472);
       })
-    ]],__operitUiTemplate_62715));
+    ]],__operitUiTemplate_62940));
     rows.push({ key: "theme", label: "\u4E3B\u9898", value: themeLabel });
   }
-  contents.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64321",[colors.surfaceContainerLow,[
-    OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64479",[input.onToggleConfiguration,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64657",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64757",[colors.onSurfaceVariant],__operitUiTemplate_64757),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64837",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64890",null,__operitUiTemplate_64890),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64991",[card === null ? "\u4E3B\u9898\u914D\u7F6E" : "\u6A21\u578B\u3001\u8BED\u97F3\u4E0E\u8BB0\u5FC6",colors.onSurfaceVariant],__operitUiTemplate_64991)],__operitUiTemplate_64837),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:65182",[input.configurationExpanded ? "ExpandLess" : "ExpandMore",colors.onSurfaceVariant],__operitUiTemplate_65182)],__operitUiTemplate_64657)],__operitUiTemplate_64479),
-    ...input.configurationExpanded ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:65358",[rows.map((row) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:65531",["entity-preview-config-" + row.key,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:65632",[row.label,colors.onSurfaceVariant],__operitUiTemplate_65632),selectable("entity-preview-config-" + row.key + "-value", row.value)],__operitUiTemplate_65531))],__operitUiTemplate_65358)] : []
-  ]],__operitUiTemplate_64321));
+  contents.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64546",[colors.surfaceContainerLow,[
+    OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64704",[input.onToggleConfiguration,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64882",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:64982",[colors.onSurfaceVariant],__operitUiTemplate_64982),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:65062",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:65115",null,__operitUiTemplate_65115),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:65216",[card === null ? "\u4E3B\u9898\u914D\u7F6E" : "\u6A21\u578B\u3001\u8BED\u97F3\u4E0E\u8BB0\u5FC6",colors.onSurfaceVariant],__operitUiTemplate_65216)],__operitUiTemplate_65062),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:65407",[input.configurationExpanded ? "ExpandLess" : "ExpandMore",colors.onSurfaceVariant],__operitUiTemplate_65407)],__operitUiTemplate_64882)],__operitUiTemplate_64704),
+    ...input.configurationExpanded ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:65583",[rows.map((row) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:65756",["entity-preview-config-" + row.key,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:65857",[row.label,colors.onSurfaceVariant],__operitUiTemplate_65857),selectable("entity-preview-config-" + row.key + "-value", row.value)],__operitUiTemplate_65756))],__operitUiTemplate_65583)] : []
+  ]],__operitUiTemplate_64546));
   return contents;
 }
 
@@ -1971,10 +1979,10 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
     });
   }
   const colors = ctx.MaterialTheme.colorScheme, enabled = !state.busy && !state.finished;
-  const text3 = (value) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:80849",[value],__operitUiTemplate_80849);
-  const caption = (value) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:80949",[value,colors.onSurfaceVariant],__operitUiTemplate_80949);
-  const section = (title, value) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81087",["preview-" + title,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81187",[title,colors.onSurfaceVariant],__operitUiTemplate_81187),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81274",[text3(value)],__operitUiTemplate_81274)],__operitUiTemplate_81087);
-  const field2 = (key, label, value, apply, maxLines = 1) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81385",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81439",[{
+  const text3 = (value) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81074",[value],__operitUiTemplate_81074);
+  const caption = (value) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81174",[value,colors.onSurfaceVariant],__operitUiTemplate_81174);
+  const section = (title, value) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81312",["preview-" + title,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81412",[title,colors.onSurfaceVariant],__operitUiTemplate_81412),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81499",[text3(value)],__operitUiTemplate_81499)],__operitUiTemplate_81312);
+  const field2 = (key, label, value, apply, maxLines = 1) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81610",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81664",[{
     key: "entity-field-" + key,
     label,
     value,
@@ -1985,44 +1993,44 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
     maxLines,
     style: {},
     onValueChange: apply,
-    ...maxLines === 1 ? {} : { suffixIconWidth: 36, suffixIconHeight: 36, trailingIcon: OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81748",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81814",["entity-expand-" + key,enabled,() => {
+    ...maxLines === 1 ? {} : { suffixIconWidth: 36, suffixIconHeight: 36, trailingIcon: OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:81973",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82039",["entity-expand-" + key,enabled,() => {
         assertOwner();
         update({ expanded: { key, label, value, apply }, fullscreen: true });
-      },OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82112",null,__operitUiTemplate_82112)],__operitUiTemplate_81814)],__operitUiTemplate_81748) }
-  }],__operitUiTemplate_81439)],__operitUiTemplate_81385);
-  const check = (key, label, checked, apply) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82217",[key,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82299",[checked,enabled,apply],__operitUiTemplate_82299),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82362",[label],__operitUiTemplate_82362)],__operitUiTemplate_82217);
-  const configure = (key, label, value, apply) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82455",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82518",[key,enabled ? apply : void 0,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82632",[label,enabled,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82674",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82752",[value],__operitUiTemplate_82752),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82849",null,__operitUiTemplate_82849)],__operitUiTemplate_82674)],__operitUiTemplate_82632)],__operitUiTemplate_82518)],__operitUiTemplate_82455);
+      },OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82337",null,__operitUiTemplate_82337)],__operitUiTemplate_82039)],__operitUiTemplate_81973) }
+  }],__operitUiTemplate_81664)],__operitUiTemplate_81610);
+  const check = (key, label, checked, apply) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82442",[key,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82524",[checked,enabled,apply],__operitUiTemplate_82524),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82587",[label],__operitUiTemplate_82587)],__operitUiTemplate_82442);
+  const configure = (key, label, value, apply) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82680",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82743",[key,enabled ? apply : void 0,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82857",[label,enabled,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82899",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:82977",[value],__operitUiTemplate_82977),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:83074",null,__operitUiTemplate_83074)],__operitUiTemplate_82899)],__operitUiTemplate_82857)],__operitUiTemplate_82743)],__operitUiTemplate_82680);
   const select = (key, label, value, choices, apply, empty2 = "\u4E0D\u7ED1\u5B9A") => configure(key, label, choices.find((option) => option.id === value)?.label ?? (value === null ? empty2 : "\u5DF2\u7ED1\u5B9A\u914D\u7F6E\u4E0D\u5B58\u5728\uFF1A" + value), () => {
     assertOwner();
     update({ picker: { title: "\u9009\u62E9" + label, key, value, choices, apply, query: "" } });
   });
-  const binding = (key, title, subtitleOff, subtitleOn, checked, apply, children, switchEnabled = true) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:83400",[key,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:83458",[ctx.Modifier.border(1, colors.outlineVariant.copy({ alpha: 0.24 }), { cornerRadius: 12 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:83646",[[
-      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:83692",[ctx.Modifier.heightIn({ minHeight: 46 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:83830",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:83872",[title,enabled && switchEnabled ? colors.onSurface : colors.onSurface.copy({ alpha: 0.46 })],__operitUiTemplate_83872),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84028",[checked ? subtitleOn : subtitleOff,enabled && switchEnabled ? colors.onSurfaceVariant : colors.onSurfaceVariant.copy({ alpha: 0.46 })],__operitUiTemplate_84028)],__operitUiTemplate_83830),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84218",[key + "-switch",checked,enabled && switchEnabled,ctx.Modifier.scale(0.82),apply],__operitUiTemplate_84218)],__operitUiTemplate_83692),
-      ...checked || !switchEnabled ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84410",null,__operitUiTemplate_84410), ...children] : []
-    ]],__operitUiTemplate_83646)],__operitUiTemplate_83458)],__operitUiTemplate_83400);
-  const body = (key, children, padding = { paddingStart: 18, paddingTop: 10, paddingEnd: 18, paddingBottom: 10 }) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84588",[key,children.map((child, index) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84666",[key + "-item-" + String(child.props?.key ?? index),padding.paddingStart,padding.paddingEnd,index === 0 ? padding.paddingTop : 0,index === children.length - 1 ? padding.paddingBottom : 0,child],__operitUiTemplate_84666))],__operitUiTemplate_84588);
-  const tabs = (key, labels, selected, apply) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:85035",[key,selected,labels.map((label, tab) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:85160",[key + "-" + tab,selected === tab,enabled,() => {
+  const binding = (key, title, subtitleOff, subtitleOn, checked, apply, children, switchEnabled = true) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:83625",[key,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:83683",[ctx.Modifier.border(1, colors.outlineVariant.copy({ alpha: 0.24 }), { cornerRadius: 12 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:83871",[[
+      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:83917",[ctx.Modifier.heightIn({ minHeight: 46 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84055",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84097",[title,enabled && switchEnabled ? colors.onSurface : colors.onSurface.copy({ alpha: 0.46 })],__operitUiTemplate_84097),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84253",[checked ? subtitleOn : subtitleOff,enabled && switchEnabled ? colors.onSurfaceVariant : colors.onSurfaceVariant.copy({ alpha: 0.46 })],__operitUiTemplate_84253)],__operitUiTemplate_84055),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84443",[key + "-switch",checked,enabled && switchEnabled,ctx.Modifier.scale(0.82),apply],__operitUiTemplate_84443)],__operitUiTemplate_83917),
+      ...checked || !switchEnabled ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84635",null,__operitUiTemplate_84635), ...children] : []
+    ]],__operitUiTemplate_83871)],__operitUiTemplate_83683)],__operitUiTemplate_83625);
+  const body = (key, children, padding = { paddingStart: 18, paddingTop: 10, paddingEnd: 18, paddingBottom: 10 }) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84813",[key,children.map((child, index) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:84891",[key + "-item-" + String(child.props?.key ?? index),padding.paddingStart,padding.paddingEnd,index === 0 ? padding.paddingTop : 0,index === children.length - 1 ? padding.paddingBottom : 0,child],__operitUiTemplate_84891))],__operitUiTemplate_84813);
+  const tabs = (key, labels, selected, apply) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:85260",[key,selected,labels.map((label, tab) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:85385",[key + "-" + tab,selected === tab,enabled,() => {
       assertOwner();
       apply(tab);
-    },OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:85297",[label],__operitUiTemplate_85297)],__operitUiTemplate_85160))],__operitUiTemplate_85035);
-  const standardButton = (key, label, action, filled = false) => filled ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:85429",[key,label,enabled,action],__operitUiTemplate_85429) : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:85493",[key,label,enabled,action],__operitUiTemplate_85493);
+    },OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:85522",[label],__operitUiTemplate_85522)],__operitUiTemplate_85385))],__operitUiTemplate_85260);
+  const standardButton = (key, label, action, filled = false) => filled ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:85654",[key,label,enabled,action],__operitUiTemplate_85654) : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:85718",[key,label,enabled,action],__operitUiTemplate_85718);
   function shell(title, child, actions, width = 760, height = 820, plainBody = false, reading = false) {
-    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:85676",[{ key: "native-entity-panel", ...state.fullscreen ? { fillMaxSize: true } : { width, height }, modifier: ctx.Modifier.clip({ cornerRadius: state.fullscreen ? 0 : 28 }) },[
-      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:85869",[reading ? 18 : 22,reading ? 8 : 12,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:86063",[{ text: title, style: reading ? "labelLarge" : "headlineSmall", fontWeight: reading ? "600" : "700", ...reading ? { color: colors.onSurfaceVariant, fontSize: 14 } : {}, maxLines: 2, overflow: "ellipsis", weight: 1 }],__operitUiTemplate_86063),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:86301",[enabled,close],__operitUiTemplate_86301)],__operitUiTemplate_85869),
-      ...state.busy ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:86417",null,__operitUiTemplate_86417)] : [],
-      ...state.error === "" ? [] : [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:86515",[state.error,colors.error],__operitUiTemplate_86515)],
-      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:86662",[{ key: "entity-content", weight: 1, fillMaxWidth: true, ...plainBody ? {} : { paddingStart: 24, paddingTop: 16, paddingEnd: 24, paddingBottom: 20 } },child],__operitUiTemplate_86662),
-      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:86838",[actions],__operitUiTemplate_86838)
-    ]],__operitUiTemplate_85676);
+    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:85901",[{ key: "native-entity-panel", ...state.fullscreen ? { fillMaxSize: true } : { width, height }, modifier: ctx.Modifier.clip({ cornerRadius: state.fullscreen ? 0 : 28 }) },[
+      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:86094",[reading ? 18 : 22,reading ? 8 : 12,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:86288",[{ text: title, style: reading ? "labelLarge" : "headlineSmall", fontWeight: reading ? "600" : "700", ...reading ? { color: colors.onSurfaceVariant, fontSize: 14 } : {}, maxLines: 2, overflow: "ellipsis", weight: 1 }],__operitUiTemplate_86288),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:86526",[enabled,close],__operitUiTemplate_86526)],__operitUiTemplate_86094),
+      ...state.busy ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:86642",null,__operitUiTemplate_86642)] : [],
+      ...state.error === "" ? [] : [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:86740",[state.error,colors.error],__operitUiTemplate_86740)],
+      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:86887",[{ key: "entity-content", weight: 1, fillMaxWidth: true, ...plainBody ? {} : { paddingStart: 24, paddingTop: 16, paddingEnd: 24, paddingBottom: 20 } },child],__operitUiTemplate_86887),
+      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:87063",[actions],__operitUiTemplate_87063)
+    ]],__operitUiTemplate_85901);
   }
   let panel;
   const cancel = standardButton("entity-cancel", "\u53D6\u6D88", close);
   if (state.expanded !== null) {
     const expanded = state.expanded;
-    panel = shell(expanded.label, OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:87235",[expanded.label,expanded.value,enabled,(value) => {
+    panel = shell(expanded.label, OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:87460",[expanded.label,expanded.value,enabled,(value) => {
       assertOwner();
       if (live.current.expanded !== null) update({ expanded: { ...live.current.expanded, value } });
-    }],__operitUiTemplate_87235), [
+    }],__operitUiTemplate_87460), [
       cancel,
       standardButton("entity-primary", "\u4FDD\u5B58", () => {
         assertOwner();
@@ -2042,17 +2050,17 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
       update({ picker: null });
     };
     const choices = picker.choices.filter((option) => (option.label + " " + (option.subtitle ?? "")).toLowerCase().includes(picker.query.trim().toLowerCase()));
-    panel = shell(picker.title, OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:88354",[[
+    panel = shell(picker.title, OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:88579",[[
       field2("picker-query", "\u641C\u7D22", picker.query, (query) => {
         assertOwner();
         if (live.current.picker !== null) update({ picker: { ...live.current.picker, query } });
       }),
-      ...themePending ? [state.themeError === "" ? caption("\u6B63\u5728\u8BFB\u53D6\u4E3B\u9898\u914D\u7F6E\u2026") : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:88714",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:88753",[state.themeError,colors.error],__operitUiTemplate_88753),standardButton("entity-picker-retry", "\u91CD\u65B0\u52A0\u8F7D\u4E3B\u9898", loadThemes)],__operitUiTemplate_88714)] : [],
-      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:88920",[[
-        OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:89010",[() => choose(null),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:89187",[picker.value === null ? "CheckCircle" : "CircleOutlined",picker.value === null ? colors.primary : colors.onSurfaceVariant],__operitUiTemplate_89187),text3("\u8DDF\u968F\u5168\u5C40 / \u4E0D\u7ED1\u5B9A")],__operitUiTemplate_89010),
-        ...choices.map((option) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:89443",["entity-picker-" + option.id,() => choose(option.id),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:89632",[picker.value === option.id ? "CheckCircle" : "CircleOutlined",picker.value === option.id ? colors.primary : colors.onSurfaceVariant],__operitUiTemplate_89632),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:89805",[[text3(option.label), ...option.subtitle === void 0 ? [] : [caption(option.subtitle)]]],__operitUiTemplate_89805)],__operitUiTemplate_89443))
-      ]],__operitUiTemplate_88920)
-    ]],__operitUiTemplate_88354), [cancel], 580, 560);
+      ...themePending ? [state.themeError === "" ? caption("\u6B63\u5728\u8BFB\u53D6\u4E3B\u9898\u914D\u7F6E\u2026") : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:88939",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:88978",[state.themeError,colors.error],__operitUiTemplate_88978),standardButton("entity-picker-retry", "\u91CD\u65B0\u52A0\u8F7D\u4E3B\u9898", loadThemes)],__operitUiTemplate_88939)] : [],
+      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:89145",[[
+        OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:89235",[() => choose(null),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:89412",[picker.value === null ? "CheckCircle" : "CircleOutlined",picker.value === null ? colors.primary : colors.onSurfaceVariant],__operitUiTemplate_89412),text3("\u8DDF\u968F\u5168\u5C40 / \u4E0D\u7ED1\u5B9A")],__operitUiTemplate_89235),
+        ...choices.map((option) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:89668",["entity-picker-" + option.id,() => choose(option.id),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:89857",[picker.value === option.id ? "CheckCircle" : "CircleOutlined",picker.value === option.id ? colors.primary : colors.onSurfaceVariant],__operitUiTemplate_89857),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:90030",[[text3(option.label), ...option.subtitle === void 0 ? [] : [caption(option.subtitle)]]],__operitUiTemplate_90030)],__operitUiTemplate_89668))
+      ]],__operitUiTemplate_89145)
+    ]],__operitUiTemplate_88579), [cancel], 580, 560);
   } else if (state.toolDraft !== null && state.snapshot !== null) {
     const draft = state.toolDraft, catalog = state.snapshot.toolCatalog;
     const names = ["\u5185\u7F6E\u5DE5\u5177", "\u63D2\u4EF6", "\u6280\u80FD", "MCP"], keys = ["allowedBuiltinTools", "allowedPackages", "allowedSkills", "allowedMcpServers"];
@@ -2062,7 +2070,7 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
       const policy = live.current.toolDraft;
       if (policy !== null) update({ toolDraft: { ...policy, [key]: checked ? [...policy[key], option.name] : policy[key].filter((name) => name !== option.name) } });
     }));
-    panel = shell("\u914D\u7F6E\u5141\u8BB8\u4F7F\u7528\u7684\u5DE5\u5177", OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:91021",[tabs("entity-tool-tabs", names, state.toolTab, (toolTab) => update({ toolTab })),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:91154",[field2("tool-query", "\u641C\u7D22", state.toolQuery, (toolQuery) => update({ toolQuery }))],__operitUiTemplate_91154),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:91328",[body("entity-tool-list", children)],__operitUiTemplate_91328)],__operitUiTemplate_91021), [cancel, standardButton("entity-primary", "\u786E\u5B9A", () => {
+    panel = shell("\u914D\u7F6E\u5141\u8BB8\u4F7F\u7528\u7684\u5DE5\u5177", OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:91246",[tabs("entity-tool-tabs", names, state.toolTab, (toolTab) => update({ toolTab })),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:91379",[field2("tool-query", "\u641C\u7D22", state.toolQuery, (toolQuery) => update({ toolQuery }))],__operitUiTemplate_91379),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:91553",[body("entity-tool-list", children)],__operitUiTemplate_91553)],__operitUiTemplate_91246), [cancel, standardButton("entity-primary", "\u786E\u5B9A", () => {
       assertOwner();
       if (live.current.toolDraft !== null) changeCard({ toolAccessConfig: copy(live.current.toolDraft) });
       update({ toolDraft: null });
@@ -2084,7 +2092,7 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
         update({ exporting: false, exportContent: "", exportName: "" });
       }));
     });
-    panel = shell("\u5BFC\u51FA", state.exportContent === "" ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:92785",[[standardButton("entity-export-json", "\u5BFC\u51FA JSON", () => exportFile("operit")), ...input.entity === "card" ? [standardButton("entity-export-tavern", "\u5BFC\u51FA\u9152\u9986 JSON", () => exportFile("tavern"))] : []]],__operitUiTemplate_92785) : body("entity-export-body", [caption("\u70B9\u51FB\u4FDD\u5B58\u6587\u4EF6\u9009\u62E9\u4FDD\u5B58\u4F4D\u7F6E\u3002"), section("JSON", state.exportContent)]), [cancel, ...state.exportContent === "" ? [] : [standardButton("entity-export-save", "\u4FDD\u5B58\u6587\u4EF6", writeExport, true)]], state.exportContent === "" ? 420 : 760, state.exportContent === "" ? 240 : 620);
+    panel = shell("\u5BFC\u51FA", state.exportContent === "" ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:93010",[[standardButton("entity-export-json", "\u5BFC\u51FA JSON", () => exportFile("operit")), ...input.entity === "card" ? [standardButton("entity-export-tavern", "\u5BFC\u51FA\u9152\u9986 JSON", () => exportFile("tavern"))] : []]],__operitUiTemplate_93010) : body("entity-export-body", [caption("\u70B9\u51FB\u4FDD\u5B58\u6587\u4EF6\u9009\u62E9\u4FDD\u5B58\u4F4D\u7F6E\u3002"), section("JSON", state.exportContent)]), [cancel, ...state.exportContent === "" ? [] : [standardButton("entity-export-save", "\u4FDD\u5B58\u6587\u4EF6", writeExport, true)]], state.exportContent === "" ? 420 : 760, state.exportContent === "" ? 240 : 620);
   } else if (state.tagDraft !== null) {
     const draft = state.tagDraft;
     const children = state.tagDeleting ? [text3(`\u786E\u5B9A\u5220\u9664\u6807\u7B7E\u201C${draft.name}\u201D\uFF1F`)] : [["name", "\u6807\u7B7E\u540D\u79F0", 1], ["description", "\u63CF\u8FF0", 1], ["promptContent", "\u63D0\u793A\u8BCD\u5185\u5BB9", 6]].map(([key, label, lines]) => field2("tag-" + key, label, draft[key], (value) => {
@@ -2100,13 +2108,13 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
       standardButton("entity-primary", state.tagDeleting ? "\u5220\u9664" : "\u4FDD\u5B58", stageTag, true)
     ], 620, state.tagDeleting ? 240 : 520);
   } else if (state.tagManaging) {
-    panel = shell("\u7BA1\u7406\u6807\u7B7E", body("entity-tag-manager", state.tags.map((tag) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:94726",["entity-tag-row-" + tag.id,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:94831",[check("entity-tag-" + tag.id, tag.name, state.card?.attachedTagIds.includes(tag.id) ?? false, (checked) => changeCard({ attachedTagIds: checked ? [...card().attachedTagIds, tag.id] : card().attachedTagIds.filter((id2) => id2 !== tag.id) }))],__operitUiTemplate_94831),standardButton("entity-tag-edit-" + tag.id, "\u7F16\u8F91", () => {
+    panel = shell("\u7BA1\u7406\u6807\u7B7E", body("entity-tag-manager", state.tags.map((tag) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:94951",["entity-tag-row-" + tag.id,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:95056",[check("entity-tag-" + tag.id, tag.name, state.card?.attachedTagIds.includes(tag.id) ?? false, (checked) => changeCard({ attachedTagIds: checked ? [...card().attachedTagIds, tag.id] : card().attachedTagIds.filter((id2) => id2 !== tag.id) }))],__operitUiTemplate_95056),standardButton("entity-tag-edit-" + tag.id, "\u7F16\u8F91", () => {
         assertOwner();
         update({ tagDraft: copy(tag) });
       }),standardButton("entity-tag-remove-" + tag.id, "\u5220\u9664", () => {
         assertOwner();
         update({ tagDraft: copy(tag), tagDeleting: true });
-      })],__operitUiTemplate_94726)), { paddingStart: 0, paddingTop: 0, paddingEnd: 0, paddingBottom: 0 }), [standardButton("entity-tag-create", "\u521B\u5EFA\u6807\u7B7E", () => {
+      })],__operitUiTemplate_94951)), { paddingStart: 0, paddingTop: 0, paddingEnd: 0, paddingBottom: 0 }), [standardButton("entity-tag-create", "\u521B\u5EFA\u6807\u7B7E", () => {
       assertOwner();
       update({ tagDraft: { id: "", name: "", description: "", promptContent: "", tagType: "CUSTOM" } });
     }), standardButton("entity-cancel", "\u5B8C\u6210", close)], 620, 560);
@@ -2114,7 +2122,7 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
     panel = shell("\u786E\u8BA4\u5220\u9664", text3(`\u786E\u5B9A\u5220\u9664\u201C${state.card?.name ?? state.group?.name}\u201D\uFF1F\u6B64\u64CD\u4F5C\u4E0D\u53EF\u64A4\u9500\u3002`), [cancel, standardButton("entity-primary", "\u5220\u9664", remove, true)], 560, 240);
   } else {
     const pages = [[], [], []];
-    if (state.loading) pages[0].push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:96153",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:96215",null,__operitUiTemplate_96215)],__operitUiTemplate_96153));
+    if (state.loading) pages[0].push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:96378",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:96440",null,__operitUiTemplate_96440)],__operitUiTemplate_96378));
     else if (state.snapshot === null) pages[0].push(standardButton("entity-retry", "\u91CD\u65B0\u52A0\u8F7D", load));
     else if (state.card !== null) {
       const draft = state.card, snapshot2 = state.snapshot;
@@ -2134,11 +2142,11 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
         pages[0].push(
           field2("name", "\u89D2\u8272\u540D\u79F0", draft.name, (name) => changeCard({ name })),
           field2("description", "\u63CF\u8FF0", draft.description, (description) => changeCard({ description })),
-          OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:97162",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:97216",[enabled,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:97286",[[
-            OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:97364",[{ key: "entity-edit-avatar", ...draft.avatarUri === null ? { path: state.avatar ?? void 0 } : { uri: draft.avatarUri }, width: 44, height: 44, contentScale: "crop", contentDescription: "\u89D2\u8272\u5934\u50CF", modifier: ctx.Modifier.clip({ type: "circle" }) }],__operitUiTemplate_97364),
-            OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:97654",null,__operitUiTemplate_97654),
-            OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:97696",[draft.avatarUri ?? "\u672A\u8BBE\u7F6E"],__operitUiTemplate_97696),
-            OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:97839",null,__operitUiTemplate_97839),
+          OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:97387",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:97441",[enabled,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:97511",[[
+            OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:97589",[{ key: "entity-edit-avatar", ...draft.avatarUri === null ? { path: state.avatar ?? void 0 } : { uri: draft.avatarUri }, width: 44, height: 44, contentScale: "crop", contentDescription: "\u89D2\u8272\u5934\u50CF", modifier: ctx.Modifier.clip({ type: "circle" }) }],__operitUiTemplate_97589),
+            OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:97879",null,__operitUiTemplate_97879),
+            OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:97921",[draft.avatarUri ?? "\u672A\u8BBE\u7F6E"],__operitUiTemplate_97921),
+            OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:98064",null,__operitUiTemplate_98064),
             standardButton("entity-choose-avatar", "\u9009\u62E9", chooseAvatar),
             ...draft.avatarUri === null ? [] : [standardButton("entity-clear-avatar", "\u6E05\u9664", () => __async(null, null, function* () {
               yield act(() => __async(null, null, function* () {
@@ -2147,16 +2155,16 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
                 if (live.current.avatar === null) void loadDefaultAvatar();
               }));
             }))]
-          ]],__operitUiTemplate_97286)],__operitUiTemplate_97216)],__operitUiTemplate_97162),
+          ]],__operitUiTemplate_97511)],__operitUiTemplate_97441)],__operitUiTemplate_97387),
           field2("characterSetting", "\u89D2\u8272\u8BBE\u5B9A", draft.characterSetting, (characterSetting) => changeCard({ characterSetting }), 6),
           field2("openingStatement", "\u5F00\u573A\u767D", draft.openingStatement, (openingStatement) => changeCard({ openingStatement }), 3),
-          OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:98685",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:98756",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:98821",null,__operitUiTemplate_98821),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:98890",[enabled,() => {
+          OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:98910",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:98981",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:99046",null,__operitUiTemplate_99046),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:99115",[enabled,() => {
               assertOwner();
               update({ tagManaging: true });
-            },OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:99054",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:99111",null,__operitUiTemplate_99111),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:99152",null,__operitUiTemplate_99152)],__operitUiTemplate_99054)],__operitUiTemplate_98890)],__operitUiTemplate_98756),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:99220",null,__operitUiTemplate_99220),state.tags.length === 0 ? caption("\u6682\u65E0\u63D0\u793A\u8BCD\u6807\u7B7E") : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:99344",[state.tags.map((tag) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:99414",["entity-tag-" + tag.id,draft.attachedTagIds.includes(tag.id),enabled,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:99528",[tag.name,ctx.Modifier.widthIn({ maxWidth: 160 })],__operitUiTemplate_99528),() => {
+            },OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:99279",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:99336",null,__operitUiTemplate_99336),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:99377",null,__operitUiTemplate_99377)],__operitUiTemplate_99279)],__operitUiTemplate_99115)],__operitUiTemplate_98981),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:99445",null,__operitUiTemplate_99445),state.tags.length === 0 ? caption("\u6682\u65E0\u63D0\u793A\u8BCD\u6807\u7B7E") : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:99569",[state.tags.map((tag) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:99639",["entity-tag-" + tag.id,draft.attachedTagIds.includes(tag.id),enabled,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:99753",[tag.name,ctx.Modifier.widthIn({ maxWidth: 160 })],__operitUiTemplate_99753),() => {
               assertOwner();
               changeCard({ attachedTagIds: card().attachedTagIds.includes(tag.id) ? card().attachedTagIds.filter((id2) => id2 !== tag.id) : [...card().attachedTagIds, tag.id] });
-            }],__operitUiTemplate_99414))],__operitUiTemplate_99344)],__operitUiTemplate_98685)
+            }],__operitUiTemplate_99639))],__operitUiTemplate_99569)],__operitUiTemplate_98910)
         );
         for (const [key, label, lines] of [["otherContentChat", "\u804A\u5929\u9644\u52A0\u5185\u5BB9", 4], ["otherContentVoice", "\u8BED\u97F3\u9644\u52A0\u5185\u5BB9", 4], ["advancedCustomPrompt", "\u9AD8\u7EA7\u81EA\u5B9A\u4E49 Prompt", 4], ["marks", "\u5907\u6CE8", 3]]) pages[1].push(field2(key, label, draft[key], (value) => changeCard({ [key]: value }), lines));
         const tts = snapshot2.ttsConfigs.find((config) => config.id === draft.ttsConfigId);
@@ -2182,7 +2190,7 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
           })])
         );
         if (draft.sharedMemoryMounts.length !== 0) pages[2].push(section("\u5171\u4EAB\u8BB0\u5FC6\u6302\u8F7D", JSON.stringify(draft.sharedMemoryMounts, null, 2)));
-        if (state.themeError !== "") pages[2].push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:104871",[state.themeError,colors.error],__operitUiTemplate_104871), standardButton("entity-theme-retry", "\u91CD\u65B0\u52A0\u8F7D\u4E3B\u9898", () => __async(null, null, function* () {
+        if (state.themeError !== "") pages[2].push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:105096",[state.themeError,colors.error],__operitUiTemplate_105096), standardButton("entity-theme-retry", "\u91CD\u65B0\u52A0\u8F7D\u4E3B\u9898", () => __async(null, null, function* () {
           yield act(loadThemes);
         })));
       }
@@ -2200,23 +2208,23 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
         onToggleConfiguration: togglePreviewConfiguration
       }));
       else {
-        pages[0].push(field2("name", "\u7FA4\u7EC4\u540D\u79F0", draft.name, (name) => changeGroup({ name })), field2("description", "\u63CF\u8FF0", draft.description, (description) => changeGroup({ description })), select("entity-theme-picker", "\u4E3B\u9898\u914D\u7F6E", draft.themeConfigId, state.themes ?? [], (themeConfigId) => changeGroup({ themeConfigId })), OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:106014",null,__operitUiTemplate_106014));
+        pages[0].push(field2("name", "\u7FA4\u7EC4\u540D\u79F0", draft.name, (name) => changeGroup({ name })), field2("description", "\u63CF\u8FF0", draft.description, (description) => changeGroup({ description })), select("entity-theme-picker", "\u4E3B\u9898\u914D\u7F6E", draft.themeConfigId, state.themes ?? [], (themeConfigId) => changeGroup({ themeConfigId })), OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:106239",null,__operitUiTemplate_106239));
         for (const option of snapshot2.cards) {
           const selected = draft.members.some((member2) => member2.characterCardId === option.id);
-          pages[0].push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:106310",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:106363",["entity-member-" + option.id,selected ? colors.primaryContainer.copy({ alpha: 0.16 }) : colors.surfaceContainerHighest.copy({ alpha: 0.28 }),ctx.Modifier.border(1, selected ? colors.primary.copy({ alpha: 0.45 }) : colors.outlineVariant.copy({ alpha: 0.28 }), { cornerRadius: 10 }),() => {
+          pages[0].push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:106535",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:106588",["entity-member-" + option.id,selected ? colors.primaryContainer.copy({ alpha: 0.16 }) : colors.surfaceContainerHighest.copy({ alpha: 0.28 }),ctx.Modifier.border(1, selected ? colors.primary.copy({ alpha: 0.45 }) : colors.outlineVariant.copy({ alpha: 0.28 }), { cornerRadius: 10 }),() => {
               assertOwner();
               const members = selected ? group().members.filter((member2) => member2.characterCardId !== option.id) : [...group().members, { characterCardId: option.id, orderIndex: group().members.length }];
               changeGroup({ members: members.map((member2, orderIndex) => ({ ...member2, orderIndex })) });
-            },OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:107196",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:107317",[selected ? "CheckCircle" : "CircleOutlined",selected ? colors.primary : colors.onSurfaceVariant],__operitUiTemplate_107317),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:107454",[{ width: 28, height: 28, ...option.avatarUri === null ? { path: state.avatar ?? void 0 } : { uri: option.avatarUri }, modifier: ctx.Modifier.clip({ type: "circle" }), contentScale: "crop", contentDescription: option.name }],__operitUiTemplate_107454),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:107692",[[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:107722",[option.name],__operitUiTemplate_107722), ...option.description.trim() === "" ? [] : [caption(option.description)]]],__operitUiTemplate_107692)],__operitUiTemplate_107196)],__operitUiTemplate_106363)],__operitUiTemplate_106310));
+            },OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:107421",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:107542",[selected ? "CheckCircle" : "CircleOutlined",selected ? colors.primary : colors.onSurfaceVariant],__operitUiTemplate_107542),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:107679",[{ width: 28, height: 28, ...option.avatarUri === null ? { path: state.avatar ?? void 0 } : { uri: option.avatarUri }, modifier: ctx.Modifier.clip({ type: "circle" }), contentScale: "crop", contentDescription: option.name }],__operitUiTemplate_107679),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:107917",[[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:107947",[option.name],__operitUiTemplate_107947), ...option.description.trim() === "" ? [] : [caption(option.description)]]],__operitUiTemplate_107917)],__operitUiTemplate_107421)],__operitUiTemplate_106588)],__operitUiTemplate_106535));
         }
       }
     }
     const isCard = state.card !== null;
     const reading = !state.editing;
-    const page = reading ? body("entity-preview-body", pages[0], { paddingStart: 24, paddingTop: 8, paddingEnd: 24, paddingBottom: 24 }) : isCard ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:108162",[tabs("entity-tab", ["\u57FA\u7840", "\u5185\u5BB9", "\u7ED1\u5B9A"], state.tab, (tab) => update({ tab })),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:108307",[state.tab,(tab) => {
+    const page = reading ? body("entity-preview-body", pages[0], { paddingStart: 24, paddingTop: 8, paddingEnd: 24, paddingBottom: 24 }) : isCard ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:108387",[tabs("entity-tab", ["\u57FA\u7840", "\u5185\u5BB9", "\u7ED1\u5B9A"], state.tab, (tab) => update({ tab })),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:108532",[state.tab,(tab) => {
       assertOwner();
       if (tab >= 0 && tab < 3) update({ tab });
-    },pages.map((children, index) => body("entity-body-" + index, children))],__operitUiTemplate_108307)],__operitUiTemplate_108162) : body("entity-body", pages[0], { paddingStart: 0, paddingTop: 0, paddingEnd: 0, paddingBottom: 0 });
+    },pages.map((children, index) => body("entity-body-" + index, children))],__operitUiTemplate_108532)],__operitUiTemplate_108387) : body("entity-body", pages[0], { paddingStart: 0, paddingTop: 0, paddingEnd: 0, paddingBottom: 0 });
     const title = state.editing ? input.mode === "create" ? input.entity === "card" ? "\u521B\u5EFA\u89D2\u8272\u5361" : "\u521B\u5EFA\u7FA4\u7EC4" : input.entity === "card" ? "\u7F16\u8F91\u89D2\u8272\u5361" : "\u7F16\u8F91\u7FA4\u7EC4" : input.entity === "card" ? "\u89D2\u8272\u5361" : "\u89D2\u8272\u7FA4\u7EC4";
     panel = shell(title, page, [
       ...state.editing && input.mode !== "create" ? [
@@ -2233,7 +2241,7 @@ function renderNativeEntity(ctx, input, lifecycle, statePrefix = "") {
       ...state.snapshot === null || state.finished ? [] : [standardButton("entity-primary", state.editing ? "\u4FDD\u5B58" : "\u7F16\u8F91", state.editing ? save : edit, true)]
     ], reading ? isCard ? 680 : 620 : isCard ? 760 : 620, reading ? 760 : 820, reading || isCard, reading);
   }
-  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:109777",[load,close,colors.surfaceContainerHigh,state.fullscreen ? 0 : 28,state.fullscreen,panel],__operitUiTemplate_109777);
+  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:110002",[load,close,colors.surfaceContainerHigh,state.fullscreen ? 0 : 28,state.fullscreen,panel],__operitUiTemplate_110002);
 }
 
 // src/ui-editor.ts
@@ -2338,9 +2346,9 @@ function renderScreen(ctx, definition2, requiredMode = null, managementView = "c
       unsubscribe.current = null;
     }
   }
-  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:116538",[initialize,[path === "" ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:116607",[error === "" ? `\u6B63\u5728\u52A0\u8F7D${managementView === "memory" ? "\u8BB0\u5FC6" : definition2.title}\u2026` : error],__operitUiTemplate_116607) : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:116755",[controller,origin,(request2) => request2.url === origin ? { action: "allow" } : { action: "cancel" },(request2) => avatars.intercept(request2) ?? (request2.url === origin ? { action: "respond", response: { mimeType: "text/html", encoding: "utf-8", statusCode: 200, reasonPhrase: "OK", filePath: path } } : { action: "block" }),(event) => {
+  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:116763",[initialize,[path === "" ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:116832",[error === "" ? `\u6B63\u5728\u52A0\u8F7D${managementView === "memory" ? "\u8BB0\u5FC6" : definition2.title}\u2026` : error],__operitUiTemplate_116832) : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/main/index.ui.js:116980",[controller,origin,(request2) => request2.url === origin ? { action: "allow" } : { action: "cancel" },(request2) => avatars.intercept(request2) ?? (request2.url === origin ? { action: "respond", response: { mimeType: "text/html", encoding: "utf-8", statusCode: 200, reasonPhrase: "OK", filePath: path } } : { action: "block" }),(event) => {
       if (event.type === "Disposed") dispose();
-    }],__operitUiTemplate_116755), ...managed === null ? [] : [renderManagedEntityScreen(ctx, managed, finishEntity)]]],__operitUiTemplate_116538);
+    }],__operitUiTemplate_116980), ...managed === null ? [] : [renderManagedEntityScreen(ctx, managed, finishEntity)]]],__operitUiTemplate_116763);
 }
 
 // src/ui/main/index.ui.ts
@@ -2350,135 +2358,135 @@ function Screen(ctx) {
   return renderScreen(ctx, definition);
 }
 
-function __operitUiTemplate_56258(__ctx,__values){return __ctx.UI.Text({text:__values[0],fillMaxWidth:true,style:"bodyMedium",color:__values[1]}); }
-function __operitUiTemplate_56223(__ctx,__values){return __ctx.UI.SelectionContainer({key:__values[0]},__values[1]); }
-function __operitUiTemplate_56609(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"labelMedium",color:__values[1]}); }
-function __operitUiTemplate_56422(__ctx,__values){return __ctx.UI.Box({key:__values[0],paddingHorizontal:10,paddingVertical:5,backgroundColor:__values[1],backgroundShape:{cornerRadius:8}},__values[2]); }
-function __operitUiTemplate_57204(__ctx,__values){return __ctx.UI.Icon({name:"GroupsOutlined",size:34,tint:__values[0]}); }
-function __operitUiTemplate_57035(__ctx,__values){return __ctx.UI.Box({width:72,height:72,contentAlignment:"center",backgroundColor:__values[0],backgroundShape:{cornerRadius:20}},__values[1]); }
-function __operitUiTemplate_57279(__ctx,__values){return __ctx.UI.Image(__values[0]); }
-function __operitUiTemplate_57654(__ctx,__values){return __ctx.UI.Text({key:"entity-preview-name",text:__values[0],style:"headlineSmall",fontSize:24,fontWeight:"700",fillMaxWidth:true}); }
-function __operitUiTemplate_57823(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"labelMedium",color:__values[1]}); }
-function __operitUiTemplate_57603(__ctx,__values){return __ctx.UI.Column({weight:1,spacing:6},__values[0]); }
-function __operitUiTemplate_56934(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,spacing:16,verticalAlignment:"center"},[__values[0],__values[1]]); }
-function __operitUiTemplate_58132(__ctx,__values){return __ctx.UI.FlowRow({key:"entity-preview-tags",spacing:6,runSpacing:6},__values[0]); }
-function __operitUiTemplate_56826(__ctx,__values){return __ctx.UI.Column({key:"entity-preview-identity",fillMaxWidth:true,spacing:14,paddingBottom:22},__values[0]); }
-function __operitUiTemplate_58808(__ctx,__values){return __ctx.UI.Icon({name:"FormatQuote",size:20,tint:__values[0]}); }
-function __operitUiTemplate_58894(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"titleSmall",fontWeight:"600",color:__values[1],weight:1}); }
-function __operitUiTemplate_58708(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,spacing:8,verticalAlignment:"center"},__values[0]); }
-function __operitUiTemplate_58481(__ctx,__values){return __ctx.UI.Column(__values[0],[__values[1],__values[2]]); }
-function __operitUiTemplate_58384(__ctx,__values){return __ctx.UI.Box({key:__values[0],fillMaxWidth:true,paddingBottom:22},__values[1]); }
-function __operitUiTemplate_62824(__ctx,__values){return __ctx.UI.Text({text:"\u7EC4\u5185\u89D2\u8272",style:"titleSmall",fontWeight:"600",color:__values[0]}); }
-function __operitUiTemplate_62980(__ctx,__values){return __ctx.UI.Text({text:"\u6682\u672A\u6DFB\u52A0\u89D2\u8272",style:"bodyMedium",color:__values[0]}); }
-function __operitUiTemplate_63414(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"labelMedium",color:__values[1]}); }
-function __operitUiTemplate_63537(__ctx,__values){return __ctx.UI.Image(__values[0]); }
-function __operitUiTemplate_63882(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"titleSmall",fontWeight:"600",fillMaxWidth:true}); }
-function __operitUiTemplate_64062(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodySmall",color:__values[1],fillMaxWidth:true}); }
-function __operitUiTemplate_63827(__ctx,__values){return __ctx.UI.Column({weight:1,spacing:4},__values[0]); }
-function __operitUiTemplate_63247(__ctx,__values){return __ctx.UI.Row({key:__values[0],fillMaxWidth:true,paddingVertical:10,spacing:12,verticalAlignment:"center"},[__values[1],__values[2],__values[3]]); }
-function __operitUiTemplate_62715(__ctx,__values){return __ctx.UI.Column({key:"entity-preview-members",fillMaxWidth:true,spacing:10,paddingBottom:22},__values[0]); }
-function __operitUiTemplate_64757(__ctx,__values){return __ctx.UI.Icon({name:"Tune",size:20,tint:__values[0]}); }
-function __operitUiTemplate_64890(__ctx,__values){return __ctx.UI.Text({text:"\u914D\u7F6E\u6458\u8981",style:"titleSmall",fontWeight:"600"}); }
-function __operitUiTemplate_64991(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodySmall",color:__values[1]}); }
-function __operitUiTemplate_64837(__ctx,__values){return __ctx.UI.Column({weight:1,spacing:3},[__values[0],__values[1]]); }
-function __operitUiTemplate_65182(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:20,tint:__values[1]}); }
-function __operitUiTemplate_64657(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,padding:16,spacing:10,verticalAlignment:"center"},[__values[0],__values[1],__values[2]]); }
-function __operitUiTemplate_64479(__ctx,__values){return __ctx.UI.Surface({key:"entity-preview-config-toggle",fillMaxWidth:true,color:"transparent",shape:{cornerRadius:16},onClick:__values[0]},__values[1]); }
-function __operitUiTemplate_65632(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"labelMedium",color:__values[1]}); }
-function __operitUiTemplate_65531(__ctx,__values){return __ctx.UI.Column({key:__values[0],fillMaxWidth:true,spacing:4},[__values[1],__values[2]]); }
-function __operitUiTemplate_65358(__ctx,__values){return __ctx.UI.Column({key:"entity-preview-config-details",fillMaxWidth:true,paddingStart:16,paddingEnd:16,paddingBottom:18,spacing:14},__values[0]); }
-function __operitUiTemplate_64321(__ctx,__values){return __ctx.UI.Column({key:"entity-preview-config",fillMaxWidth:true,backgroundColor:__values[0],backgroundShape:{cornerRadius:16}},__values[1]); }
-function __operitUiTemplate_80849(__ctx,__values){return __ctx.UI.Text({text:__values[0],fillMaxWidth:true,style:"bodyMedium"}); }
-function __operitUiTemplate_80949(__ctx,__values){return __ctx.UI.Text({text:__values[0],fillMaxWidth:true,style:"bodySmall",color:__values[1]}); }
-function __operitUiTemplate_81187(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"labelLarge",color:__values[1]}); }
-function __operitUiTemplate_81274(__ctx,__values){return __ctx.UI.SelectionContainer({},__values[0]); }
-function __operitUiTemplate_81087(__ctx,__values){return __ctx.UI.Column({key:__values[0],fillMaxWidth:true,paddingBottom:12,spacing:6},[__values[1],__values[2]]); }
-function __operitUiTemplate_82112(__ctx,__values){return __ctx.UI.Icon({name:"Fullscreen",size:18}); }
-function __operitUiTemplate_81814(__ctx,__values){return __ctx.UI.IconButton({key:__values[0],width:28,height:28,contentPadding:{horizontal:0,vertical:0},enabled:__values[1],onClick:__values[2]},__values[3]); }
-function __operitUiTemplate_81748(__ctx,__values){return __ctx.UI.Box({width:36,height:36,contentAlignment:"center"},__values[0]); }
-function __operitUiTemplate_81439(__ctx,__values){return __ctx.UI.TextField(__values[0]); }
-function __operitUiTemplate_81385(__ctx,__values){return __ctx.UI.Box({fillMaxWidth:true,paddingBottom:12},__values[0]); }
-function __operitUiTemplate_82299(__ctx,__values){return __ctx.UI.Checkbox({checked:__values[0],enabled:__values[1],onCheckedChange:__values[2]}); }
-function __operitUiTemplate_82362(__ctx,__values){return __ctx.UI.Text({text:__values[0],weight:1}); }
-function __operitUiTemplate_82217(__ctx,__values){return __ctx.UI.Row({key:__values[0],fillMaxWidth:true,verticalAlignment:"center",spacing:8},[__values[1],__values[2]]); }
-function __operitUiTemplate_82752(__ctx,__values){return __ctx.UI.Text({text:__values[0],weight:1,maxLines:1,overflow:"ellipsis",style:"bodyMedium"}); }
-function __operitUiTemplate_82849(__ctx,__values){return __ctx.UI.Icon({name:"Tune",size:24}); }
-function __operitUiTemplate_82674(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,verticalAlignment:"center",spacing:12},[__values[0],__values[1]]); }
-function __operitUiTemplate_82632(__ctx,__values){return __ctx.UI.InputDecorator({label:__values[0],enabled:__values[1]},__values[2]); }
-function __operitUiTemplate_82518(__ctx,__values){return __ctx.UI.Surface({key:__values[0],fillMaxWidth:true,color:"transparent",onClick:__values[1]},__values[2]); }
-function __operitUiTemplate_82455(__ctx,__values){return __ctx.UI.Box({fillMaxWidth:true,paddingBottom:12},__values[0]); }
-function __operitUiTemplate_83872(__ctx,__values){return __ctx.UI.Text({text:__values[0],fontSize:14,fontWeight:"700",color:__values[1]}); }
-function __operitUiTemplate_84028(__ctx,__values){return __ctx.UI.Text({text:__values[0],fontSize:12,color:__values[1]}); }
-function __operitUiTemplate_83830(__ctx,__values){return __ctx.UI.Column({weight:1,spacing:1},[__values[0],__values[1]]); }
-function __operitUiTemplate_84218(__ctx,__values){return __ctx.UI.Switch({key:__values[0],checked:__values[1],enabled:__values[2],modifier:__values[3],onCheckedChange:__values[4]}); }
-function __operitUiTemplate_83692(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,modifier:__values[0],verticalAlignment:"center",spacing:8},[__values[1],__values[2]]); }
-function __operitUiTemplate_84410(__ctx,__values){return __ctx.UI.Spacer({height:6}); }
-function __operitUiTemplate_83646(__ctx,__values){return __ctx.UI.Column({fillMaxWidth:true},__values[0]); }
-function __operitUiTemplate_83458(__ctx,__values){return __ctx.UI.Box({fillMaxWidth:true,modifier:__values[0],paddingHorizontal:10,paddingVertical:6},__values[1]); }
-function __operitUiTemplate_83400(__ctx,__values){return __ctx.UI.Box({key:__values[0],fillMaxWidth:true,paddingBottom:7},__values[1]); }
-function __operitUiTemplate_84666(__ctx,__values){return __ctx.UI.Box({key:__values[0],fillMaxWidth:true,paddingStart:__values[1],paddingEnd:__values[2],paddingTop:__values[3],paddingBottom:__values[4]},__values[5]); }
-function __operitUiTemplate_84588(__ctx,__values){return __ctx.UI.LazyColumn({key:__values[0],fillMaxWidth:true},__values[1]); }
-function __operitUiTemplate_85297(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"titleSmall"}); }
-function __operitUiTemplate_85160(__ctx,__values){return __ctx.UI.Tab({key:__values[0],selected:__values[1],enabled:__values[2],onClick:__values[3]},__values[4]); }
-function __operitUiTemplate_85035(__ctx,__values){return __ctx.UI.PrimaryTabRow({key:__values[0],fillMaxWidth:true,selectedTabIndex:__values[1],tabs:__values[2]}); }
-function __operitUiTemplate_85429(__ctx,__values){return __ctx.UI.Button({key:__values[0],text:__values[1],enabled:__values[2],onClick:__values[3]}); }
-function __operitUiTemplate_85493(__ctx,__values){return __ctx.UI.TextButton({key:__values[0],text:__values[1],enabled:__values[2],onClick:__values[3]}); }
-function __operitUiTemplate_86063(__ctx,__values){return __ctx.UI.Text(__values[0]); }
-function __operitUiTemplate_86301(__ctx,__values){return __ctx.UI.IconButton({key:"entity-close",icon:"Close",enabled:__values[0],onClick:__values[1]}); }
-function __operitUiTemplate_85869(__ctx,__values){return __ctx.UI.Row({key:"entity-header",fillMaxWidth:true,paddingStart:24,paddingTop:__values[0],paddingEnd:16,paddingBottom:__values[1],verticalAlignment:"center"},[__values[2],__values[3]]); }
-function __operitUiTemplate_86417(__ctx,__values){return __ctx.UI.LinearProgressIndicator({fillMaxWidth:true}); }
-function __operitUiTemplate_86515(__ctx,__values){return __ctx.UI.Text({key:"entity-error",text:__values[0],color:__values[1],fillMaxWidth:true,paddingHorizontal:24,paddingBottom:12}); }
-function __operitUiTemplate_86662(__ctx,__values){return __ctx.UI.Box(__values[0],__values[1]); }
-function __operitUiTemplate_86838(__ctx,__values){return __ctx.UI.FlowRow({key:"entity-footer",fillMaxWidth:true,paddingStart:24,paddingTop:0,paddingEnd:24,paddingBottom:20,horizontalArrangement:"end",spacing:8,runSpacing:8},__values[0]); }
-function __operitUiTemplate_85676(__ctx,__values){return __ctx.UI.Column(__values[0],__values[1]); }
-function __operitUiTemplate_87235(__ctx,__values){return __ctx.UI.TextField({key:"entity-expanded-input",label:__values[0],value:__values[1],fillMaxSize:true,minLines:16,maxLines:40,enabled:__values[2],onValueChange:__values[3]}); }
-function __operitUiTemplate_88753(__ctx,__values){return __ctx.UI.Text({text:__values[0],color:__values[1]}); }
-function __operitUiTemplate_88714(__ctx,__values){return __ctx.UI.Column({fillMaxWidth:true},[__values[0],__values[1]]); }
-function __operitUiTemplate_89187(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:20,tint:__values[1]}); }
-function __operitUiTemplate_89010(__ctx,__values){return __ctx.UI.Row({key:"entity-picker-clear",fillMaxWidth:true,paddingHorizontal:8,paddingVertical:9,verticalAlignment:"center",spacing:10,onClick:__values[0]},[__values[1],__values[2]]); }
-function __operitUiTemplate_89632(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:20,tint:__values[1]}); }
-function __operitUiTemplate_89805(__ctx,__values){return __ctx.UI.Column({weight:1},__values[0]); }
-function __operitUiTemplate_89443(__ctx,__values){return __ctx.UI.Row({key:__values[0],fillMaxWidth:true,paddingHorizontal:8,paddingVertical:9,verticalAlignment:"center",spacing:10,onClick:__values[1]},[__values[2],__values[3]]); }
-function __operitUiTemplate_88920(__ctx,__values){return __ctx.UI.LazyColumn({key:"entity-picker-list",weight:1,fillMaxWidth:true},__values[0]); }
-function __operitUiTemplate_88354(__ctx,__values){return __ctx.UI.Column({fillMaxSize:true},__values[0]); }
-function __operitUiTemplate_91154(__ctx,__values){return __ctx.UI.Box({fillMaxWidth:true,paddingHorizontal:18,paddingTop:10},__values[0]); }
-function __operitUiTemplate_91328(__ctx,__values){return __ctx.UI.Box({weight:1,fillMaxWidth:true},__values[0]); }
-function __operitUiTemplate_91021(__ctx,__values){return __ctx.UI.Column({fillMaxSize:true},[__values[0],__values[1],__values[2]]); }
-function __operitUiTemplate_92785(__ctx,__values){return __ctx.UI.Column({fillMaxWidth:true,spacing:8},__values[0]); }
-function __operitUiTemplate_94831(__ctx,__values){return __ctx.UI.Box({weight:1},__values[0]); }
-function __operitUiTemplate_94726(__ctx,__values){return __ctx.UI.Row({key:__values[0],fillMaxWidth:true,verticalAlignment:"center"},[__values[1],__values[2],__values[3]]); }
-function __operitUiTemplate_96215(__ctx,__values){return __ctx.UI.LoadingIndicator({size:32}); }
-function __operitUiTemplate_96153(__ctx,__values){return __ctx.UI.Box({fillMaxSize:true,contentAlignment:"center"},__values[0]); }
-function __operitUiTemplate_97364(__ctx,__values){return __ctx.UI.Image(__values[0]); }
-function __operitUiTemplate_97654(__ctx,__values){return __ctx.UI.Spacer({width:12}); }
-function __operitUiTemplate_97696(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodyMedium",weight:1,maxLines:1,overflow:"ellipsis"}); }
-function __operitUiTemplate_97839(__ctx,__values){return __ctx.UI.Spacer({width:8}); }
-function __operitUiTemplate_97286(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,verticalAlignment:"center"},__values[0]); }
-function __operitUiTemplate_97216(__ctx,__values){return __ctx.UI.InputDecorator({label:"\u89D2\u8272\u5934\u50CF",enabled:__values[0]},__values[1]); }
-function __operitUiTemplate_97162(__ctx,__values){return __ctx.UI.Box({fillMaxWidth:true,paddingBottom:12},__values[0]); }
-function __operitUiTemplate_98821(__ctx,__values){return __ctx.UI.Text({text:"\u6807\u7B7E",weight:1,fontWeight:"700"}); }
-function __operitUiTemplate_99111(__ctx,__values){return __ctx.UI.Icon({name:"Tune",size:18}); }
-function __operitUiTemplate_99152(__ctx,__values){return __ctx.UI.Text({text:"\u7BA1\u7406\u6807\u7B7E"}); }
-function __operitUiTemplate_99054(__ctx,__values){return __ctx.UI.Row({spacing:8,verticalAlignment:"center"},[__values[0],__values[1]]); }
-function __operitUiTemplate_98890(__ctx,__values){return __ctx.UI.TextButton({key:"entity-tags-manage",enabled:__values[0],onClick:__values[1]},__values[2]); }
-function __operitUiTemplate_98756(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,verticalAlignment:"center"},[__values[0],__values[1]]); }
-function __operitUiTemplate_99220(__ctx,__values){return __ctx.UI.Spacer({height:6}); }
-function __operitUiTemplate_99528(__ctx,__values){return __ctx.UI.Text({text:__values[0],maxLines:1,overflow:"ellipsis",modifier:__values[1]}); }
-function __operitUiTemplate_99414(__ctx,__values){return __ctx.UI.FilterChip({key:__values[0],selected:__values[1],enabled:__values[2],label:__values[3],onClick:__values[4]}); }
-function __operitUiTemplate_99344(__ctx,__values){return __ctx.UI.FlowRow({spacing:8,runSpacing:8},__values[0]); }
-function __operitUiTemplate_98685(__ctx,__values){return __ctx.UI.Column({fillMaxWidth:true,paddingBottom:12},[__values[0],__values[1],__values[2]]); }
-function __operitUiTemplate_104871(__ctx,__values){return __ctx.UI.Text({text:__values[0],color:__values[1]}); }
-function __operitUiTemplate_106014(__ctx,__values){return __ctx.UI.Text({text:"\u7EC4\u5185\u89D2\u8272",style:"titleSmall",fontWeight:"700",paddingTop:8,paddingBottom:8}); }
-function __operitUiTemplate_107317(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:18,tint:__values[1]}); }
-function __operitUiTemplate_107454(__ctx,__values){return __ctx.UI.Image(__values[0]); }
-function __operitUiTemplate_107722(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodyMedium",fontWeight:"700",maxLines:1,overflow:"ellipsis"}); }
-function __operitUiTemplate_107692(__ctx,__values){return __ctx.UI.Column({weight:1},__values[0]); }
-function __operitUiTemplate_107196(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,paddingHorizontal:12,paddingVertical:8,spacing:10,verticalAlignment:"center"},[__values[0],__values[1],__values[2]]); }
-function __operitUiTemplate_106363(__ctx,__values){return __ctx.UI.Surface({key:__values[0],fillMaxWidth:true,color:__values[1],shape:{cornerRadius:10},modifier:__values[2],onClick:__values[3]},__values[4]); }
-function __operitUiTemplate_106310(__ctx,__values){return __ctx.UI.Box({fillMaxWidth:true,paddingBottom:6},__values[0]); }
-function __operitUiTemplate_108307(__ctx,__values){return __ctx.UI.HorizontalPager({key:"entity-pager",weight:1,fillMaxWidth:true,currentPage:__values[0],onPageChanged:__values[1]},__values[2]); }
-function __operitUiTemplate_108162(__ctx,__values){return __ctx.UI.Column({fillMaxSize:true},[__values[0],__values[1]]); }
-function __operitUiTemplate_109777(__ctx,__values){return __ctx.UI.Dialog({key:"character-presentation",onLoad:__values[0],closeOnDismissRequest:false,onDismissRequest:__values[1],containerColor:__values[2],shape:{cornerRadius:__values[3]},properties:{fullscreen:__values[4],usePlatformDefaultWidth:false,dismissOnClickOutside:false}},__values[5]); }
-function __operitUiTemplate_116607(__ctx,__values){return __ctx.UI.Text({text:__values[0]}); }
-function __operitUiTemplate_116755(__ctx,__values){return __ctx.UI.WebView({key:"character-memory-web",controller:__values[0],fillMaxSize:true,url:__values[1],javaScriptEnabled:true,domStorageEnabled:true,supportZoom:false,useWideViewPort:true,onShouldOverrideUrlLoading:__values[2],onInterceptRequest:__values[3],onLifecycleEvent:__values[4]}); }
-function __operitUiTemplate_116538(__ctx,__values){return __ctx.UI.Box({fillMaxSize:true,onLoad:__values[0]},__values[1]); }
+function __operitUiTemplate_56483(__ctx,__values){return __ctx.UI.Text({text:__values[0],fillMaxWidth:true,style:"bodyMedium",color:__values[1]}); }
+function __operitUiTemplate_56448(__ctx,__values){return __ctx.UI.SelectionContainer({key:__values[0]},__values[1]); }
+function __operitUiTemplate_56834(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"labelMedium",color:__values[1]}); }
+function __operitUiTemplate_56647(__ctx,__values){return __ctx.UI.Box({key:__values[0],paddingHorizontal:10,paddingVertical:5,backgroundColor:__values[1],backgroundShape:{cornerRadius:8}},__values[2]); }
+function __operitUiTemplate_57429(__ctx,__values){return __ctx.UI.Icon({name:"GroupsOutlined",size:34,tint:__values[0]}); }
+function __operitUiTemplate_57260(__ctx,__values){return __ctx.UI.Box({width:72,height:72,contentAlignment:"center",backgroundColor:__values[0],backgroundShape:{cornerRadius:20}},__values[1]); }
+function __operitUiTemplate_57504(__ctx,__values){return __ctx.UI.Image(__values[0]); }
+function __operitUiTemplate_57879(__ctx,__values){return __ctx.UI.Text({key:"entity-preview-name",text:__values[0],style:"headlineSmall",fontSize:24,fontWeight:"700",fillMaxWidth:true}); }
+function __operitUiTemplate_58048(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"labelMedium",color:__values[1]}); }
+function __operitUiTemplate_57828(__ctx,__values){return __ctx.UI.Column({weight:1,spacing:6},__values[0]); }
+function __operitUiTemplate_57159(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,spacing:16,verticalAlignment:"center"},[__values[0],__values[1]]); }
+function __operitUiTemplate_58357(__ctx,__values){return __ctx.UI.FlowRow({key:"entity-preview-tags",spacing:6,runSpacing:6},__values[0]); }
+function __operitUiTemplate_57051(__ctx,__values){return __ctx.UI.Column({key:"entity-preview-identity",fillMaxWidth:true,spacing:14,paddingBottom:22},__values[0]); }
+function __operitUiTemplate_59033(__ctx,__values){return __ctx.UI.Icon({name:"FormatQuote",size:20,tint:__values[0]}); }
+function __operitUiTemplate_59119(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"titleSmall",fontWeight:"600",color:__values[1],weight:1}); }
+function __operitUiTemplate_58933(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,spacing:8,verticalAlignment:"center"},__values[0]); }
+function __operitUiTemplate_58706(__ctx,__values){return __ctx.UI.Column(__values[0],[__values[1],__values[2]]); }
+function __operitUiTemplate_58609(__ctx,__values){return __ctx.UI.Box({key:__values[0],fillMaxWidth:true,paddingBottom:22},__values[1]); }
+function __operitUiTemplate_63049(__ctx,__values){return __ctx.UI.Text({text:"\u7EC4\u5185\u89D2\u8272",style:"titleSmall",fontWeight:"600",color:__values[0]}); }
+function __operitUiTemplate_63205(__ctx,__values){return __ctx.UI.Text({text:"\u6682\u672A\u6DFB\u52A0\u89D2\u8272",style:"bodyMedium",color:__values[0]}); }
+function __operitUiTemplate_63639(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"labelMedium",color:__values[1]}); }
+function __operitUiTemplate_63762(__ctx,__values){return __ctx.UI.Image(__values[0]); }
+function __operitUiTemplate_64107(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"titleSmall",fontWeight:"600",fillMaxWidth:true}); }
+function __operitUiTemplate_64287(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodySmall",color:__values[1],fillMaxWidth:true}); }
+function __operitUiTemplate_64052(__ctx,__values){return __ctx.UI.Column({weight:1,spacing:4},__values[0]); }
+function __operitUiTemplate_63472(__ctx,__values){return __ctx.UI.Row({key:__values[0],fillMaxWidth:true,paddingVertical:10,spacing:12,verticalAlignment:"center"},[__values[1],__values[2],__values[3]]); }
+function __operitUiTemplate_62940(__ctx,__values){return __ctx.UI.Column({key:"entity-preview-members",fillMaxWidth:true,spacing:10,paddingBottom:22},__values[0]); }
+function __operitUiTemplate_64982(__ctx,__values){return __ctx.UI.Icon({name:"Tune",size:20,tint:__values[0]}); }
+function __operitUiTemplate_65115(__ctx,__values){return __ctx.UI.Text({text:"\u914D\u7F6E\u6458\u8981",style:"titleSmall",fontWeight:"600"}); }
+function __operitUiTemplate_65216(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodySmall",color:__values[1]}); }
+function __operitUiTemplate_65062(__ctx,__values){return __ctx.UI.Column({weight:1,spacing:3},[__values[0],__values[1]]); }
+function __operitUiTemplate_65407(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:20,tint:__values[1]}); }
+function __operitUiTemplate_64882(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,padding:16,spacing:10,verticalAlignment:"center"},[__values[0],__values[1],__values[2]]); }
+function __operitUiTemplate_64704(__ctx,__values){return __ctx.UI.Surface({key:"entity-preview-config-toggle",fillMaxWidth:true,color:"transparent",shape:{cornerRadius:16},onClick:__values[0]},__values[1]); }
+function __operitUiTemplate_65857(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"labelMedium",color:__values[1]}); }
+function __operitUiTemplate_65756(__ctx,__values){return __ctx.UI.Column({key:__values[0],fillMaxWidth:true,spacing:4},[__values[1],__values[2]]); }
+function __operitUiTemplate_65583(__ctx,__values){return __ctx.UI.Column({key:"entity-preview-config-details",fillMaxWidth:true,paddingStart:16,paddingEnd:16,paddingBottom:18,spacing:14},__values[0]); }
+function __operitUiTemplate_64546(__ctx,__values){return __ctx.UI.Column({key:"entity-preview-config",fillMaxWidth:true,backgroundColor:__values[0],backgroundShape:{cornerRadius:16}},__values[1]); }
+function __operitUiTemplate_81074(__ctx,__values){return __ctx.UI.Text({text:__values[0],fillMaxWidth:true,style:"bodyMedium"}); }
+function __operitUiTemplate_81174(__ctx,__values){return __ctx.UI.Text({text:__values[0],fillMaxWidth:true,style:"bodySmall",color:__values[1]}); }
+function __operitUiTemplate_81412(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"labelLarge",color:__values[1]}); }
+function __operitUiTemplate_81499(__ctx,__values){return __ctx.UI.SelectionContainer({},__values[0]); }
+function __operitUiTemplate_81312(__ctx,__values){return __ctx.UI.Column({key:__values[0],fillMaxWidth:true,paddingBottom:12,spacing:6},[__values[1],__values[2]]); }
+function __operitUiTemplate_82337(__ctx,__values){return __ctx.UI.Icon({name:"Fullscreen",size:18}); }
+function __operitUiTemplate_82039(__ctx,__values){return __ctx.UI.IconButton({key:__values[0],width:28,height:28,contentPadding:{horizontal:0,vertical:0},enabled:__values[1],onClick:__values[2]},__values[3]); }
+function __operitUiTemplate_81973(__ctx,__values){return __ctx.UI.Box({width:36,height:36,contentAlignment:"center"},__values[0]); }
+function __operitUiTemplate_81664(__ctx,__values){return __ctx.UI.TextField(__values[0]); }
+function __operitUiTemplate_81610(__ctx,__values){return __ctx.UI.Box({fillMaxWidth:true,paddingBottom:12},__values[0]); }
+function __operitUiTemplate_82524(__ctx,__values){return __ctx.UI.Checkbox({checked:__values[0],enabled:__values[1],onCheckedChange:__values[2]}); }
+function __operitUiTemplate_82587(__ctx,__values){return __ctx.UI.Text({text:__values[0],weight:1}); }
+function __operitUiTemplate_82442(__ctx,__values){return __ctx.UI.Row({key:__values[0],fillMaxWidth:true,verticalAlignment:"center",spacing:8},[__values[1],__values[2]]); }
+function __operitUiTemplate_82977(__ctx,__values){return __ctx.UI.Text({text:__values[0],weight:1,maxLines:1,overflow:"ellipsis",style:"bodyMedium"}); }
+function __operitUiTemplate_83074(__ctx,__values){return __ctx.UI.Icon({name:"Tune",size:24}); }
+function __operitUiTemplate_82899(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,verticalAlignment:"center",spacing:12},[__values[0],__values[1]]); }
+function __operitUiTemplate_82857(__ctx,__values){return __ctx.UI.InputDecorator({label:__values[0],enabled:__values[1]},__values[2]); }
+function __operitUiTemplate_82743(__ctx,__values){return __ctx.UI.Surface({key:__values[0],fillMaxWidth:true,color:"transparent",onClick:__values[1]},__values[2]); }
+function __operitUiTemplate_82680(__ctx,__values){return __ctx.UI.Box({fillMaxWidth:true,paddingBottom:12},__values[0]); }
+function __operitUiTemplate_84097(__ctx,__values){return __ctx.UI.Text({text:__values[0],fontSize:14,fontWeight:"700",color:__values[1]}); }
+function __operitUiTemplate_84253(__ctx,__values){return __ctx.UI.Text({text:__values[0],fontSize:12,color:__values[1]}); }
+function __operitUiTemplate_84055(__ctx,__values){return __ctx.UI.Column({weight:1,spacing:1},[__values[0],__values[1]]); }
+function __operitUiTemplate_84443(__ctx,__values){return __ctx.UI.Switch({key:__values[0],checked:__values[1],enabled:__values[2],modifier:__values[3],onCheckedChange:__values[4]}); }
+function __operitUiTemplate_83917(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,modifier:__values[0],verticalAlignment:"center",spacing:8},[__values[1],__values[2]]); }
+function __operitUiTemplate_84635(__ctx,__values){return __ctx.UI.Spacer({height:6}); }
+function __operitUiTemplate_83871(__ctx,__values){return __ctx.UI.Column({fillMaxWidth:true},__values[0]); }
+function __operitUiTemplate_83683(__ctx,__values){return __ctx.UI.Box({fillMaxWidth:true,modifier:__values[0],paddingHorizontal:10,paddingVertical:6},__values[1]); }
+function __operitUiTemplate_83625(__ctx,__values){return __ctx.UI.Box({key:__values[0],fillMaxWidth:true,paddingBottom:7},__values[1]); }
+function __operitUiTemplate_84891(__ctx,__values){return __ctx.UI.Box({key:__values[0],fillMaxWidth:true,paddingStart:__values[1],paddingEnd:__values[2],paddingTop:__values[3],paddingBottom:__values[4]},__values[5]); }
+function __operitUiTemplate_84813(__ctx,__values){return __ctx.UI.LazyColumn({key:__values[0],fillMaxWidth:true},__values[1]); }
+function __operitUiTemplate_85522(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"titleSmall"}); }
+function __operitUiTemplate_85385(__ctx,__values){return __ctx.UI.Tab({key:__values[0],selected:__values[1],enabled:__values[2],onClick:__values[3]},__values[4]); }
+function __operitUiTemplate_85260(__ctx,__values){return __ctx.UI.PrimaryTabRow({key:__values[0],fillMaxWidth:true,selectedTabIndex:__values[1],tabs:__values[2]}); }
+function __operitUiTemplate_85654(__ctx,__values){return __ctx.UI.Button({key:__values[0],text:__values[1],enabled:__values[2],onClick:__values[3]}); }
+function __operitUiTemplate_85718(__ctx,__values){return __ctx.UI.TextButton({key:__values[0],text:__values[1],enabled:__values[2],onClick:__values[3]}); }
+function __operitUiTemplate_86288(__ctx,__values){return __ctx.UI.Text(__values[0]); }
+function __operitUiTemplate_86526(__ctx,__values){return __ctx.UI.IconButton({key:"entity-close",icon:"Close",enabled:__values[0],onClick:__values[1]}); }
+function __operitUiTemplate_86094(__ctx,__values){return __ctx.UI.Row({key:"entity-header",fillMaxWidth:true,paddingStart:24,paddingTop:__values[0],paddingEnd:16,paddingBottom:__values[1],verticalAlignment:"center"},[__values[2],__values[3]]); }
+function __operitUiTemplate_86642(__ctx,__values){return __ctx.UI.LinearProgressIndicator({fillMaxWidth:true}); }
+function __operitUiTemplate_86740(__ctx,__values){return __ctx.UI.Text({key:"entity-error",text:__values[0],color:__values[1],fillMaxWidth:true,paddingHorizontal:24,paddingBottom:12}); }
+function __operitUiTemplate_86887(__ctx,__values){return __ctx.UI.Box(__values[0],__values[1]); }
+function __operitUiTemplate_87063(__ctx,__values){return __ctx.UI.FlowRow({key:"entity-footer",fillMaxWidth:true,paddingStart:24,paddingTop:0,paddingEnd:24,paddingBottom:20,horizontalArrangement:"end",spacing:8,runSpacing:8},__values[0]); }
+function __operitUiTemplate_85901(__ctx,__values){return __ctx.UI.Column(__values[0],__values[1]); }
+function __operitUiTemplate_87460(__ctx,__values){return __ctx.UI.TextField({key:"entity-expanded-input",label:__values[0],value:__values[1],fillMaxSize:true,minLines:16,maxLines:40,enabled:__values[2],onValueChange:__values[3]}); }
+function __operitUiTemplate_88978(__ctx,__values){return __ctx.UI.Text({text:__values[0],color:__values[1]}); }
+function __operitUiTemplate_88939(__ctx,__values){return __ctx.UI.Column({fillMaxWidth:true},[__values[0],__values[1]]); }
+function __operitUiTemplate_89412(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:20,tint:__values[1]}); }
+function __operitUiTemplate_89235(__ctx,__values){return __ctx.UI.Row({key:"entity-picker-clear",fillMaxWidth:true,paddingHorizontal:8,paddingVertical:9,verticalAlignment:"center",spacing:10,onClick:__values[0]},[__values[1],__values[2]]); }
+function __operitUiTemplate_89857(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:20,tint:__values[1]}); }
+function __operitUiTemplate_90030(__ctx,__values){return __ctx.UI.Column({weight:1},__values[0]); }
+function __operitUiTemplate_89668(__ctx,__values){return __ctx.UI.Row({key:__values[0],fillMaxWidth:true,paddingHorizontal:8,paddingVertical:9,verticalAlignment:"center",spacing:10,onClick:__values[1]},[__values[2],__values[3]]); }
+function __operitUiTemplate_89145(__ctx,__values){return __ctx.UI.LazyColumn({key:"entity-picker-list",weight:1,fillMaxWidth:true},__values[0]); }
+function __operitUiTemplate_88579(__ctx,__values){return __ctx.UI.Column({fillMaxSize:true},__values[0]); }
+function __operitUiTemplate_91379(__ctx,__values){return __ctx.UI.Box({fillMaxWidth:true,paddingHorizontal:18,paddingTop:10},__values[0]); }
+function __operitUiTemplate_91553(__ctx,__values){return __ctx.UI.Box({weight:1,fillMaxWidth:true},__values[0]); }
+function __operitUiTemplate_91246(__ctx,__values){return __ctx.UI.Column({fillMaxSize:true},[__values[0],__values[1],__values[2]]); }
+function __operitUiTemplate_93010(__ctx,__values){return __ctx.UI.Column({fillMaxWidth:true,spacing:8},__values[0]); }
+function __operitUiTemplate_95056(__ctx,__values){return __ctx.UI.Box({weight:1},__values[0]); }
+function __operitUiTemplate_94951(__ctx,__values){return __ctx.UI.Row({key:__values[0],fillMaxWidth:true,verticalAlignment:"center"},[__values[1],__values[2],__values[3]]); }
+function __operitUiTemplate_96440(__ctx,__values){return __ctx.UI.LoadingIndicator({size:32}); }
+function __operitUiTemplate_96378(__ctx,__values){return __ctx.UI.Box({fillMaxSize:true,contentAlignment:"center"},__values[0]); }
+function __operitUiTemplate_97589(__ctx,__values){return __ctx.UI.Image(__values[0]); }
+function __operitUiTemplate_97879(__ctx,__values){return __ctx.UI.Spacer({width:12}); }
+function __operitUiTemplate_97921(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodyMedium",weight:1,maxLines:1,overflow:"ellipsis"}); }
+function __operitUiTemplate_98064(__ctx,__values){return __ctx.UI.Spacer({width:8}); }
+function __operitUiTemplate_97511(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,verticalAlignment:"center"},__values[0]); }
+function __operitUiTemplate_97441(__ctx,__values){return __ctx.UI.InputDecorator({label:"\u89D2\u8272\u5934\u50CF",enabled:__values[0]},__values[1]); }
+function __operitUiTemplate_97387(__ctx,__values){return __ctx.UI.Box({fillMaxWidth:true,paddingBottom:12},__values[0]); }
+function __operitUiTemplate_99046(__ctx,__values){return __ctx.UI.Text({text:"\u6807\u7B7E",weight:1,fontWeight:"700"}); }
+function __operitUiTemplate_99336(__ctx,__values){return __ctx.UI.Icon({name:"Tune",size:18}); }
+function __operitUiTemplate_99377(__ctx,__values){return __ctx.UI.Text({text:"\u7BA1\u7406\u6807\u7B7E"}); }
+function __operitUiTemplate_99279(__ctx,__values){return __ctx.UI.Row({spacing:8,verticalAlignment:"center"},[__values[0],__values[1]]); }
+function __operitUiTemplate_99115(__ctx,__values){return __ctx.UI.TextButton({key:"entity-tags-manage",enabled:__values[0],onClick:__values[1]},__values[2]); }
+function __operitUiTemplate_98981(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,verticalAlignment:"center"},[__values[0],__values[1]]); }
+function __operitUiTemplate_99445(__ctx,__values){return __ctx.UI.Spacer({height:6}); }
+function __operitUiTemplate_99753(__ctx,__values){return __ctx.UI.Text({text:__values[0],maxLines:1,overflow:"ellipsis",modifier:__values[1]}); }
+function __operitUiTemplate_99639(__ctx,__values){return __ctx.UI.FilterChip({key:__values[0],selected:__values[1],enabled:__values[2],label:__values[3],onClick:__values[4]}); }
+function __operitUiTemplate_99569(__ctx,__values){return __ctx.UI.FlowRow({spacing:8,runSpacing:8},__values[0]); }
+function __operitUiTemplate_98910(__ctx,__values){return __ctx.UI.Column({fillMaxWidth:true,paddingBottom:12},[__values[0],__values[1],__values[2]]); }
+function __operitUiTemplate_105096(__ctx,__values){return __ctx.UI.Text({text:__values[0],color:__values[1]}); }
+function __operitUiTemplate_106239(__ctx,__values){return __ctx.UI.Text({text:"\u7EC4\u5185\u89D2\u8272",style:"titleSmall",fontWeight:"700",paddingTop:8,paddingBottom:8}); }
+function __operitUiTemplate_107542(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:18,tint:__values[1]}); }
+function __operitUiTemplate_107679(__ctx,__values){return __ctx.UI.Image(__values[0]); }
+function __operitUiTemplate_107947(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodyMedium",fontWeight:"700",maxLines:1,overflow:"ellipsis"}); }
+function __operitUiTemplate_107917(__ctx,__values){return __ctx.UI.Column({weight:1},__values[0]); }
+function __operitUiTemplate_107421(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,paddingHorizontal:12,paddingVertical:8,spacing:10,verticalAlignment:"center"},[__values[0],__values[1],__values[2]]); }
+function __operitUiTemplate_106588(__ctx,__values){return __ctx.UI.Surface({key:__values[0],fillMaxWidth:true,color:__values[1],shape:{cornerRadius:10},modifier:__values[2],onClick:__values[3]},__values[4]); }
+function __operitUiTemplate_106535(__ctx,__values){return __ctx.UI.Box({fillMaxWidth:true,paddingBottom:6},__values[0]); }
+function __operitUiTemplate_108532(__ctx,__values){return __ctx.UI.HorizontalPager({key:"entity-pager",weight:1,fillMaxWidth:true,currentPage:__values[0],onPageChanged:__values[1]},__values[2]); }
+function __operitUiTemplate_108387(__ctx,__values){return __ctx.UI.Column({fillMaxSize:true},[__values[0],__values[1]]); }
+function __operitUiTemplate_110002(__ctx,__values){return __ctx.UI.Dialog({key:"character-presentation",onLoad:__values[0],closeOnDismissRequest:false,onDismissRequest:__values[1],containerColor:__values[2],shape:{cornerRadius:__values[3]},properties:{fullscreen:__values[4],usePlatformDefaultWidth:false,dismissOnClickOutside:false}},__values[5]); }
+function __operitUiTemplate_116832(__ctx,__values){return __ctx.UI.Text({text:__values[0]}); }
+function __operitUiTemplate_116980(__ctx,__values){return __ctx.UI.WebView({key:"character-memory-web",controller:__values[0],fillMaxSize:true,url:__values[1],javaScriptEnabled:true,domStorageEnabled:true,supportZoom:false,useWideViewPort:true,onShouldOverrideUrlLoading:__values[2],onInterceptRequest:__values[3],onLifecycleEvent:__values[4]}); }
+function __operitUiTemplate_116763(__ctx,__values){return __ctx.UI.Box({fillMaxSize:true,onLoad:__values[0]},__values[1]); }

@@ -7798,6 +7798,37 @@ function onServiceInitialize(_event) {
   });
 }
 
+// src/host-path.ts
+function hostFilePath(path, platform) {
+  const normalized = path.replace(/\\/g, "/");
+  if (normalized.startsWith("/app/") || normalized.startsWith("/mnt/")) return normalized;
+  if (platform === "windows" && /^[a-z]:\//i.test(normalized)) return `/mnt/windows/${normalized[0].toLowerCase()}/${normalized.slice(3)}`;
+  if (!normalized.startsWith("/")) return null;
+  if (platform === "macos" || platform === "linux") return `/mnt/${platform}${normalized}`;
+  if (platform === "android") return `/mnt/android/root${normalized}`;
+  return null;
+}
+
+// src/import-source.ts
+function parseImportSource(raw) {
+  const trimmed = raw.trim();
+  if (trimmed === "") throw new Error("import requires JSON content or a file path");
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) return { kind: "inline", content: trimmed };
+  return { kind: "file", path: trimmed };
+}
+function readImportSource(source) {
+  return __async(this, null, function* () {
+    if (source.kind === "inline") return source.content;
+    const platform = (yield Tools.System.terminal.info()).platform;
+    const path = hostFilePath(source.path, platform);
+    if (path === null) throw new Error(`unsupported import file path on ${platform}: ${source.path}`);
+    const file = yield Tools.Files.read(path);
+    const content = file.content.replace(/^\uFEFF/, "");
+    if (content.trim() === "") throw new Error(`import file is empty: ${source.path}`);
+    return content;
+  });
+}
+
 // src/command-spec.ts
 var CHARACTER_USAGE = [
   "operit2 character list",
@@ -7861,7 +7892,7 @@ var CHARACTER_MEMORY_USAGE = [
   "operit2 memory character <character-id> settings <show|write>",
   "operit2 memory character <character-id> search-config <show|write>",
   "operit2 memory character <character-id> export",
-  "operit2 memory character <character-id> import <SKIP|UPDATE|CREATE_NEW> <json-content>"
+  "operit2 memory character <character-id> import <SKIP|UPDATE|CREATE_NEW> <json-content|file-path>"
 ];
 var SHARED_MEMORY_USAGE = [
   "operit2 memory shared <list|create|rename|delete>",
@@ -7872,7 +7903,7 @@ var SHARED_MEMORY_USAGE = [
   "operit2 memory shared <shared-id> settings <show|write>",
   "operit2 memory shared <shared-id> search-config <show|write>",
   "operit2 memory shared <shared-id> export",
-  "operit2 memory shared <shared-id> import <SKIP|UPDATE|CREATE_NEW> <json-content>"
+  "operit2 memory shared <shared-id> import <SKIP|UPDATE|CREATE_NEW> <json-content|file-path>"
 ];
 var USER_USAGE = [
   "operit2 memory <owner> user show",
@@ -8444,6 +8475,10 @@ function parseLinks(ownerKey, args) {
       throw new Error(`unknown memory link action: ${args[0]}; use memory <owner> link help`);
   }
 }
+function memoryImportInvocation(ownerKey, strategy, content) {
+  const payload = parseDomainPayload("memory.import", { ownerKey, strategy, content });
+  return invocation("memory.import", payload, (value) => result(lines([`Imported memory backup for ${ownerKey}`]), value));
+}
 function parseOwner2(ownerKey, args, usage) {
   parseDomainPayload("memory.graph", { ownerKey });
   if (wantsHelp(args)) return { kind: "usage", usage };
@@ -8463,9 +8498,19 @@ function parseOwner2(ownerKey, args, usage) {
       return invocation("memory.export", { ownerKey }, (value) => result(value.content, value));
     }
     case "import": {
-      arity(args, 3, 3, "operit2 memory <owner> import <SKIP|UPDATE|CREATE_NEW> <json-content>");
-      const payload = parseDomainPayload("memory.import", { ownerKey, strategy: args[1], content: args[2] });
-      return invocation("memory.import", payload, (value) => result(lines([`Imported memory backup for ${ownerKey}`]), value));
+      let _a;
+      arity(args, 3, 3, "operit2 memory <owner> import <SKIP|UPDATE|CREATE_NEW> <json-content|file-path>");
+      const source = parseImportSource(args[2]), strategy = args[1];
+      if (source.kind === "inline") return memoryImportInvocation(ownerKey, strategy, source.content);
+      if (strategy !== "SKIP" && strategy !== "UPDATE" && strategy !== "CREATE_NEW") throw new Error("memory.import.strategy must be SKIP | UPDATE | CREATE_NEW");
+      return {
+        kind: "deferred",
+        execute() {
+          return __async(this, null, function* () {
+            return memoryImportInvocation(ownerKey, strategy, yield readImportSource(source)).execute();
+          });
+        }
+      };
     }
     case "settings": {
       const help = ["operit2 memory <owner> settings show", "operit2 memory <owner> settings write <settings-json>"];
