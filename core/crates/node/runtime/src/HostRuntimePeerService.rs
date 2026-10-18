@@ -395,7 +395,7 @@ impl HostRuntimePeerService {
     /// listening port, because a TCP source port is ephemeral and says nothing
     /// about where the peer listens.
     fn learnObservedEndpoint(&self, node: &str, observed: Option<std::net::SocketAddr>) {
-        let skip = |reason: String| operit_util::AppLogger::AppLogger::trace("RuntimePeerService", &format!("Endpoint refresh skipped peer={node}: {reason}"));
+        let skip = |reason: String| operit_util::AppLogger::AppLogger::v_with_level("RuntimePeerService", &format!("Endpoint refresh skipped peer={node}: {reason}"), operit_util::AppLogger::VERBOSE_LEVEL_3);
         let Some(address) = observed else { skip("the carrier reports no address".into()); return; };
         let host = address.ip();
         if host.is_loopback() || host.is_unspecified() || host.is_multicast() {
@@ -501,7 +501,7 @@ impl HostRuntimePeerService {
         // is the only route that exists when its own address is not routable here.
         if self.router()?.spaceChannelScope(node)?.is_some() {
             if let Some(channel) = self.inboundCallableChannel(node) {
-                operit_util::AppLogger::AppLogger::trace("RuntimePeerService", &format!("Calling {node} over the connection it opened"));
+                operit_util::AppLogger::AppLogger::v_with_level("RuntimePeerService", &format!("Calling {node} over the connection it opened"), operit_util::AppLogger::VERBOSE_LEVEL_3);
                 return Ok(channel.lease());
             }
         }

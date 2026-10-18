@@ -755,7 +755,7 @@ impl ChatServiceCore {
         chatId: String,
         resumeContext: CoreRouteResumeContext,
     ) -> Result<(), String> {
-        AppLogger::i(
+        AppLogger::v_with_level(
             "ChatServiceCore",
             &format!(
                 "route resume context chatId={} historyMessages={} participantId={} extensionOwner={}",
@@ -764,6 +764,7 @@ impl ChatServiceCore {
                 resumeContext.participantId,
                 resumeContext.extensionOwner
             ),
+            operit_util::AppLogger::VERBOSE_LEVEL_2,
         );
         let Some(mut service) = self.newEnhancedAiServiceForChat(&chatId) else {
             return Err(format!(

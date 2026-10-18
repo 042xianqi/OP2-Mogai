@@ -223,7 +223,7 @@ pub fn observeOperit1SnapshotImportProgress() -> StateFlow<Operit1SnapshotImport
 
 /// Publishes Operit1 snapshot import progress.
 pub fn publishOperit1SnapshotImportProgress(progress: Operit1SnapshotImportProgress) {
-    AppLogger::i(
+    AppLogger::trace_detail(
         "Operit1SnapshotImport",
         &format!(
             "stage={} progress={:.0}% active={} title={} detail={}",

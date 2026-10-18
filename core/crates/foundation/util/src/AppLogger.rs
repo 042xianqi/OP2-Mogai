@@ -21,17 +21,17 @@ pub const ERROR: i32 = 6;
 /// Android-compatible assert log priority.
 pub const ASSERT: i32 = 7;
 
-/// First Verbose detail level.
+/// Process and configuration lifecycle diagnostics (V1).
 pub const VERBOSE_LEVEL_1: i32 = 1;
-/// Second Verbose detail level.
+/// User-operation stages and aggregate timings (V2).
 pub const VERBOSE_LEVEL_2: i32 = 2;
-/// Third Verbose detail level.
+/// Service, provider, plugin, and tool invocation boundaries (V3).
 pub const VERBOSE_LEVEL_3: i32 = 3;
-/// Fourth Verbose detail level.
+/// Component, session, and resource lifecycle diagnostics (V4).
 pub const VERBOSE_LEVEL_4: i32 = 4;
-/// Fifth Verbose detail level.
+/// Routing, scheduling, persistence, and state propagation internals (V5).
 pub const VERBOSE_LEVEL_5: i32 = 5;
-/// Sixth Verbose detail level.
+/// Per-item, per-chunk, repeated-loop, and payload diagnostics (V6).
 pub const VERBOSE_LEVEL_6: i32 = 6;
 
 const TOOLPKG_LOG_TAG: &str = "ToolPkg";
@@ -316,24 +316,24 @@ impl AppLogger {
             .map_err(|error| error.message)
     }
 
-    /// Writes a verbose log message.
+    /// Writes process or configuration lifecycle diagnostics at Verbose level one.
     pub fn v(tag: &str, msg: &str) -> i32 {
         Self::v_with_level(tag, msg, VERBOSE_LEVEL_1)
     }
 
-    /// Writes a verbose log message with an explicit detail level.
+    /// Writes diagnostics at an explicit depth from lifecycle (V1) through per-item detail (V6).
     pub fn v_with_level(tag: &str, msg: &str, verbose_level: i32) -> i32 {
         assert!((VERBOSE_LEVEL_1..=VERBOSE_LEVEL_6).contains(&verbose_level));
         write_entry(VERBOSE, Some(verbose_level), tag, msg, None);
         0
     }
 
-    /// Writes a flow trace at Verbose detail level five.
+    /// Writes routing, scheduling, persistence, or state propagation diagnostics at V5.
     pub fn trace(tag: &str, msg: &str) -> i32 {
         Self::v_with_level(tag, msg, VERBOSE_LEVEL_5)
     }
 
-    /// Writes a high-frequency flow trace at Verbose detail level six.
+    /// Writes per-item, per-chunk, or repeated-loop diagnostics at V6.
     pub fn trace_detail(tag: &str, msg: &str) -> i32 {
         Self::v_with_level(tag, msg, VERBOSE_LEVEL_6)
     }

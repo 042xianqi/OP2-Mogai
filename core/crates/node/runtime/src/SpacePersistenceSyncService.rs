@@ -138,7 +138,7 @@ impl SpacePersistenceSyncService {
         self.state.nodeRouter.nodeServices()?;
         self.state.spaceStore.initialize()?;
         let localNodeId = self.state.nodeRouter.localNodeId();
-        operit_util::AppLogger::AppLogger::i(
+        operit_util::AppLogger::AppLogger::v(
             "SpacePersistenceSyncService",
             &format!(
                 "space store initialize done elapsedMs={}",
@@ -181,7 +181,7 @@ impl SpacePersistenceSyncService {
             let _ = self.stop();
             return Err(error);
         }
-        operit_util::AppLogger::AppLogger::i(
+        operit_util::AppLogger::AppLogger::v(
             "SpacePersistenceSyncService",
             &format!(
                 "peer availability watcher started elapsedMs={}",
@@ -194,7 +194,7 @@ impl SpacePersistenceSyncService {
             let _ = self.stop();
             return Err(error);
         }
-        operit_util::AppLogger::AppLogger::i(
+        operit_util::AppLogger::AppLogger::v(
             "SpacePersistenceSyncService",
             &format!(
                 "space sync scheduling done elapsedMs={}",
@@ -333,7 +333,7 @@ impl SpacePersistenceSyncService {
                 operit_util::AppLogger::AppLogger::v_with_level(
                     "SpacePersistenceSyncService",
                     &format!("space_topology.published local={localNodeId}"),
-                    operit_util::AppLogger::VERBOSE_LEVEL_1,
+                    operit_util::AppLogger::VERBOSE_LEVEL_5,
                 );
             }
             Ok(false) => {}
@@ -1046,7 +1046,7 @@ impl SpacePersistenceSyncService {
                             "sync_cycle.start local={} revision={}",
                             localNodeId, synchronizedRevision
                         ),
-                        operit_util::AppLogger::VERBOSE_LEVEL_1,
+                        operit_util::AppLogger::VERBOSE_LEVEL_5,
                     );
                     match service.synchronizeOnce().await {
                         Ok(()) => {
@@ -1058,7 +1058,7 @@ impl SpacePersistenceSyncService {
                                     synchronizedRevision,
                                     currentTimeMillis() - syncStartedAt
                                 ),
-                                operit_util::AppLogger::VERBOSE_LEVEL_1,
+                                operit_util::AppLogger::VERBOSE_LEVEL_5,
                             );
                         }
                         Err(error) => {

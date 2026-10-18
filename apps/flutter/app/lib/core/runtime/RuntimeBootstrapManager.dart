@@ -93,7 +93,11 @@ class RuntimeBootstrapManager extends ChangeNotifier {
   /// Loads persisted runtime storage configuration and applies local roots.
   Future<void> initialize() async {
     final stopwatch = Stopwatch()..start();
-    ClientLogger.i('initialize start', tag: _logTag);
+    ClientLogger.v(
+      'initialize start',
+      tag: _logTag,
+      verboseLevel: VerboseLevel.level1,
+    );
     try {
       final readStopwatch = Stopwatch()..start();
       final encoded = await platformCoreProxy.runtimeBootstrapRead();
@@ -109,26 +113,30 @@ class RuntimeBootstrapManager extends ChangeNotifier {
         );
         storedConfig = LocalRuntimeStorageConfig.fromJson(decoded);
       }
-      ClientLogger.i(
+      ClientLogger.v(
         'config read done localConfirmed=${storedConfig.confirmed} elapsedMs=${readStopwatch.elapsedMilliseconds}',
         tag: _logTag,
+        verboseLevel: VerboseLevel.level1,
       );
       if (storedConfig.confirmed) {
         final storageStopwatch = Stopwatch()..start();
-        ClientLogger.i(
+        ClientLogger.v(
           'local storage apply start runtimeRoot=${storedConfig.runtimeRoot} workspaceRoot=${storedConfig.workspaceRoot}',
           tag: _logTag,
+          verboseLevel: VerboseLevel.level1,
         );
         await LocalRuntimeStorageBridge.apply(storedConfig);
-        ClientLogger.i(
+        ClientLogger.v(
           'local storage apply done elapsedMs=${storageStopwatch.elapsedMilliseconds}',
           tag: _logTag,
+          verboseLevel: VerboseLevel.level1,
         );
       }
       await _apply(storedConfig, persist: false);
-      ClientLogger.i(
+      ClientLogger.v(
         'initialize done elapsedMs=${stopwatch.elapsedMilliseconds}',
         tag: _logTag,
+        verboseLevel: VerboseLevel.level1,
       );
     } catch (error, stackTrace) {
       ClientLogger.e(
@@ -241,9 +249,10 @@ class RuntimeBootstrapManager extends ChangeNotifier {
       throw StateError('runtime identity does not exist: $identityId');
     }
     final sourceIdentityId = activeIdentity.id;
-    ClientLogger.i(
+    ClientLogger.v(
       'switch identity start sourceIdentityId=$sourceIdentityId targetIdentityId=$identityId',
       tag: _logTag,
+      verboseLevel: VerboseLevel.level1,
     );
     final now = DateTime.now().millisecondsSinceEpoch;
     final selectedConfig = _config.copyWith(
@@ -265,9 +274,10 @@ class RuntimeBootstrapManager extends ChangeNotifier {
     String workspaceRoot,
   ) async {
     final stopwatch = Stopwatch()..start();
-    ClientLogger.i(
+    ClientLogger.v(
       'confirm local runtime storage start runtimeRoot=$runtimeRoot workspaceRoot=$workspaceRoot',
       tag: _logTag,
+      verboseLevel: VerboseLevel.level1,
     );
     final localStorage = LocalRuntimeStorageConfig(
       confirmed: true,
@@ -295,9 +305,10 @@ class RuntimeBootstrapManager extends ChangeNotifier {
     String workspaceRoot,
   ) async {
     final stopwatch = Stopwatch()..start();
-    ClientLogger.i(
+    ClientLogger.v(
       'persist migrated local runtime storage start runtimeRoot=$runtimeRoot workspaceRoot=$workspaceRoot',
       tag: _logTag,
+      verboseLevel: VerboseLevel.level1,
     );
     final localStorage = LocalRuntimeStorageConfig(
       confirmed: true,
@@ -330,7 +341,11 @@ class RuntimeBootstrapManager extends ChangeNotifier {
     required bool persist,
   }) async {
     final stopwatch = Stopwatch()..start();
-    ClientLogger.d('apply start persist=$persist', tag: _logTag);
+    ClientLogger.v(
+      'apply start persist=$persist',
+      tag: _logTag,
+      verboseLevel: VerboseLevel.level1,
+    );
     _config = config;
     if (persist) {
       await _writeBootstrapConfig(config);
@@ -339,9 +354,10 @@ class RuntimeBootstrapManager extends ChangeNotifier {
       ClientLogger.attachPersistentStorage();
     }
     notifyListeners();
-    ClientLogger.i(
+    ClientLogger.v(
       'apply done persist=$persist elapsedMs=${stopwatch.elapsedMilliseconds}',
       tag: _logTag,
+      verboseLevel: VerboseLevel.level1,
     );
   }
 

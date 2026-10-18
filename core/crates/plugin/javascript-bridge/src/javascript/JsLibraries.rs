@@ -208,6 +208,13 @@ fn assembleRuntimeBootstrapScript() -> String {
         var console = {{
             log: function() {{ __operitNativeLog('info', String(globalThis.__operitCurrentCallId || ''), Array.prototype.slice.call(arguments).join(' ')); }},
             info: function() {{ __operitNativeLog('info', String(globalThis.__operitCurrentCallId || ''), Array.prototype.slice.call(arguments).join(' ')); }},
+            /** Writes explicit developer diagnostics at Debug severity. */
+            debug: function() {{ __operitNativeLog('debug', String(globalThis.__operitCurrentCallId || ''), Array.prototype.slice.call(arguments).join(' ')); }},
+            /** Writes diagnostics at the same V1-V6 depth as the Rust and Flutter loggers. */
+            verbose: function(level) {{
+                if (!Number.isInteger(level) || level < 1 || level > 6) throw new RangeError('Verbose level must be an integer from 1 to 6');
+                __operitNativeLogVerbose(level, String(globalThis.__operitCurrentCallId || ''), Array.prototype.slice.call(arguments, 1).join(' '));
+            }},
             warn: function() {{ __operitNativeLog('warn', String(globalThis.__operitCurrentCallId || ''), Array.prototype.slice.call(arguments).join(' ')); }},
             error: function() {{ __operitNativeLog('error', String(globalThis.__operitCurrentCallId || ''), Array.prototype.slice.call(arguments).join(' ')); }}
         }};
@@ -623,7 +630,7 @@ fn assembleRuntimeBootstrapScript() -> String {
             function markStage(stage) {{
                 if (profileComposeStages) {{
                     var now = Date.now();
-                    console.log('event=compose_pipeline_stage stage=js-stage-' + profileStageName +
+                    console.verbose(4, 'event=compose_pipeline_stage stage=js-stage-' + profileStageName +
                         ' durationMs=' + (now - profileStageStarted) + ' wallMicros=' + (now * 1000) + ' call=' + callId);
                     profileStageStarted = now;
                     profileStageName = stage;

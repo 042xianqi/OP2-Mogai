@@ -1421,7 +1421,7 @@ impl CoreNodeRouter {
                 ),
                 VERBOSE_LEVEL_5,
             );
-            AppLogger::i(
+            AppLogger::trace(
                 "CoreNodeRouter",
                 &format!(
                     "binding watch segment open requestId={} property={} owner={} generation={} localSource={}",
@@ -1477,7 +1477,7 @@ impl CoreNodeRouter {
                     }
                 }
             };
-            AppLogger::i(
+            AppLogger::trace(
                 "CoreNodeRouter",
                 &format!(
                     "binding watch segment stream opened requestId={} property={} owner={} generation={}",
@@ -1544,7 +1544,7 @@ impl CoreNodeRouter {
                         };
                         if !firstEventLogged {
                             firstEventLogged = true;
-                            AppLogger::i(
+                            AppLogger::trace(
                                 "CoreNodeRouter",
                                 &format!(
                                     "binding watch first event requestId={} property={} owner={} generation={} kind={:?}",
@@ -1604,7 +1604,7 @@ impl CoreNodeRouter {
                             VERBOSE_LEVEL_6,
                         );
                         if event.kind == CoreEventKind::Snapshot {
-                            AppLogger::i(
+                            AppLogger::trace(
                                 "CoreNodeRouter",
                                 &format!(
                                     "binding watch snapshot forwarded requestId={} property={} owner={} generation={}",
@@ -2125,7 +2125,7 @@ impl CoreLinkSharedClient for CoreNodeRouter {
             }
         }
         if let GeneratedCoreRoute::Binding { key, .. } = &route {
-            operit_util::AppLogger::AppLogger::i(
+            operit_util::AppLogger::AppLogger::trace(
                 "CoreNodeRouter",
                 &format!(
                     "binding call route requestId={} path={} method={} key={} source={} target={}",
@@ -2144,7 +2144,7 @@ impl CoreLinkSharedClient for CoreNodeRouter {
         let methodName = request.methodName.clone();
         let requestId = request.requestId.0.clone();
         let response = self.callNode(targetNodeId.clone(), request).await;
-        operit_util::AppLogger::AppLogger::i(
+        operit_util::AppLogger::AppLogger::trace(
             "CoreNodeRouter",
             &format!(
                 "remote call returned requestId={} method={} target={} success={}",
@@ -2217,7 +2217,7 @@ impl CoreLinkSharedClient for CoreNodeRouter {
             );
         }
         if let GeneratedCoreRoute::Binding { key, .. } = &route {
-            operit_util::AppLogger::AppLogger::i(
+            operit_util::AppLogger::AppLogger::trace(
                 "CoreNodeRouter",
                 &format!(
                     "binding watch open requestId={} path={} property={} key={} source={}",

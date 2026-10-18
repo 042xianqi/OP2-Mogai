@@ -2044,7 +2044,7 @@ impl ChatHistoryDelegate {
     /// Inserts or replaces an in-memory message in the current chat.
     pub fn upsertCurrentChatMessageInMemory(&mut self, message: ChatMessage) -> bool {
         let Some(chatId) = self.currentChatIdFlow.value() else {
-            AppLogger::trace(
+            AppLogger::trace_detail(
                 "ChatFlowTrace",
                 &format!(
                     "upsert_current.skipped_no_chat {}",
@@ -2067,7 +2067,7 @@ impl ChatHistoryDelegate {
             messages.sort_by_key(|item| item.timestamp);
             false
         };
-        AppLogger::trace(
+        AppLogger::trace_detail(
             "ChatFlowTrace",
             &format!(
                 "upsert_current chatId={} action={} count={} streamMessages={} {}",
@@ -2097,7 +2097,7 @@ impl ChatHistoryDelegate {
             .openedChatMessageFlowSnapshot(&targetChatId)
             .map(|messages| chat_flow_trace_summary(&messages))
             .unwrap_or_else(|| "none".to_string());
-        AppLogger::trace(
+        AppLogger::trace_detail(
             "ChatFlowTrace",
             &format!(
                 "add.start chatId={} current={} sender={} timestamp={} chars={} currentChat={}",
@@ -2112,7 +2112,7 @@ impl ChatHistoryDelegate {
         if message.isVariantPreview {
             if isCurrentChat {
                 self.upsertCurrentChatMessageInMemory(message);
-                ChainLogger::verbose(
+                ChainLogger::verbose_with_level(
                     MESSAGE_STORE_CHAIN,
                     "message.store.preview.memory",
                     &[
@@ -2121,6 +2121,7 @@ impl ChatHistoryDelegate {
                         ("timestamp", messageTimestamp.to_string()),
                         ("messageChars", messageChars),
                     ],
+                    operit_util::AppLogger::VERBOSE_LEVEL_6,
                 );
             }
             return;
@@ -2136,7 +2137,7 @@ impl ChatHistoryDelegate {
                 &persistedMessage,
             );
             self.publishChatMessage(&targetChatId, message);
-            ChainLogger::verbose(
+            ChainLogger::verbose_with_level(
                 MESSAGE_STORE_CHAIN,
                 "message.store.hidden.update",
                 &[
@@ -2145,8 +2146,9 @@ impl ChatHistoryDelegate {
                     ("timestamp", messageTimestamp.to_string()),
                     ("messageChars", messageChars),
                 ],
+                operit_util::AppLogger::VERBOSE_LEVEL_6,
             );
-            AppLogger::trace(
+            AppLogger::trace_detail(
                 "ChatFlowTrace",
                 &format!(
                     "add.hidden_update.done chatId={} current={}",
@@ -2169,7 +2171,7 @@ impl ChatHistoryDelegate {
                 &persistedMessage,
             );
             self.publishChatMessage(&targetChatId, message);
-            ChainLogger::verbose(
+            ChainLogger::verbose_with_level(
                 MESSAGE_STORE_CHAIN,
                 "message.store.background.update",
                 &[
@@ -2178,8 +2180,9 @@ impl ChatHistoryDelegate {
                     ("timestamp", messageTimestamp.to_string()),
                     ("messageChars", messageChars),
                 ],
+                operit_util::AppLogger::VERBOSE_LEVEL_6,
             );
-            AppLogger::trace(
+            AppLogger::trace_detail(
                 "ChatFlowTrace",
                 &format!(
                     "add.background.done chatId={} current={}",
@@ -2208,7 +2211,7 @@ impl ChatHistoryDelegate {
                 &targetChatId,
                 &persistedMessage,
             );
-            ChainLogger::verbose(
+            ChainLogger::verbose_with_level(
                 MESSAGE_STORE_CHAIN,
                 "message.store.visible.update",
                 &[
@@ -2217,8 +2220,9 @@ impl ChatHistoryDelegate {
                     ("timestamp", messageTimestamp.to_string()),
                     ("messageChars", messageChars),
                 ],
+                operit_util::AppLogger::VERBOSE_LEVEL_6,
             );
-            AppLogger::trace(
+            AppLogger::trace_detail(
                 "ChatFlowTrace",
                 &format!(
                     "add.visible_update chatId={} current={}",
@@ -2266,7 +2270,7 @@ impl ChatHistoryDelegate {
                 &targetChatId,
                 &persistedMessage,
             );
-            ChainLogger::verbose(
+            ChainLogger::verbose_with_level(
                 MESSAGE_STORE_CHAIN,
                 "message.store.window.update",
                 &[
@@ -2275,8 +2279,9 @@ impl ChatHistoryDelegate {
                     ("timestamp", messageTimestamp.to_string()),
                     ("messageChars", messageChars),
                 ],
+                operit_util::AppLogger::VERBOSE_LEVEL_6,
             );
-            AppLogger::trace(
+            AppLogger::trace_detail(
                 "ChatFlowTrace",
                 &format!(
                     "add.window_update chatId={} current={}",

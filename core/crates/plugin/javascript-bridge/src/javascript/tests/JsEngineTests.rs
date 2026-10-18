@@ -1378,6 +1378,74 @@ fn bootstrap_exposes_ui_android_okhttp_api() {
     );
 }
 
+/// Exercises real QuickJS logging, native severity/depth metadata, and strict level validation.
+#[test]
+fn plugin_console_uses_shared_diagnostic_depths() {
+    let mut state = newTestJsEngineState(None);
+    let script = r#"
+        /** Exercises console forwarding, diagnostic depths, and strict validation. */
+        exports.verify_logging = function() {
+            const callId = String(globalThis.__operitCurrentCallId);
+            for (let level = 1; level <= 6; level++) console.verbose(level, 'log-policy-v' + level);
+            console.debug('log-policy-debug');
+            console.log('log-policy-log');
+            console.info('log-policy-info');
+            console.warn('log-policy-warn');
+            console.error('log-policy-error');
+            let rejected = 0;
+            for (const level of [0, 7, 1.5, '3', null]) {
+                try { console.verbose(level, 'invalid-policy'); }
+                catch (error) { if (error instanceof RangeError) rejected++; }
+            }
+            let nativeRejected = false;
+            try { __operitNativeLogVerbose(7, callId, 'invalid-native-policy'); }
+            catch (_) { nativeRejected = true; }
+            return { callId, rejected, nativeRejected };
+        };
+    "#;
+    let output = state.execute_script_function_on_current_thread(
+        super::JsTextResourceSource::ExecutionHost,
+        script,
+        "verify_logging",
+        &testParams(),
+        &BTreeMap::new(),
+        None,
+        true,
+        60,
+        None,
+    );
+    let result: serde_json::Value =
+        serde_json::from_str(&expect_js_output(output, "plugin logging policy")).unwrap();
+    assert_eq!(result["rejected"], 5);
+    assert_eq!(result["nativeRejected"], true);
+    let call_id = result["callId"].as_str().unwrap();
+    let entries = operit_util::AppLogger::AppLogger::entries();
+    for level in 1..=6 {
+        let message = format!("[{call_id}] log-policy-v{level}");
+        let entry = entries
+            .iter()
+            .find(|entry| entry.tag == "ToolPkg" && entry.message == message)
+            .unwrap();
+        assert_eq!(entry.priority, operit_util::AppLogger::VERBOSE);
+        assert_eq!(entry.verbose_level, Some(level));
+    }
+    for (label, priority) in [
+        ("debug", operit_util::AppLogger::DEBUG),
+        ("log", operit_util::AppLogger::INFO),
+        ("info", operit_util::AppLogger::INFO),
+        ("warn", operit_util::AppLogger::WARN),
+        ("error", operit_util::AppLogger::ERROR),
+    ] {
+        let message = format!("[{call_id}] log-policy-{label}");
+        let entry = entries
+            .iter()
+            .find(|entry| entry.tag == "ToolPkg" && entry.message == message)
+            .unwrap();
+        assert_eq!(entry.priority, priority);
+        assert_eq!(entry.verbose_level, None);
+    }
+}
+
 #[test]
 fn toolpkg_ipc_local_call_returns_handler_result() {
     let mut state = newTestJsEngineState(None);

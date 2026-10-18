@@ -534,12 +534,16 @@ impl RuntimePackageManager {
                 )
                 .await;
             let completedAt = currentTimeMillis();
-            AppLogger::d("ToolPkgTiming", &format!(
-                "kind=public_api package={} function={} api={} prepareMs={} executeMs={} totalMs={} success={}",
-                runtime.packageName, declaration.function, apiName,
-                executeAt.saturating_sub(startedAt), completedAt.saturating_sub(executeAt),
-                completedAt.saturating_sub(startedAt), result.is_ok(),
-            ));
+            AppLogger::v_with_level(
+                "ToolPkgTiming",
+                &format!(
+                    "kind=public_api package={} function={} api={} prepareMs={} executeMs={} totalMs={} success={}",
+                    runtime.packageName, declaration.function, apiName,
+                    executeAt.saturating_sub(startedAt), completedAt.saturating_sub(executeAt),
+                    completedAt.saturating_sub(startedAt), result.is_ok(),
+                ),
+                operit_util::AppLogger::VERBOSE_LEVEL_3,
+            );
             let raw = result.map_err(|error| error.to_string())?
                 .ok_or_else(|| format!("Public API returned no JSON result: {apiName}"))?;
             serde_json::from_str(&raw).map_err(|error| error.to_string())
@@ -1939,15 +1943,17 @@ impl RuntimePackageManager {
                     onIntermediateResult: None,
                 };
         async move {
-            AppLogger::i(
+            AppLogger::v_with_level(
                 PACKAGE_MANAGER_LOG_TAG,
                 &format!("Navigation action started: {actionContext}"),
+                operit_util::AppLogger::VERBOSE_LEVEL_2,
             );
             let result = manager.dispatchToolPkgHookAsync(&enabled, invocation).await;
             match &result {
-                Ok(_) => AppLogger::i(
+                Ok(_) => AppLogger::v_with_level(
                     PACKAGE_MANAGER_LOG_TAG,
                     &format!("Navigation action completed: {actionContext}"),
+                    operit_util::AppLogger::VERBOSE_LEVEL_2,
                 ),
                 Err(error) => AppLogger::e(
                     PACKAGE_MANAGER_LOG_TAG,
@@ -4537,12 +4543,16 @@ impl RuntimePackageManager {
         Box::pin(async move {
             let result = pending.await;
             let completedAt = currentTimeMillis();
-            AppLogger::d("ToolPkgTiming", &format!(
-                "kind=hook package={} function={} stage={} prepareMs={} executeMs={} totalMs={} success={}",
-                packageName, timedFunction, timedEvent,
-                preparedAt.saturating_sub(startedAt), completedAt.saturating_sub(preparedAt),
-                completedAt.saturating_sub(startedAt), result.is_ok(),
-            ));
+            AppLogger::v_with_level(
+                "ToolPkgTiming",
+                &format!(
+                    "kind=hook package={} function={} stage={} prepareMs={} executeMs={} totalMs={} success={}",
+                    packageName, timedFunction, timedEvent,
+                    preparedAt.saturating_sub(startedAt), completedAt.saturating_sub(preparedAt),
+                    completedAt.saturating_sub(startedAt), result.is_ok(),
+                ),
+                operit_util::AppLogger::VERBOSE_LEVEL_3,
+            );
             result
         })
     }

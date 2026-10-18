@@ -310,7 +310,7 @@ impl OperitApplication {
     #[allow(non_snake_case)]
     pub fn onCreate(&mut self) -> Result<(), String> {
         self.appStartupTimeMs = currentTimeMillis();
-        AppLogger::i("OperitApplication", "runtime initialization start");
+        AppLogger::v("OperitApplication", "runtime initialization start");
         setHostManager(self.hostManager.clone());
         if let Some(storage) = self.hostManager.runtimeStorageHost.clone() {
             if let Err(error) =
@@ -325,7 +325,7 @@ impl OperitApplication {
         let cleanupStartedAt = currentTimeMillis();
         self.configureOpenMpEnvironment();
         self.cleanOnExitFiles()?;
-        AppLogger::i(
+        AppLogger::v(
             "OperitApplication",
             &format!(
                 "clean on-exit files done elapsedMs={}",
@@ -344,7 +344,7 @@ impl OperitApplication {
             RuntimeStorePaths::default(),
         )?;
         self.preloadDatabase();
-        AppLogger::i(
+        AppLogger::v(
             "OperitApplication",
             &format!(
                 "database preload done elapsedMs={}",
@@ -353,9 +353,9 @@ impl OperitApplication {
         );
         let mut toolHandler = self.toolHandler.clone();
         let toolRegistrationStartedAt = currentTimeMillis();
-        AppLogger::i("OperitApplication", "default tool registration start");
+        AppLogger::v("OperitApplication", "default tool registration start");
         toolHandler.registerDefaultTools();
-        AppLogger::i(
+        AppLogger::v(
             "OperitApplication",
             &format!(
                 "default tool registration done elapsedMs={}",
@@ -363,10 +363,10 @@ impl OperitApplication {
             ),
         );
         let pluginInitializationStartedAt = currentTimeMillis();
-        AppLogger::i("OperitApplication", "built-in plugin initialization start");
+        AppLogger::v("OperitApplication", "built-in plugin initialization start");
         PluginRegistry::initializeBuiltins(self.toolPkgBridgeRuntime.clone());
         crate::plugins::toolpkg::ToolPkgChatLifecycleHookBridge::ToolPkgChatLifecycleHookBridge::register(self.toolPkgBridgeRuntime.clone())?;
-        AppLogger::i(
+        AppLogger::v(
             "OperitApplication",
             &format!(
                 "built-in plugin initialization done elapsedMs={}",
@@ -384,14 +384,14 @@ impl OperitApplication {
             }),
         );
         let runtimeEventRegistrationStartedAt = currentTimeMillis();
-        AppLogger::i("OperitApplication", "host runtime event registration start");
+        AppLogger::v("OperitApplication", "host runtime event registration start");
         self.hostRuntimeEventRegistration =
             crate::services::RuntimeEventIngressService::RuntimeEventIngressService::startHostRuntimeEventSupport(
                 self.hostManager.clone(),
                 self.toolPkgBridgeRuntime.clone(),
             )?
             .map(|registration| Arc::new(Mutex::new(registration)));
-        AppLogger::i(
+        AppLogger::v(
             "OperitApplication",
             &format!(
                 "host runtime event registration done elapsedMs={}",

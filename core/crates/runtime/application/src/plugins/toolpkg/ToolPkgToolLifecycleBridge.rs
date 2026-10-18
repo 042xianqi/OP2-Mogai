@@ -276,7 +276,7 @@ fn deliver(runtime: &ToolPkgBridgeRuntime, eventName: &str, eventPayload: Value)
                     };
                     let mut payload = eventPayload.clone();
                     payload["runtimeContext"] = ownerContext;
-                    ChainLogger::info(
+                    ChainLogger::verbose_with_level(
                         PLUGIN_CHAIN,
                         "plugin.toolpkg.tool_lifecycle.run.start",
                         &[
@@ -285,6 +285,7 @@ fn deliver(runtime: &ToolPkgBridgeRuntime, eventName: &str, eventPayload: Value)
                             ("hookId", hook.hookId.clone()),
                             ("function", hook.functionName.clone()),
                         ],
+                        operit_util::AppLogger::VERBOSE_LEVEL_3,
                     );
                     match manager
                         .runToolPkgMainHook(
@@ -301,7 +302,7 @@ fn deliver(runtime: &ToolPkgBridgeRuntime, eventName: &str, eventPayload: Value)
                         )
                         .await
                     {
-                        Ok(_) => ChainLogger::info(
+                        Ok(_) => ChainLogger::verbose_with_level(
                             PLUGIN_CHAIN,
                             "plugin.toolpkg.tool_lifecycle.run.done",
                             &[
@@ -309,6 +310,7 @@ fn deliver(runtime: &ToolPkgBridgeRuntime, eventName: &str, eventPayload: Value)
                                 ("package", hook.containerPackageName.clone()),
                                 ("hookId", hook.hookId.clone()),
                             ],
+                            operit_util::AppLogger::VERBOSE_LEVEL_3,
                         ),
                         Err(error) => ChainLogger::error(
                             PLUGIN_CHAIN,

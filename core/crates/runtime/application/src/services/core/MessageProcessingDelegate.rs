@@ -124,7 +124,7 @@ fn openCoreResponseStream(
                             let markdownEvent = match event.event_type {
                                 operit_util::stream::RevisableTextStream::TextStreamEventType::Savepoint => {
                                     textRevisions.savepoint(&event.id);
-                                    AppLogger::trace(
+                                    AppLogger::trace_detail(
                                         "CoreStreamTrace",
                                         &format!(
                                             "response.revision.savepoint streamKey={} id={}",
@@ -138,7 +138,7 @@ fn openCoreResponseStream(
                                         "markdown rollback must reference an active savepoint",
                                     );
                                     markdownStream.restoreContent(content);
-                                    AppLogger::trace(
+                                    AppLogger::trace_detail(
                                         "CoreStreamTrace",
                                         &format!(
                                             "response.revision.rollback streamKey={} id={}",
@@ -252,7 +252,7 @@ impl ChatTurnReceiptState {
     fn deliver(&mut self, result: Result<MessageSendResultData, String>) {
         if let Some(sender) = self.sender.take() {
             if sender.send(result).is_err() {
-                AppLogger::trace("ChatTurnReceipt", "Originating UI observer detached from the accepted turn");
+                AppLogger::v_with_level("ChatTurnReceipt", "Originating UI observer detached from the accepted turn", operit_util::AppLogger::VERBOSE_LEVEL_4);
             }
         }
     }
@@ -1327,12 +1327,13 @@ impl MessageProcessingDelegate {
             })
             .unwrap_or(false);
         if cancelled {
-            AppLogger::trace(
+            AppLogger::v_with_level(
                 "ResponseExecutionTrace",
                 &format!(
                     "response_cancelled chatId={} turnId={}",
                     chatId, cancelledTurnId
                 ),
+                operit_util::AppLogger::VERBOSE_LEVEL_2,
             );
             self.finishChatExecution(chatId, InputProcessingState::Idle);
         }
@@ -1478,16 +1479,7 @@ impl MessageProcessingDelegate {
             Some(configuration.profile.modelBinding.providerId.clone());
         request.chatModelIdOverride = Some(configuration.profile.modelBinding.modelId.clone());
         let originalMessageText = request.messageText.trim().to_string();
-        AppLogger::i(
-            "CoreSend",
-            &format!(
-                "processing start chatId={} messageChars={} attachments={}",
-                chatId,
-                originalMessageText.chars().count(),
-                request.attachments.len()
-            ),
-        );
-        ChainLogger::info(
+        ChainLogger::verbose_with_level(
             SEND_CHAIN,
             "send.processing.start",
             &[
@@ -1500,6 +1492,7 @@ impl MessageProcessingDelegate {
                 ),
 
             ],
+            operit_util::AppLogger::VERBOSE_LEVEL_2,
         );
         self.resetCurrentTurnToolInvocationCount(chatId.clone());
         let turnId = self.beginChatTurn(
@@ -1685,10 +1678,6 @@ impl MessageProcessingDelegate {
 
         let participantName = configuration.profile.name.clone();
         let requestMessageContent = finalMessageContent;
-        AppLogger::i(
-            "CoreSend",
-            &format!("response stream create start chatId={}", chatId),
-        );
         let assistantMessageTimestamp = ChatMessageTimestampAllocator::next();
         let completionStream = match AIMessageManager::sendMessage(AIMessageSendRequest {
             chatConfiguration: configuration.clone(),
@@ -1717,14 +1706,11 @@ impl MessageProcessingDelegate {
         .await
         {
             Ok(stream) => {
-                AppLogger::i(
-                    "CoreSend",
-                    &format!("response stream created chatId={}", chatId),
-                );
-                ChainLogger::info(
+                ChainLogger::verbose_with_level(
                     RECEIVE_CHAIN,
                     "receive.stream.created",
                     &[("chatId", chatId.clone())],
+                    operit_util::AppLogger::VERBOSE_LEVEL_2,
                 );
                 stream
             }
@@ -1803,12 +1789,13 @@ impl MessageProcessingDelegate {
         self.withExistingRuntime(Some(chatId.clone()), |runtime| {
             runtime.activeStreamingAiMessage = Some(aiMessage.clone());
         });
-        AppLogger::trace(
+        AppLogger::v_with_level(
             "ResponseExecutionTrace",
             &format!(
                 "response_started chatId={} timestamp={}",
                 chatId, aiMessage.timestamp,
             ),
+            operit_util::AppLogger::VERBOSE_LEVEL_2,
         );
         let workerChatId = chatId.clone();
         let workerTurnId = turnId;
@@ -1958,18 +1945,11 @@ impl MessageProcessingDelegate {
                                 if firstResponseElapsed.is_none() {
                                     *firstResponseElapsed =
                                         Some(messageTimingNow().startedAtMs as i64);
-                                    AppLogger::i(
-                                        "CoreSend",
-                                        &format!(
-                                            "response first chunk delivered chatId={} chars={}",
-                                            chunkChatId,
-                                            chunk.chars().count()
-                                        ),
-                                    );
-                                    ChainLogger::info(
+                                    ChainLogger::verbose_with_level(
                                         RECEIVE_CHAIN,
                                         "receive.first_chunk",
                                         &[("chatId", chunkChatId.clone())],
+                                        operit_util::AppLogger::VERBOSE_LEVEL_2,
                                     );
                                 }
                                 drop(firstResponseElapsed);
@@ -1992,10 +1972,6 @@ impl MessageProcessingDelegate {
                                 persistStreamingSnapshot(&snapshot);
                             })
                             .await;
-                        AppLogger::i(
-                            "CoreSend",
-                            &format!("response stream closed chatId={}", completionChatId),
-                        );
                         let workspaceToolHookSession = completionWorkspaceToolHookSession
                             .lock()
                             .expect("workspace tool hook session mutex poisoned")
@@ -2216,13 +2192,14 @@ impl MessageProcessingDelegate {
                         }
                         drop(workerChatHistoryDelegate);
                         if let Some(routeChange) = pendingRouteChange {
-                            ChainLogger::info(
+                            ChainLogger::verbose_with_level(
                                 SEND_CHAIN,
                                 "send.route_change.request",
                                 &[
                                     ("chatId", completionChatId.clone()),
                                     ("targetNodeId", routeChange.targetNodeId.clone()),
                                 ],
+                                operit_util::AppLogger::VERBOSE_LEVEL_2,
                             );
                             if let Err(error) = workerService
                                 .requestCoreRouteChange(

@@ -1458,9 +1458,10 @@ class _AIChatSurfaceState extends State<_AIChatSurface> {
                 _requestedChatFlowChatId == chatId) {
               if (!firstMessagesLogged && switchTimer != null) {
                 firstMessagesLogged = true;
-                ClientLogger.i(
+                ClientLogger.v(
                   'chat_switch.messages_received chatId=$chatId elapsedMs=${switchTimer.elapsedMilliseconds} count=${messages.length}',
                   tag: 'ChatSwitchTrace',
+                  verboseLevel: VerboseLevel.level2,
                 );
               }
               _applyMessages(messages);
@@ -1484,9 +1485,10 @@ class _AIChatSurfaceState extends State<_AIChatSurface> {
                 state.currentChatId == chatId) {
               if (!firstStateLogged && switchTimer != null) {
                 firstStateLogged = true;
-                ClientLogger.i(
+                ClientLogger.v(
                   'chat_switch.state_received chatId=$chatId elapsedMs=${switchTimer.elapsedMilliseconds}',
                   tag: 'ChatSwitchTrace',
+                  verboseLevel: VerboseLevel.level2,
                 );
               }
               _applyChatState(state);

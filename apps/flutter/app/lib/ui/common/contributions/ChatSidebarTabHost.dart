@@ -664,10 +664,11 @@ class ChatSidebarPreparation extends ChangeNotifier {
             }
             _data = {..._data, ...prepared};
             notifyListeners();
-            ClientLogger.i(
+            ClientLogger.v(
               'event=sidebar_data_prepared package=${owner.containerPackageName} '
               'entries=${prepared.length} elapsedMs=${watch.elapsedMilliseconds}',
               tag: 'ChatSidebarPreparation',
+              verboseLevel: VerboseLevel.level4,
             );
           } catch (error) {
             if (_current(generation)) _logFailure(error);

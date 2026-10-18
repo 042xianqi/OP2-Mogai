@@ -177,9 +177,10 @@ pub fn logMessageTiming(stage: &str, startTimeMs: MessageTiming, details: Option
         .filter(|value| !value.trim().is_empty())
         .map(|value| format!(", {value}"))
         .unwrap_or_default();
-    AppLogger::d(
+    AppLogger::v_with_level(
         MESSAGE_PROCESS_TIMING_TAG,
         &format!("{stage} 耗时={elapsed}ms{suffix}"),
+        operit_util::AppLogger::VERBOSE_LEVEL_2,
     );
 }
 
@@ -324,7 +325,7 @@ impl AIMessageManager {
                 },
             );
         Self::setLastActiveChatKey(chatKey.clone());
-        ChainLogger::info(
+        ChainLogger::verbose_with_level(
             SEND_CHAIN,
             "send.ai_manager.start",
             &[
@@ -336,6 +337,7 @@ impl AIMessageManager {
                 ),
                 ("historyCount", request.chatHistory.len().to_string()),
             ],
+            operit_util::AppLogger::VERBOSE_LEVEL_2,
         );
 
         let memory = match request.promptHistoryOverride.clone() {
@@ -370,7 +372,7 @@ impl AIMessageManager {
         )
         .await;
         if let Some(pluginExecution) = pluginExecution {
-            ChainLogger::info(
+            ChainLogger::verbose_with_level(
                 PLUGIN_CHAIN,
                 "plugin.message_processing.matched",
                 &[
@@ -380,6 +382,7 @@ impl AIMessageManager {
                         ChainLogger::lenField(&request.messageContent),
                     ),
                 ],
+                operit_util::AppLogger::VERBOSE_LEVEL_3,
             );
             Self::finishOperation(&chatKey, operationId);
             return Ok(SharedAiResponseStream::from(with_event_channel_shared(
@@ -423,7 +426,7 @@ impl AIMessageManager {
             Some(value) => !value.trim().is_empty(),
             None => false,
         };
-        ChainLogger::info(
+        ChainLogger::verbose_with_level(
             SEND_CHAIN,
             "send.provider.request",
             &[
@@ -436,6 +439,7 @@ impl AIMessageManager {
                 ),
                 ("modelOverrideSet", ChainLogger::boolField(modelOverrideSet)),
             ],
+            operit_util::AppLogger::VERBOSE_LEVEL_2,
         );
         // A pre-send hook may have yielded while the user cancelled this operation.
         if activeChatOperations()
@@ -490,10 +494,11 @@ impl AIMessageManager {
                     Self::cancelOperationForId(&chatKey, Some(operationId)).await;
                     return Err(AiServiceError::RequestFailed(error.to_string()));
                 }
-                ChainLogger::info(
+                ChainLogger::verbose_with_level(
                     RECEIVE_CHAIN,
                     "receive.provider.stream.ready",
                     &[("chatKey", chatKey.clone())],
+                    operit_util::AppLogger::VERBOSE_LEVEL_2,
                 );
                 Ok(stream)
             }
@@ -1067,13 +1072,14 @@ impl AIMessageManager {
         // Close the per-send gate immediately, including a send that has not yet
         // entered the provider or registered its execution context.
         operation.cancellationToken.cancel();
-        ChainLogger::info(
+        ChainLogger::verbose_with_level(
             SEND_CHAIN,
             "send.cancel.start",
             &[
                 ("chatKey", chatKey.to_string()),
                 ("operationId", operationId.to_string()),
             ],
+            operit_util::AppLogger::VERBOSE_LEVEL_2,
         );
         // The token already stops response callbacks and new tool rounds. Close
         // output promptly, without waiting for a busy provider mutex; cleanup cannot

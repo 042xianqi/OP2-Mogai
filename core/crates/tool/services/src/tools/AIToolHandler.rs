@@ -1053,10 +1053,11 @@ impl AIToolHandler {
             None
         };
         let startMs = operit_host_api::TimeUtils::currentTimeMillis();
-        logExecution(
+        ChainLogger::verbose_with_level(
             TOOL_CHAIN,
             "tool.execute.request",
             &[("tool", request.name.clone()), ("policy", format!("{policy:?}"))],
+            operit_util::AppLogger::VERBOSE_LEVEL_3,
         );
         let execution = async {
             if let ToolExecutionPolicy::Ai { exposure } = &policy {

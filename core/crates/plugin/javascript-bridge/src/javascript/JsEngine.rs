@@ -1311,7 +1311,7 @@ impl JsEngineState {
                 ],
             );
             let completedAtMs = currentTimeMillisU128();
-            AppLogger::d("JsExecutionTiming", &format!(
+            AppLogger::trace("JsExecutionTiming", &format!(
                 "kind=js_start callId={} function={} scriptBytes={} sourceRegistered={} queueMs={} initializeMs={} invokeMs={}",
                 callId, functionName, scriptBytes, sourceRegistered,
                 startedAtMs.saturating_sub(submittedAtMs),
@@ -1925,6 +1925,7 @@ impl JsEngineState {
             "__operitNativeGetToolCatalog",
             "__operitNativeComposeWebViewControllerCommand",
             "__operitNativeLog",
+            "__operitNativeLogVerbose",
             "__operitNativeDecompress",
             "__operitNativeCrypto",
             "__operitNativeJavaClassExists",
@@ -3222,6 +3223,23 @@ fn executeHostOperation(name: &str, arguments: Vec<Value>) -> HostResult<Value> 
         | "__operitNativeJavaSetStaticField" => Err(HostError::new(format!(
             "Java host operation is not implemented: {name}"
         ))),
+        "__operitNativeLogVerbose" => {
+            let [level, callId, message] = exactHostJavaScriptJsonArguments(name, arguments)?;
+            let level = level
+                .as_i64()
+                .filter(|level| (1..=6).contains(level))
+                .ok_or_else(|| HostError::new("Verbose level must be an integer from 1 to 6"))?
+                as i32;
+            let callId = hostJavaScriptStringArgument(callId)?;
+            let message = hostJavaScriptStringArgument(message)?;
+            let message = if callId.is_empty() {
+                message
+            } else {
+                format!("[{callId}] {message}")
+            };
+            AppLogger::v_with_level("ToolPkg", &message, level);
+            Ok(Value::Null)
+        }
         "__operitNativeLog" => {
             let [level, callId, message] = exactHostJavaScriptJsonArguments(name, arguments)?;
             let level = hostJavaScriptStringArgument(level)?;
@@ -3234,6 +3252,7 @@ fn executeHostOperation(name: &str, arguments: Vec<Value>) -> HostResult<Value> 
             };
             match level.as_str() {
                 "info" => AppLogger::i("ToolPkg", &message),
+                "debug" => AppLogger::d("ToolPkg", &message),
                 "warn" => AppLogger::w("ToolPkg", &message),
                 "error" => AppLogger::e("ToolPkg", &message),
                 _ => return Err(HostError::new(format!("Unknown plugin log level: {level}"))),
@@ -3270,7 +3289,7 @@ fn executeHostOperation(name: &str, arguments: Vec<Value>) -> HostResult<Value> 
             let [callId, message] = exactHostJavaScriptJsonArguments(name, arguments)?;
             let callId = hostJavaScriptStringArgument(callId)?;
             let message = hostJavaScriptStringArgument(message)?;
-            AppLogger::d(TAG, &format!("[{callId}] {message}"));
+            AppLogger::trace_detail(TAG, &format!("[{callId}] {message}"));
             Ok(Value::Null)
         }
         "__operitNativeShouldRouteToolPkg" => {

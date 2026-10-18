@@ -327,7 +327,7 @@ impl ToolExecutionManager {
             .map(|invocation| invocation.tool.name.clone())
             .collect::<Vec<_>>()
             .join(", ");
-        AppLogger::d(
+        AppLogger::v_with_level(
             TAG,
             &format!(
                 "tool.parse.complete responseChars={} toolCount={} tools=[{}]",
@@ -335,6 +335,7 @@ impl ToolExecutionManager {
                 invocations.len(),
                 toolNames
             ),
+            operit_util::AppLogger::VERBOSE_LEVEL_3,
         );
         invocations
     }
@@ -371,7 +372,7 @@ impl ToolExecutionManager {
             .map(|invocation| invocation.tool.name.clone())
             .collect::<Vec<_>>()
             .join(", ");
-        AppLogger::d(
+        AppLogger::v_with_level(
             TAG,
             &format!(
                 "tool.execution.batch_start requestedCount={} tools=[{}] callerNameSet={} callerChatIdSet={} callerParticipantIdSet={} exposure={:?}",
@@ -382,6 +383,7 @@ impl ToolExecutionManager {
                 callerParticipantId.is_some(),
                 toolExposureMode
             ),
+            operit_util::AppLogger::VERBOSE_LEVEL_3,
         );
         toolHandler.registerDefaultTools();
         let jsPackageNames = packageManager
@@ -404,7 +406,7 @@ impl ToolExecutionManager {
 
         for invocation in injectedInvocations.iter().cloned() {
             let displayToolName = Self::resolveDisplayToolName(&invocation.tool);
-            AppLogger::d(
+            AppLogger::trace_detail(
                 TAG,
                 &format!(
                     "tool.execution.start tool={} params={} rawBytes={}",
@@ -419,13 +421,14 @@ impl ToolExecutionManager {
                     ToolExecutionPolicy::Ai { exposure: toolExposureMode.clone() },
                 )
                 .await?;
-            AppLogger::d(
+            AppLogger::v_with_level(
                 TAG,
                 &format!(
                     "tool.execution.raw_results tool={} rawResultCount={}",
                     displayToolName,
                     collected.len()
                 ),
+                operit_util::AppLogger::VERBOSE_LEVEL_3,
             );
             {
                 let last = collected.last().expect("collected not empty");
@@ -456,7 +459,7 @@ impl ToolExecutionManager {
                 if let Some(intent) = Self::routeChangeIntentForResult(&invocation.tool, last) {
                     routeChangeIntent = Some(intent);
                 }
-                AppLogger::d(
+                AppLogger::v_with_level(
                     TAG,
                     &format!(
                         "tool.execution.complete tool={} success={} rawResultCount={} combinedBytes={}",
@@ -465,13 +468,14 @@ impl ToolExecutionManager {
                         collected.len(),
                         finalResult.result.toString().len()
                     ),
+                    operit_util::AppLogger::VERBOSE_LEVEL_3,
                 );
                 results.push(finalResult);
             }
         }
 
         let batch = ToolExecutionBatch::new(results, routeChangeIntent);
-        AppLogger::d(
+        AppLogger::v_with_level(
             TAG,
             &format!(
                 "tool.execution.batch_complete requestedCount={} resultCount={} messageBytes={}",
@@ -479,6 +483,7 @@ impl ToolExecutionManager {
                 batch.results.len(),
                 batch.message.len()
             ),
+            operit_util::AppLogger::VERBOSE_LEVEL_3,
         );
         Ok(batch)
         }).await

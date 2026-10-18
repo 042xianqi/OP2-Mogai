@@ -987,9 +987,10 @@ class _AiSetupGuidePageState extends State<_AiSetupGuidePage>
   Future<void> _pickOperit1Snapshot() async {
     final previousSession = _operit1SnapshotSession;
     SnapshotImportSession? stagedSession;
-    ClientLogger.i(
+    ClientLogger.v(
       'snapshot selection started',
       tag: _operit1SnapshotImportLogTag,
+      verboseLevel: VerboseLevel.level2,
     );
     setState(() {
       _readingOperit1Snapshot = true;
@@ -1013,9 +1014,10 @@ class _AiSetupGuidePageState extends State<_AiSetupGuidePage>
       if (file == null) {
         return;
       }
-      ClientLogger.i(
+      ClientLogger.v(
         'snapshot selected name=${file.name} bytes=${file.byteLength}',
         tag: _operit1SnapshotImportLogTag,
+        verboseLevel: VerboseLevel.level2,
       );
       if (!mounted) {
         await file.close();
@@ -1059,9 +1061,10 @@ class _AiSetupGuidePageState extends State<_AiSetupGuidePage>
               );
         });
       }
-      ClientLogger.i(
+      ClientLogger.v(
         'snapshot upload completed bytes=${session.byteLength}; inspection started',
         tag: _operit1SnapshotImportLogTag,
+        verboseLevel: VerboseLevel.level3,
       );
       final snapshot = await session.completeOperit1();
       ClientLogger.i(

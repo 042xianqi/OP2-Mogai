@@ -136,9 +136,10 @@ class _DrawerContentState extends State<DrawerContent> {
       if (chatId != widget.currentChatId) ChatSelectionTransition.begin(chatId);
       widget.onConversationActivated();
       await _chatCoreProxy.switchChat(chatId: chatId);
-      ClientLogger.i(
+      ClientLogger.v(
         'chat_switch.command_completed chatId=$chatId elapsedMs=${switchStartedAt.elapsedMilliseconds}',
         tag: 'ChatSwitchTrace',
+        verboseLevel: VerboseLevel.level2,
       );
     } catch (error, stackTrace) {
       ChatSelectionTransition.complete(chatId);
