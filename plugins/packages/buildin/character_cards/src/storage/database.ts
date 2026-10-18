@@ -24,8 +24,8 @@ import {
   clone,
   collections,
   equal,
-  loadCharacterState,
   records,
+  stateFromRecords,
   storedValue,
 } from "./records";
 import type { StoredRecord } from "./records";
@@ -83,7 +83,7 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
         { op: "put", collection: "schema_migrations", key: "character", expectedVersion: null, value: { version: characterSchemaVersion } },
         ...records(state).map(row => ({ op: "put" as const, ...row, expectedVersion: null })),
         { op: "put", collection: "meta", key: "state", expectedVersion: null,
-          value: { version: state.version, nextId: state.nextId,
+          value: { version: state.version,
             active: "Model" in state.active ? null : storedValue(state.active),
             memoryPreferences: storedValue(state.memoryPreferences) } },
       ], { collection: "meta", key: "state" });
@@ -99,13 +99,7 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
     }
     const metadata = await database.get("meta", "state");
     if (metadata === null) throw new Error("Character initialization did not publish metadata");
-    assertObject(metadata.value, "character metadata");
-    // A reconciled identity space is published once so the allocation floor replicates instead of recurring.
-    // The assembled state shares row objects with the first read, so a fresh read supplies the
-    // pre-reconciliation values the publication diff compares against.
-    const loaded = loadCharacterState(metadata.value, await repository.readRecords());
-    if (loaded.healed)
-      await repository.publish(loaded.state, await repository.readRecords(), [], [], metadata.version, metadata.value);
+    assertCharacterState(stateFromRecords(metadata.value, await repository.readRecords()));
     return repository;
   }
 
@@ -146,8 +140,7 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
           "Character records changed during the read; operation was not started",
         );
       assertObject(metadata.value, "character metadata");
-      const loaded = loadCharacterState(metadata.value, rows);
-      const before = loaded.state;
+      const before = stateFromRecords(metadata.value, rows);
       const state = clone(before),
         session = new RepositorySession(
           state,
@@ -173,13 +166,11 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
               owner.userDocumentPath.lastIndexOf("/"),
             ),
         );
-      if (!equal(before, state) || documents.length !== 0 || loaded.healed) {
+      if (!equal(before, state) || documents.length !== 0) {
         try {
           await this.publish(
             state,
-            // A reconciled identity space shares row objects with the first read, so the diff
-            // needs a fresh read of the pre-reconciliation values.
-            loaded.healed ? await this.readRecords() : rows,
+            rows,
             documents,
             removed,
             metadata.version,
@@ -451,7 +442,6 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
       value: {
         ...metadata,
         version: state.version,
-        nextId: state.nextId,
         active: "Model" in state.active ? null : storedValue(state.active),
         memoryPreferences: storedValue(state.memoryPreferences),
       },

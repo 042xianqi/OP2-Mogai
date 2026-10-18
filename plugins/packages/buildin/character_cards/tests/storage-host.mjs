@@ -127,7 +127,7 @@ export function createStorageHost(directory, attempted) {
     close() { for (const sql of handles) sql.close(); handles.clear(); },
     /** Reads raw collection entries for independent test assertions and deliberate corruption cases. */
     inspect(callback) {
-      const sql = new DatabaseSync(path.join(directory, "characters-relational.sqlite"));
+      const sql = new DatabaseSync(path.join(directory, "characters-relational-v2.sqlite"));
       try { return callback(sql); } finally { sql.close(); }
     },
   };

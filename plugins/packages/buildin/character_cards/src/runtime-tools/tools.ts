@@ -408,7 +408,7 @@
           "name": "link_id",
           "type": "string",
           "required": false,
-          "description": "Lossless decimal-string relationship ID."
+          "description": "Opaque stable relationship identity."
         },
         {
           "name": "source_title",
@@ -456,7 +456,7 @@
           "name": "link_id",
           "type": "string",
           "required": false,
-          "description": "Lossless decimal-string relationship ID."
+          "description": "Opaque stable relationship identity."
         },
         {
           "name": "source_title",
@@ -516,7 +516,7 @@
           "name": "link_id",
           "type": "string",
           "required": false,
-          "description": "Lossless decimal-string relationship ID."
+          "description": "Opaque stable relationship identity."
         },
         {
           "name": "source_title",

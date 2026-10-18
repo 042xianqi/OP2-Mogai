@@ -24,11 +24,9 @@ function nonblank(value: unknown, path: string): void {
   text(value, path);
   if ((value as string).trim() === "") throw new Error(`${path} must not be blank`);
 }
-/** Validates a lossless plugin record identity without accepting or coercing numeric JSON. */
-export function parseMemoryIdentifier(value: unknown, path: string, positive = true): string {
-  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) throw new Error(`${path} must be a canonical decimal string`);
-  const id = BigInt(value);
-  if (id > 9223372036854775807n || (positive && id === 0n)) throw new Error(`${path} is outside its declared identity range`);
+/** Validates a plugin record identity as an opaque, device-independent string. */
+export function parseMemoryIdentifier(value: unknown, path: string, _positive = true): string {
+  if (typeof value !== "string" || value.trim() === "" || value !== value.trim() || value.length > 256) throw new Error(`${path} must be a nonblank identity`);
   return value;
 }
 /** Validates an existing memory or relationship identity as an unchanged string. */

@@ -21,10 +21,13 @@ function assertDirectoryCalls(settings, methods) {
 
 /** Compares the complete returned snapshot with independently read authoritative disk state and explicit host-test inputs. */
 function assertCompleteSnapshot(snapshot, state) {
-  assert.deepEqual(plain(snapshot), {
-    cards: state.cards, groups: state.groups, stores: state.stores, tags: state.tags, active: state.active, memoryPreferences: state.memoryPreferences,
-    models: directoryInput.models, ttsConfigs: directoryInput.ttsConfigs, toolCatalog: directoryInput.toolCatalog,
-  });
+  const byId = values => [...values].sort((left, right) => left.id.localeCompare(right.id));
+  const actual = plain(snapshot);
+  assert.deepEqual(
+    { ...actual, cards: byId(actual.cards), groups: byId(actual.groups), stores: byId(actual.stores), tags: byId(actual.tags) },
+    { cards: byId(state.cards), groups: byId(state.groups), stores: byId(state.stores), tags: byId(state.tags), active: state.active,
+      memoryPreferences: state.memoryPreferences, models: directoryInput.models, ttsConfigs: directoryInput.ttsConfigs, toolCatalog: directoryInput.toolCatalog },
+  );
 }
 
 /** Rejects every file mutation rather than counting only successful state publications. */
@@ -148,7 +151,8 @@ test("actual Web card save commits the complete staged tag change set once", asy
   const snapshot = await plugin.web({ action: "saveCharacter", create: false, card: { ...plain(card), description: "Web 更新", ttsConfigId: directoryInput.ttsConfigs[0].id, attachedTagIds: ["draft-created", updated.id] }, tagChanges: { created: [{ draftId: "draft-created", values: { name: "新标签", description: "新描述", promptContent: "新提示", tagType: "CUSTOM" } }], updated: [{ id: updated.id, name: updated.name, description: "修改描述", promptContent: "修改提示", tagType: updated.tagType }], deleted: [removed.id] } });
   assert.equal(disk.calls.filter(call => call.method === "storage.transaction").length, 1);
   const state = JSON.parse(await disk.stateBytes().toString("utf8"));
-  assert.deepEqual(state.cards, plain(snapshot.cards)); assert.deepEqual(state.tags, plain(snapshot.tags));
+  const byId = values => [...values].sort((left, right) => left.id.localeCompare(right.id));
+  assert.deepEqual(byId(state.cards), byId(plain(snapshot.cards))); assert.deepEqual(byId(state.tags), byId(plain(snapshot.tags)));
   assertCompleteSnapshot(snapshot, state);
   assertDirectoryCalls(settings, ["Tts.listConfigs", ...snapshotDirectoryMethods]);
   const newTags = snapshot.tags.filter(

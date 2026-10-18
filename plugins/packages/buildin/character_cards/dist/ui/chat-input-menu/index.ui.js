@@ -129,10 +129,8 @@ function nonblank(value, path) {
   text(value, path);
   if (value.trim() === "") throw new Error(`${path} must not be blank`);
 }
-function parseMemoryIdentifier(value, path, positive = true) {
-  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) throw new Error(`${path} must be a canonical decimal string`);
-  const id2 = BigInt(value);
-  if (id2 > 9223372036854775807n || positive && id2 === 0n) throw new Error(`${path} is outside its declared identity range`);
+function parseMemoryIdentifier(value, path, _positive = true) {
+  if (typeof value !== "string" || value.trim() === "" || value !== value.trim() || value.length > 256) throw new Error(`${path} must be a nonblank identity`);
   return value;
 }
 function memoryIdentifier(value, path) {
@@ -997,9 +995,6 @@ var collections = {
       version: {
         kind: "integer"
       },
-      nextId: {
-        kind: "text"
-      },
       active: {
         kind: "object",
         nullable: true,
@@ -1687,7 +1682,7 @@ var RelationalDatabase = class _RelationalDatabase {
       if (typeof directory !== "string" || directory.trim() === "")
         throw new Error("Plugin data directory is unavailable");
       const sql = yield Tools.Storage.sqlite.open({
-        path: directory + "/characters-relational.sqlite",
+        path: directory + "/characters-relational-v2.sqlite",
         merge: spaceMergeDescriptor
       });
       for (const root of Object.values(layouts))
@@ -1912,18 +1907,18 @@ function selectedOption(data) {
 function menuAvatar(ctx, option, unboundAvatar) {
   const props = { width: 32, height: 32, contentScale: "crop", modifier: ctx.Modifier.clip({ type: "circle" }) };
   if (option === null) {
-    if (unboundAvatar === null) return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:65256",[{ width: 32, height: 32, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:65322",[{ name: "Person", size: 24, tint: ctx.MaterialTheme.colorScheme.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
-    return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:65431",[{ ...props, path: unboundAvatar, contentDescription: "\u672A\u7ED1\u5B9A" }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs));
+    if (unboundAvatar === null) return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:65086",[{ width: 32, height: 32, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:65152",[{ name: "Person", size: 24, tint: ctx.MaterialTheme.colorScheme.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
+    return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:65261",[{ ...props, path: unboundAvatar, contentDescription: "\u672A\u7ED1\u5B9A" }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs));
   }
   switch (option.avatar.type) {
     case "uri":
-      return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:65587",[{ ...props, uri: option.avatar.uri, contentDescription: option.title }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs));
+      return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:65417",[{ ...props, uri: option.avatar.uri, contentDescription: option.title }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs));
     case "resource":
-      return option.avatar.path === null ? OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:65737",[{ width: 32, height: 32, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:65803",[{ name: "Person", size: 24, tint: ctx.MaterialTheme.colorScheme.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)) : OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:65902",[{ ...props, path: option.avatar.path, contentDescription: option.title }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs));
+      return option.avatar.path === null ? OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:65567",[{ width: 32, height: 32, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:65633",[{ name: "Person", size: 24, tint: ctx.MaterialTheme.colorScheme.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs)) : OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:65732",[{ ...props, path: option.avatar.path, contentDescription: option.title }],(...__operitArgs)=>ctx.UI.Image(...__operitArgs));
     case "model":
-      return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:66021",[{ width: 32, height: 32, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:66087",[{ name: "SmartToy", size: 24, tint: ctx.MaterialTheme.colorScheme.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
+      return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:65851",[{ width: 32, height: 32, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:65917",[{ name: "SmartToy", size: 24, tint: ctx.MaterialTheme.colorScheme.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
     case "group":
-      return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:66218",[{ width: 32, height: 32, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:66284",[{ name: "Groups", size: 24, tint: ctx.MaterialTheme.colorScheme.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
+      return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:66048",[{ width: 32, height: 32, contentAlignment: "center" },OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:66114",[{ name: "Groups", size: 24, tint: ctx.MaterialTheme.colorScheme.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
   }
 }
 function renderChatInputMenu(ctx) {
@@ -1960,10 +1955,10 @@ function renderChatInputMenu(ctx) {
     });
   }
   const colors = ctx.MaterialTheme.colorScheme;
-  if (state.error !== "") return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:68134",[{ text: state.error, color: colors.error, paddingHorizontal: 12, paddingVertical: 6 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs));
-  if (state.data === null) return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:68268",[{ key: "current-character-loading", onLoad: load, modifier: ctx.Modifier.heightIn({ minHeight: 48 }), fillMaxWidth: true, contentAlignment: "center" },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:68431",[],()=>[{ width: 18, height: 18 }],(...__operitArgs)=>ctx.UI.CircularProgressIndicator(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
+  if (state.error !== "") return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:67964",[{ text: state.error, color: colors.error, paddingHorizontal: 12, paddingVertical: 6 }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs));
+  if (state.data === null) return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:68098",[{ key: "current-character-loading", onLoad: load, modifier: ctx.Modifier.heightIn({ minHeight: 48 }), fillMaxWidth: true, contentAlignment: "center" },OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:68261",[],()=>[{ width: 18, height: 18 }],(...__operitArgs)=>ctx.UI.CircularProgressIndicator(...__operitArgs))],(...__operitArgs)=>ctx.UI.Box(...__operitArgs));
   const option = selectedOption(state.data);
-  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:68547",[{
+  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:68377",[{
     key: "current-character",
     fillMaxWidth: true,
     paddingHorizontal: 12,
@@ -1981,12 +1976,12 @@ function renderChatInputMenu(ctx) {
     }
   },[
     menuAvatar(ctx, option, state.unboundAvatar),
-    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69198",[],()=>[{ width: 10 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
-    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69232",[{ weight: 1 },[
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69269",[{ text: "\u5F53\u524D\u89D2\u8272\u5361", style: "labelSmall", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
-      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69385",[{ text: option === null ? "\u672A\u7ED1\u5B9A" : option.title, style: "bodySmall", color: colors.onSurface, fontWeight: "600", maxLines: 1, overflow: "ellipsis" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))
+    OperitComposeGeneration.leaf(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69028",[],()=>[{ width: 10 }],(...__operitArgs)=>ctx.UI.Spacer(...__operitArgs)),
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69062",[{ weight: 1 },[
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69099",[{ text: "\u5F53\u524D\u89D2\u8272\u5361", style: "labelSmall", color: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs)),
+      OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69215",[{ text: option === null ? "\u672A\u7ED1\u5B9A" : option.title, style: "bodySmall", color: colors.onSurface, fontWeight: "600", maxLines: 1, overflow: "ellipsis" }],(...__operitArgs)=>ctx.UI.Text(...__operitArgs))
     ]],(...__operitArgs)=>ctx.UI.Column(...__operitArgs)),
-    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69573",[{ name: "ChevronRight", size: 20, tint: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))
+    OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69403",[{ name: "ChevronRight", size: 20, tint: colors.onSurfaceVariant }],(...__operitArgs)=>ctx.UI.Icon(...__operitArgs))
   ]],(...__operitArgs)=>ctx.UI.Row(...__operitArgs));
 }
 

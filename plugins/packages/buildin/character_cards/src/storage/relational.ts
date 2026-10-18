@@ -581,7 +581,7 @@ export class RelationalDatabase {
     if (typeof directory !== "string" || directory.trim() === "")
       throw new Error("Plugin data directory is unavailable");
     const sql = await Tools.Storage.sqlite.open({
-      path: directory + "/characters-relational.sqlite",
+      path: directory + "/characters-relational-v2.sqlite",
       merge: spaceMergeDescriptor,
     });
     for (const root of Object.values(layouts))

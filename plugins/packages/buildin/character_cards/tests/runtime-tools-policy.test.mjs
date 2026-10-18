@@ -120,7 +120,7 @@ async function bind(environment, chatId = "policy-chat") {
   assert.equal((await environment.dispatchDomain("chat.configuration.binding.read", { chatId })).selection, "card:default");
   assert.deepEqual(chat.extensions.get(siblingOwner), { version: 1, selection: "card:sibling-only", private: { retained: chatId } });
   const state = JSON.parse(await environment.disk.stateBytes().toString("utf8"));
-  assert.equal(state.version, 3); assert.equal(Object.hasOwn(state, "chatBindings"), false);
+  assert.equal(state.version, 4); assert.equal(Object.hasOwn(state, "chatBindings"), false);
   return resolveContext(environment, chatId, "default");
 }
 

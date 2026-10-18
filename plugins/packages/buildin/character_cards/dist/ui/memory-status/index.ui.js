@@ -70,10 +70,8 @@ function nonblank(value, path) {
   text(value, path);
   if (value.trim() === "") throw new Error(`${path} must not be blank`);
 }
-function parseMemoryIdentifier(value, path, positive = true) {
-  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) throw new Error(`${path} must be a canonical decimal string`);
-  const id2 = BigInt(value);
-  if (id2 > 9223372036854775807n || positive && id2 === 0n) throw new Error(`${path} is outside its declared identity range`);
+function parseMemoryIdentifier(value, path, _positive = true) {
+  if (typeof value !== "string" || value.trim() === "" || value !== value.trim() || value.length > 256) throw new Error(`${path} must be a nonblank identity`);
   return value;
 }
 function memoryIdentifier(value, path) {
@@ -321,7 +319,7 @@ function Screen(ctx) {
   function close() {
     return { type: "toolpkg.presentation.cancel", requestId };
   }
-  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/memory-status/index.ui.js:16709",[{
+  return OperitComposeGeneration.node(ctx,"com.operit.character_cards:dist/ui/memory-status/index.ui.js:16582",[{
     key: "memory-status",
     title: "\u8BB0\u5FC6\u72B6\u6001",
     text: input.description,

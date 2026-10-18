@@ -393,9 +393,8 @@ export interface MemorySpace {
 }
 /** Owns the file schema for this plugin only; no runtime-wide storage schema is imposed. */
 export interface CharacterState {
-  version: 3;
+  version: 4;
   memoryPreferences: GlobalMemoryPreferences;
-  nextId: string;
   cards: Card[];
   groups: Group[];
   tags: Tag[];

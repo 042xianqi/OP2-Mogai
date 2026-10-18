@@ -17,10 +17,9 @@ function draft(state, name) {
 /** Supplies an explicit memory creation command without fabricating a persisted memory. */
 function memory(title) { return { title, content: "Persisted memory", contentType: "text/plain", source: "manual", credibility: 0.8, importance: 0.6, folderPath: null, tags: [] }; }
 
-test("new entity identities are device-independent and do not consume the numeric counter", async t => {
+test("new entity identities are device-independent UUIDs", async t => {
   const disk = await createDiskHarness(t), repository = await open(disk);
   const state = plain(disk.readState());
-  assert.equal(state.nextId, "1");
   const card = plain(await repository.run(session => session.createCharacter(draft(state, "Created"))));
   const group = plain(await repository.run(session => session.createGroup({ id: "", name: "Created group", description: "", themeConfigId: null, members: [], createdAt: 0, updatedAt: 0 })));
   const tag = plain(await repository.run(session => session.createTag({ name: "Created tag", description: "", promptContent: "", tagType: "CUSTOM" })));
@@ -29,10 +28,9 @@ test("new entity identities are device-independent and do not consume the numeri
   assert.match(group.id, ENTITY_ID);
   assert.match(tag.id, ENTITY_ID);
   assert.match(store.id, ENTITY_ID);
-  assert.equal(plain(disk.readState()).nextId, "1");
-  const created = plain(await repository.run(session => session.createMemory("character:default", memory("Numeric"))));
-  assert.equal(created.id, "1");
-  assert.equal(plain(disk.readState()).nextId, "2");
+  const created = plain(await repository.run(session => session.createMemory("character:default", memory("Device-independent"))));
+  assert.match(created.id, ENTITY_ID);
+  assert.equal(created.uuid, created.id);
 });
 
 test("two devices mint disjoint identities whose records merge as separate entities", async t => {
@@ -53,8 +51,37 @@ test("two devices mint disjoint identities whose records merge as separate entit
   const reopened = await open(second);
   const cards = plain(await reopened.run(session => session.listCharacters()));
   assert.deepEqual(cards.map(card => card.id).sort(), ["character-7", "default", left.id, right.id].sort());
-  assert.equal(plain(second.readState()).nextId, "8");
+  assert.equal("nextId" in plain(second.readState()), false);
   second.clearCalls();
   await open(second);
   assert.equal(commits(second).length, 0);
+});
+
+test("memories minted on two devices keep distinct identities after merge", async t => {
+  const first = await createDiskHarness(t), second = await createDiskHarness(t);
+  const one = await open(first), two = await open(second);
+  const left = plain(await one.run(session => session.createMemory("character:default", memory("Left device"))));
+  const right = plain(await two.run(session => session.createMemory("character:default", memory("Right device"))));
+  assert.match(left.id, ENTITY_ID); assert.match(right.id, ENTITY_ID); assert.notEqual(left.id, right.id);
+  const source = plain(first.readState()), merged = plain(second.readState());
+  merged.owners[0].memories.push(plain(source.owners[0].memories.find(item => item.id === left.id)));
+  second.replaceState(merged);
+  const reopened = await open(second);
+  const memories = plain(await reopened.run(session => session.listMemories("character:default")));
+  assert.deepEqual(memories.map(item => item.id).sort(), [left.id, right.id].sort());
+});
+
+test("legacy decimal ids coexist with device-independent identities and their references", async t => {
+  const disk = await createDiskHarness(t), repository = await open(disk);
+  const created = plain(await repository.run(session => session.createMemory("character:default", memory("New identity"))));
+  const state = plain(disk.readState());
+  state.owners[0].memories.push({ ...plain(created), id: "7", uuid: "legacy-seven", title: "Legacy identity" });
+  state.owners[0].links.push({ id: "3", sourceMemoryId: created.id, targetMemoryId: "7", type_: "related", weight: 0.5, description: "" });
+  disk.replaceState(state);
+  const reopened = await open(disk);
+  const memories = plain(await reopened.run(session => session.listMemories("character:default")));
+  assert.deepEqual(memories.map(item => item.id).sort(), [created.id, "7"].sort());
+  const graph = plain(await reopened.run(session => session.readMemoryGraph("character:default")));
+  assert.equal(graph.edges.length, 1);
+  assert.equal(graph.edges[0].id, "3");
 });

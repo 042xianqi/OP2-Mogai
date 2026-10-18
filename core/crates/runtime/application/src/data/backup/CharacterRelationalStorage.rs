@@ -545,7 +545,7 @@ impl CharacterRelationalStorage {
                 sqlite.clone(),
                 storage.clone(),
                 StorageRequest::Open {
-                    path: format!("{directory}/characters-relational.sqlite"),
+                    path: format!("{directory}/characters-relational-v2.sqlite"),
                     kind: StorageKind::Sqlite,
                     merge: None,
                 },
