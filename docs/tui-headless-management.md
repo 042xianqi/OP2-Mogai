@@ -66,7 +66,7 @@ operit2 daemon stop [--json]
 
 - `run` 支持 `--no-listen` 和 `--link-listen <http|ws|tcp|serial|bluetooth>[,<transport>...]`；显式传输会写入本机监听配置，下一次启动继续使用。
 - 同一 identity 只允许一个 Core owner：daemon 和 TUI 互斥，第二个会直接报错并给出现有 pid。短命 `operit2 cli` 命令会先尝试复用正在运行的 daemon/TUI，通过 Unix control socket 执行，不会再启动第二个 Core。
-- 交互式命令不会被路由：`chat shell`、`shell`、`model codex-login`、`tts`、`stt`、`export/import/backup`、`market`、`update`、`web`、`identity`、`link` 等仍在当前进程启动一个短命 Core；`cli help` 也会短暂启动 Core 读取插件命令目录。`chat shell` 这类长时间命令与 daemon 并发时两边会各自持有同步 worker，建议先停止 daemon。
+- 交互式命令不会被路由：`chat shell`、`shell`、`model codex-login`、`tts`、`stt`、`export/import/backup`、`market`、`update`、`web`、`identity`、`link` 等仍在当前进程启动一个短命 Core；`cli help` 也会短暂启动 Core 读取插件命令目录。短命 Core 使用按进程隔离的 plugin SDK IPC 实例，且不再接管持久化同步 worker，因此可以和 daemon 并存；但 `link listen` 会额外占用监听端口，不要和 daemon 同时执行。
 - 状态文件在 `<runtime identity>/daemon/status.json`；control socket 在 `$XDG_RUNTIME_DIR/operit2-<hash>/control.sock`（无 `XDG_RUNTIME_DIR` 时退到系统临时目录），权限均为当前用户。分离运行的 stdout/stderr 在 `<runtime identity>/logs/daemon.out`。
 - `operit2 daemon stop` 只停止 daemon；如果 owner 是 TUI，需要从 TUI 退出。
 

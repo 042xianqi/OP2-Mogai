@@ -5,7 +5,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -30,6 +30,24 @@ const MAX_CONTROL_BYTES: usize = 16 * 1024 * 1024;
 const CONTROL_READ_TIMEOUT: Duration = Duration::from_secs(3600);
 const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Whether this process owns the identity's Core. Short-lived CLI Cores must
+/// use a different plugin SDK IPC instance so they do not fight the owner for
+/// the same bus name.
+static OWNER_PROCESS: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn process_is_owner() -> bool {
+    OWNER_PROCESS.load(Ordering::Relaxed)
+}
+
+/// Reports whether another process (or this one) currently holds the owner
+/// lock. Used to keep short-lived CLI Cores from claiming the sync worker.
+pub(crate) fn owner_is_running() -> bool {
+    let Ok(paths) = DaemonPaths::for_active_identity() else {
+        return false;
+    };
+    owner_lock_held(&paths)
+}
 
 /// Runtime state shared by the status command, the control socket, and the
 /// TUI status line.
@@ -164,6 +182,7 @@ impl OwnerGuard {
             commands: 0,
         };
         write_status(&paths.status_path, &status)?;
+        OWNER_PROCESS.store(true, Ordering::Relaxed);
         Ok(Self {
             paths,
             _lock: lock,
@@ -194,6 +213,7 @@ impl OwnerGuard {
 
 impl Drop for OwnerGuard {
     fn drop(&mut self) {
+        OWNER_PROCESS.store(false, Ordering::Relaxed);
         let _ = fs::remove_file(&self.paths.socket_path);
         let _ = fs::remove_file(&self.paths.status_path);
     }

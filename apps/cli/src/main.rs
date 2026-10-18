@@ -25,6 +25,14 @@ mod daemon {
     pub(crate) async fn run(_args: &[String]) -> Result<(), String> {
         Err("daemon mode is only supported on Unix hosts".to_string())
     }
+
+    pub(crate) fn process_is_owner() -> bool {
+        false
+    }
+
+    pub(crate) fn owner_is_running() -> bool {
+        false
+    }
 }
 
 pub(crate) use bootstrap::{
