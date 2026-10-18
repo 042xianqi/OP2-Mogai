@@ -2587,16 +2587,11 @@ fn render_planask_through_async_compose_host() {
     );
     let intermediate = intermediate.lock().unwrap();
     assert!(
-        !intermediate.is_empty(),
-        "onLoad must deliver intermediate renders"
+        intermediate.is_empty(),
+        "Synchronous onLoad must publish its state through the final render only"
     );
-    for raw in intermediate.iter() {
-        let result: Value = raw.clone();
-        assert!(
-            result["tree"].is_object(),
-            "Unexpected intermediate result: {raw}"
-        );
-    }
+    assert_eq!(result["state"]["closed"], true);
+    assert_eq!(result["tree"]["props"]["key"], "planask-ready");
     engine.destroy();
 }
 
@@ -4192,8 +4187,9 @@ async fn compose_dsl_reload_drains_intermediate_revisions_before_final() {
         exports.default = function(ctx) {
             const [count, setCount] = ctx.useState('count', 0);
             return ctx.UI.Column({onLoad: async function() {
-                await toolCall('gate', {});
                 setCount(count + 1);
+                await toolCall('gate', {});
+                setCount(count + 2);
                 return 'done';
             }}, [ctx.UI.Text({text: String(count)})]);
         };
@@ -4205,19 +4201,29 @@ async fn compose_dsl_reload_drains_intermediate_revisions_before_final() {
     let action_id = initial["update"]["upserts"].as_array().unwrap().iter().find_map(|node| node["props"]["onLoad"]["__actionId"].as_str()).unwrap().to_owned();
     let delivered = Arc::new(Mutex::new(vec![initial["update"]["revision"].as_u64().unwrap()]));
     let captured = delivered.clone();
+    let intermediate_ready = Arc::new(tokio::sync::Notify::new());
+    let notify_intermediate = intermediate_ready.clone();
     let action = engine.actionForAssertionsAsync(action_id, None, params.clone(), BTreeMap::new(), Some(Arc::new(move |value| {
         captured.lock().unwrap().push(value["update"]["revision"].as_u64().unwrap());
+        notify_intermediate.notify_one();
     })));
     tokio::pin!(action);
     tokio::select! {
         _ = host.gatedToolStarted.notified() => {},
         result = &mut action => panic!("gated action completed before release: {result:?}"),
     }
+    // Keep the action pending until its real pre-await change has streamed.
+    // The post-await state is coalesced into final and need not publish twice.
+    tokio::select! {
+        _ = intermediate_ready.notified() => {},
+        result = &mut action => panic!("gated action completed before its intermediate: {result:?}"),
+    }
     let reloaded = expect_js_output(engine.renderForAssertionsAsync(source.into(), params, BTreeMap::new(), Arc::new(BTreeMap::new())).await, "same-context render");
     delivered.lock().unwrap().push(reloaded["update"]["revision"].as_u64().unwrap());
     finishGatedTool(&host);
     let final_response = expect_js_output(action.await, "action final revision");
     assert_eq!(final_response["actionResult"], "done");
+    assert!(final_response["update"]["upserts"].as_array().unwrap().iter().any(|node| node["props"]["text"] == "2"));
     delivered.lock().unwrap().push(final_response["update"]["revision"].as_u64().unwrap());
     let revisions = delivered.lock().unwrap().clone();
     assert!(revisions.len() >= 4, "both action intermediates and final updates must be exercised: {revisions:?}");

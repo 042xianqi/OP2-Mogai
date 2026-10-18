@@ -2,13 +2,15 @@ function isPromise(value) {
   return !!(value && typeof value.then === 'function');
 }
 
-/// Keeps navigation queued during intermediate renders until the action completes.
+/// Records opt-in pipeline timing and cumulative dependency execution counters.
 function profileComposeStage(bundle, sink, stage, started, revision) {
   if (!bundle.profileStages) return;
   var finished = Date.now();
+  var work = stage === 'js-render-sync' ? OperitComposeReactive.metrics(bundle.ctx) : null;
   console.log('event=compose_pipeline_stage stage=' + stage + ' durationMs=' + (finished - started) +
     ' wallMicros=' + (finished * 1000) + ' context=' + bundle.executionContextKey +
-    ' call=' + sink.callId + ' revision=' + revision);
+    ' call=' + sink.callId + ' revision=' + revision +
+    (work ? ' rootRuns=' + work.rootRuns + ' bindingRuns=' + work.bindingRuns + ' expressionRuns=' + work.expressionRuns : ''));
 }
 
 function wrapComposeResponse(bundle, tree, actionResult, includeNavigation, responseSink) {
@@ -17,7 +19,8 @@ function wrapComposeResponse(bundle, tree, actionResult, includeNavigation, resp
   };
   if (typeof tree !== 'undefined') {
     var commitStarted = bundle.profileStages ? Date.now() : 0;
-    response.update = bundle.composition.commit(tree);
+    response.update = bundle.composition.commit(tree, !includeNavigation);
+    if (response.update === null) return null;
     profileComposeStage(bundle, responseSink, 'js-retained-commit', commitStarted, response.update.revision);
   }
   if (typeof actionResult !== 'undefined') {
@@ -38,9 +41,11 @@ function requireComposeResponseSink(runtime) {
 }
 
 /// Builds a response while preserving the caller's navigation delivery policy.
-function buildComposeResponse(bundle, entry, actionResult, includeNavigation, responseSink, inputsChanged) {
+function buildComposeResponse(bundle, entry, actionResult, includeNavigation, responseSink, inputsChanged, refreshOpaqueRoot) {
   var renderStarted = bundle.profileStages ? Date.now() : 0;
-  var tree = OperitComposeReactive.render(bundle.ctx, entry);
+  // State notifications drain only indexed changes; eager, final and host renders
+  // must also observe ordinary JS closures and mutable refs.
+  var tree = OperitComposeReactive.render(bundle.ctx, entry, refreshOpaqueRoot);
   profileComposeStage(bundle, responseSink, 'js-render-sync', renderStarted, 0);
   /// Uses the just-rendered closure so lifecycle reads observe the new host inputs.
   function complete(resolvedTree) {

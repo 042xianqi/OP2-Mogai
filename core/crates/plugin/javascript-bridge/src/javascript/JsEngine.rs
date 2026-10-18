@@ -145,15 +145,22 @@ impl JsIpcTiming {
         Ok(())
     }
 
-    /// Reports non-overlapping durations only when IPC execution fails.
+    /// Reports failures normally and successful stage timings only in an explicit performance run.
     fn log(&self, successful: bool) {
-        if successful {
+        if successful && std::env::var_os("OPERIT_PROFILE_COMPOSE_STAGES").is_none() {
             return;
         }
         let stages = self.stages.lock().expect("IPC timing mutex poisoned");
         let phases = stages.windows(2)
             .map(|pair| format!("{}={}", pair[1].0, pair[1].1.saturating_sub(pair[0].1)))
             .collect::<Vec<_>>().join(" ");
+        if successful {
+            eprintln!(
+                "event=compose_ipc_timing kind={} traceId={} callId={} operation={} wallMillis={} {}",
+                self.kind, self.traceId, self.callId, self.operation, currentTimeMillisU128(), phases,
+            );
+            return;
+        }
         AppLogger::e("ToolPkg", &format!(
             "event=toolpkg_ipc_{} traceId={} callId={} operation={} outcome={} {}",
             self.kind, self.traceId, self.callId, self.operation,
@@ -1896,6 +1903,12 @@ impl JsEngineState {
     /// Installs the single structured host transport for synchronous and Promise-backed operations.
     #[allow(non_snake_case)]
     fn registerHostBindings(&mut self) -> Result<(), String> {
+        self.runtime
+            .registerHostJavaScriptFunctionConstructor(
+                "__operitNativeCompileModuleFactory",
+                &["module", "exports", "require", "__operit_call_runtime"],
+            )
+            .map_err(|error| error.to_string())?;
         let syncNames = [
             "__operitNativePrepareComposeModule",
             "__operitNativeReadBootstrapLibrary",

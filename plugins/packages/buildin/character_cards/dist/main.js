@@ -7085,6 +7085,8 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
     this.busy = false;
     this.publicationFailure = null;
     this.waiters = [];
+    /** Reuses the directory projection while the canonical metadata revision is unchanged. */
+    this.sidebarDirectoryCache = null;
   }
   /** Initializes a new plugin database or opens the records written by the centralized Core migration. */
   static open(directories = null) {
@@ -7132,7 +7134,12 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
       }
       const metadata = yield database2.get("meta", "state");
       if (metadata === null) throw new Error("Character initialization did not publish metadata");
-      assertCharacterState(stateFromRecords(metadata.value, yield repository.readRecords()));
+      const loaded = stateFromRecords(metadata.value, yield repository.readRecords());
+      assertCharacterState(loaded);
+      repository.sidebarDirectoryCache = {
+        version: metadata.version,
+        value: { cards: loaded.cards, groups: loaded.groups }
+      };
       return repository;
     });
   }
@@ -7239,16 +7246,32 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
       throw new Error("Character records kept changing during the read; retry the operation");
     });
   }
-  /** Reads role presentation independently of memory editing and background jobs. */
+  /** Reads role presentation once per canonical revision instead of reopening every relation table on each sidebar refresh. */
   readSidebarDirectory() {
-    return this.readConsistent(() => __async(this, null, function* () {
+    return __async(this, null, function* () {
+      this.requirePublicationReady();
+      const before = yield this.database.get("meta", "state");
+      if (before === null) throw new Error("Character database metadata disappeared");
+      assertObject(before.value, "character metadata");
+      if (before.value.migrationStatus === "writing") throw new Error("Character migration has not completed");
+      const cached = this.sidebarDirectoryCache;
+      if (cached !== null && cached.version === before.version) return cached.value;
       const [cards, groups] = yield Promise.all([this.readCharacters(), this.readGroups()]);
       const ids = new Set(cards.map((card) => card.id));
       for (const group of groups)
         for (const member2 of group.members)
           if (!ids.has(member2.characterCardId)) throw new Error("Missing group member: " + member2.characterCardId);
-      return { cards, groups };
-    }));
+      const after = yield this.database.get("meta", "state");
+      this.requirePublicationReady();
+      if (after === null) throw new Error("Character database metadata disappeared");
+      if (before.version !== after.version) {
+        this.sidebarDirectoryCache = null;
+        return this.readSidebarDirectory();
+      }
+      const value = { cards, groups };
+      this.sidebarDirectoryCache = { version: after.version, value };
+      return value;
+    });
   }
   readActive() {
     this.requirePublicationReady();

@@ -55,6 +55,8 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
   private busy = false;
   private publicationFailure: { error: unknown } | null = null;
   private readonly waiters: (() => void)[] = [];
+  /** Reuses the directory projection while the canonical metadata revision is unchanged. */
+  private sidebarDirectoryCache: { version: string; value: Pick<Snapshot, "cards" | "groups"> } | null = null;
 
   /** Retains the host database handle and the explicit external directory readers. */
   private constructor(
@@ -100,7 +102,15 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
     }
     const metadata = await database.get("meta", "state");
     if (metadata === null) throw new Error("Character initialization did not publish metadata");
-    assertCharacterState(stateFromRecords(metadata.value, await repository.readRecords()));
+    const loaded = stateFromRecords(metadata.value, await repository.readRecords());
+    assertCharacterState(loaded);
+    // The open path already loaded every canonical record for validation. Seed the
+    // sidebar projection from that same snapshot so the first catalog request does
+    // not reopen the cards and groups relation tables.
+    repository.sidebarDirectoryCache = {
+      version: metadata.version,
+      value: { cards: loaded.cards, groups: loaded.groups },
+    };
     return repository;
   }
 
@@ -213,16 +223,30 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
     throw new Error("Character records kept changing during the read; retry the operation");
   }
 
-  /** Reads role presentation independently of memory editing and background jobs. */
-  readSidebarDirectory(): Promise<Pick<Snapshot, "cards" | "groups">> {
-    return this.readConsistent(async () => {
-      const [cards, groups] = await Promise.all([this.readCharacters(), this.readGroups()]);
-      const ids = new Set(cards.map(card => card.id));
-      for (const group of groups)
-        for (const member of group.members)
-          if (!ids.has(member.characterCardId)) throw new Error("Missing group member: " + member.characterCardId);
-      return { cards, groups };
-    });
+  /** Reads role presentation once per canonical revision instead of reopening every relation table on each sidebar refresh. */
+  async readSidebarDirectory(): Promise<Pick<Snapshot, "cards" | "groups">> {
+    this.requirePublicationReady();
+    const before = await this.database.get("meta", "state");
+    if (before === null) throw new Error("Character database metadata disappeared");
+    assertObject(before.value, "character metadata");
+    if (before.value.migrationStatus === "writing") throw new Error("Character migration has not completed");
+    const cached = this.sidebarDirectoryCache;
+    if (cached !== null && cached.version === before.version) return cached.value;
+    const [cards, groups] = await Promise.all([this.readCharacters(), this.readGroups()]);
+    const ids = new Set(cards.map(card => card.id));
+    for (const group of groups)
+      for (const member of group.members)
+        if (!ids.has(member.characterCardId)) throw new Error("Missing group member: " + member.characterCardId);
+    const after = await this.database.get("meta", "state");
+    this.requirePublicationReady();
+    if (after === null) throw new Error("Character database metadata disappeared");
+    if (before.version !== after.version) {
+      this.sidebarDirectoryCache = null;
+      return this.readSidebarDirectory();
+    }
+    const value = { cards, groups };
+    this.sidebarDirectoryCache = { version: after.version, value };
+    return value;
   }
 
   readActive(): Promise<ActivePrompt> {

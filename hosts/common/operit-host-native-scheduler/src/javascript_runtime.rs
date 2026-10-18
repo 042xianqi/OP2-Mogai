@@ -1,6 +1,6 @@
 use crate::javascript_values::{self, JsonIntrinsics};
 use operit_host_api::{
-    HostError, HostJavaScriptAsyncJsonCallback, HostJavaScriptBootstrap,
+    HostError, HostJavaScriptAsyncJsonCallback, HostJavaScriptBootstrap, HostJavaScriptCodeCache,
     HostJavaScriptExecutionInterrupt, HostJavaScriptInterruptHandler, HostJavaScriptJsonCallback,
     HostJavaScriptRuntime, HostJavaScriptRuntimeHost, HostJavaScriptRuntimeStateAsyncTask,
     HostJavaScriptRuntimeStateFactory, HostJavaScriptRuntimeStateHandle,
@@ -16,7 +16,6 @@ use rquickjs::{
 use serde_json::Value as JsonValue;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
-use std::ffi::CString;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -61,6 +60,7 @@ type NativePromises = Rc<RefCell<BTreeMap<u64, NativePendingPromise>>>;
 
 struct NativeHostJavaScriptRuntime {
     bootstrap: Arc<HostJavaScriptBootstrap>,
+    codeCache: Arc<HostJavaScriptCodeCache>,
     runtime: Runtime,
     context: Context,
     promises: NativePromises,
@@ -72,7 +72,10 @@ struct NativeHostJavaScriptRuntime {
 
 impl NativeHostJavaScriptRuntime {
     /// Captures engine intrinsics and installs the required boundary before any script runs.
-    fn new(bootstrap: Arc<HostJavaScriptBootstrap>) -> HostResult<Self> {
+    fn new(
+        bootstrap: Arc<HostJavaScriptBootstrap>,
+        codeCache: Arc<HostJavaScriptCodeCache>,
+    ) -> HostResult<Self> {
         let runtime =
             Runtime::new_with_alloc(crate::javascript_allocator::JavaScriptAllocator::default())
                 .map_err(|error| HostError::new(error.to_string()))?;
@@ -91,6 +94,7 @@ impl NativeHostJavaScriptRuntime {
             .map_err(|error| HostError::new(error.to_string()))?;
         Ok(Self {
             bootstrap,
+            codeCache,
             runtime,
             context,
             promises: Rc::new(RefCell::new(BTreeMap::new())),
@@ -137,6 +141,22 @@ impl HostJavaScriptRuntime for NativeHostJavaScriptRuntime {
             drop(unsafe { Value::from_raw(ctx.clone(), result) });
             Ok(())
         })
+    }
+
+    /// Reuses immutable module bytecode while materializing a new function in this realm.
+    fn registerHostJavaScriptFunctionConstructor(
+        &mut self,
+        name: &str,
+        parameters: &[&str],
+    ) -> HostResult<()> {
+        let prefix = format!("(function({}){{\n", parameters.join(","));
+        let cache = self.codeCache.clone();
+        self.context
+            .with(|ctx| {
+                let function = moduleFunctionConstructor(ctx.clone(), prefix, cache)?;
+                ctx.globals().set(name, function)
+            })
+            .map_err(|error| HostError::new(error.to_string()))
     }
 
     /// Evaluates one native QuickJS script without reading its return value.
@@ -328,21 +348,25 @@ fn bootstrapException(ctx: &Ctx<'_>) -> HostError {
     HostError::new(failure.catch(ctx).unwrap_err().to_string())
 }
 
-/// Serializes a trusted global script without executing bindings or retaining runtime handles.
-fn compileBootstrap(ctx: &Ctx<'_>, source: &str) -> HostResult<Vec<u8>> {
-    let source = CString::new(source).map_err(|error| HostError::new(error.to_string()))?;
+/// Serializes source on its owning executor without executing it or retaining heap handles.
+fn compileProgram(ctx: &Ctx<'_>, source: &str, strict: bool) -> Result<Vec<u8>, QuickJsError> {
+    let mut sourceBytes = Vec::with_capacity(source.len() + 1);
+    sourceBytes.extend_from_slice(source.as_bytes());
+    sourceBytes.push(0);
+    let flags = qjs::JS_EVAL_TYPE_GLOBAL
+        | qjs::JS_EVAL_FLAG_COMPILE_ONLY
+        | if strict { qjs::JS_EVAL_FLAG_STRICT } else { 0 };
     let raw = unsafe {
         qjs::JS_Eval(
             ctx.as_raw().as_ptr(),
-            source.as_ptr(),
-            source.as_bytes().len() as _,
-            c"operit.bootstrap.js".as_ptr(),
-            (qjs::JS_EVAL_TYPE_GLOBAL | qjs::JS_EVAL_FLAG_STRICT | qjs::JS_EVAL_FLAG_COMPILE_ONLY)
-                as _,
+            sourceBytes.as_ptr().cast(),
+            source.len() as _,
+            c"operit.compiled.js".as_ptr(),
+            flags as _,
         )
     };
     if unsafe { qjs::JS_IsException(raw) } {
-        return Err(bootstrapException(ctx));
+        return Err(QuickJsError::Exception);
     }
     let compiled = unsafe { Value::from_raw(ctx.clone(), raw) };
     let mut length = 0;
@@ -355,18 +379,23 @@ fn compileBootstrap(ctx: &Ctx<'_>, source: &str) -> HostResult<Vec<u8>> {
         )
     };
     if buffer.is_null() {
-        return Err(bootstrapException(ctx));
+        return Err(QuickJsError::Exception);
     }
-    // Copy host-owned bytes before freeing QuickJS's allocation on its owning executor.
     let bytes = unsafe { std::slice::from_raw_parts(buffer, length as usize).to_vec() };
     unsafe { qjs::js_free(ctx.as_raw().as_ptr(), buffer.cast()) };
     Ok(bytes)
+}
+
+/// Preserves exact bootstrap errors and the existing strict bootstrap semantics.
+fn compileBootstrap(ctx: &Ctx<'_>, source: &str) -> HostResult<Vec<u8>> {
+    compileProgram(ctx, source, true).map_err(|_| bootstrapException(ctx))
 }
 
 /// Owns native QuickJS runtimes and their dedicated affine state threads.
 #[derive(Clone, Default)]
 pub struct NativeHostJavaScriptRuntimeHost {
     bootstrap: Arc<HostJavaScriptBootstrap>,
+    codeCache: Arc<HostJavaScriptCodeCache>,
     nextStateId: Arc<AtomicU64>,
     stateWorkers: Arc<Mutex<BTreeMap<u64, mpsc::Sender<NativeJavaScriptStateRequest>>>>,
 }
@@ -401,6 +430,7 @@ impl HostJavaScriptRuntimeHost for NativeHostJavaScriptRuntimeHost {
     fn createHostJavaScriptRuntime(&self) -> HostResult<Box<dyn HostJavaScriptRuntime>> {
         Ok(Box::new(NativeHostJavaScriptRuntime::new(
             self.bootstrap.clone(),
+            self.codeCache.clone(),
         )?))
     }
 
@@ -570,6 +600,39 @@ impl HostJavaScriptRuntimeHost for NativeHostJavaScriptRuntimeHost {
     }
 }
 
+/// Creates realm-local functions without capturing a JavaScript context in the host cache.
+fn moduleFunctionConstructor<'js>(
+    ctx: Ctx<'js>,
+    prefix: String,
+    cache: Arc<HostJavaScriptCodeCache>,
+) -> rquickjs::Result<Function<'js>> {
+    Function::new(ctx, move |ctx: Ctx<'js>, body: String| {
+        let source = format!("{prefix}{body}\n}})");
+        let bytes = cache.getOrCompile(&source, || compileProgram(&ctx, &source, false))?;
+        let raw = unsafe {
+            qjs::JS_ReadObject(
+                ctx.as_raw().as_ptr(),
+                bytes.as_ptr(),
+                bytes.len() as _,
+                qjs::JS_READ_OBJ_BYTECODE as _,
+            )
+        };
+        if unsafe { qjs::JS_IsException(raw) } {
+            return Err(QuickJsError::Exception);
+        }
+        let raw = unsafe { qjs::JS_EvalFunction(ctx.as_raw().as_ptr(), raw) };
+        if unsafe { qjs::JS_IsException(raw) } {
+            return Err(QuickJsError::Exception);
+        }
+        let value = unsafe { Value::from_raw(ctx.clone(), raw) };
+        value.as_object().unwrap().prop(
+            "name",
+            rquickjs::object::Property::from("anonymous").configurable(),
+        )?;
+        Ok::<_, QuickJsError>(value)
+    })
+}
+
 /// Creates a synchronous value binding whose engine handles stay on the owning executor.
 fn synchronousFunction<'js>(
     ctx: rquickjs::Ctx<'js>,
@@ -672,7 +735,11 @@ mod bridge_tests {
 
     /// Creates an isolated native runtime for the required host contract tests.
     fn runtime() -> NativeHostJavaScriptRuntime {
-        NativeHostJavaScriptRuntime::new(Arc::new(HostJavaScriptBootstrap::default())).unwrap()
+        NativeHostJavaScriptRuntime::new(
+            Arc::new(HostJavaScriptBootstrap::default()),
+            Arc::new(HostJavaScriptCodeCache::default()),
+        )
+        .unwrap()
     }
 
     /// Keeps mutable globals and host bindings independent across contexts sharing compiled bytes.
@@ -708,6 +775,59 @@ mod bridge_tests {
                 .evaluateHostJavaScriptString("probe", "next()")
                 .unwrap(),
             "second:1"
+        );
+    }
+
+    /// Deserialized functions resolve globals and callbacks in their own runtime.
+    #[test]
+    fn shared_module_bytecode_keeps_globals_exports_and_host_bindings_local() {
+        let host = NativeHostJavaScriptRuntimeHost::new();
+        for owner in ["first", "second"] {
+            let mut runtime = host.createHostJavaScriptRuntime().unwrap();
+            runtime
+                .registerHostJavaScriptJsonFunction(
+                    "readOwner",
+                    Arc::new(move |_| Ok(JsonValue::String(owner.into()))),
+                )
+                .unwrap();
+            runtime
+                .registerHostJavaScriptFunctionConstructor(
+                    "compileModule",
+                    &["module", "exports", "require", "runtime"],
+                )
+                .unwrap();
+            runtime.evaluateHostJavaScriptVoid("test", r#"
+                var count = 0;
+                var module = {exports:{}};
+                var factory = compileModule('exports.next = () => readOwner() + ":" + (++count); module.exports.required = require(runtime);');
+                factory(module, module.exports, value => value + ':required', 'context');
+            "#).unwrap();
+            assert_eq!(runtime.evaluateHostJavaScriptString("probe", "module.exports.next() + ':' + module.exports.next() + ':' + module.exports.required").unwrap(),
+                format!("{owner}:1:{owner}:2:context:required"));
+        }
+    }
+
+    /// A bytecode hit still creates a fresh function and preserves Function body strictness.
+    #[test]
+    fn module_constructor_preserves_function_scope_and_recovers_after_syntax_errors() {
+        let mut runtime = runtime();
+        runtime
+            .registerHostJavaScriptFunctionConstructor("compileModule", &["value"])
+            .unwrap();
+        let result = runtime.evaluateHostJavaScriptString("probe", r#"
+            (function() {
+                var local = 'lexical';
+                var a = compileModule('return [this === globalThis, typeof local, typeof anonymous, value];');
+                var b = compileModule('return [this === globalThis, typeof local, typeof anonymous, value];');
+                var strict = compileModule('"use strict"; return this === undefined;');
+                var syntax;
+                try { compileModule('return ('); } catch (e) { syntax = e instanceof SyntaxError; }
+                return JSON.stringify([a !== b, a.name, a(7), strict(), syntax, compileModule('return value + 1;')(9)]);
+            })()
+        "#).unwrap();
+        assert_eq!(
+            result,
+            r#"[true,"anonymous",[true,"undefined","undefined",7],true,true,10]"#
         );
     }
 

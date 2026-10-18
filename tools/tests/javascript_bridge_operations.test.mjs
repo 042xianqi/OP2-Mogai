@@ -72,6 +72,8 @@ function runtime(operations = {}) {
   }
   context.__operitNativeCancelJavaScriptPromises = registry.syncBinding(builtins.__operitNativeCancelJavaScriptPromises);
   context.__operitNativeScheduleJavaScriptTimer = registry.binding((id, delay) => timers.set(id, delay));
+  vm.runInContext(`globalThis.__operitNativeCompileModuleFactory = body =>
+    new Function('module', 'exports', 'require', '__operit_call_runtime', body);`, context);
   vm.runInContext(productionBootstrap(), context, { filename: 'production-bootstrap.js' });
   /** Opens a real execution session for direct public library calls. */
   function openCall(id = 'owner') {

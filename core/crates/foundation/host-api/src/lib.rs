@@ -10,7 +10,9 @@ pub mod Tcp;
 pub mod TerminalWorkingDirectory;
 pub mod TimeUtils;
 pub mod JavaScriptBootstrap;
+pub mod JavaScriptCodeCache;
 pub use JavaScriptBootstrap::HostJavaScriptBootstrap;
+pub use JavaScriptCodeCache::HostJavaScriptCodeCache;
 pub use Tcp::{TcpConnection, TcpHost, TcpListener};
 pub mod SerialPort;
 pub use SerialPort::{SerialPortConnection, SerialPortHost};
@@ -2007,6 +2009,14 @@ pub type HostJavaScriptInterruptHandler = Arc<dyn Fn() -> bool + Send + Sync + '
 pub trait HostJavaScriptRuntime {
     /// Executes shared trusted bootstrap bytecode in this runtime's independent global scope.
     fn evaluateHostJavaScriptBootstrap(&mut self, source: &'static str) -> HostResult<()>;
+
+    /// Installs a Function-constructor equivalent with fixed parameter names.
+    /// Hosts may reuse compiled bytes; every invocation creates a function in this runtime only.
+    fn registerHostJavaScriptFunctionConstructor(
+        &mut self,
+        name: &str,
+        parameters: &[&str],
+    ) -> HostResult<()>;
 
     /// Evaluates one script without reading its return value.
     fn evaluateHostJavaScriptVoid(&mut self, scriptName: &str, script: &str) -> HostResult<()>;

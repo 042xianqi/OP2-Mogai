@@ -469,11 +469,7 @@ fn assembleRuntimeBootstrapScript() -> String {
                 var artifact = OperitComposeArtifact.read(source);
                 preparedSource = artifact === null ? __operitNativePrepareComposeModule(source, identity) : artifact;
             }}
-            var factory = new Function(
-                'module',
-                'exports',
-                'require',
-                '__operit_call_runtime',
+            var factory = __operitNativeCompileModuleFactory(
                 __operitRuntimePrelude + '\n' + (composeCompilation ? preparedSource + (kind === 'main' ? '\n' + __operitComposeRuntimeSource : '') : source)
             );
             cache[key] = factory;
