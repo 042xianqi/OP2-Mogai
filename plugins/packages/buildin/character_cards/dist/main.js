@@ -76,8 +76,6 @@ __export(main_exports, {
   chatConfigurationDraftCommitApi: () => chatConfigurationDraftCommitApi,
   chatConfigurationDraftResolveApi: () => chatConfigurationDraftResolveApi,
   chatConfigurationResolveApi: () => chatConfigurationResolveApi,
-  chatConfigurationSnapshotReadApi: () => chatConfigurationSnapshotReadApi,
-  chatConfigurationSnapshotStoreApi: () => chatConfigurationSnapshotStoreApi,
   chatContextActionsApi: () => chatContextActionsApi,
   chatListSectionsApi: () => chatListSectionsApi,
   chatSidebarPrepareApi: () => chatSidebarPrepareApi,
@@ -472,6 +470,79 @@ function selectionForActive(active) {
   return "group:" + active.CharacterGroup.id;
 }
 
+// src/configuration-reads.ts
+function recordRead(cache, id2, read) {
+  const existing = cache.get(id2);
+  if (existing !== void 0) return existing;
+  const pending = read().then(
+    /** Requires the requested identity before sharing the record with another consumer. */
+    (record2) => {
+      if (record2.id !== id2) throw new Error("Configuration read returned a different identity: " + id2);
+      return record2;
+    }
+  );
+  cache.set(id2, pending);
+  return pending;
+}
+function configurationReadScope(service) {
+  const cards = /* @__PURE__ */ new Map(), groups = /* @__PURE__ */ new Map();
+  const tags = /* @__PURE__ */ new Map(), stores = /* @__PURE__ */ new Map();
+  let models;
+  let tts;
+  let preferences;
+  return {
+    /** Reads each requested character once. */
+    getCharacter: (id2) => recordRead(cards, id2, service.getCharacter.bind(service, id2)),
+    /** Reads each requested group once. */
+    getGroup: (id2) => recordRead(groups, id2, service.getGroup.bind(service, id2)),
+    /** Reads each referenced tag once across all group participants. */
+    getTag: (id2) => recordRead(tags, id2, service.getTag.bind(service, id2)),
+    /** Reads each referenced shared library once across bindings and mounts. */
+    getStore: (id2) => recordRead(stores, id2, service.getStore.bind(service, id2)),
+    /** Loads the model directory once when required. */
+    listModels: () => {
+      if (models === void 0) models = service.listModels();
+      return models;
+    },
+    /** Loads the speech directory once when required. */
+    listTtsConfigs: () => {
+      if (tts === void 0) tts = service.listTtsConfigs();
+      return tts;
+    },
+    /** Shares prompt privacy flags while the caller retains its final live privacy check. */
+    readGlobalMemoryPreferences: () => {
+      if (preferences === void 0) preferences = service.readGlobalMemoryPreferences();
+      return preferences;
+    },
+    /** Preserves typed domain operations on the existing service. */
+    dispatchDomain: (operation, input) => service.dispatchDomain(operation, input)
+  };
+}
+
+// src/character-prompt.ts
+function combineCharacterPrompt(card, additionalTagIds, promptFunctionType, host) {
+  return __async(this, null, function* () {
+    assertCard(card);
+    assertStrings(additionalTagIds, "\u9644\u52A0\u6807\u7B7E");
+    if (promptFunctionType !== "CHAT" && promptFunctionType !== "VOICE") throw new Error("\u63D0\u793A\u8BCD\u529F\u80FD\u7C7B\u578B\u65E0\u6548");
+    const parts = [];
+    const setting = card.characterSetting.trim();
+    if (setting !== "") parts.push(setting);
+    const otherContent = (promptFunctionType === "CHAT" ? card.otherContentChat : card.otherContentVoice).trim();
+    if (otherContent !== "") parts.push(otherContent);
+    for (const id2 of normalizeNames([...card.attachedTagIds, ...additionalTagIds])) {
+      const tag = yield host.getTag(id2);
+      assertTag(tag);
+      if (tag.id !== id2) throw new Error("Prompt tag read returned a different identity: " + id2);
+      const content = tag.promptContent.trim();
+      if (content !== "") parts.push(content);
+    }
+    const advanced = card.advancedCustomPrompt.trim();
+    if (advanced !== "") parts.push(advanced);
+    return parts.join("\n\n").trim();
+  });
+}
+
 // src/chat-markers.ts
 function markerValue(value, path) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
@@ -562,14 +633,14 @@ function markerProfile(value) {
     resources
   };
 }
-function decodeMessageMarker(value) {
+function decodeExecutionData(value) {
   const extension = markerObject(value, "message extension");
-  markerVersion(extension, "message marker");
-  const selection = requireId(extension.selection, "message marker selection"), parsed = parseChatSelection(selection);
-  if (extension.promptFunctionType !== "CHAT" && extension.promptFunctionType !== "VOICE") throw new Error("Invalid message marker prompt function");
+  markerVersion(extension, "execution data");
+  const selection = requireId(extension.selection, "execution data selection"), parsed = parseChatSelection(selection);
+  if (extension.promptFunctionType !== "CHAT" && extension.promptFunctionType !== "VOICE") throw new Error("Invalid execution data prompt function");
   if (!Array.isArray(extension.participants) || extension.participants.length === 0) throw new Error("Message marker requires complete participants");
   const participants = extension.participants.map(
-    /** Constructs each complete saved participant independently from current domain records. */
+    /** Constructs each complete resolved participant independently from current domain records. */
     (item) => markerProfile(item)
   ), ids = /* @__PURE__ */ new Set();
   for (const participant of participants) {
@@ -577,25 +648,25 @@ function decodeMessageMarker(value) {
     ids.add(participant.id);
   }
   const profile = markerProfile(extension.profile), matches = participants.filter(
-    /** Requires the original execution participant to be one exact complete saved participant. */
+    /** Requires the original execution participant to be one exact complete resolved participant. */
     (participant) => participant.id === profile.id
   );
-  if (matches.length !== 1 || JSON.stringify(matches[0]) !== JSON.stringify(profile)) throw new Error("Message execution profile does not match its saved participant snapshot");
-  if (parsed.kind === "card" && (participants.length !== 1 || profile.id !== parsed.id)) throw new Error("Message card selection does not match its saved participant");
+  if (matches.length !== 1 || JSON.stringify(matches[0]) !== JSON.stringify(profile)) throw new Error("Message execution profile does not match its resolved participant data");
+  if (parsed.kind === "card" && (participants.length !== 1 || profile.id !== parsed.id)) throw new Error("Message card selection does not match its resolved participant");
   if (parsed.kind === "model") {
-    if (participants.length !== 1 || profile.id !== "model:chat" || profile.name !== profile.modelBinding.modelId || extension.primaryOwnerKey !== "" || profile.resources.length !== 0 || profile.introPrompt !== "" || profile.userPreferencesText !== "" || profile.openingStatement !== "") throw new Error("Invalid model-only message snapshot");
+    if (participants.length !== 1 || profile.id !== "model:chat" || profile.name !== profile.modelBinding.modelId || extension.primaryOwnerKey !== "" || profile.resources.length !== 0 || profile.introPrompt !== "" || profile.userPreferencesText !== "" || profile.openingStatement !== "") throw new Error("Invalid model-only execution data");
     return { version: 1, selection, promptFunctionType: extension.promptFunctionType, primaryOwnerKey: "", profile, participants };
   }
   const primaryOwnerKey = requireId(extension.primaryOwnerKey, "message primary memory owner");
   if (!/^(character|shared):[^:\s]+$/u.test(primaryOwnerKey)) throw new Error("Invalid message primary memory owner");
   if (!profile.resources.some(
-    /** Requires the primary memory destination to be permitted by this exact saved execution profile. */
+    /** Requires the primary memory destination to be permitted by this exact current execution profile. */
     (resource) => resource.key === primaryOwnerKey && resource.writable
   )) throw new Error("Message primary memory owner is not writable in its saved profile");
   return { version: 1, selection, promptFunctionType: extension.promptFunctionType, primaryOwnerKey, profile, participants };
 }
-function encodeMessageMarker(marker) {
-  const validated = decodeMessageMarker(marker);
+function encodeExecutionData(marker) {
+  const validated = decodeExecutionData(marker);
   return markerObject(validated, "message extension");
 }
 
@@ -639,33 +710,31 @@ function orderedGroupParticipants(group, service) {
     for (const member2 of members2) {
       if (ids.has(member2.characterCardId)) throw new Error("Duplicate group participant: " + member2.characterCardId);
       ids.add(member2.characterCardId);
-      const card = yield service.dispatchDomain("character.get", { id: member2.characterCardId });
+      const card = yield service.getCharacter(member2.characterCardId);
       if (card.id !== member2.characterCardId) throw new Error("Group participant read returned a different identity");
       participants.push(identity(card));
     }
     return participants;
   });
 }
-function resolveChatDisplay(request, service, executeInitialMessage) {
+function resolveChatDisplay(request, service) {
   return __async(this, null, function* () {
-    if (request.purpose !== "display" || request.participantId !== null || request.messageExtension !== null) throw new Error("Display configuration cannot request an execution participant or message snapshot");
+    if (request.purpose !== "display" || request.participantId !== null) throw new Error("Display configuration cannot request an execution participant");
     const marker = decodeChatMarker(request.chatExtension), selection = parseChatSelection(marker.selection);
     if (selection.kind === "model") {
-      const participant = modelIdentity(request, yield service.snapshot());
+      const participant = modelIdentity(request, { models: yield service.listModels() });
       return { contextKey: marker.selection, identity: { title: participant.name, avatarUri: participant.avatarUri }, participants: [participant], initialMessages: [] };
     }
     if (selection.kind === "group") {
-      const group = yield service.dispatchDomain("group.get", { id: selection.id });
+      const group = yield service.getGroup(selection.id);
       if (group.id !== selection.id || group.name.trim().length === 0) throw new Error("Display group identity is invalid");
       return { contextKey: marker.selection, identity: { title: group.name, avatarUri: null }, participants: yield orderedGroupParticipants(group, service), initialMessages: [] };
     }
-    const card = yield service.dispatchDomain("character.get", { id: selection.id });
+    const card = yield service.getCharacter(selection.id);
     if (card.id !== selection.id) throw new Error("Display character read returned a different identity");
     const result2 = { contextKey: marker.selection, identity: { title: card.name, avatarUri: card.avatarUri }, participants: [identity(card)], initialMessages: [] };
     if (card.openingStatement.trim().length !== 0) {
-      const execution = yield executeInitialMessage({ ...request, purpose: "execution", participantId: card.id }, service);
-      if (execution.profile.id !== card.id) throw new Error("Initial message author does not match its explicit participant");
-      result2.initialMessages.push({ content: card.openingStatement, displayName: execution.profile.name, messageExtension: execution.messageExtension });
+      result2.initialMessages.push({ content: card.openingStatement, displayName: card.name, participantId: card.id });
     }
     return result2;
   });
@@ -957,7 +1026,6 @@ function parseChatConfigurationRequest(value) {
     purpose: required(enumeration("display", "execution")),
     chatId: required(nullable(nonblank)),
     chatExtension: required(nullable(markerObject)),
-    messageExtension: required(nullable(markerObject)),
     participantId: required(nullable(nonblank)),
     promptFunctionType: required(enumeration("CHAT", "VOICE")),
     defaultModelBinding: required(shape({ providerId: required(text), modelId: required(text) })),
@@ -965,7 +1033,7 @@ function parseChatConfigurationRequest(value) {
   })(value, "chat.configuration.resolve");
   const request = value;
   if (request.purpose === "display") {
-    if (request.participantId !== null || request.messageExtension !== null) throw new Error("Display configuration cannot request an execution participant or message snapshot");
+    if (request.participantId !== null) throw new Error("Display configuration cannot request an execution participant");
   } else {
     nonblank(request.defaultModelBinding.providerId, "execution default provider");
     nonblank(request.defaultModelBinding.modelId, "execution default model");
@@ -983,9 +1051,10 @@ function chatRecord(records3, id2, kind) {
   );
   return matches[0];
 }
-function chatParticipant(card, request, directory, service) {
+function chatParticipant(card, request, service) {
   return __async(this, null, function* () {
     nonblank(card.name, "profile.name");
+    const models = yield service.listModels();
     let modelBinding;
     switch (card.chatModelBindingMode) {
       case "FOLLOW_GLOBAL":
@@ -994,7 +1063,7 @@ function chatParticipant(card, request, directory, service) {
       case "FIXED_MODEL": {
         nonblank(card.chatModelId, "profile.fixedModelId");
         nonblank(card.chatProviderId, "Fixed model provider must be explicitly selected");
-        const candidates = directory.models.filter(
+        const candidates = models.filter(
           /** Resolves the exact provider-scoped model selected by the user. */
           (model) => model.providerId === card.chatProviderId && model.modelId === card.chatModelId
         );
@@ -1007,14 +1076,14 @@ function chatParticipant(card, request, directory, service) {
       default:
         throw new Error("Invalid model binding mode: " + card.chatModelBindingMode);
     }
-    const resolvedModels = directory.models.filter(
+    const resolvedModels = models.filter(
       /** Requires the actual configured provider/model pair. */
       (model) => model.providerId === modelBinding.providerId && model.modelId === modelBinding.modelId
     );
     if (resolvedModels.length !== 1) throw new Error("Model binding unavailable or duplicated: " + modelBinding.providerId + "/" + modelBinding.modelId);
     const ttsConfigId = card.ttsConfigId === null ? request.defaultTtsConfigId : card.ttsConfigId;
     nonblank(ttsConfigId, "profile.ttsConfigId");
-    chatRecord(directory.ttsConfigs, ttsConfigId, "TTS configuration");
+    chatRecord(yield service.listTtsConfigs(), ttsConfigId, "TTS configuration");
     let primary;
     switch (card.memoryBindingMode) {
       case "CHARACTER":
@@ -1022,7 +1091,7 @@ function chatParticipant(card, request, directory, service) {
         break;
       case "SHARED":
         nonblank(card.sharedMemoryId, "profile.sharedMemoryId");
-        chatRecord(directory.stores, card.sharedMemoryId, "shared memory");
+        yield service.getStore(card.sharedMemoryId);
         primary = "shared:" + card.sharedMemoryId;
         break;
       default:
@@ -1031,18 +1100,18 @@ function chatParticipant(card, request, directory, service) {
     const routes = /* @__PURE__ */ new Map();
     routes.set(primary, { key: primary, readable: true, writable: true });
     for (const mount2 of card.sharedMemoryMounts) {
-      chatRecord(directory.stores, mount2.sharedMemoryId, "mounted shared memory");
+      yield service.getStore(mount2.sharedMemoryId);
       const key = "shared:" + mount2.sharedMemoryId;
       const existing = routes.get(key);
       routes.set(key, { key, readable: mount2.readable || existing?.readable === true, writable: mount2.writable || existing?.writable === true });
     }
-    const prompt = yield service.dispatchDomain("character.combine", { id: card.id, promptFunctionType: request.promptFunctionType, additionalTagIds: [] });
+    const prompt = yield combineCharacterPrompt(card, [], request.promptFunctionType, service);
     const userPreferencesText = (yield service.readGlobalMemoryPreferences()).userDescriptionEnabled ? (yield service.dispatchDomain("memory.user.read", { ownerKey: primary })).content : "";
     return {
       id: card.id,
       name: card.name,
       avatarUri: card.avatarUri,
-      introPrompt: prompt.prompt,
+      introPrompt: prompt,
       userPreferencesText,
       openingStatement: card.openingStatement,
       modelBinding,
@@ -1060,50 +1129,46 @@ function chatParticipant(card, request, directory, service) {
 }
 function resolveChatConfiguration(request, service) {
   return __async(this, null, function* () {
-    if (request.purpose === "display") return resolveChatDisplay(request, service, resolveChatExecution);
-    return resolveChatExecution(request, service);
+    const reads = configurationReadScope(service);
+    if (request.purpose === "display") return resolveChatDisplay(request, reads);
+    return resolveChatExecution(request, reads);
   });
 }
 function resolveChatExecution(request, service) {
   return __async(this, null, function* () {
     if (request.purpose !== "execution") throw new Error("Execution configuration requires purpose execution");
-    if (request.messageExtension !== null) {
-      const marker2 = decodeMessageMarker(request.messageExtension);
-      if (request.participantId !== null && request.participantId !== marker2.profile.id) throw new Error("Historical execution participant does not match the saved message snapshot");
-      return { contextKey: marker2.selection, profile: marker2.profile, participants: marker2.participants, messageExtension: markerObject(request.messageExtension, "historical message extension") };
-    }
     const marker = decodeChatMarker(request.chatExtension);
-    const directory = yield service.snapshot();
-    const selection = requireChatSelection(marker.selection, directory.cards, directory.groups);
+    const selection = parseChatSelection(marker.selection);
     if (selection.kind === "model") {
-      const profile2 = modelParticipant(request, directory), participants2 = [profile2];
-      const messageExtension2 = encodeMessageMarker({ version: 1, selection: marker.selection, promptFunctionType: request.promptFunctionType, primaryOwnerKey: "", profile: profile2, participants: participants2 });
-      return { contextKey: marker.selection, profile: profile2, participants: participants2, messageExtension: messageExtension2 };
+      const [models, ttsConfigs] = yield Promise.all([service.listModels(), service.listTtsConfigs()]);
+      const profile2 = modelParticipant(request, { models, ttsConfigs }), participants2 = [profile2];
+      const executionData2 = encodeExecutionData({ version: 1, selection: marker.selection, promptFunctionType: request.promptFunctionType, primaryOwnerKey: "", profile: profile2, participants: participants2 });
+      return { contextKey: marker.selection, profile: profile2, participants: participants2, executionData: executionData2 };
     }
     let cards;
-    if (selection.kind === "card") cards = [chatRecord(directory.cards, selection.id, "character")];
+    if (selection.kind === "card") cards = [yield service.getCharacter(selection.id)];
     else {
-      const group = chatRecord(directory.groups, selection.id, "group");
+      const group = yield service.getGroup(selection.id);
       const members2 = [...group.members].sort(
         /** Preserves the persisted participant order without planning turns in Core. */
         (left, right) => left.orderIndex - right.orderIndex
       );
       if (members2.length === 0) throw new Error("Selected group has no participants: " + group.id);
       const ids = /* @__PURE__ */ new Set();
-      cards = members2.map(
+      cards = yield Promise.all(members2.map(
         /** Rejects duplicate or deleted group members before producing any execution profile. */
         (member2) => {
           if (ids.has(member2.characterCardId)) throw new Error("Duplicate group participant: " + member2.characterCardId);
           ids.add(member2.characterCardId);
-          return chatRecord(directory.cards, member2.characterCardId, "group participant");
+          return service.getCharacter(member2.characterCardId);
         }
-      );
+      ));
     }
     if (request.participantId === null && cards.length !== 1) throw new Error("A planned conversation requires an explicit execution participant");
     if (request.participantId !== null) chatRecord(cards, request.participantId, "selected participant");
     const participants = [];
-    for (const card of cards) {
-      const participant = yield chatParticipant(card, request, directory, service);
+    for (const card2 of cards) {
+      const participant = yield chatParticipant(card2, request, service);
       participants.push(selection.kind === "group" ? withGroupParticipantPrompt(participant, cards) : participant);
     }
     let profile;
@@ -1112,10 +1177,10 @@ function resolveChatExecution(request, service) {
       if (participants.length !== 1) throw new Error("A planned conversation requires an explicit execution participant");
       profile = participants[0];
     }
-    const owner2 = yield service.dispatchDomain("memory.resolveOwner", { characterId: profile.id });
-    const primaryOwnerKey = (owner2.kind === "CHARACTER" ? "character:" : "shared:") + owner2.id;
-    const messageExtension = encodeMessageMarker({ version: 1, selection: marker.selection, promptFunctionType: request.promptFunctionType, primaryOwnerKey, profile, participants });
-    return { contextKey: marker.selection, profile, participants, messageExtension };
+    const card = chatRecord(cards, profile.id, "selected participant");
+    const primaryOwnerKey = card.memoryBindingMode === "CHARACTER" ? "character:" + card.id : "shared:" + card.sharedMemoryId;
+    const executionData = encodeExecutionData({ version: 1, selection: marker.selection, promptFunctionType: request.promptFunctionType, primaryOwnerKey, profile, participants });
+    return { contextKey: marker.selection, profile, participants, executionData };
   });
 }
 
@@ -1822,200 +1887,6 @@ var collections = {
         kind: "text"
       }
     }
-  },
-  message_snapshots: {
-    kind: "object",
-    fields: {
-      version: {
-        kind: "integer"
-      },
-      selection: {
-        kind: "text"
-      },
-      promptFunctionType: {
-        kind: "text"
-      },
-      primaryOwnerKey: {
-        kind: "text"
-      },
-      profile: {
-        kind: "object",
-        fields: {
-          id: {
-            kind: "text"
-          },
-          name: {
-            kind: "text"
-          },
-          avatarUri: {
-            kind: "text",
-            nullable: true
-          },
-          introPrompt: {
-            kind: "text"
-          },
-          userPreferencesText: {
-            kind: "text"
-          },
-          openingStatement: {
-            kind: "text"
-          },
-          modelBinding: {
-            kind: "object",
-            fields: {
-              providerId: {
-                kind: "text"
-              },
-              modelId: {
-                kind: "text"
-              }
-            }
-          },
-          ttsConfigId: {
-            kind: "text"
-          },
-          toolAccess: {
-            kind: "object",
-            fields: {
-              enabled: {
-                kind: "boolean"
-              },
-              allowedBuiltinTools: {
-                kind: "array",
-                item: {
-                  kind: "text"
-                }
-              },
-              allowedPackages: {
-                kind: "array",
-                item: {
-                  kind: "text"
-                }
-              },
-              allowedSkills: {
-                kind: "array",
-                item: {
-                  kind: "text"
-                }
-              },
-              allowedMcpServers: {
-                kind: "array",
-                item: {
-                  kind: "text"
-                }
-              }
-            }
-          },
-          resources: {
-            kind: "array",
-            item: {
-              kind: "object",
-              fields: {
-                key: {
-                  kind: "text"
-                },
-                readable: {
-                  kind: "boolean"
-                },
-                writable: {
-                  kind: "boolean"
-                }
-              }
-            }
-          }
-        }
-      },
-      participants: {
-        kind: "array",
-        item: {
-          kind: "object",
-          fields: {
-            id: {
-              kind: "text"
-            },
-            name: {
-              kind: "text"
-            },
-            avatarUri: {
-              kind: "text",
-              nullable: true
-            },
-            introPrompt: {
-              kind: "text"
-            },
-            userPreferencesText: {
-              kind: "text"
-            },
-            openingStatement: {
-              kind: "text"
-            },
-            modelBinding: {
-              kind: "object",
-              fields: {
-                providerId: {
-                  kind: "text"
-                },
-                modelId: {
-                  kind: "text"
-                }
-              }
-            },
-            ttsConfigId: {
-              kind: "text"
-            },
-            toolAccess: {
-              kind: "object",
-              fields: {
-                enabled: {
-                  kind: "boolean"
-                },
-                allowedBuiltinTools: {
-                  kind: "array",
-                  item: {
-                    kind: "text"
-                  }
-                },
-                allowedPackages: {
-                  kind: "array",
-                  item: {
-                    kind: "text"
-                  }
-                },
-                allowedSkills: {
-                  kind: "array",
-                  item: {
-                    kind: "text"
-                  }
-                },
-                allowedMcpServers: {
-                  kind: "array",
-                  item: {
-                    kind: "text"
-                  }
-                }
-              }
-            },
-            resources: {
-              kind: "array",
-              item: {
-                kind: "object",
-                fields: {
-                  key: {
-                    kind: "text"
-                  },
-                  readable: {
-                    kind: "boolean"
-                  },
-                  writable: {
-                    kind: "boolean"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
   }
 };
 
@@ -2624,59 +2495,16 @@ function readChatBinding(chatId) {
     return binding;
   });
 }
-function snapshotReference(value) {
-  const reference = markerObject(value, "plugin snapshot reference");
-  if (Object.keys(reference).length !== 2 || reference.schemaVersion !== 1)
-    throw new Error("Invalid plugin snapshot reference");
-  return {
-    recordId: requireId(reference.recordId, "snapshot record id"),
-    schemaVersion: 1
-  };
-}
-function readStoredSnapshot(value) {
-  return __async(this, null, function* () {
-    const reference = snapshotReference(value), row = yield (yield chatDatabase()).get("message_snapshots", reference.recordId);
-    if (row === null)
-      throw new Error("Plugin snapshot is unavailable: " + reference.recordId);
-    return decodeMessageMarker(row.value);
-  });
-}
-function storeSnapshot(value) {
-  return __async(this, null, function* () {
-    const marker = decodeMessageMarker(value), recordId = "snapshot:" + Array.from(
-      { length: 4 },
-      () => Math.floor(Math.random() * 4294967296).toString(16).padStart(8, "0")
-    ).join("");
-    yield (yield chatDatabase()).commit([
-      {
-        op: "put",
-        collection: "message_snapshots",
-        key: recordId,
-        value: markerObject(marker, "message snapshot"),
-        expectedVersion: null
-      }
-    ]);
-    return { recordId, schemaVersion: 1 };
-  });
-}
-function readMessageSnapshot(chatId, messageTimestamp, variantIndex) {
+function readMessageAuthor(chatId, messageTimestamp, variantIndex) {
   return __async(this, null, function* () {
     requireId(chatId, "chat id");
     assertInteger(messageTimestamp, "message timestamp", 0);
     assertInteger(variantIndex, "message variant index", 0);
-    if (variantIndex > 2147483647)
-      throw new Error("Message variant index exceeds the host's i32 range");
-    const reference = (yield Tools.Chat.readExtension({
-      kind: "message",
-      chatId,
-      messageTimestamp,
-      variantIndex
-    })).extension;
-    if (reference === null)
-      throw new Error(
-        "Message revision has no saved configuration reference: " + chatId + "/" + messageTimestamp + "/" + variantIndex
-      );
-    return readStoredSnapshot(snapshotReference(reference));
+    const { extension } = yield Tools.Chat.readExtension({ kind: "message", chatId, messageTimestamp, variantIndex });
+    if (extension === null) return null;
+    const identity3 = markerObject(extension, "message author identity");
+    if (Object.keys(identity3).length !== 1) throw new Error("Invalid message author identity");
+    return requireId(identity3.participantId, "message author participant id");
   });
 }
 function listChatBindings() {
@@ -2885,31 +2713,44 @@ function requireChatOwner(chatId, ownerKey, repository) {
     throw new Error("Chat is not writable for this memory owner: " + chatId + " / " + ownerKey);
   });
 }
-function requireMessageOwner(chatId, message, ownerKey, repository) {
+function currentMessageMemoryAccess(chatId, message, repository) {
   return __async(this, null, function* () {
     assertMemoryChatMessage(message);
+    const participantId = yield readMessageAuthor(chatId, message.timestamp, message.variantIndex);
+    if (participantId === "model:chat") return { primaryOwnerKey: "", resources: [] };
+    if (participantId === null) throw new Error("Message has no character author identity");
+    const card = yield repository.getCharacter(participantId);
+    const primaryOwnerKey = yield primaryOwner(card, repository);
+    const resources = [{ key: primaryOwnerKey, readable: true, writable: true }];
+    for (const mount2 of card.sharedMemoryMounts) {
+      yield repository.getStore(mount2.sharedMemoryId);
+      const key = "shared:" + mount2.sharedMemoryId;
+      const existing = resources.find((resource) => resource.key === key);
+      if (existing) {
+        existing.readable || (existing.readable = mount2.readable);
+        existing.writable || (existing.writable = mount2.writable);
+      } else resources.push({ key, readable: mount2.readable, writable: mount2.writable });
+    }
+    return { primaryOwnerKey, resources };
+  });
+}
+function requireMessageOwner(chatId, message, ownerKey, repository) {
+  return __async(this, null, function* () {
     yield repository.readMemorySpace(ownerKey);
-    const marker = yield readMessageSnapshot(chatId, message.timestamp, message.variantIndex);
-    if (!marker.profile.resources.some(
-      /** Checks only this saved participant's explicit writable resource grants. */
-      (resource) => resource.key === ownerKey && resource.writable
-    )) throw new Error("Saved message identity is not writable for this memory owner: " + ownerKey);
-    return marker;
+    const access = yield currentMessageMemoryAccess(chatId, message, repository);
+    if (!access.resources.some((resource) => resource.key === ownerKey && resource.writable)) throw new Error("Message author is not currently writable for this memory owner: " + ownerKey);
+    return access;
   });
 }
 function requireMessagesOwner(chatId, messages, ownerKey, repository) {
   return __async(this, null, function* () {
     yield repository.readMemorySpace(ownerKey);
-    let permitted = false;
     for (const message of messages) {
       if (message.sender !== "ai" && message.sender !== "assistant") continue;
-      const marker = yield readMessageSnapshot(chatId, message.timestamp, message.variantIndex);
-      if (marker.profile.resources.some(
-        /** Requires an actual saved writable grant without deriving identity from a display name. */
-        (resource) => resource.key === ownerKey && resource.writable
-      )) permitted = true;
+      const access = yield currentMessageMemoryAccess(chatId, message, repository);
+      if (access.resources.some((resource) => resource.key === ownerKey && resource.writable)) return;
     }
-    if (!permitted) throw new Error("History has no saved assistant identity writable for this memory owner: " + ownerKey);
+    throw new Error("History has no assistant author currently writable for this memory owner: " + ownerKey);
   });
 }
 function listMemoryChats(ownerKey, repository) {
@@ -3429,13 +3270,13 @@ function enqueueCandidate(input, repository) {
     if (message.content.trim() === "") throw new Error("Memory candidate source is blank");
     const owners = /* @__PURE__ */ new Set();
     if (input.sourceType === "reply_finalized_auto") {
-      const marker = yield readMessageSnapshot(input.chatId, message.timestamp, message.variantIndex);
-      const ownerKey = input.ownerKey === null ? marker.primaryOwnerKey : input.ownerKey;
+      const access = yield currentMessageMemoryAccess(input.chatId, message, repository);
+      const ownerKey = input.ownerKey === null ? access.primaryOwnerKey : input.ownerKey;
       if (ownerKey === "") return { owners: [], candidateIds: [] };
-      if (!marker.profile.resources.some(
-        /** Authorizes only the exact submitted resource through the already-read historical snapshot. */
+      if (!access.resources.some(
+        /** Authorizes only the exact submitted resource through the already-read current author permissions. */
         (resource) => resource.key === ownerKey && resource.writable
-      )) throw new Error("Saved candidate identity cannot write this memory owner: " + ownerKey);
+      )) throw new Error("Current message author cannot write this memory owner: " + ownerKey);
       yield repository.readMemorySpace(ownerKey);
       owners.add(ownerKey);
     } else if (input.ownerKey !== null) {
@@ -4339,7 +4180,18 @@ var handlers = {
   "memory.candidate.enqueue": (input, repository) => enqueueCandidate(input, repository),
   /** Resolves chat configuration using this operation's existing repository snapshot. */
   "chat.configuration.resolve": (input, repository) => resolveConfiguration(input, {
-    snapshot: () => snapshot(repository),
+    /** Reads only the requested character. */
+    getCharacter: (id2) => repository.getCharacter(id2),
+    /** Reads only the requested group. */
+    getGroup: (id2) => repository.getGroup(id2),
+    /** Reads only a referenced tag. */
+    getTag: (id2) => repository.getTag(id2),
+    /** Reads only a referenced shared library. */
+    getStore: (id2) => repository.getStore(id2),
+    /** Reads only the model directory. */
+    listModels: () => repository.listModels(),
+    /** Reads only the speech directory. */
+    listTtsConfigs: () => repository.listTtsConfigs(),
     readGlobalMemoryPreferences: () => repository.readGlobalMemoryPreferences(),
     dispatchDomain: (operation, payload) => executeDomain(operation, payload, repository)
   }),
@@ -5040,6 +4892,18 @@ function createCharacterCardsService(owner2, configurations = independentConfigu
     runMemoryJobs: () => jobs.tick(),
     /** Reads only the metadata flags needed by prompt composition. */
     readGlobalMemoryPreferences: () => owner2.readGlobalMemoryPreferences(),
+    /** Reads only the selected character and its owned relations. */
+    getCharacter: (id2) => owner2.getCharacter(id2),
+    /** Reads only the selected group and its saved membership. */
+    getGroup: (id2) => owner2.getGroup(id2),
+    /** Reads only one referenced prompt tag. */
+    getTag: (id2) => owner2.getTag(id2),
+    /** Reads only one referenced shared memory library. */
+    getStore: (id2) => owner2.getStore(id2),
+    /** Reads the model directory independently of role and tool catalogs. */
+    listModels: () => owner2.listModels(),
+    /** Reads the speech directory independently of role and tool catalogs. */
+    listTtsConfigs: () => owner2.listTtsConfigs(),
     /** Preserves action-specific results through the shared service dispatcher. */
     dispatch: dispatchRequest,
     /** Reads configuration records without loading memory data. */
@@ -5636,24 +5500,7 @@ function searchMemories(options, host) {
 function combinePrompts(characterId, additionalTagIds, promptFunctionType, host) {
   return __async(this, null, function* () {
     const card = yield host.getCharacter(requireId(characterId, "\u89D2\u8272\u5361\u6807\u8BC6"));
-    assertCard(card);
-    assertStrings(additionalTagIds, "\u9644\u52A0\u6807\u7B7E");
-    if (promptFunctionType !== "CHAT" && promptFunctionType !== "VOICE")
-      throw new Error("\u63D0\u793A\u8BCD\u529F\u80FD\u7C7B\u578B\u65E0\u6548");
-    const tags = records(yield host.listTags(), assertTag, "\u6807\u7B7E\u5217\u8868");
-    const parts = [];
-    const setting = card.characterSetting.trim();
-    if (setting !== "") parts.push(setting);
-    const otherContent = (promptFunctionType === "CHAT" ? card.otherContentChat : card.otherContentVoice).trim();
-    if (otherContent !== "") parts.push(otherContent);
-    const ids = normalizeNames([...card.attachedTagIds, ...additionalTagIds]);
-    for (const id2 of ids) {
-      const content = findRecord(tags, id2, "\u63D0\u793A\u8BCD\u6807\u7B7E").promptContent.trim();
-      if (content !== "") parts.push(content);
-    }
-    const advanced = card.advancedCustomPrompt.trim();
-    if (advanced !== "") parts.push(advanced);
-    return parts.join("\n\n").trim();
+    return combineCharacterPrompt(card, additionalTagIds, promptFunctionType, host);
   });
 }
 function writeMemorySettings(ownerKey, settings2, host) {
@@ -7167,6 +7014,8 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
     this.busy = false;
     this.publicationFailure = null;
     this.waiters = [];
+    /** Reuses the directory projection while the canonical metadata revision is unchanged. */
+    this.sidebarDirectoryCache = null;
   }
   /** Initializes a new plugin database or opens the records written by the centralized Core migration. */
   static open(directories = null) {
@@ -7213,7 +7062,12 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
       }
       const metadata = yield database2.get("meta", "state");
       if (metadata === null) throw new Error("Character initialization did not publish metadata");
-      assertCharacterState(stateFromRecords(metadata.value, yield repository.readRecords()));
+      const loaded = stateFromRecords(metadata.value, yield repository.readRecords());
+      assertCharacterState(loaded);
+      repository.sidebarDirectoryCache = {
+        version: metadata.version,
+        value: { cards: loaded.cards, groups: loaded.groups }
+      };
       return repository;
     });
   }
@@ -7320,16 +7174,32 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
       throw new Error("Character records kept changing during the read; retry the operation");
     });
   }
-  /** Reads role presentation independently of memory editing and background jobs. */
+  /** Reads role presentation once per canonical revision instead of reopening every relation table on each sidebar refresh. */
   readSidebarDirectory() {
-    return this.readConsistent(() => __async(this, null, function* () {
+    return __async(this, null, function* () {
+      this.requirePublicationReady();
+      const before = yield this.database.get("meta", "state");
+      if (before === null) throw new Error("Character database metadata disappeared");
+      assertObject(before.value, "character metadata");
+      if (before.value.migrationStatus === "writing") throw new Error("Character migration has not completed");
+      const cached = this.sidebarDirectoryCache;
+      if (cached !== null && cached.version === before.version) return cached.value;
       const [cards, groups] = yield Promise.all([this.readCharacters(), this.readGroups()]);
       const ids = new Set(cards.map((card) => card.id));
       for (const group of groups)
         for (const member2 of group.members)
           if (!ids.has(member2.characterCardId)) throw new Error("Missing group member: " + member2.characterCardId);
-      return { cards, groups };
-    }));
+      const after = yield this.database.get("meta", "state");
+      this.requirePublicationReady();
+      if (after === null) throw new Error("Character database metadata disappeared");
+      if (before.version !== after.version) {
+        this.sidebarDirectoryCache = null;
+        return this.readSidebarDirectory();
+      }
+      const value = { cards, groups };
+      this.sidebarDirectoryCache = { version: after.version, value };
+      return value;
+    });
   }
   readActive() {
     this.requirePublicationReady();
@@ -7408,6 +7278,42 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
       assertGroup(row.value);
       return row.value;
     }));
+  }
+  /** Reads one attached prompt tag without scanning the tag directory. */
+  getTag(id2) {
+    requireId(id2, "\u6807\u7B7E\u6807\u8BC6");
+    return this.readConsistent(() => __async(this, null, function* () {
+      const row = yield this.database.get("tags", id2);
+      if (row === null) throw new Error("Tag not found: " + id2);
+      assertTag(row.value);
+      return row.value;
+    }));
+  }
+  /** Reads one referenced shared library without scanning unrelated stores. */
+  getStore(id2) {
+    requireId(id2, "\u5171\u4EAB\u8BB0\u5FC6\u5E93\u6807\u8BC6");
+    return this.readConsistent(() => __async(this, null, function* () {
+      const row = yield this.database.get("stores", id2);
+      if (row === null) throw new Error("Shared memory not found: " + id2);
+      assertObject(row.value, "\u5171\u4EAB\u8BB0\u5FC6\u5E93");
+      requireId(row.value.id, "\u5171\u4EAB\u8BB0\u5FC6\u5E93\u6807\u8BC6");
+      assertString(row.value.name, "\u5171\u4EAB\u8BB0\u5FC6\u5E93\u540D\u79F0");
+      assertInteger(row.value.createdAt, "\u8BB0\u5FC6\u5E93\u521B\u5EFA\u65F6\u95F4", 0);
+      assertInteger(row.value.updatedAt, "\u8BB0\u5FC6\u5E93\u4FEE\u6539\u65F6\u95F4", 0);
+      return row.value;
+    }));
+  }
+  /** Reads the actual model directory only when model validation needs it. */
+  listModels() {
+    this.requirePublicationReady();
+    if (this.directories === null) throw new Error("External directory readers are unavailable");
+    return this.directories.listModels();
+  }
+  /** Reads the actual speech directory only when speech validation needs it. */
+  listTtsConfigs() {
+    this.requirePublicationReady();
+    if (this.directories === null) throw new Error("External directory readers are unavailable");
+    return this.directories.listTtsConfigs();
   }
   readMetadata() {
     return __async(this, null, function* () {
@@ -9208,7 +9114,7 @@ function chatConfigurationResolveApi(event) {
   return __async(this, null, function* () {
     if (event.callerPackage !== "host") throw new Error("chat.configuration.resolve requires an authenticated host caller");
     const request = parseDomainPayload("chat.configuration.resolve", event.payload);
-    if (request.chatId !== null && request.messageExtension === null) {
+    if (request.chatId !== null) {
       const binding = yield findChatBinding(request.chatId);
       request.chatExtension = { version: 1, selection: binding === null ? "model:chat" : binding.selection };
     }
@@ -9247,18 +9153,6 @@ function chatConfigurationDeleteApi(event) {
     const result2 = yield dispatchDomain2("chat.configuration.binding.delete", input);
     if (result2.chatId !== input.chatId || !result2.deleted) throw new Error("Character binding deletion was not acknowledged");
     return { deleted: true };
-  });
-}
-function chatConfigurationSnapshotStoreApi(event) {
-  return __async(this, null, function* () {
-    if (event.callerPackage !== "host") throw new Error("Snapshot storage requires the host caller");
-    return storeSnapshot(event.payload);
-  });
-}
-function chatConfigurationSnapshotReadApi(event) {
-  return __async(this, null, function* () {
-    if (event.callerPackage !== "host") throw new Error("Snapshot reads require the host caller");
-    return readStoredSnapshot(event.payload);
   });
 }
 function chatConfigurationBindingReadApi(event) {
@@ -9647,8 +9541,6 @@ function registerDomainApis() {
   ToolPkg.registerApi({ name: "chat.configuration.draft.resolve", function: chatConfigurationDraftResolveApi });
   ToolPkg.registerApi({ name: "chat.configuration.draft.commit", function: chatConfigurationDraftCommitApi });
   ToolPkg.registerApi({ name: "chat.configuration.draft.abort", function: chatConfigurationDraftAbortApi });
-  ToolPkg.registerApi({ name: "chat.configuration.snapshot.store", function: chatConfigurationSnapshotStoreApi });
-  ToolPkg.registerApi({ name: "chat.configuration.snapshot.read", function: chatConfigurationSnapshotReadApi });
   ToolPkg.registerApi({ name: "memory.query", function: memoryQueryApi });
   ToolPkg.registerApi({ name: "memory.searchWithOptions", function: memorySearchWithOptionsApi });
   ToolPkg.registerApi({ name: "memory.candidate.enqueue", function: memoryCandidateEnqueueApi });
@@ -9832,10 +9724,10 @@ function requirePolicyOwner(registeredOwner) {
 }
 function executionContext(value, registeredOwner) {
   requirePolicyOwner(registeredOwner);
-  const context = record(value, "executionContext"), fields4 = ["chatId", "participantId", "extensionOwner", "messageExtension"];
+  const context = record(value, "executionContext"), fields4 = ["chatId", "participantId", "extensionOwner", "executionData"];
   const actual = Object.keys(context);
   if (actual.some(
-    /** Rejects complete plugin maps and undocumented alternative snapshot fields. */
+    /** Rejects complete plugin maps and undocumented alternative execution fields. */
     (key) => fields4.indexOf(key) === -1
   )) throw new Error("executionContext has unexpected fields");
   for (const key of fields4) {
@@ -9850,13 +9742,13 @@ function executionContext(value, registeredOwner) {
   if (participantId !== null && typeof participantId !== "string") throw new Error("Invalid execution participantId");
   if (typeof context.extensionOwner !== "string" || context.extensionOwner !== registeredOwner) throw new Error("executionContext.extensionOwner does not match the authenticated registered owner");
   if (chatId === null && participantId !== null) throw new Error("A selected execution participant requires a real chat context");
-  const messageExtension = context.messageExtension === null ? null : record(context.messageExtension, "executionContext.messageExtension");
-  return { chatId, participantId, extensionOwner: context.extensionOwner, messageExtension };
+  const executionData = context.executionData === null ? null : record(context.executionData, "executionContext.executionData");
+  return { chatId, participantId, extensionOwner: context.extensionOwner, executionData };
 }
-function snapshotToolPolicy(context) {
-  if (context.messageExtension === null) return null;
-  const marker = decodeMessageMarker(context.messageExtension);
-  if (context.participantId === null || marker.profile.id !== context.participantId) throw new Error("Execution participant does not match the frozen message snapshot");
+function executionToolPolicy(context) {
+  if (context.executionData === null) return null;
+  const marker = decodeExecutionData(context.executionData);
+  if (context.participantId === null || marker.profile.id !== context.participantId) throw new Error("Execution participant does not match the current execution data");
   return marker.profile.toolAccess;
 }
 function toolAllowed(config, name, activationSource) {
@@ -9886,7 +9778,7 @@ function toolCallPolicy(event) {
     if (event.eventName !== "tool_call_intercept") return;
     requirePolicyOwner(event.containerPackageName);
     if (event.eventPayload.runtimeContext === null) return;
-    const policy = snapshotToolPolicy(executionContext(event.eventPayload.runtimeContext, event.containerPackageName));
+    const policy = executionToolPolicy(executionContext(event.eventPayload.runtimeContext, event.containerPackageName));
     if (policy === null) return;
     let source;
     if (event.eventPayload.toolName === "use_package") {
@@ -9905,7 +9797,7 @@ function toolPromptPolicy(event) {
     requirePolicyOwner(event.containerPackageName);
     const metadata = record(payload.metadata, "tool-prompt metadata");
     if (metadata.executionContext === null) return;
-    const policy = snapshotToolPolicy(executionContext(metadata.executionContext, event.containerPackageName));
+    const policy = executionToolPolicy(executionContext(metadata.executionContext, event.containerPackageName));
     if (policy === null) return;
     if (!Array.isArray(payload.availableTools)) throw new Error("Tool-prompt availableTools must be the actual host catalog");
     return { availableTools: payload.availableTools.filter(
@@ -10334,7 +10226,7 @@ function createGroupExecutionController(service, transport) {
       return __async(this, null, function* () {
         const parsed = parseChatSelection(selection);
         if (parsed.kind !== "group") throw new Error("Group planner requires a group selection");
-        return orderedGroupParticipants(yield service.dispatchDomain("group.get", { id: parsed.id }), service);
+        return orderedGroupParticipants(yield service.getGroup(parsed.id), service);
       });
     },
     plan: planGroupResponse,
@@ -10346,12 +10238,10 @@ function createGroupExecutionController(service, transport) {
 function sequenceKey(chatId, submissionId) {
   return JSON.stringify([chatId, submissionId]);
 }
-function verifySnapshot(chatId, selected, assistant2) {
+function verifyAuthor(chatId, selected, assistant2) {
   return __async(this, null, function* () {
-    const marker = yield readMessageSnapshot(chatId, assistant2.messageTimestamp, assistant2.variantIndex);
-    if (marker.selection !== selected.selection || marker.profile.id !== selected.participantId || marker.promptFunctionType !== "CHAT") {
-      throw new Error("Committed group assistant snapshot identifies a different participant or selection");
-    }
+    const participantId = yield readMessageAuthor(chatId, assistant2.messageTimestamp, assistant2.variantIndex);
+    if (participantId !== selected.participantId) throw new Error("Committed group assistant identifies a different participant");
   });
 }
 var NativeGroupTurnTransport = class {
@@ -10443,7 +10333,7 @@ var NativeGroupTurnTransport = class {
     if (sequence === void 0 || sequence.chatId !== chatId || sequence.runtime !== runtime2) throw new Error("Group submission has no matching send sequence");
     return sequence;
   }
-  /** Awaits one real finalized send, validates its originating receipt and checks the native-authored snapshot. */
+  /** Awaits one real finalized send, validates its originating receipt and checks the native-authored identity. */
   run(sequence, input, request) {
     return __async(this, null, function* () {
       const requestKey = "kind" in input && input.kind === "record_only" ? input.requestKey : input.turn.requestKey;
@@ -10462,7 +10352,7 @@ var NativeGroupTurnTransport = class {
           if (decision.receipt.assistant !== null) {
             sequence.assistants.push({ ...decision.receipt.assistant });
             if ("kind" in input && input.kind === "record_only") throw new Error("Record-only native send committed an assistant");
-            yield verifySnapshot(sequence.chatId, input.turn, decision.receipt.assistant);
+            yield verifyAuthor(sequence.chatId, input.turn, decision.receipt.assistant);
           }
         }
         return actual;

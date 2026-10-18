@@ -3558,7 +3558,7 @@ mod tests {
                     runtimeChatHistory: Vec::new(), workspacePath: None,
                     promptFunctionType: operit_model::PromptFunctionType::PromptFunctionType::CHAT,
                     enableThinking: false, participantId: String::new(), extensionOwner: String::new(),
-                    messageExtension: serde_json::Map::new(), proxySenderName: None,
+                    executionData: serde_json::Map::new(), proxySenderName: None,
                     notifyReplyOverride: None, chatProviderIdOverride: None, chatModelIdOverride: None,
                     turnOptions: Default::default(),
                 };

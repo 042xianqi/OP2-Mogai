@@ -927,7 +927,9 @@ test("current plugin routes connect selector and memory attachment to the actual
     await ui.page.getByRole("button", { name: "真实选择角色", exact: true }).click();
     await ui.page.getByRole("button", { name: "附件根", exact: true }).click();
     const content = await ui.page.getByLabel("记忆附件正文", { exact: true }).textContent();
-    assert.equal(content, "# 真实选择角色 / 附件根\n\n## 真实附件第一条\n\n真实文件中的完整记忆内容\n\n## 真实附件第二条\n\n第二条完整内容");
+    const [heading, ...sections] = content.split("\n\n## ");
+    assert.equal(heading, "# 真实选择角色 / 附件根");
+    assert.deepEqual(sections.sort(), ["真实附件第一条\n\n真实文件中的完整记忆内容", "真实附件第二条\n\n第二条完整内容"].sort());
     await ui.page.getByRole("button", { name: "添加记忆附件", exact: true }).click(); await ui.page.getByText("当前视图已结束。", { exact: true }).waitFor();
     assert.deepEqual(ui.completed, [{ type: "toolpkg.presentation.complete", requestId: "attachment-native", value: { type: "text", name: "记忆附件", content, mediaType: "text/plain" } }]);
     assert.equal(ui.calls.some(

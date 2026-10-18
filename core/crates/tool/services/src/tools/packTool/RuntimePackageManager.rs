@@ -452,6 +452,7 @@ impl RuntimePackageManager {
         methodName: &str,
         payload: serde_json::Value,
     ) -> impl Future<Output = Result<serde_json::Value, String>> + 'static {
+        let startedAt = currentTimeMillis();
         let manager = self.toolPkgManager().clone();
         let reader = self.resourceReader();
         let apiName = format!("{packageName}/{methodName}");
@@ -492,7 +493,7 @@ impl RuntimePackageManager {
             );
             params.insert(
                 "containerPackageName".to_string(),
-                serde_json::Value::String(runtime.packageName),
+                serde_json::Value::String(runtime.packageName.clone()),
             );
             params.insert(
                 "__operit_execution_context_key".to_string(),
@@ -520,18 +521,26 @@ impl RuntimePackageManager {
                     serde_json::Value::String(source),
                 );
             }
-            let raw = engine
+            let executeAt = currentTimeMillis();
+            let result = engine
                 .execute_script_function_async(
                     script,
-                    declaration.function,
+                    declaration.function.clone(),
                     params,
                     BTreeMap::new(),
                     None,
                     true,
                     60_000,
                 )
-                .await
-                .map_err(|error| error.to_string())?
+                .await;
+            let completedAt = currentTimeMillis();
+            AppLogger::d("ToolPkgTiming", &format!(
+                "kind=public_api package={} function={} api={} prepareMs={} executeMs={} totalMs={} success={}",
+                runtime.packageName, declaration.function, apiName,
+                executeAt.saturating_sub(startedAt), completedAt.saturating_sub(executeAt),
+                completedAt.saturating_sub(startedAt), result.is_ok(),
+            ));
+            let raw = result.map_err(|error| error.to_string())?
                 .ok_or_else(|| format!("Public API returned no JSON result: {apiName}"))?;
             serde_json::from_str(&raw).map_err(|error| error.to_string())
         }
@@ -4501,10 +4510,14 @@ impl RuntimePackageManager {
         onIntermediateResult: Option<std::sync::Arc<dyn Fn(String) + Send + Sync>>,
         timeoutMillis: u64,
     ) -> operit_plugin_sdk::javascript::JsExecutionCompletion<Result<Option<String>, String>> {
-        self.toolPkgManager().dispatchToolPkgHook(
+        let startedAt = currentTimeMillis();
+        let packageName = self.normalizePackageName(containerPackageName);
+        let timedFunction = functionName.to_string();
+        let timedEvent = eventName.unwrap_or(event).to_string();
+        let pending = self.toolPkgManager().dispatchToolPkgHook(
             &self.getEnabledPackageNames(),
             ToolPkgHookInvocation {
-                containerPackageName: self.normalizePackageName(containerPackageName),
+                containerPackageName: packageName.clone(),
                 functionName: functionName.to_string(),
                 event: event.to_string(),
                 eventName: eventName.map(str::to_string),
@@ -4519,7 +4532,19 @@ impl RuntimePackageManager {
                 dispatchIntermediateOnMain: true,
                 onIntermediateResult,
             },
-        )
+        );
+        let preparedAt = currentTimeMillis();
+        Box::pin(async move {
+            let result = pending.await;
+            let completedAt = currentTimeMillis();
+            AppLogger::d("ToolPkgTiming", &format!(
+                "kind=hook package={} function={} stage={} prepareMs={} executeMs={} totalMs={} success={}",
+                packageName, timedFunction, timedEvent,
+                preparedAt.saturating_sub(startedAt), completedAt.saturating_sub(preparedAt),
+                completedAt.saturating_sub(startedAt), result.is_ok(),
+            ));
+            result
+        })
     }
 
     /// Performs MCP discovery before synchronous package metadata/activation, without holding its lock.

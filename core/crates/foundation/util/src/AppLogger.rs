@@ -1,5 +1,6 @@
 #[cfg(not(target_os = "espidf"))]
 use std::backtrace::Backtrace;
+use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex, Once, OnceLock};
 
@@ -58,6 +59,42 @@ struct LoggerState {
     retain_entries: bool,
 }
 
+/// Retains formatted file records only for the current synchronous execution step.
+struct BatchedLogFileWrite {
+    host: Arc<dyn FileSystemHost>,
+    path: String,
+    content: String,
+}
+
+#[derive(Default)]
+struct LogFileWriteBatchState {
+    depth: usize,
+    writes: Vec<BatchedLogFileWrite>,
+}
+
+thread_local! {
+    static FILE_WRITE_BATCH: RefCell<LogFileWriteBatchState> = RefCell::new(LogFileWriteBatchState::default());
+}
+
+/// Flushes each file once when the owning thread leaves its outermost synchronous batch.
+pub struct LogFileWriteBatch {
+    owner_thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl Drop for LogFileWriteBatch {
+    /// Flushes after releasing the thread-local borrow, including during error unwinding.
+    fn drop(&mut self) {
+        let writes = FILE_WRITE_BATCH.with(|batch| {
+            let mut batch = batch.borrow_mut();
+            batch.depth -= 1;
+            if batch.depth == 0 { std::mem::take(&mut batch.writes) } else { Vec::new() }
+        });
+        for write in writes {
+            let _ = write.host.writeFile(&write.path, &write.content, true);
+        }
+    }
+}
+
 static STATE: OnceLock<Mutex<LoggerState>> = OnceLock::new();
 static HOST_LOG_SINK_INIT: Once = Once::new();
 
@@ -90,6 +127,21 @@ fn install_host_log_sink_once() {
 pub struct AppLogger;
 
 impl AppLogger {
+    /// Coalesces file writes for a synchronous scope while preserving individual records and timestamps.
+    pub fn batch_file_writes() -> LogFileWriteBatch {
+        FILE_WRITE_BATCH.with(|batch| batch.borrow_mut().depth += 1);
+        LogFileWriteBatch { owner_thread: std::marker::PhantomData }
+    }
+
+    /// Batches only each synchronous poll and flushes before a future yields or changes threads.
+    pub async fn batch_future_file_writes<F: std::future::Future>(future: F) -> F::Output {
+        let mut future = std::pin::pin!(future);
+        std::future::poll_fn(|context| {
+            let _batch = Self::batch_file_writes();
+            future.as_mut().poll(context)
+        }).await
+    }
+
     /// Controls in-memory history independently of console/file sinks.
     /// Constrained apps may disable retention without changing other hosts.
     pub fn set_retain_entries(enabled: bool) {
@@ -428,7 +480,20 @@ fn write_entry(
 
 /// Appends one formatted log line through the configured file-system host.
 fn append_line(file_system_host: &Arc<dyn FileSystemHost>, path: &str, line: &str) {
-    let _ = file_system_host.writeFile(path, line, true);
+    let batched = FILE_WRITE_BATCH.with(|batch| {
+        let mut batch = batch.borrow_mut();
+        if batch.depth == 0 { return false; }
+        match batch.writes.iter_mut().find(|write| write.path == path && Arc::ptr_eq(&write.host, file_system_host)) {
+            Some(write) => write.content.push_str(line),
+            None => batch.writes.push(BatchedLogFileWrite {
+                host: file_system_host.clone(), path: path.to_string(), content: line.to_string(),
+            }),
+        }
+        true
+    });
+    if !batched {
+        let _ = file_system_host.writeFile(path, line, true);
+    }
 }
 
 /// Creates an empty log file through the host when the path is absent.

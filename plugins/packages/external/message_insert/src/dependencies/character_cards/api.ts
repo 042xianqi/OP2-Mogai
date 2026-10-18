@@ -65,7 +65,6 @@ export interface ChatConfigurationRequest {
   purpose: "display" | "execution";
   chatId: string | null;
   chatExtension: JsonObject | null;
-  messageExtension: JsonObject | null;
   participantId: string | null;
   promptFunctionType: "CHAT" | "VOICE";
   defaultModelBinding: ChatModelBinding;
@@ -93,7 +92,7 @@ export interface ChatConfigurationExecutionResult {
   contextKey: string;
   profile: ChatParticipantProfile;
   participants: ChatParticipantProfile[];
-  messageExtension: JsonObject;
+  executionData: JsonObject;
 }
 
 /** Describes presentation identity without resolving a model, speech voice or memory owner. */
@@ -101,7 +100,7 @@ export interface ChatDisplayIdentity { title: string; avatarUri: string | null }
 /** Preserves the plugin-declared presentation order and real participant identity. */
 export interface ChatDisplayParticipant { id: string; name: string; avatarUri: string | null }
 /** Supplies an explicitly authored initial message and its complete immutable participant snapshot. */
-export interface ChatInitialMessage { content: string; displayName: string; messageExtension: JsonObject }
+export interface ChatInitialMessage { content: string; displayName: string; participantId: string }
 /** Returns presentation data only; an empty initial-message array does not select an executor. */
 export interface ChatConfigurationDisplayResult {
   contextKey: string | null;

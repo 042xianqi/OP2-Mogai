@@ -24,6 +24,21 @@ test("new installation stores independent records and reopens without mutations"
   assert.equal(disk.calls.filter(call => ["write", "mkdir", "move", "deleteFile"].includes(call.method)).length, 0);
 });
 
+test("sidebar directory reuses the canonical revision and refreshes after a character write", async t => {
+  const disk = await createDiskHarness(t), owner = await open(disk);
+  disk.clearCalls();
+  const first = await owner.readSidebarDirectory();
+  const firstRequestCount = disk.calls.filter(call => call.method.startsWith("storage.")).length;
+  const second = await owner.readSidebarDirectory();
+  const secondRequestCount = disk.calls.filter(call => call.method.startsWith("storage.")).length - firstRequestCount;
+  assert.deepEqual(plain(second), plain(first));
+  assert.equal(firstRequestCount, 1);
+  assert.equal(secondRequestCount, 1);
+  await owner.run(session => session.createCharacter(card("Revision refreshed")));
+  const refreshed = await owner.readSidebarDirectory();
+  assert.ok(refreshed.cards.some(value => value.name === "Revision refreshed"));
+});
+
 test("one memory edit publishes only that memory and the metadata guard", async t => {
   const disk = await createDiskHarness(t), owner = await open(disk);
   const first = await owner.run(session => session.createMemory("character:default", memory("First")));

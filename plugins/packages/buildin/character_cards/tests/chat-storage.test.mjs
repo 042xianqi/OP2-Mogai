@@ -32,12 +32,6 @@ async function environment(t, count = 3) {
   return { disk, chats, calls, repository, service, storage };
 }
 
-/** Constructs a complete immutable send snapshot with an explicit memory permission. */
-function snapshot() {
-  const profile = { id: "default", name: "Original role", avatarUri: null, introPrompt: "Original prompt", userPreferencesText: "Original USER", openingStatement: "Hello", modelBinding: { providerId: "provider", modelId: "model" }, ttsConfigId: "voice", toolAccess: { enabled: false, allowedBuiltinTools: [], allowedPackages: [], allowedSkills: [], allowedMcpServers: [] }, resources: [{ key: "character:default", readable: true, writable: true }] };
-  return { version: 1, selection: "card:default", promptFunctionType: "CHAT", primaryOwnerKey: "character:default", profile, participants: [plain(profile)] };
-}
-
 test("binding CRUD persists solely in SQL and role deletion respects explicit bindings", async t => {
   const h = await environment(t);
   const role = await h.service.dispatchDomain("character.create", { values: { name: "Bound role" } });
@@ -79,13 +73,17 @@ test("group and writable mount ownership is filtered through relation tables", a
   assert.deepEqual(plain(await h.storage.chatsForMemoryOwner("character:" + role.id)), ["chat-1"]);
 });
 
-test("generic references retain immutable historical profiles after current role edits", async t => {
-  const h = await environment(t), saved = snapshot();
-  const reference = await h.storage.storeSnapshot(saved);
-  assert.deepEqual(Object.keys(reference).sort(), ["recordId", "schemaVersion"]);
-  await h.service.dispatchDomain("character.update", { id: "default", changes: { name: "Changed role", characterSetting: "Changed prompt" } });
-  assert.deepEqual(plain(await h.storage.readStoredSnapshot(reference)), saved);
-  await assert.rejects(h.storage.readStoredSnapshot({ recordId: "missing", schemaVersion: 1 }), /unavailable/);
+test("message author reads have no configuration storage and never write SQL", async t => {
+  const disk = await createDiskHarness(t);
+  let extension = { participantId: "default" };
+  const storage = loadModule("src/chat-storage.ts", { ...disk.globals, Tools: { ...disk.globals.Tools, Chat: { async readExtension() { return { extension }; } } } });
+  assert.equal(await storage.readMessageAuthor("chat-1", 10, 0), "default");
+  assert.equal(disk.calls.length, 0);
+  assert.equal(storage.storeSnapshot, undefined); assert.equal(storage.readStoredSnapshot, undefined);
+  extension = { participantId: "default", profile: { introPrompt: "forbidden" } };
+  await assert.rejects(() => storage.readMessageAuthor("chat-1", 10, 0), /Invalid message author identity/);
+  extension = null;
+  assert.equal(await storage.readMessageAuthor("chat-1", 10, 0), null);
 });
 
 test("draft commit is atomic and a stale deletion rolls back the entire SQL batch", async t => {

@@ -897,3 +897,63 @@ fn record_watch_supports_device_storage_and_releases_pending_waits() {
     assert!(wait.as_mut().poll(&mut context).is_pending());f.call(json!({"op":"close","handle":handle})).unwrap();
     assert!(matches!(wait.as_mut().poll(&mut context),Poll::Ready(Err(_))));drop(wait);f.dispose();
 }
+
+
+/// Measures actual retained storage handles, file validation and SQLite reads independently.
+#[test]
+#[ignore = "Manual native storage benchmark with real files and SQLite"]
+fn storage_query_roundtrip_benchmark() {
+    use operit_store::SqliteStore::SqliteRowGet;
+    /// Returns the median time of a fixed number of successful real host operations.
+    fn median_micros(mut operation: impl FnMut(), iterations: usize) -> f64 {
+        for _ in 0..10 { operation(); }
+        let mut samples = Vec::new();
+        for _ in 0..5 {
+            let started = std::time::Instant::now();
+            for _ in 0..iterations { operation(); }
+            samples.push(started.elapsed().as_secs_f64() * 1e6 / iterations as f64);
+        }
+        samples.sort_by(f64::total_cmp);
+        samples[2]
+    }
+    let fixture = Fixture::new("storage-benchmark");
+    let handle = fixture.open("sqlite");
+    let store = SqliteStore::openWithHost(fixture.host.clone(), &fixture.path).unwrap();
+    let request = json!({"op":"query","handle":handle,"statement":{"sql":"SELECT 1 AS value","params":[]}});
+    let session = median_micros(|| {
+        let result = fixture.call(request.clone()).unwrap();
+        assert_eq!(result[0]["values"][0], json!({"kind":"integer","value":"1"}));
+    }, 200);
+    let validation = median_micros(|| {
+        assert!(fixture.host.exists(&fixture.path).unwrap());
+        assert!(PluginStorage::ownsFile(fixture.host.clone(), &fixture.path).unwrap());
+    }, 200);
+    let query = median_micros(|| {
+        assert_eq!(store.queryRows("SELECT 1 AS value", vec![]).unwrap()[0].get::<_,i64>(0).unwrap(), 1);
+    }, 200);
+    let transaction = median_micros(|| {
+        assert_eq!(store.transaction(|tx| tx.queryRows("SELECT 1 AS value", vec![])).unwrap()[0].get::<_,i64>(0).unwrap(), 1);
+    }, 200);
+    eprintln!("STORAGE_BENCH session_us={session:.3} validation_us={validation:.3} query_us={query:.3} transaction_query_us={transaction:.3}");
+    drop(store);
+    fixture.dispose();
+}
+
+
+/// Allows a read-only SDK query while another connection holds SQLite's writer reservation.
+#[test]
+fn sql_query_does_not_reserve_the_writer() {
+    let fixture = Fixture::new("concurrent-reader");
+    let handle = fixture.open("sqlite");
+    fixture.call(json!({"op":"define_table","handle":handle,"table":table()})).unwrap();
+    let writer = SqliteStore::openWithHost(fixture.host.clone(), &fixture.path).unwrap();
+    writer.transaction(|_| {
+        let rows = fixture.call(json!({"op":"query","handle":handle,"statement":{
+            "sql":"SELECT id FROM records", "params":[],
+        }})).map_err(operit_store::SqliteStore::SqliteStoreError::Message)?;
+        assert_eq!(rows, json!([]));
+        Ok(())
+    }).unwrap();
+    drop(writer);
+    fixture.dispose();
+}

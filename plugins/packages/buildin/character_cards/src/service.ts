@@ -1,6 +1,8 @@
 import type { DomainInput, DomainOperation, DomainOutput } from "./api";
 import { executeDomain, resolveConfiguration } from "./operations";
 import { parseDomainPayload } from "./domain";
+import type { ChatConfigurationService } from "./domain";
+import { combineCharacterPrompt } from "./character-prompt";
 import { findChatBinding } from "./chat-storage";
 import { parseChatSelection } from "./chat-bindings";
 import { MemoryJobRunner } from "./memory-jobs/scheduler";
@@ -82,7 +84,7 @@ interface TagPlan {
   deleted: string[];
   attachedIds: string[];
 }
-export interface CharacterCardsService {
+export interface CharacterCardsService extends ChatConfigurationService {
   readGlobalMemoryPreferences(): Promise<
     import("./model").GlobalMemoryPreferences
   >;
@@ -161,6 +163,18 @@ export function createCharacterCardsService(
     runMemoryJobs: () => jobs.tick(),
     /** Reads only the metadata flags needed by prompt composition. */
     readGlobalMemoryPreferences: () => owner.readGlobalMemoryPreferences(),
+    /** Reads only the selected character and its owned relations. */
+    getCharacter: (id) => owner.getCharacter(id),
+    /** Reads only the selected group and its saved membership. */
+    getGroup: (id) => owner.getGroup(id),
+    /** Reads only one referenced prompt tag. */
+    getTag: (id) => owner.getTag(id),
+    /** Reads only one referenced shared memory library. */
+    getStore: (id) => owner.getStore(id),
+    /** Reads the model directory independently of role and tool catalogs. */
+    listModels: () => owner.listModels(),
+    /** Reads the speech directory independently of role and tool catalogs. */
+    listTtsConfigs: () => owner.listTtsConfigs(),
     /** Preserves action-specific results through the shared service dispatcher. */
     dispatch: dispatchRequest,
     /** Reads configuration records without loading memory data. */
@@ -864,31 +878,10 @@ export async function combinePrompts(
   characterId: string,
   additionalTagIds: string[],
   promptFunctionType: "CHAT" | "VOICE",
-  host: Pick<CharacterRepository, "getCharacter" | "listTags">,
+  host: Pick<CharacterRepository, "getCharacter" | "getTag">,
 ): Promise<string> {
   const card = await host.getCharacter(requireId(characterId, "角色卡标识"));
-  assertCard(card);
-  assertStrings(additionalTagIds, "附加标签");
-  if (promptFunctionType !== "CHAT" && promptFunctionType !== "VOICE")
-    throw new Error("提示词功能类型无效");
-  const tags = records(await host.listTags(), assertTag, "标签列表");
-  const parts: string[] = [];
-  const setting = card.characterSetting.trim();
-  if (setting !== "") parts.push(setting);
-  const otherContent = (
-    promptFunctionType === "CHAT"
-      ? card.otherContentChat
-      : card.otherContentVoice
-  ).trim();
-  if (otherContent !== "") parts.push(otherContent);
-  const ids = normalizeNames([...card.attachedTagIds, ...additionalTagIds]);
-  for (const id of ids) {
-    const content = findRecord(tags, id, "提示词标签").promptContent.trim();
-    if (content !== "") parts.push(content);
-  }
-  const advanced = card.advancedCustomPrompt.trim();
-  if (advanced !== "") parts.push(advanced);
-  return parts.join("\n\n").trim();
+  return combineCharacterPrompt(card, additionalTagIds, promptFunctionType, host);
 }
 
 /** Saves full settings through the owner service rather than writing preference files. */

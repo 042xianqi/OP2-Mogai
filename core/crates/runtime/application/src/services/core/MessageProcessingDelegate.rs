@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::core::chat::AIMessageManager::{
     logMessageTiming, messageTimingNow, AIMessageManager, BuildUserMessageContentRequest,
-    SendMessageRequest as AIMessageSendRequest, StableContextWindowRequest,
+    SendMessageRequest as AIMessageSendRequest,
 };
 use crate::data::preferences::ApiPreferences::ApiPreferences;
 use crate::data::preferences::FunctionalConfigManager::FunctionalConfigManager;
@@ -36,9 +36,7 @@ use operit_model::MessagePartCodec::{AssistantMarkupStreamState, MessagePartCode
 use operit_model::PromptFunctionType::PromptFunctionType;
 use operit_model::PromptTurn::PromptTurn;
 use operit_providers::chat::llmprovider::AIService::SharedAiResponseStream;
-use operit_providers::chat::EnhancedAIService::{
-    EnhancedAIService, SendMessageCallbacks, SendMessageOptions,
-};
+use operit_providers::chat::EnhancedAIService::{EnhancedAIService, SendMessageCallbacks};
 use operit_providers::runtime_support::ChatConfigurationResult;
 use operit_plugin_sdk::js_sdk::results::{ChatCommittedMessage, JsOptional, MessageSendOutcome, MessageSendResultData, MessageSendStatus};
 use tokio::sync::oneshot;
@@ -1610,9 +1608,7 @@ impl MessageProcessingDelegate {
                     error.to_string(),
                 )
             })?;
-        AIMessageManager::applyConfigurationSnapshot(&mut userMessage, &configuration, &request.enhancedAiService.tool_handler).await.map_err(
-            operit_providers::chat::llmprovider::AIService::AiServiceError::RequestFailed,
-        )?;
+        AIMessageManager::applyConfigurationIdentity(&mut userMessage, &configuration);
         }
         let mut workspaceToolHookSession = None;
         let mut workspaceToolHookHandler = request.enhancedAiService.tool_handler.clone();
@@ -1789,9 +1785,7 @@ impl MessageProcessingDelegate {
                     error.to_string(),
                 )
             })?;
-        AIMessageManager::applyConfigurationSnapshot(&mut aiMessage, &configuration, &request.enhancedAiService.tool_handler).await.map_err(
-            operit_providers::chat::llmprovider::AIService::AiServiceError::RequestFailed,
-        )?;
+        AIMessageManager::applyConfigurationIdentity(&mut aiMessage, &configuration);
         let streamKey = format!("chat-message-stream:{}:{}", chatId, aiMessage.timestamp);
         let segmentSource = coreResponseStreamSource(sharedResponseStream.clone(), streamKey);
         aiMessage.contentStream = Some(CoreStream::fromSourceWithId(
@@ -1828,9 +1822,7 @@ impl MessageProcessingDelegate {
             Arc::new(Mutex::new(request.chatHistoryDelegate.clone_for_core()));
         let workerMessageProcessingDelegate = Arc::new(Mutex::new(self.clone_for_core()));
         let completionContextWorkspacePath = request.workspacePath.clone();
-        let completionContextWorkspaceFolders = request.workspaceFolders.clone();
         let completionContextPromptFunctionType = request.promptFunctionType.clone();
-        let completionContextParticipantId = configuration.profile.id.clone();
         let completionContextConfiguration = configuration.clone();
         let completionContextEnableThinking = request.enableThinking;
         let completionContextProxySenderName = request.proxySenderNameOverride.clone();
@@ -2121,68 +2113,38 @@ impl MessageProcessingDelegate {
                                 ],
                             );
                         }
-                        let mut completionChatHistory = {
-                            let workerChatHistoryDelegate = completionChatHistoryDelegate
-                                .lock()
-                                .expect("worker chat history mutex poisoned");
-                            workerChatHistoryDelegate
-                                .getRuntimeChatHistory(completionChatId.clone())
-                        };
-                        if workerTurnOptions.persistTurn {
-                            let persistedAssistant = completionChatHistory
-                                .iter_mut()
-                                .find(|message| message.timestamp == finalMessage.timestamp)
-                                .expect("persisted assistant placeholder must remain in chat history");
-                            *persistedAssistant = finalMessage.clone();
-                        }
                         let pendingRouteChange = workerService.takePendingRouteChange();
                         let routeResumeContext =
-                            pendingRouteChange.as_ref().map(|_| CoreRouteResumeContext {
-                                runtimeChatHistory: completionChatHistory.clone(),
-                                workspacePath: completionContextWorkspacePath.clone(),
-                                promptFunctionType: completionContextPromptFunctionType.clone(),
-                                enableThinking: completionContextEnableThinking,
-                                participantId: completionContextConfiguration.profile.id.clone(),
-                                extensionOwner: completionContextConfiguration.extensionOwner.clone(),
-                                messageExtension: completionContextConfiguration.messageExtension.clone(),
-                                proxySenderName: completionContextProxySenderName.clone(),
-                                notifyReplyOverride: completionTurnOptions.notifyReply,
-                                chatProviderIdOverride: completionContextProviderIdOverride.clone(),
-                                chatModelIdOverride: completionContextModelIdOverride.clone(),
-                                turnOptions: completionTurnOptions.clone(),
+                            pendingRouteChange.as_ref().map(|_| {
+                                let mut completionChatHistory = {
+                                    let delegate = completionChatHistoryDelegate
+                                        .lock().expect("worker chat history mutex poisoned");
+                                    delegate.getRuntimeChatHistory(completionChatId.clone())
+                                };
+                                if workerTurnOptions.persistTurn {
+                                    let persistedAssistant = completionChatHistory.iter_mut()
+                                        .find(|message| message.timestamp == finalMessage.timestamp)
+                                        .expect("persisted assistant placeholder must remain in chat history");
+                                    *persistedAssistant = finalMessage.clone();
+                                }
+                                CoreRouteResumeContext {
+                                    runtimeChatHistory: completionChatHistory,
+                                    workspacePath: completionContextWorkspacePath.clone(),
+                                    promptFunctionType: completionContextPromptFunctionType.clone(),
+                                    enableThinking: completionContextEnableThinking,
+                                    participantId: completionContextConfiguration.profile.id.clone(),
+                                    extensionOwner: completionContextConfiguration.extensionOwner.clone(),
+                                    proxySenderName: completionContextProxySenderName.clone(),
+                                    notifyReplyOverride: completionTurnOptions.notifyReply,
+                                    chatProviderIdOverride: completionContextProviderIdOverride.clone(),
+                                    chatModelIdOverride: completionContextModelIdOverride.clone(),
+                                    turnOptions: completionTurnOptions.clone(),
+                                }
                             });
-                        let nextWindowSize = async {
-                            let runtimeOptions = SendMessageOptions {
-                                executionParticipantId: Some(completionContextParticipantId.clone()),
-                                promptFunctionType: completionContextPromptFunctionType.clone(),
-                                chatProviderIdOverride: completionContextProviderIdOverride.clone(),
-                                chatModelIdOverride: completionContextModelIdOverride.clone(),
-                                ..SendMessageOptions::new()
-                            };
-                            let runtime = workerService
-                                .createSendMessageRuntime(&runtimeOptions, completionContextConfiguration)
-                                .map_err(|_| ())?;
-                            AIMessageManager::calculateStableContextWindow(
-                                StableContextWindowRequest {
-                                    enhancedAiService: &mut workerService,
-                                    chatId: Some(completionChatId.clone()),
-                                    messageContent: String::new(),
-                                    chatHistory: completionChatHistory,
-                                    workspacePath: completionContextWorkspacePath,
-                                    workspaceFolders: completionContextWorkspaceFolders,
-                                    promptFunctionType: completionContextPromptFunctionType,
-                                    proxySenderName: completionContextProxySenderName,
-                                    chatProviderIdOverride: completionContextProviderIdOverride,
-                                    chatModelIdOverride: completionContextModelIdOverride,
-                                    publishEstimate: true,
-                                    runtime,
-                                },
-                            )
-                            .await
-                            .map_err(|_| ())
-                        }
-                        .await
-                        .ok();
+                        // The provider completed this estimate from the actual prepared
+                        // request and final reply before closing the response stream.
+                        // Completion must not rebuild a send runtime or invoke plugins.
+                        let nextWindowSize = workerService.getLastTurnContextWindow();
                         if !completionMessageProcessingDelegate
                             .lock()
                             .expect("worker message processing delegate mutex poisoned")

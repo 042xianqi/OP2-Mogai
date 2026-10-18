@@ -245,7 +245,7 @@ impl ToolPromptComposeHook for ToolPromptComposeBridge {
             let manager = RuntimePackageManager::readySnapshot(
                 self.runtime.tool_handler().getOrCreatePackageManager(),
             ).await?;
-            ToolPkgToolLifecycleBridge::validateExecutionSnapshot(&manager, executionContext.as_ref())?;
+            ToolPkgToolLifecycleBridge::validateExecutionContext(&manager, executionContext.as_ref())?;
             let budget = ToolPkgPreHookTimeout::fromPreferences();
             let mut current = context.clone();
             let mut combined = PromptHookMutation::default();

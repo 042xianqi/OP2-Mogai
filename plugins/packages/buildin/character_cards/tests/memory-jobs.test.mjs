@@ -209,7 +209,7 @@ async function enqueueProviderReplies(runtime, harness) {
 }
 
 /** Proves provider-to-interval work keeps the original send identity even after the current chat namespace is removed. */
-test("controlled Chat/AI: registered candidate provider and interval use exact saved message snapshots without reading current chat selection", async t => {
+test("controlled Chat/AI: registered candidate provider and interval use exact message authors and current permissions without reading current chat selection", async t => {
   const harness = await createMemoryJobsHarness(t), runtime = harness.openRuntime(); await runtime.initialize(); await runtime.bind();
   await enqueueProviderReplies(runtime, harness);
   const before = await readOwner(harness);
@@ -221,7 +221,7 @@ test("controlled Chat/AI: registered candidate provider and interval use exact s
   await runtime.interval(); harness.assertOutputsConsumed();
   const saved = await readOwner(harness); assert.equal(saved.candidates.length, 0); assert.equal(saved.memories.length, 1);
   assert.equal(saved.memories[0].title, "Snapshot ownership");
-  for (const call of harness.extensionCalls.slice(readCount)) assert.equal(call.target.kind, "message", "Historical assistant execution must not read current chat identity");
+  for (const call of harness.extensionCalls.slice(readCount)) assert.equal(call.target.kind, "message", "Message author lookup must not read current chat identity");
 });
 
 /** Checks strict missing-snapshot and required-revision errors without manufacturing an owner or publishing a candidate. */
@@ -229,8 +229,8 @@ test("controlled Chat/AI: candidate provider rejects missing snapshots or absent
   const harness = await createMemoryJobsHarness(t), runtime = harness.openRuntime(); await runtime.initialize(); await runtime.bind();
   const source = harness.message(31), before = await harness.readStateText(); harness.disk.clearCalls();
   await assert.rejects(() => runtime.api("memory.candidate.enqueue", { chatId: CONTROLLED_CHAT_ID, timestamp: source.timestamp, sourceType: "reply_finalized_auto", ownerKey: null }), /variantIndex is required/);
-  harness.removeMessageMarker(source.timestamp, source.variantIndex);
-  await assert.rejects(() => runtime.api("memory.candidate.enqueue", { chatId: CONTROLLED_CHAT_ID, timestamp: source.timestamp, variantIndex: source.variantIndex, sourceType: "reply_finalized_auto", ownerKey: null }), /no saved configuration reference/);
+  harness.removeExecutionData(source.timestamp, source.variantIndex);
+  await assert.rejects(() => runtime.api("memory.candidate.enqueue", { chatId: CONTROLLED_CHAT_ID, timestamp: source.timestamp, variantIndex: source.variantIndex, sourceType: "reply_finalized_auto", ownerKey: null }), /has no character author identity/);
   assert.equal(await harness.readStateText(), before); assert.equal(mutations(harness.disk).length, 0); assert.equal(harness.modelCalls.length, 0);
 });
 

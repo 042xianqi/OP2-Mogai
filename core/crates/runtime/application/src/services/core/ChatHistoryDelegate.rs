@@ -1439,7 +1439,6 @@ impl ChatHistoryDelegate {
             purpose: ChatConfigurationPurpose::Display,
             chatId: Some(draft.id.clone()),
             chatExtension: None,
-            messageExtension: None,
             participantId: None,
             promptFunctionType: PromptFunctionType::CHAT,
             defaultModelBinding: support
@@ -1501,14 +1500,13 @@ impl ChatHistoryDelegate {
                 let mut opening =
                     ChatMessage::new_with_markdown("ai".to_string(), initial.content.clone());
                 opening.roleName = initial.displayName.clone();
-                if let Some(snapshot) = &initial.messageExtension {
-                    let reference = api.storeSnapshot(snapshot.clone()).await?;
-                    let execution = api.resolve(ChatConfigurationRequest { purpose: ChatConfigurationPurpose::Execution, messageExtension: Some(snapshot.clone()), ..request.clone() }).await?;
-                    opening.pluginExtensions.insert("host.chat.identity".into(), serde_json::json!({"title": execution.profile.name, "avatarUri": execution.profile.avatarUri}));
-                    opening.pluginExtensions.insert(
-                        configuration.extensionOwner.clone(),
-                        Value::Object(reference),
-                    );
+                if let Some(participantId) = &initial.participantId {
+                    let participant = configuration.participants.iter().find(|participant| &participant.id == participantId)
+                        .ok_or_else(|| "Initial message author is not a current chat participant".to_string())?;
+                    opening.pluginExtensions.insert("host.chat.identity".into(), serde_json::json!({
+                        "title": participant.name, "avatarUri": participant.avatarUri,
+                    }));
+                    opening.pluginExtensions.insert(configuration.extensionOwner.clone(), serde_json::json!({ "participantId": participant.id }));
                 }
                 draft.messages.push(opening);
             }

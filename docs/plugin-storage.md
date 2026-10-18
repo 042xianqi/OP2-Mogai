@@ -162,8 +162,9 @@ then request Core metadata in batches of at most 200 chat IDs. General domain ed
 sessions still assemble an operation snapshot in memory.
 
 Core conversations contain generic chat/message data. Current character bindings
-reside in the plugin. Core message revisions store only the plugin namespace and
-`{recordId, schemaVersion}` reference to an immutable plugin snapshot.
+reside in the plugin. Core message revisions store only `{participantId}` in the plugin namespace and
+`host.chat.identity` display fields. Prompt, model, voice, tool policy and memory
+grants are resolved from current settings; no historical configuration is stored.
 
 `USER.md` remains a real file for editing and attachment through `Tools.Files`.
 Writes stage a sibling file before the record commit and publish it afterwards.
@@ -174,8 +175,9 @@ Core's physical database version remains 28. `CharacterPluginMigration` adopts
 v27 sources and the bindings staged by 27→28 before plugin startup. Already-upgraded
 v28 Objects records are copied to the typed tables, verified and removed once;
 `characters.sqlite` retains migration provenance. Old Core chat markers become
-plugin bindings, and frozen message/variant markers become plugin snapshots and
-Core references. Migrated chat synchronization operations use schema version 8.
+plugin bindings, and old message/variant configuration becomes author IDs. Released snapshot tables,
+object records and row metadata are removed after author conversion. Replication
+operations retain their original payloads to preserve operation identity on retry. Migrated chat synchronization operations use schema version 8.
 
 Operit1 imports use the same writer and create plugin binding drafts. Reconciliation
 publishes a draft only when the imported Core chat carries its matching reference;
