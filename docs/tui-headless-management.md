@@ -53,8 +53,43 @@ Space 身份：
 
 名称写入本机链接身份并持久化，重启后仍然保留；Space 中的 nodeId 不变。
 
+## 后台 daemon
+
+没有 TTY 时用 daemon 保持 Core、Space 同步和监听常驻：
+
+```bash
+operit2 daemon run                    # 前台运行，适合 systemd
+operit2 daemon start                  # 派生后台进程并等待就绪
+operit2 daemon status [--json]
+operit2 daemon stop [--json]
+```
+
+- `run` 支持 `--no-listen` 和 `--link-listen <http|ws|tcp|serial|bluetooth>[,<transport>...]`；显式传输会写入本机监听配置，下一次启动继续使用。
+- 同一 identity 只允许一个 Core owner：daemon 和 TUI 互斥，第二个会直接报错并给出现有 pid。短命 `operit2 cli` 命令会先尝试复用正在运行的 daemon/TUI，通过 Unix control socket 执行，不会再启动第二个 Core。
+- 交互式命令不会被路由：`chat shell`、`shell`、`model codex-login`、`tts`、`stt`、`export/import/backup`、`market`、`update`、`web`、`identity`、`link` 等仍在当前进程启动一个短命 Core；`cli help` 也会短暂启动 Core 读取插件命令目录。`chat shell` 这类长时间命令与 daemon 并发时两边会各自持有同步 worker，建议先停止 daemon。
+- 状态文件在 `<runtime identity>/daemon/status.json`；control socket 在 `$XDG_RUNTIME_DIR/operit2-<hash>/control.sock`（无 `XDG_RUNTIME_DIR` 时退到系统临时目录），权限均为当前用户。分离运行的 stdout/stderr 在 `<runtime identity>/logs/daemon.out`。
+- `operit2 daemon stop` 只停止 daemon；如果 owner 是 TUI，需要从 TUI 退出。
+
+systemd 示例：
+
+```ini
+[Unit]
+Description=Operit2 Core daemon
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/you/.local/bin/operit2 daemon run
+Restart=on-failure
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target
+```
+
 ## 仍待补齐
 
-- TUI 需要 TTY；长期后台运行目前仍依赖 tmux/systemd-run 或 `operit2 cli link listen`。
-- `link listen` 没有 SIGTERM 优雅退出、pid/status 和控制通道，daemon 化是后续工作。
+- `link` 子命令仍会启动自己的短命 Core，尚未通过 control socket 路由；不要和 daemon 同时执行 `link listen`。
 - Market/GitHub 登录仍是 loopback 回调，无头服务器需要端口转发；Codex 已有 device-code 流程可参照。
+- 没有自动日志轮转；长期运行需自行清理 `operit.log`。

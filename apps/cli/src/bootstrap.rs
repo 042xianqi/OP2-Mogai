@@ -346,6 +346,14 @@ pub(crate) fn cli_identities() -> (Vec<CliIdentity>, String) {
     (config.identities, config.activeIdentityId)
 }
 
+/// Returns the selected identity and the runtime/workspace roots it owns.
+pub(crate) fn active_cli_identity() -> (CliIdentity, PathBuf, PathBuf) {
+    let config = CliStorageConfig::read();
+    let identity = config.activeIdentity().clone();
+    let (runtimeRoot, workspaceRoot) = config.activeRoots();
+    (identity, runtimeRoot, workspaceRoot)
+}
+
 /// Creates one isolated CLI identity without changing the active process identity.
 pub(crate) fn create_cli_identity(name: String) -> Result<CliIdentity, String> {
     let identity = newCliIdentity(name)?;
