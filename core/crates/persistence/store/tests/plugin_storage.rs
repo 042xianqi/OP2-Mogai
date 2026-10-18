@@ -957,3 +957,54 @@ fn sql_query_does_not_reserve_the_writer() {
     drop(writer);
     fixture.dispose();
 }
+
+/// Byte budgets bound one exported page without splitting a transaction or reordering it.
+#[test]
+fn byte_budgets_bound_exported_pages_without_reordering() {
+    let f = Fixture::new("first");
+    let handle = f.open("data_store");
+    // Each commit is one synchronization transaction; a 48 KiB value makes a
+    // single transaction far larger than a small page budget.
+    for index in 0..4 {
+        f.call(json!({
+            "op": "commit",
+            "handle": handle,
+            "mutations": [put(&format!("key-{index}"), json!("x".repeat(48 * 1024)))],
+        }))
+        .unwrap();
+    }
+    let all = f.export();
+    assert!(all.len() >= 4, "each commit must export one transaction");
+    let budget = 64 * 1024;
+    let page = PluginStorage::operationsSinceWithBudget(
+        f.host.clone(),
+        &SyncClock::empty(),
+        &[],
+        1000,
+        budget,
+    )
+    .unwrap();
+    assert!(!page.is_empty());
+    assert!(page.len() < all.len(), "the byte budget must cut the page");
+    // The page is an ordered prefix of the unbounded export: no transaction is
+    // split and nothing is reordered.
+    let pageIds = page
+        .iter()
+        .map(|operation| operation.opId.clone())
+        .collect::<Vec<_>>();
+    let prefixIds = all
+        .iter()
+        .take(page.len())
+        .map(|operation| operation.opId.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(pageIds, prefixIds);
+    if page.len() > 1 {
+        let bytes = page
+            .iter()
+            .map(|operation| serde_json::to_vec(&operation.payload).unwrap().len())
+            .sum::<usize>();
+        assert!(bytes <= budget, "a multi-operation page must stay in budget");
+    }
+    f.call(json!({"op":"close","handle":handle})).unwrap();
+    f.dispose();
+}

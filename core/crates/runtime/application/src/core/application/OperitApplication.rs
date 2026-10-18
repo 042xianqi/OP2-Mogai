@@ -863,8 +863,14 @@ impl OperitApplication {
                 .map_err(|error| error.to_string())?,
         );
         operations.extend(
-            PluginStorage::operationsSince(self.pluginSqliteHost()?, &clock, &domains, limit)
-                .map_err(|e| e.to_string())?,
+            PluginStorage::operationsSinceWithBudget(
+                self.pluginSqliteHost()?,
+                &clock,
+                &domains,
+                limit,
+                operit_store::SyncOperationStore::DEFAULT_SYNC_PAGE_BYTES,
+            )
+            .map_err(|e| e.to_string())?,
         );
         operations.retain(|operation| {
             !crate::data::backup::CharacterPluginMigration::isRetiredCharacterOperation(operation)
@@ -877,7 +883,26 @@ impl OperitApplication {
         });
         operations = compactSyncOperations(operations);
         operations.truncate(limit);
-        serde_json::to_value(operations).map_err(|error| error.to_string())
+        // Bound the page by bytes as well as by count: one transaction can be
+        // hundreds of KiB, so a count-only page has no memory ceiling. The first
+        // operation always travels even when it alone exceeds the budget; the
+        // send path reports an operation that cannot fit any message.
+        let mut page = Vec::new();
+        let mut pageBytes = 0usize;
+        for operation in operations {
+            let bytes = serde_json::to_vec(&operation)
+                .map(|encoded| encoded.len())
+                .unwrap_or(0);
+            if !page.is_empty()
+                && pageBytes.saturating_add(bytes)
+                    > operit_store::SyncOperationStore::DEFAULT_SYNC_PAGE_BYTES
+            {
+                break;
+            }
+            pageBytes = pageBytes.saturating_add(bytes);
+            page.push(operation);
+        }
+        serde_json::to_value(page).map_err(|error| error.to_string())
     }
 
     /// Applies incoming sync operations to their owning persistent stores.

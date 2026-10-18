@@ -1161,31 +1161,112 @@ pub fn operationsSince(
     domains: &[String],
     limit: usize,
 ) -> Result<Vec<SyncOperation>, SqliteStoreError> {
+    operationsSinceWithBudget(host, clock, domains, limit, usize::MAX)
+}
+
+/// Exports one byte-bounded page of record transactions.
+///
+/// The page is planned from outbox metadata first and only the selected payloads
+/// are parsed, so one large transaction cannot make a store materialize
+/// `limit × origins` operations before the page is truncated. The first
+/// operation is always kept even when it alone exceeds `maxBytes`: the send path
+/// reports an operation that cannot fit any message instead of stalling here.
+pub fn operationsSinceWithBudget(
+    host: Arc<dyn RuntimeSqliteHost>,
+    clock: &SyncClock,
+    domains: &[String],
+    limit: usize,
+    maxBytes: usize,
+) -> Result<Vec<SyncOperation>, SqliteStoreError> {
     if !domains.is_empty() && !domains.iter().any(|d| d == PLUGIN_STORAGE_SYNC_DOMAIN) {
         return Ok(Vec::new());
     }
-    let mut operations = Vec::new();
-    for manifest in manifests(host.clone())?.into_iter().filter(|m| m.sync) {
-        let store = SqliteStore::openWithHost(host.clone(), &manifest.path)?;
+    struct PlannedOperation {
+        store: usize,
+        origin: String,
+        sequence: i64,
+        createdAt: i64,
+        bytes: usize,
+    }
+    let stores = manifests(host.clone())?
+        .into_iter()
+        .filter(|manifest| manifest.sync)
+        .map(|manifest| SqliteStore::openWithHost(host.clone(), &manifest.path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut planned = Vec::new();
+    for (storeIndex, store) in stores.iter().enumerate() {
         for originRow in store.queryRows(
             "SELECT DISTINCT origin FROM _operit_log WHERE outgoing=1",
             Vec::new(),
         )? {
             let origin: String = originRow.get(0)?;
-            for row in store.queryRows("SELECT sequence,created_at,payload FROM _operit_log WHERE origin=?1 AND sequence>?2 AND outgoing=1 ORDER BY sequence LIMIT ?3",vec![SqliteValue::Text(origin.clone()),SqliteValue::Integer(clock.sequenceFor(&origin)),SqliteValue::Integer(i64::try_from(limit).map_err(|_|failure("Sync limit overflows int64"))?)])? {
-                let sequence:i64=row.get(0)?;
-                operations.push(SyncOperation {opId:format!("{origin}:{sequence}"),originDeviceId:origin.clone(),sequence,domain:PLUGIN_STORAGE_SYNC_DOMAIN.into(),entityType:"transaction".into(),entityId:format!("{origin}:{sequence}"),operation:"commit".into(),semantics:SyncOperationSemantics::Transaction,payload:serde_json::from_str(&row.get::<_,String>(2)?).map_err(|e|failure(e.to_string()))?,createdAt:row.get(1)?,schemaVersion:1});
+            for row in store.queryRows(
+                "SELECT sequence,created_at,length(payload) FROM _operit_log WHERE origin=?1 AND sequence>?2 AND outgoing=1 ORDER BY sequence LIMIT ?3",
+                vec![
+                    SqliteValue::Text(origin.clone()),
+                    SqliteValue::Integer(clock.sequenceFor(&origin)),
+                    SqliteValue::Integer(i64::try_from(limit).map_err(|_| failure("Sync limit overflows int64"))?),
+                ],
+            )? {
+                planned.push(PlannedOperation {
+                    store: storeIndex,
+                    origin: origin.clone(),
+                    sequence: row.get(0)?,
+                    createdAt: row.get(1)?,
+                    bytes: usize::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
+                });
             }
         }
     }
-    operations.sort_by(|a, b| {
-        (a.createdAt, &a.originDeviceId, a.sequence).cmp(&(
-            b.createdAt,
-            &b.originDeviceId,
-            b.sequence,
+    planned.sort_by(|left, right| {
+        (left.createdAt, &left.origin, left.sequence).cmp(&(
+            right.createdAt,
+            &right.origin,
+            right.sequence,
         ))
     });
-    operations.truncate(limit);
+    let mut selected = Vec::new();
+    let mut bytes = 0usize;
+    for operation in planned {
+        if selected.len() >= limit {
+            break;
+        }
+        if !selected.is_empty() && bytes.saturating_add(operation.bytes) > maxBytes {
+            break;
+        }
+        bytes = bytes.saturating_add(operation.bytes);
+        selected.push(operation);
+    }
+    let mut operations = Vec::with_capacity(selected.len());
+    for operation in selected {
+        let sequence = operation.sequence;
+        let payload: String = stores[operation.store]
+            .queryRows(
+                "SELECT payload FROM _operit_log WHERE origin=?1 AND sequence=?2",
+                vec![
+                    SqliteValue::Text(operation.origin.clone()),
+                    SqliteValue::Integer(sequence),
+                ],
+            )
+            .map_err(|error| failure(error.to_string()))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| failure("Missing synchronization payload"))?
+            .get(0)?;
+        operations.push(SyncOperation {
+            opId: format!("{}:{sequence}", operation.origin),
+            originDeviceId: operation.origin.clone(),
+            sequence,
+            domain: PLUGIN_STORAGE_SYNC_DOMAIN.into(),
+            entityType: "transaction".into(),
+            entityId: format!("{}:{sequence}", operation.origin),
+            operation: "commit".into(),
+            semantics: SyncOperationSemantics::Transaction,
+            payload: serde_json::from_str(&payload).map_err(|error| failure(error.to_string()))?,
+            createdAt: operation.createdAt,
+            schemaVersion: 1,
+        });
+    }
     Ok(operations)
 }
 
