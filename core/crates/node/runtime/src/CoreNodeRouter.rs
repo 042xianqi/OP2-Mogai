@@ -250,6 +250,15 @@ impl CoreNodeRouter {
         self.peerServices.get().ok_or_else(|| "Node services are not installed".into())
     }
 
+    /// Largest encoded Link message one direct peer connection can carry.
+    /// Callers that build their own payloads size them against this ceiling;
+    /// an uninstalled peer service falls back to the documented default.
+    pub fn maxPeerMessageBytes(&self) -> usize {
+        self.nodeServices()
+            .map(|services| services.peers().maxMessageBytes())
+            .unwrap_or(operit_peer_link::DEFAULT_MAX_PEER_MESSAGE_BYTES)
+    }
+
     /// Creates a router over the local Core and its runtime-owned Link Access records.
     pub fn new(localCore: CoreNodeLocalRuntime) -> Self {
         let bindingStore = Arc::new(
@@ -3558,7 +3567,7 @@ mod tests {
                     runtimeChatHistory: Vec::new(), workspacePath: None,
                     promptFunctionType: operit_model::PromptFunctionType::PromptFunctionType::CHAT,
                     enableThinking: false, participantId: String::new(), extensionOwner: String::new(),
-                    executionData: serde_json::Map::new(), proxySenderName: None,
+                    proxySenderName: None,
                     notifyReplyOverride: None, chatProviderIdOverride: None, chatModelIdOverride: None,
                     turnOptions: Default::default(),
                 };

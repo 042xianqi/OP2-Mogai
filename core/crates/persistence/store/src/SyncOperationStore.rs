@@ -26,6 +26,11 @@ pub enum SyncOperationStoreError {
     Message(String),
 }
 
+/// Largest serialized operation page one synchronization exchange materializes.
+/// The page stays far below the Link message ceiling so peak memory is bounded
+/// by policy instead of by how much a device has pending.
+pub const DEFAULT_SYNC_PAGE_BYTES: usize = 4 * 1024 * 1024;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncClock {
     pub sequences: BTreeMap<String, i64>,
