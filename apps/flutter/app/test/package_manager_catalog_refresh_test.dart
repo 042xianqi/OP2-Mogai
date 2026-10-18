@@ -33,10 +33,12 @@ void main() {
           ..enabled = true;
         bridge.preferences['chat_sidebar_tab_v1'] = selection;
         final selectionsAtNotification = <String?>[];
-        final subscription = ToolPkgCatalogChangeBus.listen(() {
+        final reloadPolicies = <bool>[];
+        final subscription = ToolPkgCatalogChangeBus.listenChanges((change) {
           selectionsAtNotification.add(
             bridge.preferences['chat_sidebar_tab_v1'],
           );
+          reloadPolicies.add(change.reloadPluginCode);
         });
         addTearDown(subscription.cancel);
         await tester.pumpWidget(_manager(bridge));
@@ -54,6 +56,7 @@ void main() {
         expect(bridge.scans, 0);
         expect(bridge.preferences['chat_sidebar_tab_v1'], expected);
         expect(selectionsAtNotification, [expected]);
+        expect(reloadPolicies, [false]);
         expect(
           bridge.mutations,
           expected != selection ? ['disable', 'selection'] : ['disable'],
@@ -62,6 +65,24 @@ void main() {
       },
     );
   }
+
+  testWidgets('enabling a plugin requests a registration-only refresh', (
+    tester,
+  ) async {
+    final bridge = _CatalogBridge()..installed = true;
+    final changes = <ToolPkgCatalogChange>[];
+    final subscription = ToolPkgCatalogChangeBus.listenChanges(changes.add);
+    addTearDown(subscription.cancel);
+    await tester.pumpWidget(_manager(bridge));
+    await tester.pumpAndSettle();
+    expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+    expect(bridge.enabled, isTrue);
+    expect(bridge.mutations, ['enable']);
+    expect(changes.map((change) => change.reloadPluginCode), [false]);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('failed plugin disable keeps the current sidebar selection', (
     tester,
@@ -783,6 +804,11 @@ class _CatalogBridge extends OperitRuntimeBridge {
         return result;
       case 'getEnabledPackageNames':
         return installed && enabled ? ['demo_toolpkg'] : [];
+      case 'enableToolPkgContainer':
+        expect((request.args as Map)['containerPackageName'], 'demo_toolpkg');
+        enabled = true;
+        mutations.add('enable');
+        return 'Enabled';
       case 'disableToolPkgContainer':
         expect((request.args as Map)['containerPackageName'], 'demo_toolpkg');
         if (disableError case final Object error) throw error;

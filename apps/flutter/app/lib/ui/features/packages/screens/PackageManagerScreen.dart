@@ -284,7 +284,7 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
           );
         }
       }
-      ToolPkgCatalogChangeBus.notifyCatalogChanged();
+      ToolPkgCatalogChangeBus.notifyCatalogChanged(reloadPluginCode: false);
       await _loadSnapshot();
     } catch (error, stackTrace) {
       debugPrint('Failed to update plugin state: $error\n$stackTrace');
@@ -312,7 +312,7 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
       } else {
         await _packageManager.disablePackage(packageName: package.name);
       }
-      ToolPkgCatalogChangeBus.notifyCatalogChanged();
+      ToolPkgCatalogChangeBus.notifyCatalogChanged(reloadPluginCode: false);
     } catch (error, stackTrace) {
       debugPrint('Failed to update package state: $error\n$stackTrace');
       if (!mounted) {
