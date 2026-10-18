@@ -2446,6 +2446,18 @@ var RelationalDatabase = class _RelationalDatabase {
     });
   }
 };
+function mutationStatementCount(mutation) {
+  const root = layouts[mutation.collection];
+  if (root === void 0)
+    throw new Error("Unknown relational collection: " + mutation.collection);
+  const children = tables(root).slice(1);
+  if (mutation.op === "delete") return 1 + children.length;
+  const encoded = encode(root.name, mutation.key, mutation.value, "count");
+  let count = 1;
+  if (mutation.expectedVersion !== null) count += children.length;
+  for (const table of children) count += encoded.get(table.name)?.length ?? 0;
+  return count;
+}
 function insertRow(table, row) {
   const columns = Object.keys(row);
   return {
@@ -7042,6 +7054,7 @@ var RepositorySession = class {
 function completed(result2) {
   if (!result2.successful) throw new Error(result2.details);
 }
+var HOST_TRANSACTION_STATEMENT_LIMIT = 1e3;
 var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
   /** Retains the host database handle and the explicit external directory readers. */
   constructor(database2, directory, directories) {
@@ -7445,7 +7458,7 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
     if (waiter === void 0) this.busy = false;
     else waiter();
   }
-  /** Commits only changed domain records and retains the migration provenance in the metadata guard. */
+  /** Commits only changed domain records in host-sized batches and retains the migration provenance in the metadata guard. */
   publish(state, before, documents, removed, metadataVersion, metadata) {
     return __async(this, null, function* () {
       const previous = new Map(
@@ -7483,10 +7496,23 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
         },
         expectedVersion: metadataVersion
       });
-      if (mutations.length > 1e3)
-        throw new Error(
-          "Character operation exceeds the host transaction limit of 1000 records"
-        );
+      const batches = [];
+      let batch = [], statements = 0;
+      for (const mutation of mutations) {
+        const count = mutationStatementCount(mutation);
+        if (count > HOST_TRANSACTION_STATEMENT_LIMIT)
+          throw new Error(
+            "Character record requires " + count + " statements, exceeding the host transaction limit of " + HOST_TRANSACTION_STATEMENT_LIMIT
+          );
+        if (batch.length !== 0 && statements + count > HOST_TRANSACTION_STATEMENT_LIMIT) {
+          batches.push(batch);
+          batch = [];
+          statements = 0;
+        }
+        batch.push(mutation);
+        statements += count;
+      }
+      if (batch.length !== 0) batches.push(batch);
       const stagedDocuments = [];
       for (const document of documents) {
         if (document.newDocument) {
@@ -7506,7 +7532,7 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
         completed(yield Tools.Files.write(stagedPath, document.content, false));
         stagedDocuments.push({ path: document.path, stagedPath });
       }
-      yield this.database.commit(mutations);
+      for (const pending of batches) yield this.database.commit(pending);
       for (const document of stagedDocuments)
         completed(yield Tools.Files.move(document.stagedPath, document.path));
       for (const path of removed)
