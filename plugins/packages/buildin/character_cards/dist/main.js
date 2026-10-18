@@ -4541,6 +4541,39 @@ function executeDomain(operation, input, host) {
   return handlers[operation](parseDomainPayload(operation, input), host);
 }
 
+// src/chat-binding-catalog.ts
+function listBindableChats() {
+  return __async(this, null, function* () {
+    const result2 = yield Tools.Chat.listAll();
+    assertInteger(result2.totalCount, "conversation count", 0);
+    if (!Array.isArray(result2.chats) || result2.chats.length !== result2.totalCount)
+      throw new Error("\u5BF9\u8BDD\u5217\u8868\u4E0D\u5B8C\u6574\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
+    const ids = /* @__PURE__ */ new Set();
+    for (const chat of result2.chats) {
+      requireId(chat.id, "conversation id");
+      if (ids.has(chat.id)) throw new Error("\u5BF9\u8BDD\u5217\u8868\u5305\u542B\u91CD\u590D\u8BB0\u5F55");
+      ids.add(chat.id);
+      assertString(chat.title, "conversation title");
+      assertString(chat.updatedAt, "conversation update time");
+      assertInteger(chat.messageCount, "message count", 0);
+      assertBoolean(chat.isCurrent, "current conversation");
+    }
+    const bindings = yield bindingsForChats([...ids]);
+    return result2.chats.map((chat) => ({
+      id: chat.id,
+      title: chat.title,
+      updatedAt: chat.updatedAt,
+      messageCount: chat.messageCount,
+      isCurrent: chat.isCurrent,
+      selection: bindings.get(chat.id) ?? null
+    })).sort((left, right) => timestamp(right.updatedAt) - timestamp(left.updatedAt) || left.id.localeCompare(right.id));
+  });
+}
+function timestamp(value) {
+  const parsed = /^\d+$/.test(value) ? Number(value) : Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 // src/selection-application.ts
 function copyReferences(references) {
   parseChatSelection(references.selection);
@@ -4855,6 +4888,8 @@ function createCharacterCardsService(owner2, configurations = independentConfigu
     switch (request.action) {
       case "snapshot":
         return owner2.readConfigurationSnapshot();
+      case "listBindableChats":
+        return listBindableChats();
       case "listMemoryChats":
         return listMemoryChats(request.ownerKey, owner2);
       case "readGlobalMemoryPreferences":
@@ -5596,6 +5631,8 @@ function dispatch(request, host) {
         assertActive(active);
         return active;
       }
+      case "listBindableChats":
+        return listBindableChats();
       case "readChatBinding":
         return executeDomain(
           "chat.configuration.binding.read",
@@ -9910,9 +9947,9 @@ function decodeNativeGroupSendResult(value, input, previousTimestamp) {
       let userMessageTimestamp;
       if (outcome.userMessageTimestamp === null) userMessageTimestamp = null;
       else {
-        const timestamp = outcome.userMessageTimestamp;
-        assertInteger(timestamp, "native user message timestamp", 1);
-        userMessageTimestamp = timestamp;
+        const timestamp2 = outcome.userMessageTimestamp;
+        assertInteger(timestamp2, "native user message timestamp", 1);
+        userMessageTimestamp = timestamp2;
       }
       if (previousTimestamp !== null && userMessageTimestamp !== null && userMessageTimestamp !== previousTimestamp) throw new Error("Group continuation created or referenced a different user message");
       const located = outcome.assistant === null ? null : assistant(outcome.assistant);

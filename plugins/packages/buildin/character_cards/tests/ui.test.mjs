@@ -1068,3 +1068,117 @@ test("management create and edit entrypoints use the one native dialog bridge wi
   await ui.page.waitForFunction(() => window.testCalls.some(call => call.action === "snapshot"));
   await ui.context.close();
 });
+
+
+/** Supplies explicit presentation-only history; SQL persistence is checked in chat-storage.test.mjs. */
+function bindingFixture() {
+  const data = fixture();
+  data.bindingChats = [
+    { id: "binding-one", title: "周末的旅行计划", selection: null, messageCount: 12, updatedAt: "2026-10-18T10:00:00Z", isCurrent: true },
+    { id: "binding-two", title: "学习与日常记录", selection: "card:" + data.snapshot.cards[1].id, messageCount: 28, updatedAt: "2026-10-17T10:00:00Z", isCurrent: false },
+    { id: "binding-three", title: "已经绑定的对话", selection: "card:" + data.snapshot.cards[0].id, messageCount: 6, updatedAt: "2026-10-16T10:00:00Z", isCurrent: false },
+  ];
+  return data;
+}
+
+test("batch binding picker preserves hidden selections, excludes existing bindings and commits only on submit", async () => {
+  const data = bindingFixture(), { page: p, context } = await page(1100, 850, data);
+  try {
+    await p.locator('[data-action="bind-card-chats"]').first().click();
+    const dialog = p.getByRole("dialog", { name: "批量绑定对话" });
+    await dialog.locator('[data-binding-chat="binding-one"]').check();
+    assert.match(await dialog.locator(".binding-selection-count").innerText(), /已选择 1 条/);
+    await dialog.getByRole("textbox", { name: "搜索对话或当前角色" }).fill("学习");
+    assert.equal(await dialog.locator(".binding-chat").count(), 1);
+    await dialog.getByRole("button", { name: "全选结果" }).click();
+    assert.match(await dialog.locator(".binding-selection-count").innerText(), /已选择 2 条/);
+    await dialog.getByRole("textbox", { name: "搜索对话或当前角色" }).fill("");
+    assert.equal(await dialog.locator('[data-binding-chat="binding-one"]').isChecked(), true);
+    const composition = await dialog.getByRole("textbox", { name: "搜索对话或当前角色" }).evaluate(input => {
+      input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      input.value = "学习";
+      input.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true, data: "学习" }));
+      const retained = input.isConnected;
+      input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "学习" }));
+      return { retained, finalQuery: document.querySelector("[data-binding-query]").value };
+    });
+    assert.deepEqual(composition, { retained: true, finalQuery: "学习" });
+    assert.equal(await dialog.locator(".binding-chat").count(), 1);
+    await dialog.getByRole("textbox", { name: "搜索对话或当前角色" }).fill("");
+    assert.equal(await dialog.locator('[data-binding-chat="binding-three"]').isDisabled(), true);
+    assert.equal(await p.evaluate(() => window.testCalls.filter(call => call.action === "writeChatBinding").length), 0);
+    await dialog.getByRole("button", { name: "绑定 2 条对话" }).click();
+    await dialog.waitFor({ state: "hidden" });
+    const writes = await p.evaluate(() => window.testCalls.filter(call => call.action === "writeChatBinding"));
+    assert.deepEqual(writes, ["binding-one", "binding-two"].map(chatId => ({ action: "writeChatBinding", chatId, selection: "card:" + data.snapshot.cards[0].id })));
+  } finally { await context.close(); }
+});
+
+test("batch binding picker retains failed rows for retry and cancellation performs no extra writes", async () => {
+  const data = bindingFixture(), { page: p, context } = await page(1100, 850, data);
+  try {
+    await p.locator('[data-action="bind-chats"]').click();
+    const dialog = p.getByRole("dialog", { name: "批量绑定对话" });
+    assert.equal(await dialog.getByRole("button", { name: "绑定对话", exact: true }).isDisabled(), true);
+    await dialog.getByRole("combobox", { name: "绑定到角色卡" }).selectOption(data.snapshot.cards[0].id);
+    await dialog.getByRole("button", { name: "全选结果" }).click();
+    await p.evaluate(() => { window.testBindingFailure = "binding-two"; });
+    await dialog.getByRole("button", { name: "绑定 2 条对话" }).click();
+    await dialog.locator(".dialog-error").filter({ hasText: "1 条未完成" }).waitFor();
+    assert.equal(await dialog.locator('[data-binding-chat="binding-two"]').isChecked(), true);
+    assert.equal(await dialog.locator('[data-binding-chat="binding-one"]').isChecked(), false);
+    assert.equal(await dialog.locator('[data-binding-chat="binding-one"]').isDisabled(), true);
+    await p.evaluate(() => { window.testBindingFailure = null; });
+    await dialog.getByRole("button", { name: "绑定 1 条对话" }).click();
+    await dialog.waitFor({ state: "hidden" });
+    assert.equal(await p.evaluate(() => window.testCalls.filter(call => call.action === "writeChatBinding").length), 3);
+    await p.locator('[data-action="bind-chats"]').click();
+    await dialog.getByRole("button", { name: "取消", exact: true }).click();
+    assert.equal(await p.evaluate(() => window.testCalls.filter(call => call.action === "writeChatBinding").length), 3);
+  } finally { await context.close(); }
+});
+
+test("batch binding picker fits phone and desktop in both host palettes with scrollable history", async () => {
+  for (const width of [360, 1100]) {
+    const data = bindingFixture();
+    for (let index = 0; index < 35; index++) data.bindingChats.push({ ...data.bindingChats[0], id: "extra-" + index, title: "更多对话 " + index, isCurrent: false });
+    const { page: p, context } = await page(width, width === 360 ? 740 : 850, data);
+    try {
+      await p.locator('[data-action="bind-card-chats"]').first().click();
+      const dialog = p.getByRole("dialog", { name: "批量绑定对话" });
+      await dialog.locator('[data-binding-chat="binding-one"]').check();
+      for (const palette of ["light", "dark"]) {
+        if (palette === "dark") await applyDarkHostTheme(p);
+        const geometry = await dialog.evaluate(element => {
+          const bounds = element.getBoundingClientRect(), list = element.querySelector(".binding-chat-list"), footer = element.querySelector(".dialog-footer").getBoundingClientRect();
+          return { left: bounds.left, right: bounds.right, bottom: bounds.bottom, viewportWidth: innerWidth, viewportHeight: innerHeight, scrolls: list.scrollHeight > list.clientHeight, listHeight: list.clientHeight, footerBottom: footer.bottom, overflows: element.scrollWidth > element.clientWidth };
+        });
+        assert.ok(geometry.left >= 0 && geometry.right <= geometry.viewportWidth, JSON.stringify(geometry));
+        assert.ok(geometry.bottom <= geometry.viewportHeight && geometry.footerBottom <= geometry.viewportHeight, JSON.stringify(geometry));
+        assert.equal(geometry.overflows, false, JSON.stringify(geometry));
+        assert.ok(geometry.scrolls && geometry.listHeight > 100, JSON.stringify(geometry));
+        await p.screenshot({ path: path.join(output, `batch-binding-${width}-${palette}.png`) });
+      }
+    } finally { await context.close(); }
+  }
+});
+
+/** Exercises browser -> actual registered Compose bridge -> main IPC -> real SQLite publication. */
+test("batch binding management writes actual SQL through the registered bridge without changing global role", async t => {
+  const plugin = await fileBackedPlugin(t, mainScript);
+  const role = await plugin.api("character.create", { values: { name: "批量绑定目标" } });
+  const originalActive = await plugin.api("activePrompt.get", {});
+  const summaries = ["chat-dom", "chat-second"].map(id => ({ id, title: "真实接口测试对话 " + id, messageCount: 0, createdAt: "2026-10-18T10:00:00Z", updatedAt: "2026-10-18T10:00:00Z", isCurrent: id === "chat-dom", inputTokens: 0, outputTokens: 0 }));
+  plugin.tools.Chat.listAll = async () => ({ totalCount: summaries.length, currentChatId: "chat-dom", chats: plain(summaries) });
+  plugin.tools.Chat.findChat = async input => ({ matchedCount: 1, chat: plain(summaries.find(chat => chat.id === input.query)) });
+  const ui = await registeredPage(t, plugin, "main", null, origin);
+  await ui.page.getByRole("button", { name: "绑定对话", exact: true }).first().click();
+  const dialog = ui.page.getByRole("dialog", { name: "批量绑定对话" });
+  await dialog.getByRole("combobox", { name: "绑定到角色卡" }).selectOption(role.id);
+  await dialog.getByRole("button", { name: "全选结果", exact: true }).click();
+  await dialog.getByRole("button", { name: "绑定 2 条对话", exact: true }).click();
+  await dialog.waitFor({ state: "hidden" });
+  for (const summary of summaries) assert.deepEqual(await plugin.api("chat.configuration.binding.read", { chatId: summary.id }), { chatId: summary.id, selection: "card:" + role.id });
+  assert.deepEqual(await plugin.api("activePrompt.get", {}), originalActive);
+  assert.deepEqual(ui.errors, []);
+});

@@ -257,6 +257,7 @@ export type Request =
   | { action: "deleteCharacter"; id: string }
   | { action: "activate"; type: "card" | "group"; id: string }
   | { action: "readActive" }
+  | { action: "listBindableChats" }
   | { action: "readChatBinding"; chatId: string }
   | { action: "writeChatBinding"; chatId: string; selection: string }
   | { action: "deleteChatBinding"; chatId: string }
@@ -420,6 +421,12 @@ export interface CharacterDirectories {
 /** Projects an explicit record-extension selection; this DTO is never stored in plugin files. */
 export interface ChatBinding { chatId: string; selection: string }
 
+/** Supplies history and its explicit nullable role binding to the batch picker. */
+export interface BindableChat {
+  id: string; title: string; updatedAt: string; messageCount: number;
+  isCurrent: boolean; selection: string | null;
+}
+
 /** Stages an owner document edit for the same serialized service operation. */
 export interface UserDocumentWrite { ownerKey: string; path: string; content: string; newDocument: boolean }
 
@@ -439,6 +446,7 @@ export interface RequestResults {
   deleteCharacter: Snapshot;
   activate: Snapshot;
   readActive: ActivePrompt;
+  listBindableChats: BindableChat[];
   readChatBinding: import("./api").ChatBindingRecord;
   writeChatBinding: import("./api").ChatBindingRecord;
   deleteChatBinding: { chatId: string; deleted: boolean; };

@@ -18,6 +18,10 @@ async function environment(t, count = 3) {
       if (record === undefined) throw new Error("Core chat missing");
       return { matchedCount: 1, chat: plain(record) };
     },
+    async listAll() {
+      calls.push({ method: "listAll" });
+      return { totalCount: chats.size, currentChatId: null, chats: [...chats.values()].map(plain) };
+    },
     /** Returns exactly the requested bounded batch without any plugin-owned business data. */
     async listChats(options) {
       calls.push({ method: "listChats", options: plain(options) });
@@ -119,4 +123,38 @@ test("memory settings and USER reads never query bodies or vectors", async t => 
   const flagQueries = h.disk.calls.filter(call => call.method === "storage.query");
   assert.equal(flagQueries.length, 1);
   assert.match(flagQueries[0].args[0], /SELECT \* FROM "meta"/);
+});
+
+
+test("batch binding catalog includes every bound and unbound host conversation using indexed SQL", async t => {
+  const h = await environment(t, 525);
+  await h.storage.writeChatBinding({ chatId: "chat-1", selection: "card:default" });
+  await h.storage.writeChatBinding({ chatId: "chat-2", selection: "model:chat" });
+  h.disk.clearCalls();
+  const rows = plain(await h.service.dispatch({ action: "listBindableChats" }));
+  assert.equal(rows.length, 525);
+  assert.equal(rows.find(chat => chat.id === "chat-0").selection, null);
+  assert.equal(rows.find(chat => chat.id === "chat-1").selection, "card:default");
+  assert.equal(rows.find(chat => chat.id === "chat-2").selection, "model:chat");
+  assert.equal(rows[0].id, "chat-524");
+  assert.deepEqual(h.calls.map(call => call.method), ["listAll"]);
+  const queries = h.disk.calls.filter(call => call.method === "storage.query" && /FROM "chat_bindings" WHERE/.test(call.args[0]));
+  assert.equal(queries.length, 2);
+  assert.deepEqual(queries.map(call => call.args[1].length), [500, 25]);
+  assert.equal(h.disk.calls.filter(call => call.method === "storage.transaction").length, 0);
+});
+
+
+test("batch picker rejects duplicate histories and binds through the existing validated service", async t => {
+  const h = await environment(t);
+  const role = await h.service.dispatchDomain("character.create", { values: { name: "Batch target role" } });
+  for (const chatId of ["chat-0", "chat-1"]) {
+    assert.deepEqual(plain(await h.service.dispatch({ action: "writeChatBinding", chatId, selection: "card:" + role.id })), { chatId, selection: "card:" + role.id });
+  }
+  await assert.rejects(h.service.dispatch({ action: "writeChatBinding", chatId: "missing-chat", selection: "card:" + role.id }), /missing/);
+  const rows = plain(await h.service.dispatch({ action: "listBindableChats" }));
+  assert.equal(rows.filter(row => row.selection === "card:" + role.id).length, 2);
+  assert.equal(rows.find(row => row.id === "chat-2").selection, null);
+  h.chats.set("chat-2", h.chats.get("chat-0"));
+  await assert.rejects(h.service.dispatch({ action: "listBindableChats" }), /重复/);
 });

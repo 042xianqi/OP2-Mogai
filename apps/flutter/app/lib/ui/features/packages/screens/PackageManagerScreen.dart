@@ -751,11 +751,11 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
   }
 
   /// Opens the complete structured explanation for one failed package load.
-  void _showPackageLoadIssue(core_proxy.ToolPkgLoadIssue issue) {
+  Future<void> _showPackageLoadIssue(core_proxy.ToolPkgLoadIssue issue) async {
     if (!mounted) {
       return;
     }
-    showDialog<void>(
+    final deleteRequested = await showDialog<bool>(
       context: context,
       builder: (context) {
         final colorScheme = Theme.of(context).colorScheme;
@@ -794,10 +794,65 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
               onPressed: () => Navigator.of(context).pop(),
               child: const Text('关闭'),
             ),
+            FilledButton.icon(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: FilledButton.styleFrom(
+                backgroundColor: colorScheme.error,
+                foregroundColor: colorScheme.onError,
+              ),
+              icon: const Icon(Icons.delete_outline),
+              label: const Text('删除'),
+            ),
           ],
         );
       },
     );
+    if (deleteRequested != true || !mounted) {
+      return;
+    }
+    final importRecords = issue.packageKind == 'package_manager';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(importRecords ? '删除导入记录' : '删除加载失败的包'),
+        content: Text(
+          importRecords
+              ? '确定删除异常导入记录？已安装的包文件会保留。'
+              : '确定删除 ${issue.displayName} 的安装文件和记录？删除后可重新添加。此操作不可撤销。',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    try {
+      await _packageManager.deleteToolPkgLoadIssue(issue: issue);
+      ToolPkgCatalogChangeBus.notifyCatalogChanged();
+      if (!mounted) return;
+      await _loadSnapshot();
+      if (!mounted) return;
+      _showSnackBar(importRecords ? '导入记录已删除' : '已删除，可重新添加');
+    } catch (error, stackTrace) {
+      debugPrint('Failed to delete package load issue: $error\n$stackTrace');
+      if (!mounted) return;
+      await _loadSnapshot();
+      if (!mounted) return;
+      _showSnackBar('删除失败：$error');
+    }
   }
 
   /// Compares ToolPkg containers using the persisted package-manager order.
@@ -946,6 +1001,8 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
       category: 'ToolPkg',
       toolCount: 0,
       subpackageCount: container.subpackages.length,
+      requiredInstallationScope:
+          container.manifestExtensions['installation_scope'] as String?,
     );
   }
 
@@ -1035,18 +1092,21 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
   Future<void> _loadBundledExternalPlugin(
     core_proxy.BundledExternalPackageCandidate plugin,
   ) async {
-    final scope = await chooseExtensionScope(context);
+    final requiredScope = plugin.requiredInstallationScope;
+    final scope = requiredScope ?? await chooseExtensionScope(context);
     if (scope == null) return;
     await _runAddAction(() async {
       final result = await _packageManager
           .importBundledExternalToolPkgContainer(
             containerPackageName: plugin.packageName,
           );
-      await widget.clients.application.setExtensionScope(
-        kind: 'package',
-        id: plugin.packageName,
-        scope: scope,
-      );
+      if (requiredScope == null) {
+        await widget.clients.application.setExtensionScope(
+          kind: 'package',
+          id: plugin.packageName,
+          scope: scope,
+        );
+      }
       return result;
     });
   }
@@ -1055,17 +1115,20 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
   Future<void> _loadBundledExternalPackage(
     core_proxy.BundledExternalPackageCandidate package,
   ) async {
-    final scope = await chooseExtensionScope(context);
+    final requiredScope = package.requiredInstallationScope;
+    final scope = requiredScope ?? await chooseExtensionScope(context);
     if (scope == null) return;
     await _runAddAction(() async {
       final result = await _packageManager.importBundledExternalPackage(
         packageName: package.packageName,
       );
-      await widget.clients.application.setExtensionScope(
-        kind: 'package',
-        id: package.packageName,
-        scope: scope,
-      );
+      if (requiredScope == null) {
+        await widget.clients.application.setExtensionScope(
+          kind: 'package',
+          id: package.packageName,
+          scope: scope,
+        );
+      }
       return result;
     });
   }

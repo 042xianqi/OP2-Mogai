@@ -61,6 +61,11 @@ export function installBrowserFixture(data) {
         case "readMemorySettings": return copy(data.settings);
         case "readMemorySearchConfig": return copy(data.searchConfig);
         case "listMemoryChats": return [];
+        case "listBindableChats": return copy(data.bindingChats ?? []);
+        case "writeChatBinding": {
+          if (window.testBindingFailure === operation.chatId) throw new Error("TEST_BINDING_REJECTED");
+          return { chatId: operation.chatId, selection: operation.selection };
+        }
         case "readMemoryAutoSaveStatus": return { ownerKey: operation.ownerKey, pendingCandidates: 0, pendingChats: 0, processingCandidates: 0, failedCandidates: 0, nextRunAtMs: data.settings.nextAutoSaveRunAtMs, minutesUntilNextRun: 0, lastError: "" };
         case "readMemoryRebuildProgress": return { status: "idle", totalChats: 0, completedChats: 0, totalWindows: 0, completedWindows: 0, totalSourceMessages: 0, processedSourceMessages: 0, failedWindows: 0, currentChatTitle: "", lastError: "" };
         case "readUser": return { ownerKey: operation.ownerKey, content: window.testProfile };

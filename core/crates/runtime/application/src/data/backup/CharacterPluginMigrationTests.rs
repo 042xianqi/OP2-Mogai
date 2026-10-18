@@ -1461,6 +1461,190 @@ fn retired_character_keys_do_not_discard_a_mixed_native_transaction() {
     assert!(isRetiredCharacterOperation(&operation));
 }
 
+/// A released v27 install has no retired plugin database or internal metadata tables.
+#[test]
+fn configuration_retirement_accepts_an_empty_legacy_database() {
+    let fixture = Fixture::new();
+    let database = SqliteStore::openWithHost(
+        fixture.host.clone(),
+        "runtime/empty-retired-character.sqlite",
+    )
+    .unwrap();
+    for _ in 0..2 {
+        eraseHistoricalConfigurations(&database).unwrap();
+        assert!(database
+            .queryRows("SELECT name FROM sqlite_master WHERE type='table'", vec![])
+            .unwrap()
+            .is_empty());
+    }
+}
+
+/// Retires only the metadata actually present after an interrupted storage initialization.
+#[test]
+fn configuration_retirement_preserves_unrelated_rows_in_partial_metadata() {
+    let fixture = Fixture::new();
+    let database = SqliteStore::openWithHost(
+        fixture.host.clone(),
+        "runtime/partial-retired-character.sqlite",
+    )
+    .unwrap();
+    database.executeBatch(
+        "CREATE TABLE message_snapshots (_key TEXT PRIMARY KEY);
+         CREATE TABLE message_snapshots_participants (_key TEXT PRIMARY KEY);
+         CREATE TABLE unrelated (_key TEXT PRIMARY KEY);
+         INSERT INTO unrelated VALUES ('keep');
+         CREATE TABLE _operit_tables (name TEXT PRIMARY KEY);
+         INSERT INTO _operit_tables VALUES ('message_snapshots'), ('message_snapshots_participants'), ('unrelated');
+         CREATE TABLE _operit_versions (collection TEXT, key TEXT);
+         INSERT INTO _operit_versions VALUES ('message_snapshots', 'remove'), ('message_snapshots_participants', 'remove-child'), ('unrelated', 'keep');",
+    ).unwrap();
+    for _ in 0..2 {
+        eraseHistoricalConfigurations(&database).unwrap();
+        assert!(!database.tableExists("message_snapshots").unwrap());
+        assert!(!database
+            .tableExists("message_snapshots_participants")
+            .unwrap());
+        let kept: String = database
+            .queryOne("SELECT _key FROM unrelated", vec![])
+            .unwrap()
+            .unwrap()
+            .get(0)
+            .unwrap();
+        assert_eq!(kept, "keep");
+        let kept: String = database
+            .queryOne("SELECT name FROM _operit_tables", vec![])
+            .unwrap()
+            .unwrap()
+            .get(0)
+            .unwrap();
+        assert_eq!(kept, "unrelated");
+        let rows = database
+            .queryRows("SELECT collection,key FROM _operit_versions", vec![])
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get::<_, String>(0).unwrap(), "unrelated");
+        assert_eq!(rows[0].get::<_, String>(1).unwrap(), "keep");
+        assert!(!database.tableExists("_operit_values").unwrap());
+    }
+}
+
+/// Missing tables are harmless; malformed existing metadata still rolls back the whole cleanup.
+#[test]
+fn configuration_retirement_rolls_back_on_invalid_existing_metadata() {
+    let fixture = Fixture::new();
+    let database = SqliteStore::openWithHost(
+        fixture.host.clone(),
+        "runtime/invalid-retired-character.sqlite",
+    )
+    .unwrap();
+    database
+        .executeBatch(
+            "CREATE TABLE message_snapshots (_key TEXT PRIMARY KEY);
+         INSERT INTO message_snapshots VALUES ('keep-until-verified');
+         CREATE TABLE _operit_versions (wrong_column TEXT);",
+        )
+        .unwrap();
+    assert!(eraseHistoricalConfigurations(&database).is_err());
+    assert!(database.tableExists("message_snapshots").unwrap());
+    let key: String = database
+        .queryOne("SELECT _key FROM message_snapshots", vec![])
+        .unwrap()
+        .unwrap()
+        .get(0)
+        .unwrap();
+    assert_eq!(key, "keep-until-verified");
+}
+
+/// Publishes released name/group/default bindings into the current SQL store without a prior plugin store.
+#[test]
+fn released_v27_bindings_survive_a_clean_upgrade_and_reopen() {
+    let fixture = Fixture::new();
+    let writer = fixture.writer();
+    let mut release = data();
+    let mut custom = release.cards[0].clone();
+    custom.id = "release15-card".into();
+    custom.name = "Release 15 role".into();
+    custom.isDefault = false;
+    release.cards.push(custom);
+    release.owners.push(ownerMetadata(
+        "character:release15-card",
+        MemorySettings::default(),
+        MemorySearchConfig::default(),
+    ));
+    release
+        .documents
+        .insert("character:release15-card".into(), b"# USER\n".to_vec());
+    release.groups.push(CharacterGroupCard {
+        id: "release15-group".into(),
+        name: "Release 15 group".into(),
+        description: String::new(),
+        members: vec![GroupMemberConfig {
+            characterCardId: "release15-card".into(),
+            orderIndex: 0,
+        }],
+        createdAt: 100,
+        updatedAt: 200,
+    });
+    writer.import("operit2-v27", release).unwrap();
+    let database =
+        SqliteStore::openWithHost(fixture.host.clone(), "runtime/release15-core.sqlite").unwrap();
+    operit_store::db::AppDatabase::createAllTables(&database).unwrap();
+    let chats = [
+        (
+            "named",
+            json!({"characterCardName":"Original","characterGroupId":null}),
+            "card:legacy",
+        ),
+        (
+            "custom",
+            json!({"characterCardName":"Release 15 role","characterGroupId":null}),
+            "card:release15-card",
+        ),
+        (
+            "group",
+            json!({"characterCardName":"Original","characterGroupId":"release15-group"}),
+            "group:release15-group",
+        ),
+        (
+            "default",
+            json!({"characterCardName":null,"characterGroupId":null}),
+            "card:legacy",
+        ),
+    ];
+    for (id, legacy, _) in &chats {
+        let extensions = json!({LEGACY_BINDING_NAMESPACE:legacy,"other.plugin":{"keep":true}});
+        database.execute(
+            "INSERT INTO chats(id,title,createdAt,updatedAt,pluginExtensions) VALUES(?1,?1,100,200,?2)",
+            vec![SqliteValue::Text((*id).into()), SqliteValue::Text(extensions.to_string())],
+        ).unwrap();
+    }
+    for _ in 0..2 {
+        adoptCoreConfigurationRows(&database, writer).unwrap();
+        let reopened =
+            CharacterPluginWriter::open(fixture.host.clone(), fixture.host.clone()).unwrap();
+        assert_eq!(reopened.list("chat_bindings").unwrap().len(), chats.len());
+        for (id, _, selection) in &chats {
+            assert_eq!(
+                reopened.get("chat_bindings", id).unwrap().unwrap()["value"],
+                json!({"version":1,"selection":selection})
+            );
+            let extensions: String = database
+                .queryOne(
+                    "SELECT pluginExtensions FROM chats WHERE id=?1",
+                    vec![SqliteValue::Text((*id).into())],
+                )
+                .unwrap()
+                .unwrap()
+                .get(0)
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&extensions).unwrap(),
+                json!({"other.plugin":{"keep":true}})
+            );
+        }
+    }
+}
+
 /// Converts released SQL/object references and native inline settings, then removes all old payloads.
 #[test]
 fn configuration_retirement_removes_sql_and_objects_without_rewriting_sync_history() {
@@ -1470,6 +1654,12 @@ fn configuration_retirement_removes_sql_and_objects_without_rewriting_sync_histo
     let database = SqliteStore::openWithHost(fixture.host.clone(), "runtime/retire-core.sqlite").unwrap();
     operit_store::db::AppDatabase::createAllTables(&database).unwrap();
     database.execute("INSERT INTO chats(id,title,createdAt,updatedAt) VALUES('chat','Chat',1,1)", vec![]).unwrap();
+    let opened = writer.request(StorageRequest::Open {
+        path: format!("{}/characters-relational.sqlite", writer.directory),
+        kind: StorageKind::Sqlite,
+        merge: None,
+    }).unwrap();
+    writer.request(StorageRequest::Close { handle: requiredString(&opened, "handle").unwrap().into() }).unwrap();
     let relational = SqliteStore::openWithHost(fixture.host.clone(), &format!("{}/characters-relational.sqlite",writer.directory)).unwrap();
     relational.execute("CREATE TABLE message_snapshots (_key TEXT PRIMARY KEY,profile__id TEXT,secret TEXT)",vec![]).unwrap();
     relational.execute("CREATE TABLE message_snapshots_participants (_key TEXT PRIMARY KEY,secret TEXT)",vec![]).unwrap();

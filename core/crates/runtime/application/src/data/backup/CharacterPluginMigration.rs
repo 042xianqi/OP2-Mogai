@@ -1302,13 +1302,22 @@ fn retiredConfigurationCollection(name: &str) -> bool {
 /// Called only after Core references have been reduced to author identities.
 fn eraseHistoricalConfigurations(store: &SqliteStore) -> Result<(), String> {
     store.transaction(|tx| {
-        for row in tx.queryRows("SELECT name FROM sqlite_master WHERE type='table'", vec![])? {
-            let name: String = row.get(0)?;
-            if retiredConfigurationCollection(&name) {
+        let tables = tx
+            .queryRows("SELECT name FROM sqlite_master WHERE type='table'", vec![])?
+            .into_iter()
+            .map(|row| row.get::<_, String>(0))
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        for name in &tables {
+            if retiredConfigurationCollection(name) {
                 tx.execute(&format!("DROP TABLE \"{}\"", name.replace('"', "\"\"")), vec![])?;
             }
         }
+        // A released v27 upgrade has never opened the retired plugin database.
+        // Empty and partially initialized stores have no complete metadata schema.
         for table in ["_operit_tables", "_operit_values", "_operit_dirty", "_operit_versions", "_operit_merge_map", "_operit_merge_names"] {
+            if !tables.contains(table) {
+                continue;
+            }
             let column = if table == "_operit_tables" { "name" } else { "collection" };
             tx.execute(&format!("DELETE FROM {table} WHERE {column}='message_snapshots' OR {column} GLOB 'message_snapshots_*'"), vec![])?;
         }

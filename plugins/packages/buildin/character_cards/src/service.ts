@@ -4,6 +4,7 @@ import { parseDomainPayload } from "./domain";
 import type { ChatConfigurationService } from "./domain";
 import { combineCharacterPrompt } from "./character-prompt";
 import { findChatBinding } from "./chat-storage";
+import { listBindableChats } from "./chat-binding-catalog";
 import { parseChatSelection } from "./chat-bindings";
 import { MemoryJobRunner } from "./memory-jobs/scheduler";
 import { listMemoryChats } from "./memory-jobs/chat";
@@ -125,6 +126,8 @@ export function createCharacterCardsService(
     switch (request.action) {
       case "snapshot":
         return owner.readConfigurationSnapshot();
+      case "listBindableChats":
+        return listBindableChats();
       case "listMemoryChats":
         return listMemoryChats(request.ownerKey, owner);
       case "readGlobalMemoryPreferences":
@@ -994,6 +997,8 @@ export async function dispatch(
       assertActive(active);
       return active;
     }
+    case "listBindableChats":
+      return listBindableChats();
     case "readChatBinding":
       return executeDomain(
         "chat.configuration.binding.read",

@@ -86,6 +86,185 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  for (final name in <String>[
+    'com.operit.plan_mode_bundle',
+    'com.operit.goal_mode_bundle',
+  ]) {
+    for (final runtimeFallback in <bool>[false, true]) {
+      testWidgets(
+        'fixed-scope extra loads directly: $name, fallback=$runtimeFallback',
+        (tester) async {
+          final bridge = _CatalogBridge();
+          if (runtimeFallback) {
+            bridge.extraRuntimes.add(
+              _pluginRuntime().toJson()
+                ..['packageName'] = name
+                ..['manifestExtensions'] = <String, Object?>{
+                  'installation_scope': 'space',
+                },
+            );
+          } else {
+            bridge.extraCandidates.add(
+              _extraCandidate(name, requiredScope: 'space'),
+            );
+          }
+          await tester.pumpWidget(_manager(bridge));
+          await tester.pumpAndSettle();
+          await tester.tap(find.byTooltip('展开'));
+          await tester.pumpAndSettle();
+          await tester.ensureVisible(find.text('加载'));
+          await tester.tap(find.text('加载'));
+          await tester.pumpAndSettle();
+          expect(find.text('选择存放位置'), findsNothing);
+          expect(bridge.imports, [name]);
+          expect(bridge.scopeChanges, isEmpty);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
+
+  for (final scope in <String>['device', 'space']) {
+    testWidgets('unrestricted extra keeps scope selection: $scope', (
+      tester,
+    ) async {
+      final bridge = _CatalogBridge()
+        ..extraCandidates.add(_extraCandidate('flexible.plugin'));
+      await tester.pumpWidget(_manager(bridge));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('展开'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('加载'));
+      await tester.tap(find.text('加载'));
+      await tester.pumpAndSettle();
+      expect(find.text('选择存放位置'), findsOneWidget);
+      expect(bridge.imports, isEmpty);
+      await tester.tap(find.text(scope == 'space' ? '设备空间' : '仅本设备'));
+      await tester.pumpAndSettle();
+      expect(bridge.imports, ['flexible.plugin']);
+      expect(bridge.scopeChanges.single['scope'], scope);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final packageName in <String?>['broken_toolpkg', null]) {
+    testWidgets(
+      'failed package can be deleted from its details: $packageName',
+      (tester) async {
+        final issue = core_proxy.ToolPkgLoadIssue(
+          sourcePath: '/packages/broken.toolpkg',
+          packageName: packageName,
+          displayName: 'Broken package',
+          code: 'parse_failed',
+          message: 'Invalid manifest',
+          packageKind: 'toolpkg',
+        );
+        final bridge = _CatalogBridge()..loadIssues.add(issue);
+        await tester.pumpWidget(_manager(bridge));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Broken package'));
+        await tester.pumpAndSettle();
+        expect(find.text('Invalid manifest'), findsWidgets);
+        await tester.tap(find.widgetWithText(FilledButton, '删除'));
+        await tester.pumpAndSettle();
+        expect(find.text('删除加载失败的包'), findsOneWidget);
+        await tester.tap(find.widgetWithText(FilledButton, '删除'));
+        await tester.pumpAndSettle();
+        expect(bridge.deletedIssues.single.toJson(), issue.toJson());
+        expect(find.text('Broken package'), findsNothing);
+        expect(find.text('已删除，可重新添加'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets('broken import bookkeeping can be deleted from its details', (
+    tester,
+  ) async {
+    final bridge = _CatalogBridge()
+      ..loadIssues.add(
+        const core_proxy.ToolPkgLoadIssue(
+          sourcePath: '/packages',
+          packageName: null,
+          displayName: '插件导入记录',
+          code: 'scan_failed',
+          message: 'missing field scope',
+          packageKind: 'package_manager',
+        ),
+      );
+    await tester.pumpWidget(_manager(bridge));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('包'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('插件导入记录'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '删除'));
+    await tester.pumpAndSettle();
+    expect(find.text('删除导入记录'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, '删除'));
+    await tester.pumpAndSettle();
+    expect(bridge.deletedIssues.single.packageKind, 'package_manager');
+    expect(find.text('插件导入记录'), findsNothing);
+    expect(find.text('导入记录已删除'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('cancelling failed package deletion keeps its source', (
+    tester,
+  ) async {
+    final bridge = _CatalogBridge()
+      ..loadIssues.add(
+        const core_proxy.ToolPkgLoadIssue(
+          sourcePath: '/packages/broken.toolpkg',
+          packageName: 'broken',
+          displayName: 'Broken package',
+          code: 'parse_failed',
+          message: 'Invalid manifest',
+          packageKind: 'toolpkg',
+        ),
+      );
+    await tester.pumpWidget(_manager(bridge));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Broken package'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '删除'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(bridge.deletedIssues, isEmpty);
+    expect(find.text('Broken package'), findsOneWidget);
+  });
+
+  testWidgets(
+    'failed deletion reports the error and keeps the failed package',
+    (tester) async {
+      final bridge = _CatalogBridge()
+        ..deleteIssueError = StateError('Storage rejected deletion')
+        ..loadIssues.add(
+          const core_proxy.ToolPkgLoadIssue(
+            sourcePath: '/packages/broken.toolpkg',
+            packageName: 'broken',
+            displayName: 'Broken package',
+            code: 'parse_failed',
+            message: 'Invalid manifest',
+            packageKind: 'toolpkg',
+          ),
+        );
+      await tester.pumpWidget(_manager(bridge));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Broken package'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, '删除'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, '删除'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Storage rejected deletion'), findsOneWidget);
+      expect(find.text('Broken package'), findsOneWidget);
+      expect(bridge.deletedIssues, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('catalog change refreshes list without reopening or rescanning', (
     tester,
   ) async {
@@ -372,6 +551,13 @@ class _CatalogBridge extends OperitRuntimeBridge {
   bool installed = false;
   bool enabled = false;
   Object? disableError;
+  Object? deleteIssueError;
+  final loadIssues = <core_proxy.ToolPkgLoadIssue>[];
+  final deletedIssues = <core_proxy.ToolPkgLoadIssue>[];
+  final extraCandidates = <core_proxy.BundledExternalPackageCandidate>[];
+  final extraRuntimes = <Map<String, Object?>>[];
+  final imports = <String>[];
+  final scopeChanges = <Map<String, Object?>>[];
   final preferences = <String, String>{};
   final mutations = <String>[];
   int scans = 0;
@@ -438,10 +624,29 @@ class _CatalogBridge extends OperitRuntimeBridge {
         );
         mutations.add('selection');
         return null;
-      case 'getToolPkgContainerOrder':
-      case 'getBundledExternalPackageCandidates':
-      case 'getBundledExternalToolPkgContainerRuntimes':
+      case 'deleteToolPkgLoadIssue':
+        if (deleteIssueError case final Object error) throw error;
+        final issue = core_proxy.ToolPkgLoadIssue.fromJson(
+          ((request.args as Map)['issue'] as Map).cast<String, Object?>(),
+        );
+        deletedIssues.add(issue);
+        loadIssues.clear();
+        return null;
       case 'getToolPkgLoadIssues':
+        return loadIssues.map((issue) => issue.toJson()).toList();
+      case 'getBundledExternalPackageCandidates':
+        return extraCandidates.map((candidate) => candidate.toJson()).toList();
+      case 'getBundledExternalToolPkgContainerRuntimes':
+        return extraRuntimes;
+      case 'importBundledExternalToolPkgContainer':
+        imports.add((request.args as Map)['containerPackageName'] as String);
+        extraCandidates.clear();
+        extraRuntimes.clear();
+        return 'Successfully imported package';
+      case 'setExtensionScope':
+        scopeChanges.add((request.args as Map).cast<String, Object?>());
+        return null;
+      case 'getToolPkgContainerOrder':
         return [];
     }
     throw StateError('Unexpected catalog call: ${request.methodName}');
@@ -545,3 +750,27 @@ core_proxy.ToolPkgContainerRuntime _pluginRuntime() {
     marketOrigin: null,
   );
 }
+
+/// Creates extra-package metadata with an optional manifest installation restriction.
+core_proxy.BundledExternalPackageCandidate _extraCandidate(
+  String name, {
+  String? requiredScope,
+}) => core_proxy.BundledExternalPackageCandidate(
+  packageName: name,
+  displayName: const core_proxy.LocalizedText(
+    values: {'default': 'Extra plugin'},
+  ),
+  description: const core_proxy.LocalizedText(
+    values: {'default': 'Extra plugin fixture'},
+  ),
+  author: const ['Operit'],
+  packageKind: 'toolpkg',
+  sourcePath: '$name.toolpkg',
+  sourceFileName: '$name.toolpkg',
+  isToolPkg: true,
+  version: '1.0.0',
+  category: 'ToolPkg',
+  toolCount: 0,
+  subpackageCount: 0,
+  requiredInstallationScope: requiredScope,
+);
