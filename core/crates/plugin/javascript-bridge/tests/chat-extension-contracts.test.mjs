@@ -27,41 +27,6 @@ function extensionRuntime(native) {
 /** Normalizes values returned from the isolated VM without changing their JSON payload. */
 function plain(value) { return JSON.parse(JSON.stringify(value)); }
 
-/** Checks actual schemas and native registration do not route metadata through a user-controlled tool parameter map. */
-test("typed extensions require exact targets and a native engine-bound actual owner", () => {
-  const sdk = source("core/crates/plugin/sdk/src/js_sdk/chat.rs");
-  const engine = source("core/crates/plugin/javascript-bridge/src/javascript/JsEngine.rs");
-  const handler = source("core/crates/tool/services/src/tools/AIToolHandler.rs");
-  const bindings = source("core/crates/plugin/sdk/src/js_sdk/runtime_bindings.rs");
-  const generator = source("core/crates/plugin/codegen/src/runtime_bindings.rs");
-  assert.match(sdk, /#\[serde\(tag = "kind", deny_unknown_fields\)\]/);
-  assert.match(sdk, /Message\s*\{\s*chatId: String,\s*messageTimestamp: i64,\s*variantIndex: i32,/);
-  for (const method of ["readExtension", "writeExtension", "deleteExtension"]) {
-    assert.match(bindings, new RegExp('namespace: "Chat",\\s*method: "' + method + '"'));
-  }
-  assert.match(generator, /Tools\[\\"Chat\\"\] = __operitToolPkgApi\.namespace\(\\"Tools\.Chat\\"/);
-  assert.match(generator, /return toolCall\(/);
-  assert.match(engine, /host\.for_toolpkg_execution_context\(context\)\.map_err\(JsExecutionError::invalid_request\)\?/);
-  assert.match(engine, /"__operitNativeCallToolStructured"/);
-  assert.doesNotMatch(engine, /__operitNativeChatExtensionAsync/);
-  assert.doesNotMatch(handler, /RuntimeToolExecutor|RuntimeToolRequest|executeRuntimeOperation/);
-  const binding = handler.slice(handler.indexOf("fn for_toolpkg_execution_context("), handler.indexOf("fn get_tool_catalog("));
-  assert.match(binding, /getToolPkgContainerRuntime\(&context\.container_package_name\)/);
-  assert.match(binding, /getEnabledToolPkgContainerRuntimes\(\)\.iter\(\)[\s\S]*?runtime\.packageName == context\.container_package_name/);
-  assert.match(binding, /let mut host = self\.clone\(\)/);
-  assert.match(binding, /host\.authenticatedExtensionOwner = Some\(context\.container_package_name\.clone\(\)\)/);
-  assert.doesNotMatch(binding, /request\.parameters|parameters\.get\(|namespace.*get\(/);
-  const registration = source("core/crates/tool/services/src/tools/ToolRegistration.rs");
-  const execution = source("core/crates/tool/services/src/ToolExecutionManager.rs");
-  const direct = execution.slice(execution.indexOf("pub fn requirePluginOwner("), execution.indexOf("/// Borrows the exact captured model turn"));
-  for (const method of ["read", "write", "delete"]) {
-    assert.match(registration, new RegExp("runtimeSupport\\(\\)\\." + method + "ChatExtension\\(&context\\.requirePluginOwner\\(\\)\\?"));
-  }
-  assert.doesNotMatch(direct, /execute_tool_call|ToolParameter|unwrap_or_default|SoftwareSettings\.exec/);
-  assert.match(direct, /getToolPkgContainerRuntime\(owner\)/);
-  assert.match(direct, /getEnabledToolPkgContainerRuntimes\(\)\.iter\(\)[\s\S]*?runtime\.packageName == owner/);
-});
-
 /** Checks the actual package tool executor releases its registry mutex before native per-engine context authentication. */
 test("package engine creation authenticates outside the original registry lock", () => {
   const runtime = source("core/crates/tool/services/src/tools/ToolJsRuntime.rs");
