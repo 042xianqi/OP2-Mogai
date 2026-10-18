@@ -63,6 +63,8 @@ pub async fn run_package_command(
                 .ok_or_else(|| "usage: operit2 package load <name>".to_string())?;
             load_more_package(tool_handler, name, output)
         }
+        "issues" => list_package_load_issues(tool_handler, output),
+        "delete-issue" => delete_package_load_issue(tool_handler, args, output),
         "delete" | "remove" => {
             let name = args
                 .get(1)
@@ -310,6 +312,62 @@ fn load_more_package(
     Ok(())
 }
 
+/// Lists package load and import failures that still have persisted sources.
+fn list_package_load_issues(
+    tool_handler: AIToolHandler,
+    output: &mut CoreCommandOutput,
+) -> Result<(), String> {
+    let package_manager = package_manager(&tool_handler);
+    let guard = package_manager
+        .lock()
+        .expect("package manager mutex poisoned");
+    let issues = guard.getToolPkgLoadIssues();
+    output.push_stdout_line(format!("Package load issues: {}", issues.len()));
+    for issue in &issues {
+        output.push_stdout_line(format!(
+            "- {} — {} — {} — {}",
+            issue.displayName, issue.code, issue.packageKind, issue.message
+        ));
+    }
+    output.setJsonStdout(serde_json::to_value(&issues).map_err(|error| error.to_string())?);
+    Ok(())
+}
+
+/// Deletes one load failure by its exact persisted source identity.
+fn delete_package_load_issue(
+    tool_handler: AIToolHandler,
+    args: &[String],
+    output: &mut CoreCommandOutput,
+) -> Result<(), String> {
+    const USAGE: &str =
+        "usage: operit2 package delete-issue <source-path> <package-kind> <code> [package-name]";
+    let source_path = args.get(1).ok_or_else(|| USAGE.to_string())?;
+    let package_kind = args.get(2).ok_or_else(|| USAGE.to_string())?;
+    let code = args.get(3).ok_or_else(|| USAGE.to_string())?;
+    let package_name = args.get(4);
+    let package_manager = package_manager(&tool_handler);
+    let mut guard = package_manager
+        .lock()
+        .expect("package manager mutex poisoned");
+    let issue = guard
+        .getToolPkgLoadIssues()
+        .into_iter()
+        .find(|issue| {
+            issue.sourcePath == *source_path
+                && issue.packageKind == *package_kind
+                && issue.code == *code
+                && package_name
+                    .is_none_or(|name| issue.packageName.as_deref() == Some(name.as_str()))
+        })
+        .ok_or_else(|| {
+            "Package load issue is no longer present; refresh the package list".to_string()
+        })?;
+    guard.deleteToolPkgLoadIssue(issue)?;
+    output.push_stdout_line("Package load issue deleted.");
+    output.setJsonStdout(serde_json::json!({"deleted": true}));
+    Ok(())
+}
+
 /// Deletes one package from external package storage.
 fn delete_package(
     tool_handler: AIToolHandler,
@@ -393,6 +451,7 @@ fn bundled_external_candidate_json(
         "description": candidate.description.resolve(false),
         "tools": candidate.toolCount,
         "subpackages": candidate.subpackageCount,
+        "requiredInstallationScope": candidate.requiredInstallationScope,
     })
 }
 
@@ -415,6 +474,8 @@ fn print_package_usage(output: &mut CoreCommandOutput) {
         "operit2 package load <name>                          Load one item from 'package more' into the user package directory.",
         "operit2 package show <name>                          Show a loaded package.",
         "operit2 package import <js-ts-hjson-toolpkg-path>    Import a package file.",
+        "operit2 package issues                               List package load and import failures.",
+        "operit2 package delete-issue <source-path> <kind> <code> [package-name]  Delete one failed source.",
         "operit2 package delete <name>                        Delete an external package.",
         "operit2 package enable <name>                        Enable a loaded package.",
         "operit2 package disable <name>                       Disable a loaded package.",

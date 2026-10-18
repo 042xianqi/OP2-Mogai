@@ -12,9 +12,10 @@ use crate::PreferencesEncryption::tests::{
     loadOrCreateWithSecretStoreForTest, ENCRYPTION_HOST_SECRET_KEY_FOR_TEST,
 };
 use crate::SyncOperationStore::{SyncClock, SyncOperationStore};
+use crate::CoreNodeIdentityStore::CoreNodeIdentityStore;
 use operit_util::RuntimeStorageLayout::{
     CONFIG_PREFERENCES_DIR_PATH, GITHUB_AUTH_PREFERENCES_PATH, MODEL_CONFIGS_PREFERENCES_PATH,
-    PREFERENCES_ENCRYPTION_KEY_PATH, RUNTIME_SYNC_DIR_PATH,
+    PREFERENCES_ENCRYPTION_KEY_PATH, RUNTIME_LINK_ACCESS_IDENTITY_PATH, RUNTIME_SYNC_DIR_PATH,
 };
 
 use super::{
@@ -367,6 +368,64 @@ fn preferences_schema_runs_sequential_migrations_atomically() {
     );
     store.data().expect("current schema read");
     assert_eq!(host.writeCount(), 1);
+}
+
+#[test]
+/// Verifies version-one identity records migrate whether they were stored as
+/// a JSON string or as the object written by an intermediate build.
+fn core_node_identity_migration_accepts_legacy_string_and_object_records() {
+    let fixtures = [
+        (
+            json!("{\"deviceId\":\"core-legacy-string\"}"),
+            "core-legacy-string",
+            Value::Null,
+        ),
+        (
+            json!({
+                "deviceId": "core-legacy-object",
+                "deviceInfo": {
+                    "model": "legacy-model",
+                    "platform": "linux"
+                }
+            }),
+            "core-legacy-object",
+            json!({"model": "legacy-model", "platform": "linux"}),
+        ),
+    ];
+    for (record, expectedNodeId, expectedDeviceInfo) in fixtures {
+        let host = Arc::new(MemoryStorageHost::default());
+        let mut preferences = Preferences::default();
+        preferences.set(
+            &stringPreferencesKey(PREFERENCES_SCHEMA_VERSION_KEY_NAME),
+            "1".to_string(),
+        );
+        preferences.set(&stringPreferencesKey("record"), record);
+        host.writeBytes(
+            RUNTIME_LINK_ACCESS_IDENTITY_PATH,
+            &serde_json::to_vec_pretty(&preferences).expect("identity preferences serialization"),
+        )
+        .expect("identity preferences write");
+
+        let identity = CoreNodeIdentityStore::new(host.clone())
+            .initialize()
+            .expect("legacy identity must migrate");
+        assert_eq!(identity.nodeId, expectedNodeId);
+        let stored: Value = serde_json::from_slice(
+            &host
+                .readBytes(RUNTIME_LINK_ACCESS_IDENTITY_PATH)
+                .expect("migrated identity read"),
+        )
+        .expect("migrated identity JSON");
+        assert_eq!(
+            stored[PREFERENCES_SCHEMA_VERSION_KEY_NAME],
+            json!(2),
+            "migration must advance the schema version"
+        );
+        assert_eq!(stored["record"]["deviceId"], json!(expectedNodeId));
+        if !expectedDeviceInfo.is_null() {
+            assert_eq!(stored["record"]["deviceInfo"], expectedDeviceInfo);
+        }
+    }
 }
 
 #[test]
