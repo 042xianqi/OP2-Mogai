@@ -300,6 +300,7 @@ impl<'a, 'js> PlainDataReader<'a, 'js> {
         Ok(key)
     }
 
+    /// Reads one JSON-compatible value while validating its properties and array shape.
     fn read(&mut self, value: qjs::JSValue, depth: usize) -> rquickjs::Result<JsonValue> {
         self.nodes += 1;
         self.depth = self.depth.max(depth);
@@ -453,7 +454,7 @@ impl<'a, 'js> PlainDataReader<'a, 'js> {
         let mut offset = 0;
         for index in 0..names.len {
             let atom = unsafe { (*names.pointer.add(index as usize)).atom };
-            if array && atom == qjs::JS_ATOM_length {
+            if array && atom == qjs::JS_ATOM_length as qjs::JSAtom {
                 continue;
             }
             let position = if array && !proxy {
