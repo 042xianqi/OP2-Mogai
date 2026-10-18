@@ -682,6 +682,20 @@ export class RelationalDatabase {
   }
 }
 
+/** Counts the exact host statements one mutation expands to without writing any row. */
+export function mutationStatementCount(mutation: RelationalMutation): number {
+  const root = layouts[mutation.collection];
+  if (root === undefined)
+    throw new Error("Unknown relational collection: " + mutation.collection);
+  const children = tables(root).slice(1);
+  if (mutation.op === "delete") return 1 + children.length;
+  const encoded = encode(root.name, mutation.key, mutation.value, "count");
+  let count = 1;
+  if (mutation.expectedVersion !== null) count += children.length;
+  for (const table of children) count += encoded.get(table.name)?.length ?? 0;
+  return count;
+}
+
 /** Inserts one declared row and requires one genuinely affected identity. */
 function insertRow(table: string, row: Row): Storage.Statement {
   const columns = Object.keys(row);

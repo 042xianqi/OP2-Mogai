@@ -185,3 +185,87 @@ test("failed concurrent read settles all collections before another repository o
   assert.equal((await next)[0].id, "default");
   assert.equal(executed, true);
 });
+
+/** Builds one complete synthetic memory so bulk tests never depend on a real exported backup. */
+function bulkMemory(index, tags = 2) {
+  return {
+    id: String(index + 1),
+    uuid: "synthetic-" + index,
+    title: "Synthetic memory " + index,
+    content: "Synthetic bulk content " + index,
+    contentType: "text/plain",
+    source: "test",
+    credibility: 0.5,
+    importance: 0.5,
+    documentPath: null,
+    isDocumentNode: false,
+    chunkIndexFilePath: null,
+    folderPath: null,
+    createdAt: 1,
+    updatedAt: 1,
+    lastAccessedAt: 1,
+    tags: Array.from({ length: tags }, (_, tag) => ({ id: String(1000000 + index * 10 + tag), name: "tag-" + tag })),
+    properties: [],
+  };
+}
+
+/** Reads a validated empty owner space and replaces only its records with synthetic memories. */
+async function syntheticSpace(owner, count) {
+  const space = plain(await owner.run(session => session.readMemorySpace("character:default")));
+  space.memories = Array.from({ length: count }, (_, index) => bulkMemory(index));
+  space.links = []; space.chunks = []; space.candidates = []; space.embeddings = [];
+  return space;
+}
+
+/** Verifies a single import larger than one host transaction is chunked instead of rejected. */
+test("bulk memory import commits bounded host transactions and retains every record", async t => {
+  const disk = await createDiskHarness(t), owner = await open(disk), space = await syntheticSpace(owner, 1005);
+  disk.clearCalls();
+  await owner.run(session => session.importMemorySpace("character:default", space, "SKIP"));
+  const transactions = commits(disk);
+  assert.ok(transactions.length > 1, "bulk import must span more than one host transaction");
+  for (const call of transactions) assert.ok(call.args[0].length <= 1000, "each transaction must stay within the host statement limit");
+  const reopened = await open(disk), retained = await reopened.run(session => session.listMemories("character:default"));
+  assert.equal(retained.length, 1005);
+  assert.equal(new Set(retained.map(value => value.uuid)).size, 1005);
+});
+
+/** Verifies full-record export reads every memory beyond one host page without truncation. */
+test("memory export retains records beyond one host page", async t => {
+  const disk = await createDiskHarness(t), owner = await open(disk), space = await syntheticSpace(owner, 1005);
+  await owner.run(session => session.importMemorySpace("character:default", space, "SKIP"));
+  const { exportMemoryBackup } = loadModule("src/backup.ts", disk.globals);
+  const content = await owner.run(session => exportMemoryBackup("character:default", session));
+  const backup = JSON.parse(content);
+  assert.equal(backup.version, "2.0");
+  assert.equal(backup.space.memories.length, 1005);
+  assert.equal(new Set(backup.space.memories.map(value => value.uuid)).size, 1005);
+});
+
+/** Verifies a rejected middle batch leaves resumable records and SKIP completes without duplicates. */
+test("a failed bulk import resumes with SKIP after earlier batches committed", async t => {
+  const disk = await createDiskHarness(t);
+  await open(disk);
+  const failure = new Error("Second bulk transaction rejected"), originalOpen = disk.storage.sqlite.open;
+  let handles = 0;
+  disk.storage.sqlite.open = async options => {
+    const database = await originalOpen(options);
+    if (handles++ !== 0) return database;
+    const transaction = database.transaction.bind(database);
+    let count = 0;
+    database.transaction = async (...args) => {
+      count += 1;
+      if (count === 2) throw failure;
+      return transaction(...args);
+    };
+    return database;
+  };
+  const owner = await open(disk), space = await syntheticSpace(owner, 1005);
+  await assert.rejects(owner.run(session => session.importMemorySpace("character:default", space, "SKIP")), error => error === failure);
+  const reopened = await open(disk), partial = await reopened.run(session => session.listMemories("character:default"));
+  assert.ok(partial.length > 0 && partial.length < 1005, "the first batch must remain committed");
+  await reopened.run(session => session.importMemorySpace("character:default", space, "SKIP"));
+  const completed = await reopened.run(session => session.listMemories("character:default"));
+  assert.equal(completed.length, 1005);
+  assert.equal(new Set(completed.map(value => value.uuid)).size, 1005);
+});

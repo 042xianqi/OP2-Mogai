@@ -1713,3 +1713,48 @@ fn configuration_retirement_removes_sql_and_objects_without_rewriting_sync_histo
     assert!(writer.get("cards","legacy").unwrap().is_some());
     assert!(writer.list("owners").unwrap().len()>0);
 }
+
+/// Accepts profiles that never had the retired relational database instead of creating and cleaning an empty one.
+#[test]
+fn configuration_retirement_tolerates_absent_retired_database() {
+    let fixture = Fixture::new();
+    let writer = fixture.writer();
+    let database = SqliteStore::openWithHost(fixture.host.clone(), "runtime/retire-core.sqlite").unwrap();
+    operit_store::db::AppDatabase::createAllTables(&database).unwrap();
+    database.execute("INSERT INTO chats(id,title,createdAt,updatedAt) VALUES('chat','Chat',1,1)", vec![]).unwrap();
+    database.execute(
+        "INSERT INTO messages(chatId,sender,roleName,timestamp,orderIndex,pluginExtensions) VALUES('chat','ai','Keep',1,1,?1)",
+        vec![SqliteValue::Text(json!({PLUGIN_ID: {"participantId": "legacy"}}).to_string())],
+    ).unwrap();
+    let retired_path = format!("{}/characters-relational.sqlite", writer.directory);
+    assert!(
+        !writer.storage.exists(&retired_path).map_err(|error| error.to_string()).unwrap(),
+        "the fixture must start without the retired database"
+    );
+    adoptCoreConfigurationRows(&database, writer).unwrap();
+    assert!(
+        !writer.storage.exists(&retired_path).map_err(|error| error.to_string()).unwrap(),
+        "migration must not create an empty retired database"
+    );
+    let encoded: String = database
+        .queryOne("SELECT pluginExtensions FROM messages WHERE chatId='chat'", vec![])
+        .unwrap()
+        .unwrap()
+        .get(0)
+        .unwrap();
+    let extensions: Value = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(extensions[PLUGIN_ID], json!({"participantId": "legacy"}));
+}
+
+/// Accepts an already-created but empty retired database instead of failing on its absent metadata tables.
+#[test]
+fn configuration_retirement_tolerates_empty_retired_database() {
+    let fixture = Fixture::new();
+    let writer = fixture.writer();
+    let database = SqliteStore::openWithHost(fixture.host.clone(), "runtime/retire-core.sqlite").unwrap();
+    operit_store::db::AppDatabase::createAllTables(&database).unwrap();
+    let retired_path = format!("{}/characters-relational.sqlite", writer.directory);
+    SqliteStore::openWithHost(fixture.host.clone(), &retired_path).unwrap();
+    assert!(writer.storage.exists(&retired_path).map_err(|error| error.to_string()).unwrap());
+    adoptCoreConfigurationRows(&database, writer).unwrap();
+}

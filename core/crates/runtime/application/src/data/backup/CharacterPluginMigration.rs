@@ -1388,12 +1388,23 @@ fn adoptCoreConfigurationRows(
         .map(|entry| entry["value"].clone())
         .collect::<Vec<_>>();
     // Read only author IDs from retired storage before dropping it; never decode old execution settings.
-    let retired_store = SqliteStore::openWithHost(writer.sqlite.clone(), &format!("{}/characters-relational.sqlite", writer.directory)).map_err(|error| error.to_string())?;
+    // A fresh or already-retired profile has no legacy database, and opening it would create an empty file.
+    let retired_path = format!("{}/characters-relational.sqlite", writer.directory);
+    let retired_store = if writer.storage.exists(&retired_path).map_err(|error| error.to_string())? {
+        Some(SqliteStore::openWithHost(writer.sqlite.clone(), &retired_path).map_err(|error| error.to_string())?)
+    } else {
+        None
+    };
     let mut authors = BTreeMap::<String, String>::new();
-    let exists = retired_store.queryOne("SELECT name FROM sqlite_master WHERE type='table' AND name='message_snapshots'", vec![]).map_err(|error| error.to_string())?.is_some();
-    if exists {
-        for row in retired_store.queryRows("SELECT _key,profile__id FROM message_snapshots", vec![]).map_err(|error| error.to_string())? {
-            authors.insert(row.get(0).map_err(|error| error.to_string())?, row.get(1).map_err(|error| error.to_string())?);
+    if let Some(store) = retired_store.as_ref() {
+        let exists = store
+            .queryOne("SELECT name FROM sqlite_master WHERE type='table' AND name='message_snapshots'", vec![])
+            .map_err(|error| error.to_string())?
+            .is_some();
+        if exists {
+            for row in store.queryRows("SELECT _key,profile__id FROM message_snapshots", vec![]).map_err(|error| error.to_string())? {
+                authors.insert(row.get(0).map_err(|error| error.to_string())?, row.get(1).map_err(|error| error.to_string())?);
+            }
         }
     }
     for entry in writer.legacyList("message_snapshots")? {
@@ -1466,7 +1477,9 @@ fn adoptCoreConfigurationRows(
         }
     }
     discardHistoricalModelConfigurations(database)?;
-    eraseHistoricalConfigurations(&retired_store)?;
+    if let Some(retired_store) = &retired_store {
+        eraseHistoricalConfigurations(retired_store)?;
+    }
     let object_store = SqliteStore::openWithHost(writer.sqlite.clone(), &format!("{}/characters.sqlite", writer.directory)).map_err(|error| error.to_string())?;
     eraseHistoricalConfigurations(&object_store)?;
     database.execute(

@@ -29,7 +29,7 @@ import {
   storedValue,
 } from "./records";
 import type { StoredRecord } from "./records";
-import { RelationalDatabase, decodeScalarProjection, migrateCharacterSchema, characterSchemaVersion } from "./relational";
+import { RelationalDatabase, decodeScalarProjection, migrateCharacterSchema, characterSchemaVersion, mutationStatementCount } from "./relational";
 import type { RelationalMutation } from "./relational";
 import {
   assertBoolean,
@@ -49,6 +49,9 @@ import { userDocumentPath } from "./state";
 function completed(result: { successful: boolean; details: string }): void {
   if (!result.successful) throw new Error(result.details);
 }
+
+/** Matches the host's per-transaction statement ceiling for plugin SQL transactions. */
+const HOST_TRANSACTION_STATEMENT_LIMIT = 1000;
 
 /** Owns record transactions in the persistent synchronized plugin data namespace. */
 export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
@@ -467,7 +470,7 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
     else waiter();
   }
 
-  /** Commits only changed domain records and retains the migration provenance in the metadata guard. */
+  /** Commits only changed domain records in host-sized batches and retains the migration provenance in the metadata guard. */
   private async publish(
     state: CharacterState,
     before: StoredRecord[],
@@ -512,10 +515,33 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
       },
       expectedVersion: metadataVersion,
     });
-    if (mutations.length > 1000)
-      throw new Error(
-        "Character operation exceeds the host transaction limit of 1000 records",
-      );
+    // One host transaction is capped at 1000 statements and each changed record can expand into
+    // several relation rows. Sequential batches keep large imports possible; a failure after an
+    // earlier batch leaves those records committed, which a repeated SKIP/UPDATE import resumes.
+    const batches: RelationalMutation[][] = [];
+    let batch: RelationalMutation[] = [],
+      statements = 0;
+    for (const mutation of mutations) {
+      const count = mutationStatementCount(mutation);
+      if (count > HOST_TRANSACTION_STATEMENT_LIMIT)
+        throw new Error(
+          "Character record requires " +
+            count +
+            " statements, exceeding the host transaction limit of " +
+            HOST_TRANSACTION_STATEMENT_LIMIT,
+        );
+      if (
+        batch.length !== 0 &&
+        statements + count > HOST_TRANSACTION_STATEMENT_LIMIT
+      ) {
+        batches.push(batch);
+        batch = [];
+        statements = 0;
+      }
+      batch.push(mutation);
+      statements += count;
+    }
+    if (batch.length !== 0) batches.push(batch);
     const stagedDocuments: { path: string; stagedPath: string }[] = [];
     for (const document of documents) {
       if (document.newDocument) {
@@ -535,7 +561,9 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
       completed(await Tools.Files.write(stagedPath, document.content, false));
       stagedDocuments.push({ path: document.path, stagedPath });
     }
-    await this.database.commit(mutations);
+    // The metadata guard stays in the final batch, so its expected revision is still the one
+    // read at the start of this operation unless another execution changed it concurrently.
+    for (const pending of batches) await this.database.commit(pending);
     for (const document of stagedDocuments)
       completed(await Tools.Files.move(document.stagedPath, document.path));
     for (const path of removed)
