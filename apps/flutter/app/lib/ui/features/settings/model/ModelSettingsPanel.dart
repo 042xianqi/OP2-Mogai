@@ -4853,7 +4853,7 @@ class _ModelInlineSettingsFormState extends State<_ModelInlineSettingsForm> {
     _enableSummary = summary.enableSummary;
     final rawContext = widget.initialConfig.context.maxContextLength;
     final normalizedContext = rawContext >= 10000
-        ? (rawContext / 1024).roundToDouble()
+        ? (rawContext / 1000).roundToDouble()
         : rawContext;
     _maxContextLengthController = TextEditingController(
       text: normalizedContext > 0
