@@ -2,7 +2,7 @@ name: Prepare Flutter Engine Fonts
 on:
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   fonts:
     runs-on: ubuntu-24.04
@@ -38,6 +38,15 @@ jobs:
           (root / 'flutter_web_fonts.lock.json').write_text(json.dumps({'formatVersion': 1, 'origin': origin, 'fonts': fonts}, indent=2) + '\n')
           print('Verified fonts:', len(fonts), 'bytes:', sum(row['bytes'] for row in fonts))
           PY
+      - name: Transfer the verified resources through a temporary Git branch
+        run: |
+          python -m zipfile -c "$RUNNER_TEMP/flutter-engine-fonts.zip" .ci-fonts
+          git checkout --orphan "web-font-resources-$GITHUB_RUN_ID"
+          git rm -r --cached -- .
+          cp "$RUNNER_TEMP/flutter-engine-fonts.zip" flutter-engine-fonts.zip
+          git add -f -- flutter-engine-fonts.zip
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "build: verified Flutter font resources"
+          git push origin "HEAD:refs/heads/web-font-resources-$GITHUB_RUN_ID"
       - uses: actions/upload-artifact@v4
         with:
           name: flutter-engine-fonts
