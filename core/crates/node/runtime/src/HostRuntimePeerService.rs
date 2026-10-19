@@ -799,6 +799,8 @@ fn parseTransport(t: &str) -> Result<PeerTransport, CoreLinkError> { match t {
 impl RuntimePeerService for HostRuntimePeerService {
     fn spaceClient(&self) -> Option<Arc<dyn CoreLinkSharedClient + Send + Sync>> { duplex::spaceClient(self) }
     fn spaceConnection(&self) -> Option<super::NodeServices::SpaceClientConnection> { duplex::spaceConnection(self) }
+    /// Reports the ceiling the Host app installed, not a protocol-wide constant.
+    fn maxMessageBytes(&self) -> usize { self.state.limits.maxMessageBytes }
     /// Returns only unpaired candidates using the current state after discovery completes.
     async fn discoverPeers(&self, timeoutMs: u64) -> Result<Vec<DiscoveredPeer>, CoreLinkError> {
         let host = self.state.host.serviceDiscoveryHost.clone().ok_or_else(|| error("Discovery Host is not installed"))?;

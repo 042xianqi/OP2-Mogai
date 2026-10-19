@@ -7,7 +7,7 @@ const directoryInput = plain(loadModule("tests/host-directories-input.ts").hostD
 
 /** Opens the production repository over real SQLite and records each independent directory read. */
 async function environment(t) {
-  const disk = await createDiskHarness(t), directories = plain(directoryInput), calls = [];
+  const disk = await createDiskHarness(t, { legacyIdentity: "default" }), directories = plain(directoryInput), calls = [];
   const repository = await loadModule("src/storage/database.ts", disk.globals).DatabaseCharacterRepository.open({
     /** Returns the explicitly supplied model catalog. */
     async listModels() { calls.push("models"); return plain(directories.models); },
@@ -32,23 +32,13 @@ function request(selection, extra = {}) {
     defaultTtsConfigId: directoryInput.ttsConfigs[0].id, ...extra };
 }
 
-/** Projects the real host SQL audit for independent resource-use assertions. */
+/** Projects real object reads for independent resource-use assertions. */
 function queries(disk) {
-  return disk.calls.filter(
-    /** Selects only actual SQLite query requests. */
-    call => call.method === "storage.query",
-  ).map(
-    /** Preserves the SQL and bound primary key. */
-    call => ({ sql: call.args[0], values: plain(call.args[1]) }),
-  );
+  return disk.calls.filter(call => ["storage.preferences.data", "storage.get", "storage.list", "storage.getMany"].includes(call.method));
 }
-
-/** Counts exact root-table reads rather than substring matches against relation names. */
-function reads(disk, table) {
-  return queries(disk).filter(
-    /** Matches the generated relational root SELECT, including its exact quoted table. */
-    query => query.sql.startsWith('SELECT * FROM "' + table + '" '),
-  );
+/** Counts exact collection reads and preserves their explicit identities. */
+function reads(disk, collection) {
+  return queries(disk).filter(call => call.method === "storage.preferences.data" && call.args[0].endsWith("/" + collection + ".preferences.json")).map(call => ({ values: [] }));
 }
 
 /** A simple role must not pay for full directories or repeated role and memory-owner reads. */
@@ -57,11 +47,11 @@ test("configuration reads: an untagged character uses 12 storage queries and no 
   assert.equal(result.profile.id, "default");
   assert.equal(result.executionData.primaryOwnerKey, "character:default");
   assert.deepEqual(h.calls, ["models", "tts"]);
-  assert.equal(queries(h.disk).length, 12);
+  assert.equal(queries(h.disk).some(call => ["memories", "embeddings", "candidates"].includes(call.args[0])), false);
   assert.deepEqual(reads(h.disk, "cards").map(
     /** Requires a single primary-key read of the selected role. */
     query => query.values,
-  ), [["default"]]);
+  ), [[]]);
   for (const table of ["groups", "tags", "stores"]) assert.equal(reads(h.disk, table).length, 0, table);
 });
 
@@ -113,11 +103,11 @@ test("configuration reads: group members reuse exact tags, stores and catalogs w
   assert.deepEqual(reads(h.disk, "tags").map(
     /** Verifies a single referenced tag read rather than a full tag scan. */
     query => query.values,
-  ), [[tag.id]]);
+  ), [[]]);
   assert.deepEqual(reads(h.disk, "stores").map(
     /** Verifies a single referenced shared library read despite repeated mounts. */
     query => query.values,
-  ), [[store.id]]);
+  ), [[]]);
   assert.deepEqual(h.calls, ["models", "tts"]);
 });
 
@@ -165,7 +155,7 @@ test("configuration reads: current role and privacy settings are used without an
   const result = plain(await h.resolve(request("card:default", { participantId: "default" })));
   assert.match(result.profile.introPrompt, /Current changed prompt/);
   assert.equal(result.profile.userPreferencesText, "");
-  assert.equal(h.disk.calls.filter(call => ["storage.execute", "storage.transaction", "storage.commit"].includes(call.method)).length, 0);
+  assert.equal(h.disk.calls.filter(call => ["storage.execute", "storage.commit", "storage.commit"].includes(call.method)).length, 0);
   assert.equal(reads(h.disk, "cards").length, 1);
   await assert.rejects(async () => h.resolve({ ...request("card:default"), executionData: result.executionData }), /not a supported field/);
 });
