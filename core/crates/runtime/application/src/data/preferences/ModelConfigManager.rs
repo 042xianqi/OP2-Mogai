@@ -825,10 +825,6 @@ impl ModelConfigManager {
         version: u32,
         preferences: &mut Preferences,
     ) -> Result<(), PreferencesDataStoreError> {
-        // A record that names a provider type no longer present in `ApiProviderType`
-        // fails to deserialize. Normalize those records before any arm parses one;
-        // every upgrade path starts here.
-        Self::rewriteRemovedProviderTypes(preferences)?;
         match version {
             0 => {
                 let mut providerIds = preferences
@@ -887,7 +883,21 @@ impl ModelConfigManager {
                     .collect::<Vec<_>>();
                 for (key, value) in records {
                     let encoded = serde_json::from_value::<String>(value)?;
-                    let record: serde_json::Value = serde_json::from_str(&encoded)?;
+                    let mut record: serde_json::Value = serde_json::from_str(&encoded)?;
+                    for field in ["providerTypeId", "providerType"] {
+                        let removed = record
+                            .get(field)
+                            .and_then(|value| value.as_str())
+                            .map(|value| {
+                                Self::REMOVED_PROVIDER_TYPE_IDS
+                                    .iter()
+                                    .any(|removed| value.trim().eq_ignore_ascii_case(removed))
+                            })
+                            .unwrap_or(false);
+                        if removed {
+                            record[field] = serde_json::json!(ApiProviderType::OTHER.name());
+                        }
+                    }
                     let provider: ProviderProfile = serde_json::from_value(record.clone())?;
                     let id = key
                         .strip_prefix("provider_")
@@ -902,62 +912,47 @@ impl ModelConfigManager {
                 preferences.remove(&Self::PROVIDER_LIST_KEY());
                 Ok(())
             }
-            4 => Ok(()),
+            4 => {
+                // iFlow was removed as a provider type. A version-four record naming it
+                // fails to deserialize in readProviderList, so rewrite it to OTHER here
+                // before any later arm or the provider list reads it.
+                let records = preferences
+                    .iterEntries()
+                    .filter_map(|(key, value)| {
+                        (key != "provider_list" && key.starts_with("provider_"))
+                            .then(|| (key.to_owned(), value.clone()))
+                    })
+                    .collect::<Vec<_>>();
+                for (key, value) in records {
+                    let mut record = value;
+                    for field in ["providerTypeId", "providerType"] {
+                        let removed = record
+                            .get(field)
+                            .and_then(|value| value.as_str())
+                            .map(|value| {
+                                Self::REMOVED_PROVIDER_TYPE_IDS
+                                    .iter()
+                                    .any(|removed| value.trim().eq_ignore_ascii_case(removed))
+                            })
+                            .unwrap_or(false);
+                        if removed {
+                            record[field] = serde_json::json!(ApiProviderType::OTHER.name());
+                        }
+                    }
+                    preferences.set(&stringPreferencesKey(&key), record);
+                }
+                Ok(())
+            }
             from => Err(PreferencesDataStoreError::MissingMigration { from, to: from + 1 }),
         }
     }
 
     /// Provider type ids that earlier builds could persist but that no longer exist in
     /// `ApiProviderType`. A provider record naming one fails to deserialize, which makes
-    /// `readProviderList` reject the whole store. This normalizes those records to the
-    /// OpenAI-compatible catch-all. It runs before every migration arm so any upgrade
-    /// path cleans the store before an arm parses a `ProviderProfile`.
+    /// `readProviderList` reject the whole store. Migrations that can encounter such a
+    /// record rewrite its two provider-type fields to the OpenAI-compatible catch-all
+    /// before the provider list is read.
     const REMOVED_PROVIDER_TYPE_IDS: [&'static str; 1] = ["IFLOW"];
-
-    fn rewriteRemovedProviderTypes(
-        preferences: &mut Preferences,
-    ) -> Result<(), PreferencesDataStoreError> {
-        let records = preferences
-            .iterEntries()
-            .filter_map(|(key, value)| {
-                (key != "provider_list" && key.starts_with("provider_"))
-                    .then(|| (key.to_owned(), value.clone()))
-            })
-            .collect::<Vec<_>>();
-        for (key, value) in records {
-            let (mut record, wasEncodedString) = match value {
-                serde_json::Value::String(encoded) => {
-                    (serde_json::from_str::<serde_json::Value>(&encoded)?, true)
-                }
-                record => (record, false),
-            };
-            let mut changed = false;
-            for field in ["providerTypeId", "providerType"] {
-                let removed = record
-                    .get(field)
-                    .and_then(|value| value.as_str())
-                    .map(|value| {
-                        Self::REMOVED_PROVIDER_TYPE_IDS
-                            .iter()
-                            .any(|removed| value.trim().eq_ignore_ascii_case(removed))
-                    })
-                    .unwrap_or(false);
-                if removed {
-                    record[field] = serde_json::json!(ApiProviderType::OTHER.name());
-                    changed = true;
-                }
-            }
-            if changed {
-                let migrated = if wasEncodedString {
-                    serde_json::Value::String(serde_json::to_string(&record)?)
-                } else {
-                    record
-                };
-                preferences.set(&stringPreferencesKey(&key), migrated);
-            }
-        }
-        Ok(())
-    }
 
     /// Loads and decodes one provider profile from preferences.
     fn loadProviderFromDataStore(
