@@ -42,5 +42,7 @@ jobs:
         with:
           name: flutter-engine-fonts
           path: .ci-fonts/
+          include-hidden-files: true
+          if-no-files-found: error
           compression-level: 0
           retention-days: 3
