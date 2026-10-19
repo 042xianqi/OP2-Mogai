@@ -2751,6 +2751,11 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsAppearanceBubbleImagePreviewText => '这是一条气泡预览，切线展示九宫格区域';
 
   @override
+  String settingsAppearanceBubbleImageImportFailed(String error) {
+    return '气泡图片没有生效：$error';
+  }
+
+  @override
   String get settingsAppearanceBubbleImageCrop => '裁切';
 
   @override

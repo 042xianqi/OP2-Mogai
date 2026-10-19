@@ -1182,3 +1182,44 @@ test("batch binding management writes actual SQL through the registered bridge w
   assert.deepEqual(await plugin.api("activePrompt.get", {}), originalActive);
   assert.deepEqual(ui.errors, []);
 });
+
+/** Reads a real composited browser pixel without depending on a PNG decoding package. */
+async function screenshotPixel(page, x, y) {
+  const png = await page.screenshot();
+  return page.evaluate(
+    /** Decodes the captured host and iframe composition into its exact RGBA pixel. */
+    async ({ bytes, x, y }) => {
+      const image = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: "image/png" }));
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width; canvas.height = image.height;
+      const context = canvas.getContext("2d");
+      context.drawImage(image, 0, 0); image.close();
+      return Array.from(context.getImageData(x, y, 1, 1).data);
+    },
+    { bytes: Array.from(png), x, y },
+  );
+}
+
+/** Verifies actual iframe compositing for the source and packaged documents in both host palettes. */
+test("hosted pages reveal the global background across live theme changes", async () => {
+  for (const route of ["/", "/installed"]) {
+    const context = await browser.newContext({ viewport: { width: 1100, height: 950 } });
+    try {
+      await context.addInitScript({ content: `(${installBrowserFixture.toString()})(${JSON.stringify(fixture())}); (${installManagementPresentation.toString()})();` });
+      const host = await context.newPage();
+      await host.setContent(`<body style="margin:0;background:rgb(7,91,143)"><iframe src="${origin}${route}" style="border:0;display:block;width:100vw;height:100vh;color-scheme:light"></iframe></body>`);
+      await host.frameLocator("iframe").getByRole("heading", { name: "角色卡", exact: true }).waitFor();
+      const frame = host.frames().find(frame => frame.parentFrame() !== null);
+      assert.ok(frame);
+      await frame.evaluate(() => { window.retainedBackgroundDocument = document; });
+      assert.deepEqual(await screenshotPixel(host, 1, 1), [7, 91, 143, 255], route + " light page must reveal its host");
+      await host.locator("iframe").evaluate(element => { element.style.colorScheme = "dark"; });
+      await applyDarkHostTheme(frame);
+      assert.deepEqual(await screenshotPixel(host, 1, 1), [7, 91, 143, 255], route + " dark page must reveal its host");
+      assert.equal(await frame.evaluate(() => window.retainedBackgroundDocument === document), true);
+      assert.equal(await frame.evaluate(() => getComputedStyle(document.body).color), "rgb(224, 227, 229)");
+      await host.locator("body").evaluate(element => { element.style.background = "rgb(143, 61, 7)"; });
+      assert.deepEqual(await screenshotPixel(host, 1, 1), [143, 61, 7, 255], route + " must reveal live global background updates");
+    } finally { await context.close(); }
+  }
+});

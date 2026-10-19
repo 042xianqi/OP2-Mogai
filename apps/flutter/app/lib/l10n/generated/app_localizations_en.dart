@@ -2860,6 +2860,11 @@ class AppLocalizationsEn extends AppLocalizations {
       'Bubble preview with 9-slice guides';
 
   @override
+  String settingsAppearanceBubbleImageImportFailed(String error) {
+    return 'Bubble image was not applied: $error';
+  }
+
+  @override
   String get settingsAppearanceBubbleImageCrop => 'Crop';
 
   @override

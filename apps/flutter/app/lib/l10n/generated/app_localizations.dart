@@ -5204,6 +5204,12 @@ abstract class AppLocalizations {
   /// **'Bubble preview with 9-slice guides'**
   String get settingsAppearanceBubbleImagePreviewText;
 
+  /// No description provided for @settingsAppearanceBubbleImageImportFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Bubble image was not applied: {error}'**
+  String settingsAppearanceBubbleImageImportFailed(String error);
+
   /// No description provided for @settingsAppearanceBubbleImageCrop.
   ///
   /// In en, this message translates to:
