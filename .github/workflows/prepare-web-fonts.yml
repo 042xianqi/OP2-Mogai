@@ -1,0 +1,46 @@
+name: Prepare Flutter Engine Fonts
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fonts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download the exact engine inventory for local verification
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from concurrent.futures import ThreadPoolExecutor
+          from pathlib import Path
+          import urllib.request
+          root = Path('.ci-fonts')
+          paths = json.loads(Path('tools/flutter_web_font_paths.json').read_text())
+          origin = 'https://fonts.gstatic.com/s/'
+          def download(path):
+              """Download one immutable upstream font and record its byte identity."""
+              with urllib.request.urlopen(origin + path, timeout=45) as response:
+                  data = response.read(8 * 1024 * 1024 + 1)
+              if data[:4] != b'wOF2' or len(data) > 8 * 1024 * 1024:
+                  raise ValueError('Invalid WOFF2: ' + path)
+              target = root / path
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_bytes(data)
+              return {'path': path, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+          with ThreadPoolExecutor(max_workers=8) as pool:
+              fonts = list(pool.map(download, paths))
+          (root / 'flutter_web_fonts.lock.json').write_text(json.dumps({'formatVersion': 1, 'origin': origin, 'fonts': fonts}, indent=2) + '\n')
+          print('Verified fonts:', len(fonts), 'bytes:', sum(row['bytes'] for row in fonts))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flutter-engine-fonts
+          path: .ci-fonts/
+          compression-level: 0
+          retention-days: 3
