@@ -93,7 +93,7 @@ jobs:
 
       - name: Build Flutter Web experience
         working-directory: apps/flutter/app
-        run: fvm flutter build web --release --no-wasm-dry-run --base-href /
+        run: fvm flutter build web --release --no-wasm-dry-run --no-web-resources-cdn --base-href /
 
       - name: Install Theme Studio locked wasm-bindgen CLI
         run: |
@@ -121,12 +121,20 @@ jobs:
           RELEASE_ID="ci-${GITHUB_SHA::12}"
           test -s apps/flutter/app/build/web/index.html
           test -s apps/flutter/app/build/web/main.dart.js
+          test -s apps/flutter/app/build/web/canvaskit/canvaskit.js
+          test -s apps/flutter/app/build/web/canvaskit/canvaskit.wasm
+          test -s apps/flutter/app/build/web/canvaskit/chromium/canvaskit.js
+          test -s apps/flutter/app/build/web/canvaskit/chromium/canvaskit.wasm
           test -s apps/flutter/app/build/web/assets/assets/model_logos/DEEPSEEK.svg
           test -s apps/flutter/app/build/web/runtime/generated/operit_runtime_worker.js
           test -s apps/flutter/app/build/web/theme/index.html
           test -s apps/flutter/app/build/web/theme/theme-studio-config.json
           test -s "apps/flutter/app/build/web/theme/theme-preview/${RELEASE_ID}/index.html"
           test -s "apps/flutter/app/build/web/theme/theme-preview/${RELEASE_ID}/main.dart.js"
+          test -s "apps/flutter/app/build/web/theme/theme-preview/${RELEASE_ID}/canvaskit/canvaskit.js"
+          test -s "apps/flutter/app/build/web/theme/theme-preview/${RELEASE_ID}/canvaskit/canvaskit.wasm"
+          test -s "apps/flutter/app/build/web/theme/theme-preview/${RELEASE_ID}/canvaskit/chromium/canvaskit.js"
+          test -s "apps/flutter/app/build/web/theme/theme-preview/${RELEASE_ID}/canvaskit/chromium/canvaskit.wasm"
           test -s "apps/flutter/app/build/web/theme/theme-preview/${RELEASE_ID}/theme_contract_client.js"
           test -s "apps/flutter/app/build/web/theme/theme-preview/${RELEASE_ID}/theme_contract_worker.js"
           test -s "apps/flutter/app/build/web/theme/theme-preview/${RELEASE_ID}/validator/operit_plugin_theme.js"

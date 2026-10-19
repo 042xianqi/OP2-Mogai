@@ -27,6 +27,7 @@ def output(*args: str, cwd: Path = ROOT) -> str:
 
 
 def main() -> None:
+    """Build a pinned renderer release with its rendering engine served locally."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--renderer-release-id", required=True)
     parser.add_argument("--flutter-sdk", required=True, type=Path)
@@ -72,7 +73,8 @@ def main() -> None:
         "--features", "wasm", "--target", "wasm32-unknown-unknown", "--release", "--locked")
     wasm = Path(workspace["target_directory"]) / "wasm32-unknown-unknown/release/operit_plugin_theme.wasm"
     run(str(flutter), "pub", "get", "--enforce-lockfile", cwd=PREVIEW)
-    run(str(flutter), "build", "web", "--release", "--no-pub", "--output=" + str(destination),
+    run(str(flutter), "build", "web", "--release", "--no-pub", "--no-web-resources-cdn",
+        "--output=" + str(destination),
         "--base-href=" + base_prefix + "/theme-preview/" + release_id + "/",
         "--dart-define=OPERIT_THEME_RENDERER_RELEASE_ID=" + release_id,
         "--dart-define=OPERIT_THEME_FIXTURE_SOURCE_SHA256=" + fixture_source_sha256, cwd=PREVIEW)
