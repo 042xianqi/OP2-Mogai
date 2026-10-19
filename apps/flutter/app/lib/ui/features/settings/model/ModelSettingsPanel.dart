@@ -1043,6 +1043,7 @@ class _ProviderEditorDialogState extends State<_ProviderEditorDialog> {
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
+            padding: const EdgeInsets.only(top: 12, bottom: 8),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
