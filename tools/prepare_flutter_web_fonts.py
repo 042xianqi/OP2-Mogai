@@ -96,7 +96,7 @@ def main() -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(CACHE / entry["path"], target)
     shutil.copyfile(LOCK, destination / "font-resources.json")
-    shutil.copyfile(args.flutter_sdk / "bin/cache/artifacts/material_fonts/roboto_license.txt", destination / "Roboto-LICENSE.txt")
+    shutil.copyfile(ROOT / "tools/licenses/flutter-roboto.txt", destination / "Roboto-LICENSE.txt")
     shutil.copyfile(ROOT / "apps/flutter/packages/operit_ui/assets/licenses/noto-sans-sc.txt", destination / "Noto-LICENSE.txt")
     print(f"Staged {len(actual)} verified engine fonts ({sum(row['bytes'] for row in actual):,} bytes)", flush=True)
 
