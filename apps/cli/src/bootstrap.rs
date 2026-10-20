@@ -743,12 +743,12 @@ pub(crate) fn rescue_roots() -> Result<operit_host_data_rescue::RescueRoots, Str
 /// Returns the CLI configuration directory for an explicitly selected damaged-config rescue.
 pub(crate) fn rescue_config_root() -> PathBuf { cli_config_dir() }
 
-/// Creates only the selected secret-store adapter for a CLI maintenance session.
-pub(crate) fn rescue_secret_store(root: &std::path::Path) -> Option<Arc<dyn operit_host_api::HostSecretStore>> {
+/// Opens maintenance with the same explicitly selected secret contract as normal CLI profiles.
+pub(crate) fn rescue_session(default_runtime: PathBuf, root: &std::path::Path) -> Result<operit_host_data_rescue::NativeRescueSession, String> {
     if env::var("OPERIT_CLI_SECRET_STORE").as_deref() == Ok("file") {
-        // Every identity's file-backed secrets are already included in the raw runtime namespace.
-        return None;
+        return operit_host_data_rescue::NativeRescueSession::open_file_secrets(default_runtime);
     }
-    Some(Arc::new(NativeRuntimeStorageHost::new(root.to_path_buf(), root.with_file_name("workspaces"))))
+    let secrets = Arc::new(NativeRuntimeStorageHost::new(root.to_path_buf(), root.with_file_name("workspaces")));
+    operit_host_data_rescue::NativeRescueSession::open(default_runtime, Some(secrets))
 }
 

@@ -286,8 +286,8 @@ impl CharacterPluginWriter {
             AppLogger::w(
                 "CharacterPluginMigration",
                 &format!(
-                    "source={source} dropped {} group members, {} relationships and {} document chunks whose legacy owner was deleted without a reference cleanup",
-                    dropped.groupMembers, dropped.relationships, dropped.documentChunks
+                    "source={source} removed {} tag attachments, {} shared memory mounts, {} group members, {} relationships and {} document chunks with missing legacy targets",
+                    dropped.tagAttachments, dropped.sharedMemoryMounts, dropped.groupMembers, dropped.relationships, dropped.documentChunks
                 ),
             );
         }
@@ -515,17 +515,59 @@ fn validateResourcePath(path: &str) -> Result<(), String> {
 /// Counts legacy references removed because their target is absent from the same snapshot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DroppedLegacyRecords {
+    pub tagAttachments: usize,
+    pub sharedMemoryMounts: usize,
     pub groupMembers: usize,
     pub relationships: usize,
     pub documentChunks: usize,
 }
 
-/// Removes group members, relationships and document chunks whose target is absent from the snapshot.
-/// The retired Core deleted characters and memories without clearing their references.
+/// Removes list references whose tags, shared stores, characters or memories are absent from the snapshot.
+/// Retired deletion paths removed target records without clearing every referring record.
 /// Group identities, retained member order indices and timestamps remain unchanged.
 /// Records with malformed fields stay for validateMigrationData to report precisely.
 pub fn dropUnresolvableRecords(data: &mut CharacterMigrationData) -> DroppedLegacyRecords {
     let mut dropped = DroppedLegacyRecords::default();
+    let tags = data
+        .tags
+        .iter()
+        .map(|tag| tag.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let stores = data
+        .stores
+        .iter()
+        .map(|store| store.id.as_str())
+        .collect::<BTreeSet<_>>();
+    for card in &mut data.cards {
+        let card_id = &card.id;
+        card.attachedTagIds.retain(|tag_id| {
+            if tag_id.trim().is_empty() || tags.contains(tag_id.as_str()) {
+                return true;
+            }
+            AppLogger::w(
+                "CharacterPluginMigration",
+                &format!("card={card_id} removed reference to missing legacy tagId={tag_id}"),
+            );
+            dropped.tagAttachments += 1;
+            false
+        });
+        card.sharedMemoryMounts.retain(|mount| {
+            if mount.sharedMemoryId.trim().is_empty()
+                || stores.contains(mount.sharedMemoryId.as_str())
+            {
+                return true;
+            }
+            AppLogger::w(
+                "CharacterPluginMigration",
+                &format!(
+                    "card={card_id} removed mount to missing legacy sharedMemoryId={}",
+                    mount.sharedMemoryId
+                ),
+            );
+            dropped.sharedMemoryMounts += 1;
+            false
+        });
+    }
     let cards = data
         .cards
         .iter()
@@ -1606,12 +1648,12 @@ struct ThemeBinding {
     config: ThemeConfig,
 }
 
-/// Persists the conversion inputs before either configuration or role bindings are changed.
+/// Holds exact cleanup inputs and allocated theme identities until migration completes.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct ThemeMigrationPlan {
     bindings: Vec<ThemeBinding>,
     activeConfigId: Option<String>,
-    sourceEntries: Vec<(String, String)>,
+    sourceEntries: Vec<(String, Value)>,
     complete: bool,
 }
 
@@ -1627,7 +1669,7 @@ fn themePrefix(collection: &str, id: &str) -> Result<String, String> {
 }
 
 impl CharacterPluginWriter {
-    /// Migrates every imported role theme, verifies both owners, then removes only its exact source keys.
+    /// Migrates supported appearance, verifies both owners, then removes all obsolete scoped preferences.
     pub fn migrateThemes(
         &self,
         source: &str,

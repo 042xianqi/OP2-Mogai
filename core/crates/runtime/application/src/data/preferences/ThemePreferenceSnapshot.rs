@@ -586,39 +586,47 @@ pub(crate) fn readThemePreferenceSnapshot(
     Ok(snapshot)
 }
 
-/// Projects the released role-scoped keys and global user avatar into the ordinary snapshot codec.
+/// Collects exact cleanup inputs and converts only legacy settings supported by the current theme schema.
 pub(crate) fn readLegacyCharacterThemeSnapshot(
     preferences: &Preferences,
     prefix: &str,
-) -> Result<(BTreeMap<String, Value>, Vec<(String, String)>), PreferencesDataStoreError> {
+) -> Result<(BTreeMap<String, Value>, Vec<(String, Value)>), PreferencesDataStoreError> {
     let mut scoped = operit_store::PreferencesDataStore::emptyPreferences();
     let mut source_entries = Vec::new();
     for (key, value) in preferences.iterEntries() {
         if let Some(field) = key.strip_prefix(prefix) {
-            if !SNAPSHOT_FIELDS.iter().any(|entry| entry.preference_key == field)
-                && !matches!(field, "use_system_theme" | "custom_ai_avatar_uri")
-            {
-                return Err(invalidSnapshot(key, "unknown legacy role appearance preference"));
+            source_entries.push((key.to_string(), value.clone()));
+            // The released resolver reads the user avatar globally and does not apply scoped AI avatars.
+            if matches!(field, "custom_user_avatar_uri" | "custom_ai_avatar_uri") {
+                continue;
+            }
+            let descriptor = snapshotFields().find(|entry| entry.preference_key == field);
+            // Unsupported historical settings are cleanup inputs, not current snapshot fields.
+            if descriptor.is_none() && field != "use_system_theme" {
+                continue;
             }
             let encoded = serde_json::from_value::<String>(value.clone())?;
-            source_entries.push((key.to_string(), encoded.clone()));
-            // The released resolver always reads the user avatar globally, even when a scoped key exists.
-            if field != "custom_user_avatar_uri" && field != "custom_ai_avatar_uri" {
-                let descriptor = SNAPSHOT_FIELDS.iter().find(|entry| entry.preference_key == field);
-                let decoded = match descriptor.map(|entry| entry.kind) {
-                    Some(FieldKind::Boolean | FieldKind::OptionalColor | FieldKind::Number { .. }) => serde_json::from_str::<Value>(&encoded)?,
-                    _ if field == "use_system_theme" => serde_json::to_value(serde_json::from_str::<bool>(&encoded)?)?,
-                    _ => Value::String(encoded),
-                };
-                scoped.set(&stringPreferencesKey(field), decoded);
-            }
+            let decoded = match descriptor.map(|entry| entry.kind) {
+                Some(FieldKind::Boolean | FieldKind::OptionalColor | FieldKind::Number { .. }) => {
+                    serde_json::from_str::<Value>(&encoded)?
+                }
+                _ if field == "use_system_theme" => {
+                    serde_json::to_value(serde_json::from_str::<bool>(&encoded)?)?
+                }
+                _ => Value::String(encoded),
+            };
+            scoped.set(&stringPreferencesKey(field), decoded);
         }
     }
     if let Some(avatar) = preferences.get(&stringPreferencesKey("custom_user_avatar_uri")) {
-        scoped.set(&stringPreferencesKey("custom_user_avatar_uri"), avatar.clone());
+        scoped.set(
+            &stringPreferencesKey("custom_user_avatar_uri"),
+            avatar.clone(),
+        );
     }
     // These are the released resolver's declared initial fields, independent of current global appearance.
-    let initial: BTreeMap<String, Value> = serde_json::from_str(r#"{
+    let initial: BTreeMap<String, Value> = serde_json::from_str(
+        r#"{
   "themeMode": "system",
   "useCustomColors": false,
   "customPrimaryColor": null,
@@ -697,8 +705,12 @@ pub(crate) fn readLegacyCharacterThemeSnapshot(
   "showMessageTimingStats": false,
   "showMessageTimestamp": false,
   "showInputProcessingStatus": true
-}"#)?;
-    Ok((readThemePreferenceSnapshot(&scoped, &initial)?, source_entries))
+}"#,
+    )?;
+    Ok((
+        readThemePreferenceSnapshot(&scoped, &initial)?,
+        source_entries,
+    ))
 }
 
 /// Validates exact ordinary appearance keys before staging a partial configuration edit.
