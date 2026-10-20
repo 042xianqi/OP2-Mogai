@@ -577,11 +577,11 @@ impl HostRuntimePeerService {
         }
         // A peer that dialed us can be called over the connection it opened, which
         // is the only route that exists when its own address is not routable here.
-        if self.router()?.spaceChannelScope(node)?.is_some() {
-            if let Some(channel) = self.inboundCallableChannel(node) {
-                operit_util::AppLogger::AppLogger::v_with_level("RuntimePeerService", &format!("Calling {node} over the connection it opened"), operit_util::AppLogger::VERBOSE_LEVEL_3);
-                return Ok(channel.lease());
-            }
+        // Pre-admission pairing traffic (Space join) also rides this route before
+        // any Space scope exists; every request still passes the router's checks.
+        if let Some(channel) = self.inboundCallableChannel(node) {
+            operit_util::AppLogger::AppLogger::v_with_level("RuntimePeerService", &format!("Calling {node} over the connection it opened"), operit_util::AppLogger::VERBOSE_LEVEL_3);
+            return Ok(channel.lease());
         }
         if self.dialSuppressed(node) {
             return Err(CoreLinkError::new("PEER_CALL_BACK_ONLY", "Active dialing is paused: the peer is reachable over the connection it opened"));
@@ -879,7 +879,8 @@ impl HostRuntimePeerService {
             channel.setSpaceScoped(spaceChannel);
             let live = self.startLiveChannel(&hello.nodeId, channel.clone())?;
             // One reader handles both directions, including original pairing connections.
-            // Reverse routing becomes available only after admission to the same Space.
+            // Reverse routing carries pairing-level traffic before admission and
+            // same-Space traffic once both endpoints are admitted members.
             if DUPLEX_CHANNELS && channel.peerDuplex() && isNetworkTransport(raw.transport()) {
                 let scheduler = self.state.host.hostRuntimeTaskSchedulerHost.clone()
                     .ok_or_else(|| error("Host scheduler is not installed"))?;
