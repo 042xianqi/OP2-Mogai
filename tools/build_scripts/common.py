@@ -18,7 +18,12 @@ RELEASE_DIR = REPO_ROOT / "tools" / "release"
 DIST_DIR = RELEASE_DIR / "dist"
 ANDROID_DIR = FLUTTER_APP_DIR / "android"
 ANDROID_LOCAL_PROPERTIES = ANDROID_DIR / "local.properties"
+PLUGIN_PACKAGES_DIR = REPO_ROOT / "plugins" / "packages"
+PLUGIN_SYNC_SCRIPT = REPO_ROOT / "plugins" / "tools" / "sync_plugin_packages.py"
+PLUGIN_MANIFEST_FILENAMES = ("manifest.hjson", "manifest.json")
+PLUGIN_SYNCABLE_SUFFIXES = (".js", ".toolpkg")
 _fvm_sdk_prepared = False
+_plugin_assets_prepared = False
 
 
 def run(command: list[str | Path], cwd: Path = REPO_ROOT, env: dict[str, str] | None = None) -> None:
@@ -261,6 +266,71 @@ def prepare_python_command() -> None:
             target.unlink()
         target.symlink_to(python)
     run([str(target), "--version"])
+
+
+# Returns the interpreter under the repository virtualenv used by build hooks.
+def prepared_python_path() -> Path:
+    if host_platform() == "windows":
+        return REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+    return REPO_ROOT / ".venv" / "bin" / "python"
+
+
+# Regenerates the gitignored ToolPkg assets that operit-runtime embeds at compile time.
+def prepare_plugin_assets() -> None:
+    global _plugin_assets_prepared
+    if _plugin_assets_prepared:
+        return
+    prepare_python_command()
+    run(
+        [
+            str(prepared_python_path()),
+            str(PLUGIN_SYNC_SCRIPT),
+            "--source",
+            "runtime",
+            "--no-hot-reload",
+        ],
+        cwd=REPO_ROOT,
+    )
+    _plugin_assets_prepared = True
+
+
+# Mirrors sync_plugin_packages.py's plan so builds can assert the generated asset set.
+def expected_plugin_asset_names() -> list[str]:
+    names: list[str] = []
+    for kind in ("buildin", "external"):
+        source_dir = PLUGIN_PACKAGES_DIR / kind
+        if not source_dir.is_dir():
+            continue
+        for child in sorted(source_dir.iterdir(), key=lambda path: path.name.lower()):
+            if child.is_dir():
+                if any((child / name).is_file() for name in PLUGIN_MANIFEST_FILENAMES):
+                    names.append(f"{child.name}.toolpkg")
+                continue
+            lower_name = child.name.lower()
+            if lower_name.endswith(".d.ts"):
+                continue
+            if lower_name.endswith(".ts"):
+                names.append(f"{child.stem}.js")
+            elif child.suffix.lower() in PLUGIN_SYNCABLE_SUFFIXES:
+                names.append(child.name)
+    return names
+
+
+# Fails when a packaged binary omits any generated ToolPkg asset that build.rs must embed.
+def verify_cli_plugin_assets(binary_path: Path) -> None:
+    names = expected_plugin_asset_names()
+    if not names:
+        raise RuntimeError(
+            f"No plugin package sources found under {PLUGIN_PACKAGES_DIR}; refusing to package a CLI without built-in plugins"
+        )
+    data = binary_path.read_bytes()
+    missing = [name for name in names if name.encode("utf-8") not in data]
+    if missing:
+        raise RuntimeError(
+            "Built CLI is missing embedded plugin assets: "
+            + ", ".join(missing)
+            + ". Run: python3 plugins/tools/sync_plugin_packages.py --source runtime --no-hot-reload"
+        )
 
 
 def generate_dart_proxy_artifacts() -> None:

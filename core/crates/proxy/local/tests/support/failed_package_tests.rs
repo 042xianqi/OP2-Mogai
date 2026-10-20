@@ -34,7 +34,8 @@ async fn failed_package_deletion_allows_bundled_reinstallation() {
         .path;
     record.scope = "device".into();
     record.sourceName.clear();
-    record.settings["builtin"] = json!(true);
+    // Non-builtin duplicates must keep failing instead of being auto-merged.
+    record.settings["builtin"] = json!(false);
     record
         .settings
         .as_object_mut()
@@ -160,4 +161,67 @@ async fn failed_package_deletion_allows_bundled_reinstallation() {
     assert!(!duplicate.exists());
     assert_eq!(store.record("package", extra).unwrap().scope, "device");
     assert!(manager.getToolPkgContainerRuntime(extra).is_some());
+}
+
+/// Legacy device-scope builtin records auto-merge into the required space owner on load.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_builtin_device_record_merges_into_space_owner() {
+    let _test_guard = SHARED_CONCURRENCY_TEST_LOCK.lock().await;
+    let storage = register_test_runtime_roots();
+    let mut hosts = HostManager::withFileSystemHost(Arc::new(PosixFileSystemHost::new()));
+    hosts.runtimeStorageHost = Some(storage.clone());
+    hosts.runtimeSqliteHost = Some(storage.clone());
+    hosts.hostSecretStore = Some(Arc::new(TestSecretStore::default()));
+    hosts.hostJavaScriptRuntimeHost = Some(Arc::new(NativeHostJavaScriptRuntimeHost::new()));
+    hosts.hostRuntimeTaskSchedulerHost = Some(Arc::new(NativeHostRuntimeTaskSchedulerHost::new()));
+    ui_resource_tests::configure_package_hosts(&mut hosts);
+    let app = OperitApplication::newWithContext(hosts);
+    let packages = app.packageManager();
+    let mut manager = packages.lock().unwrap();
+    manager.loadAvailablePackages();
+    let name = "com.operit.goal_mode_bundle";
+    let store = ExtensionStore::new(storage.clone());
+    let canonical = store.record("package", name).unwrap();
+    assert_eq!(canonical.scope, "space");
+    let space_record_path = storage
+        .list("runtime/extensions/space/records")
+        .unwrap()
+        .into_iter()
+        .find(|entry| {
+            serde_json::from_slice::<Value>(&storage.readBytes(&entry.path).unwrap()).unwrap()["id"]
+                == name
+        })
+        .unwrap()
+        .path;
+    let mut legacy = canonical.clone();
+    legacy.scope = "device".into();
+    legacy
+        .settings
+        .as_object_mut()
+        .unwrap()
+        .remove("installationScope");
+    legacy.settings["enabledNames"] = json!(["legacy_toggle"]);
+    legacy.settings["order"] = json!(9);
+    let device_record_path = space_record_path.replace("/space/", "/device/");
+    storage
+        .writeBytes(&device_record_path, &serde_json::to_vec(&legacy).unwrap())
+        .unwrap();
+    assert!(store.record("package", name).is_err());
+
+    manager.loadAvailablePackages();
+
+    assert!(manager
+        .getToolPkgLoadIssues()
+        .iter()
+        .all(|issue| issue.packageName.as_deref() != Some(name)));
+    let merged = store.record("package", name).unwrap();
+    assert_eq!(merged.scope, "space");
+    assert_eq!(merged.settings["order"], json!(9));
+    assert!(merged.settings["enabledNames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value == "legacy_toggle"));
+    assert!(!storage.exists(&device_record_path).unwrap());
+    assert!(manager.getToolPkgContainerRuntime(name).is_some());
 }

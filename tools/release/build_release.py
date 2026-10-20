@@ -32,6 +32,7 @@ CLI_MANIFEST = REPO_ROOT / "apps" / "cli" / "Cargo.toml"
 RUNTIME_MANIFEST = REPO_ROOT / "core" / "crates" / "runtime" / "application" / "Cargo.toml"
 BUILD_SCRIPTS_DIR = REPO_ROOT / "tools" / "build_scripts"
 sys.path.insert(0, str(BUILD_SCRIPTS_DIR))
+from common import prepare_plugin_assets, verify_cli_plugin_assets
 from release_artifacts import release_asset_name, validate_release_assets
 DEFAULT_GITHUB_ENV = SECRETS_DIR / "github.env"
 DEFAULT_RELEASE_REPO = "AAswordman/Operit2"
@@ -839,6 +840,8 @@ def build_wsl_linux_cli(distro):
 
 
 def wsl_build_cli_target(distro, target):
+    # Generate the generated ToolPkg assets on the Windows host so the WSL build needs no Node.
+    prepare_plugin_assets()
     dist = shlex.quote(windows_path_to_wsl(DIST_DIR))
     work = shlex.quote(windows_path_to_wsl(cli_package_dir(target)))
     package = shlex.quote(windows_path_to_wsl(cli_package_path(target)))
@@ -1088,6 +1091,7 @@ def vs_dev_env(vcvars_path, arch):
 
 def build_cli_target(target, use_default_target=False):
     require_command("cargo")
+    prepare_plugin_assets()
     binary_name = cli_binary_name(target.platform)
     package_dir = cli_package_dir(target)
     package_path = cli_package_path(target)
@@ -1115,6 +1119,7 @@ def build_cli_target(target, use_default_target=False):
         run(["cargo", "build", "--release", "--target", target.rust_target, "--manifest-path", CLI_MANIFEST], env=build_env)
         binary_source = cli_target_binary_path(target)
 
+    verify_cli_plugin_assets(binary_source)
     reset_dir(package_dir)
     copy_required_file(binary_source, package_dir / binary_name)
     write_cli_installer_files(package_dir, target.platform)

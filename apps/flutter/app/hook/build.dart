@@ -98,7 +98,7 @@ void main(List<String> args) async {
     await _run(_pythonExecutable(repoRoot), [
       syncScript.path,
       '--source',
-      'buildin',
+      'runtime',
       '--no-hot-reload',
     ], workingDirectory: repoRoot.path);
 

@@ -949,3 +949,70 @@ fn shared_builtin_customization_syncs_source_changes_without_deleting_configurat
     assert!(!target.exists(archive).unwrap());
     assert_eq!(target.readBytes(&config).unwrap(), b"shared configuration");
 }
+
+/// Legacy device-scope builtin records merge into the required space installation.
+#[test]
+fn builtin_scope_duplicate_records_merge_into_required_space_installation() {
+    let storage = host();
+    let store = ExtensionStore::new(storage.clone());
+    let settings = |enabled: Value, order: u64| {
+        let subpackageEnabled = enabled
+            .as_array()
+            .is_some_and(|values| !values.is_empty());
+        json!({
+            "members": ["bundle", "bundle_tools"], "enabledNames": enabled,
+            "disabledNames": [], "subpackageStates": {"bundle_tools": subpackageEnabled},
+            "order": order, "builtin": true,
+            "installationId": "00000000000000000000000000000000"
+        })
+    };
+    store
+        .registerDevice("package", "bundle", "", settings(json!(["legacy"]), 7))
+        .unwrap();
+    let mut canonical = store.record("package", "bundle").unwrap();
+    canonical.scope = "space".into();
+    canonical.settings = settings(json!(["canonical"]), 2);
+    canonical.settings["installationScope"] = json!("space");
+    store.write(&canonical).unwrap();
+    assert!(store
+        .record("package", "bundle")
+        .unwrap_err()
+        .contains("ownership conflict"));
+
+    assert!(store
+        .reconcileBuiltinScopeDuplicates("package", "bundle", "space")
+        .unwrap());
+    let merged = store.record("package", "bundle").unwrap();
+    assert_eq!(merged.scope, "space");
+    assert_eq!(merged.settings["enabledNames"], json!(["canonical", "legacy"]));
+    assert_eq!(merged.settings["order"], json!(7));
+    assert_eq!(merged.settings["installationScope"], json!("space"));
+    assert!(store
+        .records("package")
+        .unwrap()
+        .iter()
+        .all(|record| record.scope == "space"));
+    assert!(!store
+        .reconcileBuiltinScopeDuplicates("package", "bundle", "space")
+        .unwrap());
+}
+
+/// Genuine ownership conflicts must keep failing instead of being auto-merged.
+#[test]
+fn builtin_scope_reconciliation_refuses_non_builtin_duplicates() {
+    let storage = host();
+    let store = ExtensionStore::new(storage);
+    register_package_owner(&store, "bundle", &["bundle"]);
+    let mut duplicate = store.record("package", "bundle").unwrap();
+    duplicate.scope = "space".into();
+    duplicate.settings["installationScope"] = json!("space");
+    store.write(&duplicate).unwrap();
+
+    assert!(!store
+        .reconcileBuiltinScopeDuplicates("package", "bundle", "space")
+        .unwrap());
+    assert!(store
+        .record("package", "bundle")
+        .unwrap_err()
+        .contains("ownership conflict"));
+}

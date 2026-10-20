@@ -103,7 +103,7 @@ WantedBy=default.target
 
 - `link` 子命令仍会启动自己的短命 Core，尚未通过 control socket 路由；不要和 daemon 同时执行 `link listen`。
 - Market/GitHub 登录仍是 loopback 回调，无头服务器需要端口转发；Codex 已有 device-code 流程可参照。
-- 没有自动日志轮转；长期运行需自行清理 `operit.log`。
+- 日志保留策略：`operit.log`/`toolpkg.log` 单文件上限 4 MiB（超限淘汰最早一半并留标记行），`daemon.out` 在 daemon 启动时裁剪到 4 MiB 内（保留最新 1 MiB）。
 
 daemon 的控制协议和 identity 生命周期在 `apps/cli/src/daemon.rs`，平台选择集中在 `apps/cli/src/host.rs`。Windows 实现在 `hosts/windows/src/daemon.rs`；Linux 和 macOS 从各自 host 入口引用 `hosts/unix/daemon.rs`。`hosts/common/operit-host-native-common/src/DaemonHost.rs` 只定义共享字节流接口，不包含平台选择、传输实现或进程操作。
 
