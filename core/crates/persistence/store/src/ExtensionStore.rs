@@ -370,6 +370,79 @@ impl ExtensionStore {
         self.write(&record)
     }
 
+    /// Installs a custom implementation under the built-in identity while retaining its settings.
+    pub fn customizePackage(
+        &self,
+        id: &str,
+        sourceName: &str,
+        members: Vec<String>,
+    ) -> Result<(), String> {
+        let mut record = self.record("package", id)?;
+        let previousSource = record.sourceName.clone();
+        if record.settings["builtin"] == true {
+            record.settings["builtinMembers"] = record.settings["members"].clone();
+        } else if record.settings["customized"] != true {
+            return Err(format!("Package is not a built-in customization: {id}"));
+        }
+        record.sourceName = sourceName.to_string();
+        record.settings["builtin"] = Value::Bool(false);
+        record.settings["customized"] = Value::Bool(true);
+        record.settings["members"] =
+            serde_json::to_value(members).map_err(|error| error.to_string())?;
+        self.publishPackageSource(&record, &previousSource)
+    }
+
+    /// Removes only custom code and restores the built-in installation with its existing data.
+    pub fn removePackageCustomization(&self, id: &str) -> Result<(), String> {
+        let mut record = self.record("package", id)?;
+        if record.settings["customized"] != true {
+            return Err(format!("Package is not customized: {id}"));
+        }
+        let members: Vec<String> =
+            serde_json::from_value(record.settings["builtinMembers"].clone())
+                .map_err(|error| error.to_string())?;
+        let previousSource = record.sourceName.clone();
+        record.sourceName.clear();
+        record.settings["builtin"] = Value::Bool(true);
+        record.settings["customized"] = Value::Bool(false);
+        record.settings["members"] =
+            serde_json::to_value(members).map_err(|error| error.to_string())?;
+        self.publishPackageSource(&record, &previousSource)
+    }
+
+    /// Publishes a source change and retires its previous archive without touching configuration roots.
+    fn publishPackageSource(
+        &self,
+        record: &ExtensionRecord,
+        previousSource: &str,
+    ) -> Result<(), String> {
+        self.validate(record)?;
+        let root = Self::root("package", &record.scope)?;
+        if record.scope == "space" && !record.sourceName.is_empty() {
+            let path = format!("{root}/{}", record.sourceName);
+            let bytes = self
+                .storage
+                .readBytes(&path)
+                .map_err(|error| error.to_string())?;
+            self.writeOwnedBytes(record, &path, &bytes)?;
+        }
+        self.write(record)?;
+        if !previousSource.is_empty() && previousSource != record.sourceName {
+            let path = format!("{root}/{previousSource}");
+            match record.scope.as_str() {
+                "device" => self
+                    .storage
+                    .delete(&path, false)
+                    .map_err(|error| error.to_string())?,
+                "space" => RuntimeFileSyncStore::new(self.storage.clone(), RUNTIME_SYNC_DIR_PATH)
+                    .delete(&path)?,
+                _ => return Err("Unknown extension scope".to_string()),
+            }
+        }
+        notifyCatalogChanged();
+        Ok(())
+    }
+
     /// Retires an archived package source in its exact scope without deleting its data.
     pub fn retirePackageSource(&self, id: &str, sourceName: &str, scope: &str) -> Result<(), String> {
         validateScope(scope)?;

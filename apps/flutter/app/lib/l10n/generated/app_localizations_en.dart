@@ -4194,4 +4194,55 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsAppearanceResetAfterError => 'Reset appearance';
+
+  @override
+  String get backgroundWorkIdle => 'No work is running';
+
+  @override
+  String get backgroundWorkRunningCount => 'work items running';
+
+  @override
+  String get backgroundWorkWaiting => 'Waiting for your confirmation';
+
+  @override
+  String get backgroundWorkWaitingCount => 'awaiting confirmation';
+
+  @override
+  String get backgroundWorkCompleted => 'Completed';
+
+  @override
+  String get backgroundWorkFailed => 'Failed — open to view details';
+
+  @override
+  String get backgroundWorkCancelled => 'Stopped';
+
+  @override
+  String get backgroundWorkProcessing => 'Preparing';
+
+  @override
+  String get backgroundWorkConnecting => 'Connecting';
+
+  @override
+  String get backgroundWorkReceiving => 'Writing a response';
+
+  @override
+  String get backgroundWorkTool => 'Running a tool';
+
+  @override
+  String get backgroundWorkToolResult => 'Processing tool results';
+
+  @override
+  String get backgroundWorkSummarizing => 'Organizing context';
+
+  @override
+  String get backgroundWorkPlan => 'Executing a plan';
+
+  @override
+  String get backgroundWorkOpen => 'View conversation';
+
+  @override
+  String get backgroundWorkReview => 'Review';
+
+  @override
+  String get backgroundWorkStop => 'Stop';
 }

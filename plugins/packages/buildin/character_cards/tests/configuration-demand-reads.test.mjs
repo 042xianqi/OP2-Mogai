@@ -219,3 +219,34 @@ test("invalid installed bindings allow ordinary edits and explicit rebinding thr
     assert.deepEqual(result.profile.modelBinding, { providerId: model.providerId, modelId: model.modelId });
   }
 });
+
+/** Opens damaged selections for editing while requiring a real library for new bindings and execution. */
+test("missing primary memory libraries stay editable and require explicit valid rebinding", async t => {
+  for (const sharedId of [null, "", "  ", "deleted-store"]) {
+    const h = await environment(t);
+    h.disk.storage.inspectPreferences("cards", values => Object.assign(values.record_default, {
+      memoryBindingMode: "SHARED", sharedMemoryId: sharedId,
+    }));
+    const initial = h.disk.stateBytes();
+    await loadModule("src/storage/database.ts", h.disk.globals).DatabaseCharacterRepository.open();
+    assert.deepEqual(h.disk.stateBytes(), initial);
+    const listed = await h.service.dispatchDomain("character.list", {});
+    assert.equal(listed.find(card => card.id === "default").sharedMemoryId, sharedId);
+    const saved = await h.service.dispatchDomain("character.update", { id: "default", changes: { description: "Memory choice stays editable" } });
+    assert.equal(saved.description, "Memory choice stays editable");
+    assert.equal(saved.memoryBindingMode, "SHARED"); assert.equal(saved.sharedMemoryId, sharedId);
+    const other = await h.service.dispatchDomain("character.create", { values: { name: "Unaffected role" } });
+    assert.equal((await h.resolve(request("card:" + other.id))).profile.id, other.id);
+    await assert.rejects(h.resolve(request("card:default")), /profile.sharedMemoryId|Shared memory not found/);
+    const before = h.disk.stateBytes();
+    await assert.rejects(h.service.dispatchDomain("character.create", { values: {
+      name: "Invalid new role", memoryBindingMode: "SHARED", sharedMemoryId: sharedId,
+    } }), /共享记忆库/);
+    await assert.rejects(h.service.dispatchDomain("character.update", { id: "default", changes: { sharedMemoryId: "another-deleted-store" } }), /共享记忆库/);
+    assert.deepEqual(h.disk.stateBytes(), before);
+    const store = await h.service.dispatchDomain("memory.shared.create", { name: "Explicitly selected library" });
+    const repaired = await h.service.dispatchDomain("character.update", { id: "default", changes: { sharedMemoryId: store.id } });
+    assert.equal(repaired.memoryBindingMode, "SHARED"); assert.equal(repaired.sharedMemoryId, store.id);
+    assert.equal((await h.resolve(request("card:default"))).profile.id, "default");
+  }
+});

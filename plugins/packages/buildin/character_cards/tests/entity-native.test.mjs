@@ -494,3 +494,44 @@ test("complete legacy FIXED_CONFIG appears as its exact fixed model in preview a
   assert.ok(keyedNode(ui.render().tree, "entity-model-picker"));
   assert.deepEqual(plugin.disk.stateBytes(), before);
 });
+
+/** Preserves damaged primary selections through preview and ordinary edits before an explicit library repair. */
+test("native editor opens missing shared libraries and saves content without changing the memory choice", async t => {
+  for (const sharedId of [null, "", "  ", "deleted-store"]) {
+    const plugin = await environment(t);
+    plugin.disk.storage.inspectPreferences("cards", values => Object.assign(values.record_default, {
+      memoryBindingMode: "SHARED", sharedMemoryId: sharedId,
+    }));
+    const before = plugin.disk.stateBytes(), ui = mount(plugin, "preview", "card", "default");
+    await ui.load(); await click(ui, "entity-preview-config-toggle");
+    assert.ok(composeNodes(ui.render().tree, node => node.props.text === "共享记忆库已不可用").length);
+    assert.deepEqual(plugin.disk.stateBytes(), before);
+    await click(ui, "entity-primary");
+    assert.equal(keyedNode(ui.render().tree, "entity-memory-switch").props.enabled, true);
+    await click(ui, "entity-field-description", "onValueChange", "Saved while retaining the missing library");
+    await click(ui, "entity-primary");
+    const saved = await plugin.api("character.get", { id: "default" });
+    assert.equal(saved.description, "Saved while retaining the missing library");
+    assert.equal(saved.memoryBindingMode, "SHARED"); assert.equal(saved.sharedMemoryId, sharedId);
+    const store = await plugin.api("memory.shared.create", { name: "User selected library" });
+    const editor = mount(plugin, "preview", "card", "default", "memory-rebind");
+    await editor.load(); await click(editor, "entity-primary");
+    await click(editor, "entity-store-picker"); await click(editor, "entity-picker-" + store.id);
+    await click(editor, "entity-primary");
+    const repaired = await plugin.api("character.get", { id: "default" });
+    assert.equal(repaired.memoryBindingMode, "SHARED"); assert.equal(repaired.sharedMemoryId, store.id);
+  }
+});
+
+/** Allows the user to explicitly leave a deleted shared library even when the store directory is empty. */
+test("native memory binding can explicitly switch to character memory with no shared libraries", async t => {
+  const plugin = await environment(t);
+  plugin.disk.storage.inspectPreferences("cards", values => Object.assign(values.record_default, {
+    memoryBindingMode: "SHARED", sharedMemoryId: "deleted-store",
+  }));
+  const ui = mount(plugin, "preview", "card", "default"); await ui.load(); await click(ui, "entity-primary");
+  assert.equal(keyedNode(ui.render().tree, "entity-memory-switch").props.enabled, true);
+  await click(ui, "entity-memory-switch", "onCheckedChange", false); await click(ui, "entity-primary");
+  const repaired = await plugin.api("character.get", { id: "default" });
+  assert.equal(repaired.memoryBindingMode, "CHARACTER"); assert.equal(repaired.sharedMemoryId, null);
+});

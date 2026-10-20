@@ -518,15 +518,13 @@ function assertCharacterModelBinding(card: Card): void {
   }
 }
 
-/** Normalizes editable content while preserving the stored model selection for unrelated edits. */
+/** Normalizes editable content while preserving stored model and memory selections for unrelated edits. */
 function normalizedCharacter(card: Card): Card {
   if (
     card.memoryBindingMode !== "CHARACTER" &&
     card.memoryBindingMode !== "SHARED"
   )
     throw new Error("记忆绑定模式无效");
-  if (card.memoryBindingMode === "SHARED")
-    requireId(card.sharedMemoryId, "共享记忆库");
   if (card.ttsConfigId !== null) requireId(card.ttsConfigId, "TTS 配置");
   if (card.themeConfigId !== null) requireId(card.themeConfigId, "主题配置");
   const policy = card.toolAccessConfig;
@@ -579,6 +577,7 @@ export async function saveCharacter(
   assertCard(card);
   assertBoolean(create, "角色新建标识");
   let value = normalizedCharacter(card);
+  let validateMemoryBinding = create;
   if (create) {
     assertCharacterModelBinding(value);
     value = { ...value, id: "", createdAt: 0, updatedAt: 0 };
@@ -587,6 +586,7 @@ export async function saveCharacter(
     const original = await host.getCharacter(id);
     assertCard(original);
     if (!sameCharacterModelBinding(original, value)) assertCharacterModelBinding(value);
+    validateMemoryBinding = original.memoryBindingMode !== value.memoryBindingMode || original.sharedMemoryId !== value.sharedMemoryId;
     value = {
       ...value,
       id: original.id,
@@ -615,7 +615,7 @@ export async function saveCharacter(
   records(tags, assertTag, "标签列表");
   records(stores, assertStore, "共享记忆库列表");
   const plan = prepareTagChanges(value.attachedTagIds, tagChanges, tags);
-  if (value.memoryBindingMode === "SHARED")
+  if (validateMemoryBinding && value.memoryBindingMode === "SHARED")
     findRecord(
       stores,
       requireId(value.sharedMemoryId, "共享记忆库标识"),

@@ -281,6 +281,71 @@ fn stale_legacy_names_do_not_replace_current_chat_bindings() {
     );
 }
 
+/// Repairs both released import encodings across live and synchronized history without changing saved identities.
+#[test]
+fn historical_message_avatars_are_adopted_after_completed_imports() {
+    let fixture = Fixture::new();
+    let writer = fixture.writer();
+    let mut source = data();
+    source.cards[0].avatarUri = Some("/app/character/avatar.png".into());
+    writer.import("operit1", source).unwrap();
+    let database = SqliteStore::openWithHost(fixture.host.clone(), "runtime/avatar-history.sqlite").unwrap();
+    operit_store::db::AppDatabase::createAllTables(&database).unwrap();
+    database.execute("INSERT INTO chats(id,title,createdAt,updatedAt) VALUES('history','History',1,1)", vec![]).unwrap();
+    let cases = [
+        ("ai", "Original", json!({}), true),
+        ("ai", "Historical name", json!({PLUGIN_ID:{"participantId":"legacy"},"other.plugin":{"keep":true}}), true),
+        ("ai", "Original", json!({"host.chat.identity":{"title":"Saved name","avatarUri":null}}), false),
+        ("user", "Original", json!({}), false),
+        ("ai", "Deleted role", json!({}), false),
+        ("ai", "Original", json!({PLUGIN_ID:{"participantId":"deleted-card"}}), false),
+        ("ai", "Historical name", json!({LEGACY_BINDING_NAMESPACE:{"characterCardName":"Original","characterGroupId":null}}), true),
+    ];
+    for (index, (sender, name, extensions, _)) in cases.iter().enumerate() {
+        database.execute("INSERT INTO messages(chatId,sender,timestamp,orderIndex,roleName,pluginExtensions) VALUES('history',?1,?2,?2,?3,?4)", vec![SqliteValue::Text((*sender).into()),SqliteValue::Integer(index as i64),SqliteValue::Text((*name).into()),SqliteValue::Text(extensions.to_string())]).unwrap();
+        database.execute("INSERT INTO message_variants(chatId,messageTimestamp,variantIndex,roleName,pluginExtensions) VALUES('history',?1,0,?2,?3)", vec![SqliteValue::Integer(index as i64),SqliteValue::Text((*name).into()),SqliteValue::Text(extensions.to_string())]).unwrap();
+    }
+    database.execute("INSERT INTO sync_sql_operations VALUES('history-op','test-device',1,'chat','chat','history','upsert','snapshot',1,8)", vec![]).unwrap();
+    for (synchronized, live) in [("sync_sql_message_rows","messages"),("sync_sql_message_variant_rows","message_variants")] {
+        let columns = database.queryRows(&format!("PRAGMA table_info({synchronized})"), vec![]).unwrap().into_iter()
+            .map(|row| row.get::<_,String>(1).unwrap()).filter(|name| name != "opId")
+            .map(|name| format!("\"{name}\"")).collect::<Vec<_>>().join(",");
+        database.execute(&format!("INSERT INTO {synchronized}(opId,{columns}) SELECT 'history-op',{columns} FROM {live}"), vec![]).unwrap();
+    }
+    for _ in 0..2 {
+        adoptCoreConfigurationRows(&database, writer).unwrap();
+        for (table, timestamp) in [("messages","timestamp"),("message_variants","messageTimestamp"),("sync_sql_message_rows","timestamp"),("sync_sql_message_variant_rows","messageTimestamp")] {
+            let rows = database.queryRows(&format!("SELECT pluginExtensions FROM {table} ORDER BY {timestamp}"), vec![]).unwrap();
+            assert_eq!(rows.len(), cases.len());
+            for (row, (_, name, before, repaired)) in rows.iter().zip(&cases) {
+                let actual: Value = serde_json::from_str(&row.get::<_,String>(0).unwrap()).unwrap();
+                let mut expected = before.clone();
+                expected.as_object_mut().unwrap().remove(LEGACY_BINDING_NAMESPACE);
+                if *repaired {
+                    expected[PLUGIN_ID] = json!({"participantId":"legacy"});
+                    expected["host.chat.identity"] = json!({"title":name,"avatarUri":"/app/character/avatar.png"});
+                }
+                assert_eq!(actual, expected, "wrong historical avatar in {table}");
+            }
+        }
+    }
+}
+
+/// Keeps ambiguous old names unassigned while exact participant IDs retain their own avatar.
+#[test]
+fn historical_avatar_adoption_requires_an_exact_author() {
+    let cards = vec![
+        json!({"id":"first","name":"Same name","avatarUri":"/app/first.png"}),
+        json!({"id":"second","name":"Same name","avatarUri":"/app/second.png"}),
+    ];
+    let mut unnamed = BTreeMap::new();
+    adoptMessageIdentity(&mut unnamed, &cards, Some("Same name")).unwrap();
+    assert!(unnamed.is_empty());
+    let mut identified = BTreeMap::from([(PLUGIN_ID.into(), json!({"participantId":"second"}))]);
+    adoptMessageIdentity(&mut identified, &cards, Some("Historical name")).unwrap();
+    assert_eq!(identified["host.chat.identity"], json!({"title":"Historical name","avatarUri":"/app/second.png"}));
+}
+
 /// Requires explicit global flags before any fresh import can publish business data.
 #[test]
 fn import_without_memory_preferences_rejects_before_publication() {
@@ -2311,4 +2376,50 @@ fn installed_startup_theme_failure_resumes_after_process_restart() {
     );
     fixture.writer().migrateCoreThemes().unwrap();
     assert_eq!(manager.list().unwrap(), themes);
+}
+
+/// Preserves missing primary libraries through both import sources without selecting another owner.
+#[test]
+fn retains_unresolved_primary_memory_bindings_without_blocking_import() {
+    for source_id in ["operit1", "operit2-v27"] {
+        for mode in ["SHARED", "CHARACTER"] {
+            for shared_id in [None, Some(""), Some("  "), Some("deleted-store")] {
+                let fixture = Fixture::new();
+                let mut source = data();
+                source.cards[0].memoryBindingMode = mode.to_string();
+                source.cards[0].sharedMemoryId = shared_id.map(str::to_string);
+                source.records.push(memory(1));
+                let mut expected = serde_json::to_value(&source.cards[0]).unwrap();
+                expected.as_object_mut().unwrap().remove("isDefault");
+                expected["themeConfigId"] = Value::Null;
+                assert_eq!(
+                    dropUnresolvableRecords(&mut source),
+                    DroppedLegacyRecords::default()
+                );
+                validateMigrationData(&source).unwrap();
+                fixture.writer().import(source_id, source).unwrap();
+                let writer =
+                    CharacterPluginWriter::open(fixture.host.clone(), fixture.host.clone())
+                        .unwrap();
+                assert_eq!(
+                    writer.get("cards", "legacy").unwrap().unwrap()["value"],
+                    expected
+                );
+                assert!(writer.list("stores").unwrap().is_empty());
+                assert_eq!(writer.list("owners").unwrap().len(), 1);
+                assert_eq!(writer.list("memories").unwrap().len(), 1);
+                assert_eq!(
+                    writer.get("meta", "state").unwrap().unwrap()["value"]["migrationStatus"],
+                    "complete"
+                );
+                writer
+                    .import(source_id, CharacterMigrationData::default())
+                    .unwrap();
+                assert_eq!(
+                    writer.get("cards", "legacy").unwrap().unwrap()["value"],
+                    expected
+                );
+            }
+        }
+    }
 }

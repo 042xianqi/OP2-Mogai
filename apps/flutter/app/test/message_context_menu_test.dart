@@ -8,6 +8,7 @@ import 'package:operit2/core/link/CoreLinkProtocol.dart';
 import 'package:operit2/core/proxy/generated/CoreProxyClients.g.dart';
 import 'package:operit2/core/proxy/generated/CoreProxyModels.g.dart';
 import 'package:operit2/ui/features/chat/components/MessageContextMenu.dart';
+import 'package:operit2/ui/common/components/RetainedPage.dart';
 
 /// Verifies message editing, selected-revision deletion and generic plugin menu dispatch.
 void main() {
@@ -144,52 +145,64 @@ Future<void> _openMenu(
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
-        body: Center(
-          child: MessageContextMenu(
-            message: ChatMessage(
-              pluginExtensions: const {
-                'arbitrary.plugin': {'opaque': 'unchanged'},
-              },
-              sender: sender,
-              parts: const <MessagePart>[],
-              timestamp: 123,
-              roleName: 'assistant',
-              selectedVariantIndex: selectedVariantIndex,
-              variantCount: variantCount,
-              provider: 'test',
-              modelName: 'test',
-              inputTokens: 0,
-              outputTokens: 0,
-              cachedInputTokens: 0,
-              sentAt: 0,
-              outputDurationMs: 0,
-              waitDurationMs: 0,
-              completedAt: 1,
-              displayMode: ChatMessageDisplayMode.normal,
-              isFavorite: false,
-              contentStream: null,
-            ),
-            chatId: 'chat',
-            messageIndex: 0,
-            clients: clients,
-            packageManager: clients.application.packageManager(),
-            onToggleFavoriteMessage: (timestamp, isFavorite) async {},
-            onDeleteMessageVariant: onDeleteMessageVariant,
-            onSelectMessageToEdit: onSelectMessageToEdit,
-            onRefresh: onRefresh,
-            child: const SizedBox(
-              width: 200,
-              height: 60,
-              child: Text('Assistant reply'),
+        body: Padding(
+          padding: const EdgeInsets.only(left: 80, top: 100),
+          child: RetainedPage(
+            active: true,
+            child: Center(
+              child: MessageContextMenu(
+                message: ChatMessage(
+                  pluginExtensions: const {
+                    'arbitrary.plugin': {'opaque': 'unchanged'},
+                  },
+                  sender: sender,
+                  parts: const <MessagePart>[],
+                  timestamp: 123,
+                  roleName: 'assistant',
+                  selectedVariantIndex: selectedVariantIndex,
+                  variantCount: variantCount,
+                  provider: 'test',
+                  modelName: 'test',
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  cachedInputTokens: 0,
+                  sentAt: 0,
+                  outputDurationMs: 0,
+                  waitDurationMs: 0,
+                  completedAt: 1,
+                  displayMode: ChatMessageDisplayMode.normal,
+                  isFavorite: false,
+                  contentStream: null,
+                ),
+                chatId: 'chat',
+                messageIndex: 0,
+                clients: clients,
+                packageManager: clients.application.packageManager(),
+                onToggleFavoriteMessage: (timestamp, isFavorite) async {},
+                onDeleteMessageVariant: onDeleteMessageVariant,
+                onSelectMessageToEdit: onSelectMessageToEdit,
+                onRefresh: onRefresh,
+                child: const SizedBox(
+                  width: 200,
+                  height: 60,
+                  child: Text('Assistant reply'),
+                ),
+              ),
             ),
           ),
         ),
       ),
     ),
   );
+  final anchor = tester.getCenter(find.text('Assistant reply'));
   await tester.longPress(find.text('Assistant reply'));
   await tester.pumpAndSettle();
   expect(find.text(sender == 'ai' ? '重新生成' : '编辑并重发'), findsOneWidget);
+  final firstItem = tester.getRect(
+    find.byWidgetPredicate((widget) => widget is PopupMenuItem).first,
+  );
+  expect(firstItem.right, closeTo(anchor.dx + 1, 0.1));
+  expect(firstItem.top, closeTo(anchor.dy + 8, 0.1));
 }
 
 /// Supplies an empty extension menu through the actual Core bridge codec.

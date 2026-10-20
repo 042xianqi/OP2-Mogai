@@ -654,7 +654,7 @@ fn migrateCharacterModelBinding(card: &mut CharacterCard) {
     }
 }
 
-/// Validates imported structural references without rejecting repairable model selections.
+/// Validates owned records and list references while preserving unresolved primary selections.
 fn validateMigrationData(data: &CharacterMigrationData) -> Result<(), String> {
     let cards = data
         .cards
@@ -690,14 +690,7 @@ fn validateMigrationData(data: &CharacterMigrationData) -> Result<(), String> {
                 return Err(format!("Missing imported tag: {tag}"));
             }
         }
-        if card.memoryBindingMode == "SHARED"
-            && !card
-                .sharedMemoryId
-                .as_ref()
-                .is_some_and(|id| stores.contains(id.as_str()))
-        {
-            return Err("Imported shared binding is invalid".to_string());
-        }
+        // Preserve the exact primary selection for explicit rebinding; execution validates its target.
         for mount in &card.sharedMemoryMounts {
             if !stores.contains(mount.sharedMemoryId.as_str()) {
                 return Err("Imported memory mount is missing".to_string());
@@ -1310,6 +1303,37 @@ fn attachMessageAuthor(extensions: &mut BTreeMap<String, Value>, owner: &str, id
     }
 }
 
+/// Materializes the display snapshot from the exact historical author encoding.
+fn adoptMessageIdentity(
+    extensions: &mut BTreeMap<String, Value>,
+    cards: &[Value],
+    role_name: Option<&str>,
+) -> Result<(), String> {
+    if extensions.contains_key("host.chat.identity") {
+        return Ok(());
+    }
+    let Some(role_name) = role_name.filter(|name| !name.trim().is_empty()) else { return Ok(()); };
+    let card = match extensions.get(PLUGIN_ID) {
+        Some(author) => {
+            let Some(id) = author["participantId"].as_str() else { return Ok(()); };
+            cards.iter().find(|card| card["id"] == id)
+        }
+        None => {
+            let mut matching = cards.iter().filter(|card| card["name"] == role_name);
+            let first = matching.next();
+            if matching.next().is_some() { return Ok(()); }
+            first
+        }
+    };
+    let Some(card) = card else { return Ok(()); };
+    attachMessageAuthor(extensions, PLUGIN_ID, requiredString(card, "id")?);
+    extensions.insert("host.chat.identity".into(), json!({
+        "title": role_name,
+        "avatarUri": card["avatarUri"],
+    }));
+    Ok(())
+}
+
 /// Adopts current chat bindings and reduces old message configuration to author identity.
 fn adoptCoreExtensions(
     paths: RuntimeStorePaths,
@@ -1320,7 +1344,7 @@ fn adoptCoreExtensions(
     adoptCoreConfigurationRows(database.store(), writer)
 }
 
-/// Migrates committed Core references using the same SQL Host as upgrade and archive import.
+/// Adopts bindings and historical message snapshots for both new and already completed imports.
 fn adoptCoreConfigurationRows(
     database: &SqliteStore,
     writer: &CharacterPluginWriter,
@@ -1337,48 +1361,44 @@ fn adoptCoreConfigurationRows(
         .into_iter()
         .map(|entry| entry["value"].clone())
         .collect::<Vec<_>>();
-    for table in [
-        "chats",
-        "sync_sql_chat_rows",
-        "messages",
-        "message_variants",
-        "sync_sql_message_rows",
-        "sync_sql_message_variant_rows",
+    for (table, query) in [
+        ("chats", "SELECT rowid,pluginExtensions,id,NULL FROM chats"),
+        ("sync_sql_chat_rows", "SELECT rowid,pluginExtensions,NULL,NULL FROM sync_sql_chat_rows"),
+        ("messages", "SELECT rowid,pluginExtensions,roleName,sender FROM messages"),
+        ("sync_sql_message_rows", "SELECT rowid,pluginExtensions,roleName,sender FROM sync_sql_message_rows"),
+        ("message_variants", "SELECT v.rowid,v.pluginExtensions,v.roleName,m.sender FROM message_variants v LEFT JOIN messages m ON m.chatId=v.chatId AND m.timestamp=v.messageTimestamp"),
+        ("sync_sql_message_variant_rows", "SELECT v.rowid,v.pluginExtensions,v.roleName,m.sender FROM sync_sql_message_variant_rows v LEFT JOIN sync_sql_message_rows m ON m.opId=v.opId AND m.chatId=v.chatId AND m.timestamp=v.messageTimestamp"),
     ] {
-        let columns = if table == "chats" {
-            "rowid,pluginExtensions,id"
-        } else {
-            "rowid,pluginExtensions"
-        };
-        let rows = database
-            .queryRows(&format!("SELECT {columns} FROM {table}"), Vec::new())
-            .map_err(|error| error.to_string())?;
+        let rows = database.queryRows(query, Vec::new()).map_err(|error| error.to_string())?;
         for row in rows {
             let row_id: i64 = row.get(0).map_err(|error| error.to_string())?;
             let mut extensions: BTreeMap<String, Value> =
                 serde_json::from_str(&row.get::<_, String>(1).map_err(|error| error.to_string())?)
                     .map_err(|error| error.to_string())?;
-            let Some(legacy) = extensions.remove(LEGACY_BINDING_NAMESPACE) else {
-                continue;
-            };
-            let value = resolveBinding(&cards, &groups, &legacy)?;
-            match table {
-                "chats" => {
-                    let id: String = row.get(2).map_err(|error| error.to_string())?;
-                    if let Some(value) = value {
-                        writer.adoptRecord("chat_bindings", &id, value)?;
+            if let Some(legacy) = extensions.remove(LEGACY_BINDING_NAMESPACE) {
+                let value = resolveBinding(&cards, &groups, &legacy)?;
+                match table {
+                    "chats" => {
+                        let id: String = row.get(2).map_err(|error| error.to_string())?;
+                        if let Some(value) = value {
+                            writer.adoptRecord("chat_bindings", &id, value)?;
+                        }
+                    }
+                    "sync_sql_chat_rows" => {}
+                    _ => {
+                        if let Some(id) = value
+                            .as_ref()
+                            .and_then(|binding| binding["selection"].as_str())
+                            .and_then(|selection| selection.strip_prefix("card:"))
+                        {
+                            attachMessageAuthor(&mut extensions, PLUGIN_ID, id);
+                        }
                     }
                 }
-                "sync_sql_chat_rows" => {}
-                _ => {
-                    if let Some(id) = value
-                        .as_ref()
-                        .and_then(|binding| binding["selection"].as_str())
-                        .and_then(|selection| selection.strip_prefix("card:"))
-                    {
-                        attachMessageAuthor(&mut extensions, PLUGIN_ID, id);
-                    }
-                }
+            }
+            if row.get::<_, Option<String>>(3).map_err(|error| error.to_string())?.as_deref() == Some("ai") {
+                let role_name: Option<String> = row.get(2).map_err(|error| error.to_string())?;
+                adoptMessageIdentity(&mut extensions, &cards, role_name.as_deref())?;
             }
             let encoded = serde_json::to_string(&extensions).map_err(|error| error.to_string())?;
             if encoded == row.get::<_, String>(1).map_err(|error| error.to_string())? {

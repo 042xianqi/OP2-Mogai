@@ -4024,4 +4024,55 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settingsAppearanceResetAfterError => '重置外观';
+
+  @override
+  String get backgroundWorkIdle => '当前没有正在运行的工作';
+
+  @override
+  String get backgroundWorkRunningCount => '项工作正在运行';
+
+  @override
+  String get backgroundWorkWaiting => '等待你确认';
+
+  @override
+  String get backgroundWorkWaitingCount => '项待确认';
+
+  @override
+  String get backgroundWorkCompleted => '已完成';
+
+  @override
+  String get backgroundWorkFailed => '执行失败，打开查看详情';
+
+  @override
+  String get backgroundWorkCancelled => '已停止';
+
+  @override
+  String get backgroundWorkProcessing => '正在准备';
+
+  @override
+  String get backgroundWorkConnecting => '正在连接';
+
+  @override
+  String get backgroundWorkReceiving => '正在生成回复';
+
+  @override
+  String get backgroundWorkTool => '正在执行工具';
+
+  @override
+  String get backgroundWorkToolResult => '正在处理工具结果';
+
+  @override
+  String get backgroundWorkSummarizing => '正在整理上下文';
+
+  @override
+  String get backgroundWorkPlan => '正在执行计划';
+
+  @override
+  String get backgroundWorkOpen => '查看会话';
+
+  @override
+  String get backgroundWorkReview => '查看并确认';
+
+  @override
+  String get backgroundWorkStop => '停止';
 }

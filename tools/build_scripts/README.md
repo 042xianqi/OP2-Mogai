@@ -13,7 +13,9 @@ Release package filenames use
 `release_artifacts.py` validates the shared App runtime and CLI version and keeps
 prerelease identifiers and compound extensions intact. App packages for macOS
 use `universal` and `.zip`; macOS CLI packages use their target architecture and
-`.tar.gz`. Separate checksum files are not produced.
+`.tar.gz`. Build and verification scripts must not write separate `.sha256`
+files or `SHA256SUMS` lists for release packages. Verification results may
+include hashes in the existing build manifest.
 
 ## Entry points
 

@@ -18,6 +18,7 @@ class PackageTabContent extends StatelessWidget {
     required this.morePackages,
     required this.loadIssues,
     required this.scopes,
+    this.customizedPackageNames = const <String>{},
     required this.onMoveScope,
     required this.enabledPackageNames,
     required this.isSearchActive,
@@ -32,6 +33,7 @@ class PackageTabContent extends StatelessWidget {
   final List<core_proxy.BundledExternalPackageCandidate> morePackages;
   final List<core_proxy.ToolPkgLoadIssue> loadIssues;
   final Map<String, String> scopes;
+  final Set<String> customizedPackageNames;
   final ValueChanged<String> onMoveScope;
 
   final Set<String> enabledPackageNames;
@@ -104,12 +106,16 @@ class PackageTabContent extends StatelessWidget {
                   key: ValueKey<String>('package:${package.name}'),
                   icon: packageCategoryIcon(package.category),
                   title: toolPackageDisplayName(package),
+                  statusLabel: customizedPackageNames.contains(package.name)
+                      ? '自定义'
+                      : null,
                   subtitle: localizedText(package.description),
                   metadata: <String>[
                     package.name,
                     package.category,
                     '${package.tools.length} 工具',
-                    package.isBuiltIn ? '内置' : '外部',
+                    if (!customizedPackageNames.contains(package.name))
+                      package.isBuiltIn ? '内置' : '外部',
                   ],
                   enabled: enabledPackageNames.contains(package.name),
                   onDetails: () => onPackageTap(package),

@@ -152,7 +152,6 @@ async fn run_cli_root_inner(args: &[String]) -> Result<(), String> {
     }
 
     let localArgs = scope_cli_storage_command_args(args)?;
-    #[cfg(unix)]
     if let Some(result) = crate::daemon::try_run_cli_command(&localArgs, cli_json_mode()).await {
         return result;
     }

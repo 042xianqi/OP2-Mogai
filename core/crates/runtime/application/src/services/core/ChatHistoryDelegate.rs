@@ -1667,18 +1667,6 @@ impl ChatHistoryDelegate {
     }
 
     #[allow(non_snake_case)]
-    /// Removes the provisional assistant message for a failed response.
-    pub fn discardFailedAssistantMessage(&mut self, chatId: String, timestamp: i64) {
-        self.chatHistoryManager
-            .deleteMessage(chatId.clone(), timestamp)
-            .expect("ChatHistoryManager.deleteMessage must remove failed assistant message");
-        self.removeChatMessage(&chatId, timestamp);
-        if self.currentChatIdFlow.value().as_ref() == Some(&chatId) {
-            self.emitChatHistoryState();
-        }
-    }
-
-    #[allow(non_snake_case)]
     /// Deletes a message from a chat by timestamp.
     pub fn deleteMessageByTimestamp(&mut self, chatId: String, timestamp: i64) -> bool {
         self.chatHistoryManager

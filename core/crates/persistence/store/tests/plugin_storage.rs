@@ -1291,3 +1291,52 @@ fn opening_a_database_heals_rows_written_under_aliased_identities() {
     );
     fixture.dispose();
 }
+
+/// Keeps durable clocks readable while an invalid plugin contract fails export and catches up after repair.
+#[test]
+fn invalid_merge_contract_preserves_clocks_and_pending_transactions() {
+    let source = Fixture::new("broken-contract-source");
+    let target = Fixture::new("broken-contract-target");
+    let handle = source.open("objects");
+    source.call(json!({"op":"commit","handle":handle,"mutations":[put("pending",json!(7))]})).unwrap();
+    let pending = source.export();
+    assert!(!pending.is_empty());
+    let committed = PluginStorage::localClock(source.host.clone()).unwrap();
+    let catalog = SqliteStore::openWithHost(
+        source.host.clone(), "runtime/extensions/device/storage/catalog.sqlite",
+    ).unwrap();
+    let invalid = json!({
+        "version": 1, "maxEntities": 1, "maxReferences": 1,
+        "entities": [{
+            "collection":"keys", "identityColumn":"key", "nameColumn":null,
+            "ignoredColumns":[], "keyEncoding":"slash_root", "references":[],
+            "keyReferences":[{"collection":"cards","prefix":"character:"}]
+        }]
+    });
+    catalog.execute(
+        "UPDATE plugin_databases SET merge=?1 WHERE path=?2",
+        vec![
+            operit_host_api::SqliteValue::Text(invalid.to_string()),
+            operit_host_api::SqliteValue::Text(source.path.clone()),
+        ],
+    ).unwrap();
+    assert_eq!(PluginStorage::localClock(source.host.clone()).unwrap(), committed);
+    assert!(PluginStorage::operationsSince(
+        source.host.clone(), &SyncClock::empty(), &["plugin_storage".into()], 100,
+    ).is_err());
+    assert!(PluginStorage::operationsSince(
+        source.host.clone(), &SyncClock::empty(), &["preferences".into()], 100,
+    ).unwrap().is_empty());
+    assert!(PluginStorage::localClock(target.host.clone()).unwrap().sequences.is_empty());
+
+    catalog.execute("UPDATE plugin_databases SET merge=NULL", Vec::new()).unwrap();
+    let retried = source.export();
+    assert_eq!(retried, pending);
+    target.replay(&retried);
+    assert_eq!(PluginStorage::localClock(target.host.clone()).unwrap(), committed);
+    let targetHandle = target.open("objects");
+    assert_eq!(target.get(&targetHandle, "pending")["value"], json!(7));
+    drop(catalog);
+    source.dispose();
+    target.dispose();
+}

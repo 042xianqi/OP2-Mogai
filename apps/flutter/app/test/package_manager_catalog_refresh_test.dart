@@ -20,6 +20,70 @@ import 'package:operit2/ui/common/contributions/ChatSidebarTabHost.dart';
 
 /// Verifies installation notifications update an already mounted package list.
 void main() {
+  testWidgets(
+    'customized built-in displays its status and uninstalls through plugin details',
+    (tester) async {
+      final bridge = _CatalogBridge()
+        ..installed = true
+        ..enabled = true
+        ..customizedPackageNames.add('demo_toolpkg');
+      await tester.pumpWidget(_manager(bridge));
+      await tester.pumpAndSettle();
+      expect(find.text('自定义'), findsOneWidget);
+      await tester.tap(find.text('Demo ToolPkg').first);
+      await tester.pumpAndSettle();
+      expect(find.text('卸载自定义'), findsOneWidget);
+      await tester.tap(find.text('卸载自定义'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('数据和配置会保留'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, '卸载自定义'));
+      await tester.pumpAndSettle();
+      expect(bridge.deletedPackages, ['demo_toolpkg']);
+      expect(bridge.enabled, isTrue);
+      expect(find.text('自定义'), findsNothing);
+      expect(find.text('Demo ToolPkg'), findsOneWidget);
+      await tester.tap(find.text('Demo ToolPkg'));
+      await tester.pumpAndSettle();
+      expect(find.text('卸载自定义'), findsNothing);
+      expect(find.text('删除'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('customized script retains its built-in row after uninstall', (
+    tester,
+  ) async {
+    final bridge = _CatalogBridge()
+      ..executablePackages['demo_script'] = _namedPackage(
+        'demo_script',
+        'Demo Script',
+      )
+      ..scopes['demo_script'] = 'device'
+      ..customizedPackageNames.add('demo_script');
+    await tester.pumpWidget(_manager(bridge));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(of: find.byType(TabBar), matching: find.text('包')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('自定义'), findsOneWidget);
+    await tester.tap(find.text('Demo Script'));
+    await tester.pumpAndSettle();
+    expect(find.text('卸载自定义'), findsOneWidget);
+    await tester.tap(find.text('卸载自定义'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '卸载自定义'));
+    await tester.pumpAndSettle();
+    expect(bridge.deletedPackages, ['demo_script']);
+    expect(find.text('自定义'), findsNothing);
+    expect(find.text('Demo Script'), findsOneWidget);
+    await tester.tap(find.text('Demo Script'));
+    await tester.pumpAndSettle();
+    expect(find.text('卸载自定义'), findsNothing);
+    expect(find.text('删除'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final selection in <String>[
     chatSidebarTabIdentity('demo_toolpkg', 'sidebar-demo'),
     chatSidebarTabIdentity('another_toolpkg', 'sidebar-demo'),
@@ -752,6 +816,9 @@ class _CatalogBridge extends OperitRuntimeBridge {
   final installedContainers = <Map<String, Object?>>[];
   final executablePackages = <String, core_proxy.ToolPackage>{};
   final scopes = <String, String>{};
+  final customizedPackageNames = <String>[];
+  final deletedPackages = <String>[];
+  bool restoredBuiltin = false;
   final imports = <String>[];
   final scopeChanges = <Map<String, Object?>>[];
   final preferences = <String, String>{};
@@ -776,6 +843,22 @@ class _CatalogBridge extends OperitRuntimeBridge {
       case 'getAvailablePackages':
         environmentCatalogReads++;
         return <String, Object?>{};
+      case 'getCustomizedPackageNames':
+        return List<String>.of(customizedPackageNames);
+      case 'getToolPkgContainerDetails':
+        return null;
+      case 'deletePackage':
+        final name = (request.args as Map)['packageName'] as String;
+        deletedPackages.add(name);
+        customizedPackageNames.remove(name);
+        if (executablePackages[name]
+            case final core_proxy.ToolPackage package) {
+          executablePackages[name] = core_proxy.ToolPackage.fromJson(
+            package.toJson()..['is_built_in'] = true,
+          );
+        }
+        restoredBuiltin = true;
+        return true;
       case 'getExtensionScopes':
         return <String, Object?>{
           if (installed) 'demo_toolpkg': 'device',
@@ -793,7 +876,11 @@ class _CatalogBridge extends OperitRuntimeBridge {
           activeCatalogReads,
         );
         final result = <Object?>[
-          if (installed) _pluginRuntime().toJson(),
+          if (installed)
+            _pluginRuntime().toJson()
+              ..['sourceType'] = restoredBuiltin
+                  ? core_proxy.ToolPkgSourceType.asset.toJson()
+                  : core_proxy.ToolPkgSourceType.externalValue.toJson(),
           ...installedContainers,
         ];
         final started = catalogReadStarted;

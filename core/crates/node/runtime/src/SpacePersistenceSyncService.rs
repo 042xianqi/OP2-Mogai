@@ -17,14 +17,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::CoreNodeRouter::{CoreNodeLocalRuntime, CoreNodeRouter};
 
-const SYNC_DOMAINS: [&str; 6] = [
+const SYNC_DOMAINS: [&str; 5] = [
     "preferences",
     "chat",
     "binding",
     "runtime_file",
     "network_control",
-    "plugin_storage",
 ];
+const PLUGIN_SYNC_DOMAINS: [&str; 1] = ["plugin_storage"];
 const SPACE_SYNC_PREPARATION_DELAY_MS: u64 = 0;
 const SYNC_BLOB_CHUNK_BYTES: i64 = 64 * 1024;
 /// Wire reservation for the Link request envelope, AEAD tag and frame prefix.
@@ -680,6 +680,29 @@ impl SpacePersistenceSyncService {
             ));
         }
 
+        let mut errors = Vec::new();
+        for domains in [&SYNC_DOMAINS[..], &PLUGIN_SYNC_DOMAINS[..]] {
+            match self.synchronizeDomains(targetNodeId, limit, domains).await {
+                Ok(false) => return Ok(false),
+                Ok(true) => {}
+                Err(error) => errors.push(format!("domains={} {error}", domains.join(","))),
+            }
+        }
+        if errors.is_empty() {
+            Ok(true)
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+
+    /// Advances one independent group without acknowledging failures in another group.
+    #[allow(non_snake_case)]
+    async fn synchronizeDomains(
+        &self,
+        targetNodeId: &str,
+        limit: usize,
+        domains: &[&str],
+    ) -> Result<bool, String> {
         // Pages are bounded by bytes as well as by operation count, so a page
         // can end before the backlog does. The pass therefore keeps paging until
         // one exchange finds nothing left; the cap only stops a device that is
@@ -688,6 +711,7 @@ impl SpacePersistenceSyncService {
         loop {
             if !self.storageReplicationAllowed(targetNodeId)? { return Ok(false); }
             let localClock: Value = self.callLocal("syncClock", Value::Null).await?;
+            validateDomainClock(&localClock, domains, "local")?;
             let remoteClock: Value = callRemote(
                 &self.state.nodeRouter,
                 targetNodeId,
@@ -695,6 +719,7 @@ impl SpacePersistenceSyncService {
                 Value::Null,
             )
             .await?;
+            validateDomainClock(&remoteClock, domains, "remote")?;
             operit_util::AppLogger::AppLogger::trace(
                 "CoreSyncTrace",
                 &format!(
@@ -709,7 +734,7 @@ impl SpacePersistenceSyncService {
                     "syncOperationsSince",
                     json!({
                         "clock": remoteClock,
-                        "domains": SYNC_DOMAINS,
+                        "domains": domains,
                         "limit": limit,
                     }),
                 )
@@ -720,7 +745,7 @@ impl SpacePersistenceSyncService {
                 PeerSyncMethod::SyncOperationsSince,
                 json!({
                     "clock": localClock,
-                    "domains": SYNC_DOMAINS,
+                    "domains": domains,
                     "limit": limit,
                 }),
             )
@@ -810,22 +835,29 @@ impl SpacePersistenceSyncService {
             // A split page only closes the history boundary on its final
             // message; an earlier one must not finalize the same history.
             let chunkComplete = chunkCompletesPage(complete, index, chunks.len());
-            let _: Value = callRemote(
+            let remote: Result<Value, String> = callRemote(
                 &self.state.nodeRouter,
                 targetNodeId,
                 PeerSyncMethod::SyncApplyOperations,
                 json!({ "operations": chunk, "complete": chunkComplete }),
             )
-            .await?;
+            .await;
             if !self.storageReplicationAllowed(targetNodeId)? {
                 return Ok(false);
             }
-            let _: Value = self
+            let local: Result<Value, String> = self
                 .callLocal(
                     "syncApplyOperations",
                     json!({ "operations": chunk, "complete": chunkComplete }),
                 )
-                .await?;
+                .await;
+            let errors = [("remote", remote), ("local", local)]
+                .into_iter()
+                .filter_map(|(side, result)| result.err().map(|error| format!("{side} apply: {error}")))
+                .collect::<Vec<_>>();
+            if !errors.is_empty() {
+                return Err(errors.join("; "));
+            }
         }
         Ok(true)
     }
@@ -1265,6 +1297,22 @@ fn persistenceServices() -> &'static Mutex<BTreeMap<String, Arc<SpacePersistence
     SPACE_SYNC_SERVICES.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
+/// Rejects only the requested domains whose durable clocks could not be read.
+#[allow(non_snake_case)]
+fn validateDomainClock(clock: &Value, domains: &[&str], side: &str) -> Result<(), String> {
+    if let Some(errors) = clock.get("domainErrors") {
+        let errors: BTreeMap<String, String> = serde_json::from_value(errors.clone())
+            .map_err(|error| format!("{side} invalid sync clock errors: {error}"))?;
+        let failures = domains.iter().filter_map(|domain| {
+            errors.get(*domain).map(|error| format!("{side} {domain} clock: {error}"))
+        }).collect::<Vec<_>>();
+        if !failures.is_empty() {
+            return Err(failures.join("; "));
+        }
+    }
+    Ok(())
+}
+
 /// Invokes one application method through the Router.
 async fn callRemote<T>(
     nodeRouter: &CoreNodeRouter,
@@ -1564,6 +1612,31 @@ fn summarizeSyncOperations(operations: &[Value]) -> String {
 mod page_budget_tests {
     use super::*;
 
+    /// Keeps core clocks usable while a plugin clock is explicitly unavailable.
+    #[test]
+    fn plugin_clock_failures_are_isolated_from_core_domains() {
+        let clock = json!({
+            "sequences": {"core": 7},
+            "domainErrors": {"plugin_storage": "invalid plugin catalog"},
+        });
+        assert!(validateDomainClock(&clock, &SYNC_DOMAINS, "local").is_ok());
+        assert_eq!(
+            validateDomainClock(&clock, &PLUGIN_SYNC_DOMAINS, "remote").unwrap_err(),
+            "remote plugin_storage clock: invalid plugin catalog",
+        );
+        let durable: operit_store::SyncOperationStore::SyncClock = serde_json::from_value(clock).unwrap();
+        assert_eq!(durable.sequenceFor("core"), 7);
+        assert_eq!(durable.sequences.len(), 1);
+    }
+
+    /// Clears a plugin clock error only when the actual clock can be read again.
+    #[test]
+    fn recovered_plugin_clock_can_synchronize_again() {
+        let clock = json!({"sequences": {"plugin": 2}, "domainErrors": {}});
+        assert!(validateDomainClock(&clock, &PLUGIN_SYNC_DOMAINS, "local").is_ok());
+    }
+
+    /// Constructs one transport-sized plugin operation for page budget tests.
     fn operation(opId: &str, payloadBytes: usize) -> Value {
         json!({
             "opId": opId,
@@ -1572,6 +1645,7 @@ mod page_budget_tests {
         })
     }
 
+    /// Extracts operation identities from one planned message chunk.
     fn ids(chunk: &[Value]) -> Vec<String> {
         chunk
             .iter()

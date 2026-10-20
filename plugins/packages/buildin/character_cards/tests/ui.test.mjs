@@ -121,6 +121,63 @@ async function openCharacterGraph(page) {
   return graph;
 }
 
+/** Checks graph space, nonoverlapping controls and dismissible secondary actions across viewport sizes. */
+test("Material graph keeps the canvas prominent and secondary actions in overflow", async () => {
+  const ui = await page(390, 844), graph = await openCharacterGraph(ui.page);
+  try {
+    for (const width of [320, 390, 600, 840, 1100]) {
+      await ui.page.setViewportSize({ width, height: 844 });
+      const bounds = await graph.boundingBox(), canvas = await graph.locator("[data-graph-surface]").boundingBox();
+      const title = await graph.getByRole("heading", { name: "记忆图谱", exact: true }).boundingBox();
+      const search = await graph.getByRole("search").boundingBox();
+      const fab = await graph.getByRole("button", { name: "创建记忆", exact: true }).boundingBox();
+      const tools = await graph.getByRole("group", { name: "画布缩放", exact: true }).boundingBox();
+      assert.ok(canvas.height >= bounds.height * 0.45, `Canvas is squeezed at ${width}px`);
+      assert.ok(title.height <= 28, `Title wraps at ${width}px`);
+      assert.ok(search.y > title.y + title.height);
+      assert.ok(fab.x >= tools.x + tools.width + 8, `Canvas controls overlap at ${width}px`);
+      assert.ok(fab.x + fab.width <= canvas.x + canvas.width);
+      assert.ok(await graph.evaluate(
+        /** Rejects horizontal overflow in the graph workspace. */
+        element => element.scrollWidth <= element.clientWidth,
+      ));
+      if (width <= 600) { assert.equal(bounds.x, 0); assert.equal(bounds.width, width); assert.equal(bounds.height, 844); }
+      await ui.page.screenshot({ path: output + `memory-graph-material-${width}.png` });
+    }
+    await ui.page.setViewportSize({ width: 390, height: 844 });
+    await applyDarkHostTheme(ui.page);
+    await ui.page.screenshot({ path: output + "memory-graph-material-dark.png" });
+    const more = graph.getByRole("button", { name: "更多操作", exact: true });
+    await more.click();
+    await graph.getByRole("button", { name: "导出记忆 JSON", exact: true }).waitFor();
+    await ui.page.screenshot({ path: output + "memory-graph-material-menu.png" });
+    await ui.page.keyboard.press("Escape");
+    assert.equal(await graph.isVisible(), true);
+    assert.equal(await graph.getByRole("button", { name: "导出记忆 JSON", exact: true }).isVisible(), false);
+    assert.equal(await more.evaluate(
+      /** Confirms Escape restores keyboard focus to the overflow trigger. */
+      element => element === document.activeElement,
+    ), true);
+    await more.click();
+    await graph.getByLabel("搜索记忆", { exact: true }).click({ position: { x: 8, y: 20 } });
+    assert.equal(await graph.getByRole("button", { name: "导出记忆 JSON", exact: true }).isVisible(), false);
+    await more.click();
+    await graph.getByRole("button", { name: "刷新", exact: true }).click();
+    assert.equal(await graph.getByRole("button", { name: "导出记忆 JSON", exact: true }).isVisible(), false);
+    await graph.getByRole("button", { name: "链接", exact: true }).click();
+    assert.equal(await graph.getByRole("button", { name: "链接", exact: true }).getAttribute("aria-pressed"), "true");
+    await graph.getByText("选择两条记忆以建立链接", { exact: true }).waitFor();
+    await graph.getByRole("button", { name: "链接", exact: true }).click();
+    await more.click();
+    await graph.getByRole("button", { name: "记忆设置", exact: true }).click();
+    const settings = ui.page.getByRole("dialog", { name: "记忆设置", exact: true });
+    await settings.waitFor();
+    await settings.locator(".dialog-header").getByRole("button", { name: "关闭", exact: true }).click();
+    assert.equal(await graph.isVisible(), true);
+    assert.equal(await graph.getByRole("button", { name: "导出记忆 JSON", exact: true }).isVisible(), false);
+  } finally { await ui.context.close(); }
+});
+
 /** Verifies shared-bound memory operations retain the card's actual owner identity. */
 test("independent memory page USER.md and graph use the selected character shared binding", async () => {
   const ui = await page();

@@ -106,6 +106,7 @@ async function prepareVersionOne(storage: CharacterStorage, metadata: Document, 
     if (!Object.prototype.hasOwnProperty.call(identities, key)) throw new Error("Missing migration reference: " + key);
     return identities[key];
   }
+  const sourceStoreIds = new Set(state.stores.map(store => store.id));
   for (const collection of configurationNames)
     for (const record of state[collection]) record.id = identity(collection, record.id);
   /** Converts the documented selection variants without modifying Core model identities. */
@@ -117,7 +118,8 @@ async function prepareVersionOne(storage: CharacterStorage, metadata: Document, 
   }
   for (const card of state.cards) {
     card.attachedTagIds = card.attachedTagIds.map(id => reference("tags", id));
-    if (card.sharedMemoryId !== null) card.sharedMemoryId = reference("stores", card.sharedMemoryId);
+    // Convert identities of imported libraries while retaining unresolved primary selections exactly.
+    if (card.sharedMemoryId !== null && sourceStoreIds.has(card.sharedMemoryId)) card.sharedMemoryId = reference("stores", card.sharedMemoryId);
     for (const mount of card.sharedMemoryMounts) mount.sharedMemoryId = reference("stores", mount.sharedMemoryId);
   }
   for (const group of state.groups)

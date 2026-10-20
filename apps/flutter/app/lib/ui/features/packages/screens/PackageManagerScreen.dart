@@ -78,6 +78,7 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
   Future<void>? _snapshotLoad;
   bool _snapshotPending = false;
   Map<String, String> _scopes = {};
+  Set<String> _customizedPackageNames = <String>{};
   StreamSubscription<int>? _scopeSubscription;
 
   GeneratedApplicationPackageManagerCoreProxy get _packageManager =>
@@ -182,6 +183,7 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
         _packageManager.getBundledExternalPackageCandidates(),
         _packageManager.getBundledExternalToolPkgContainerRuntimes(),
         widget.clients.application.getExtensionScopes(kind: 'package'),
+        _packageManager.getCustomizedPackageNames(),
       ]);
       if (!_canApplySnapshot(generation)) {
         return;
@@ -209,6 +211,7 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
       final enabledPackageNameSet = enabledPackages.toSet();
       setState(() {
         _scopes = scopes;
+        _customizedPackageNames = (results[7] as List<String>).toSet();
         _snapshot = PackageManagerSnapshot(
           availablePackages: availablePackages,
           enabledPackageNames: enabledPackageNameSet,
@@ -329,12 +332,17 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
     if (!mounted) {
       return;
     }
+    final customized = _customizedPackageNames.contains(package.name);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('删除包'),
-          content: Text('确定删除 ${toolPackageDisplayName(package)}？此操作不可撤销。'),
+          title: Text(customized ? '卸载自定义' : '删除包'),
+          content: Text(
+            customized
+                ? '卸载 ${toolPackageDisplayName(package)} 的自定义版本，恢复使用内置版本。数据和配置会保留。'
+                : '确定删除 ${toolPackageDisplayName(package)}？此操作不可撤销。',
+          ),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -346,7 +354,7 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
                 backgroundColor: Theme.of(context).colorScheme.error,
                 foregroundColor: Theme.of(context).colorScheme.onError,
               ),
-              child: const Text('删除'),
+              child: Text(customized ? '卸载自定义' : '删除'),
             ),
           ],
         );
@@ -388,12 +396,17 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
     if (!mounted) {
       return;
     }
+    final customized = _customizedPackageNames.contains(plugin.packageName);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('删除插件'),
-          content: Text('确定删除 ${toolPkgContainerDisplayName(plugin)}？此操作不可撤销。'),
+          title: Text(customized ? '卸载自定义' : '删除插件'),
+          content: Text(
+            customized
+                ? '卸载 ${toolPkgContainerDisplayName(plugin)} 的自定义版本，恢复使用内置版本。数据和配置会保留。'
+                : '确定删除 ${toolPkgContainerDisplayName(plugin)}？此操作不可撤销。',
+          ),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -405,7 +418,7 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
                 backgroundColor: Theme.of(context).colorScheme.error,
                 foregroundColor: Theme.of(context).colorScheme.onError,
               ),
-              child: const Text('删除'),
+              child: Text(customized ? '卸载自定义' : '删除'),
             ),
           ],
         );
@@ -604,6 +617,7 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
     return PluginTabContent(
       plugins: _filteredPlugins,
       scopes: _scopes,
+      customizedPackageNames: _customizedPackageNames,
       onMoveScope: _movePackageScope,
       morePlugins: _filteredMorePlugins,
       loadIssues: _filteredPluginLoadIssues,
@@ -623,6 +637,7 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
     return PackageTabContent(
       packages: _filteredPackages,
       scopes: _scopes,
+      customizedPackageNames: _customizedPackageNames,
       onMoveScope: _movePackageScope,
       enabledPackageNames: _snapshot.enabledPackageNames,
       loadIssues: _filteredPackageLoadIssues,
@@ -1180,6 +1195,7 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
       builder: (context) {
         return PluginDetailsDialog(
           plugin: plugin,
+          isCustomized: _customizedPackageNames.contains(plugin.packageName),
           enabled: _snapshot.enabledPluginContainerNames.contains(
             plugin.packageName,
           ),
@@ -1309,6 +1325,7 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
       builder: (context) {
         return PackageDetailsDialog(
           package: package,
+          isCustomized: _customizedPackageNames.contains(package.name),
           onDeletePackage: () {
             Navigator.of(context).pop();
             if (mounted) {

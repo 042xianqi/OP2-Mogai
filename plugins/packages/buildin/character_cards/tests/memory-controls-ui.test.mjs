@@ -416,6 +416,7 @@ test("graph canonical relationship editing and full memory backup import/export 
   await editor.getByRole("button", { name: "保存", exact: true }).click();
   assert.equal((await storedOwner(ui.harness)).links[0].type_, "canonical-edited");
   assert.equal((await storedOwner(ui.harness)).links[0].description, link.description);
+  await graph.getByRole("button", { name: "更多操作", exact: true }).click();
   await graph.getByRole("button", { name: "导出记忆 JSON", exact: true }).click();
   const exported = ui.page.getByRole("dialog", { name: "导出 JSON", exact: true });
   const content = await exported.getByLabel("JSON 内容").inputValue(), backup = JSON.parse(content);
@@ -435,6 +436,7 @@ test("graph canonical relationship editing and full memory backup import/export 
   await ui.page.evaluate(() => { window.rejectExport = false; });
   await exported.getByRole("button", { name: "保存文件", exact: true }).click();
   assert.equal((await ui.harness.disk.readBytes(path)).toString("utf8"), content);
+  await graph.getByRole("button", { name: "更多操作", exact: true }).click();
   await graph.getByRole("button", { name: "导入记忆 JSON", exact: true }).click();
   const imported = ui.page.getByRole("dialog", { name: "导入记忆 JSON", exact: true });
   await imported.getByLabel("相同 UUID 记忆处理", { exact: true }).selectOption("UPDATE");

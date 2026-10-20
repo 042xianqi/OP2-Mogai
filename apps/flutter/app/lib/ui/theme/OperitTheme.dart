@@ -1096,7 +1096,14 @@ class _VideoThemeBackgroundState extends State<_VideoThemeBackground> {
         child: SizedBox(
           width: controller.value.size.width,
           height: controller.value.size.height,
-          child: VideoPlayer(controller),
+          child: ValueListenableBuilder<VideoPlayerValue>(
+            valueListenable: controller,
+            child: VideoPlayer(controller),
+            builder: (context, value, child) => LiquidGlassSourceAnimation(
+              active: value.isPlaying,
+              child: child!,
+            ),
+          ),
         ),
       ),
     );

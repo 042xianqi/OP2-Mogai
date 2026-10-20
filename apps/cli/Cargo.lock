@@ -2407,6 +2407,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "tokio",
  "tungstenite",
  "uuid",
  "zbus",
@@ -2421,6 +2422,7 @@ dependencies = [
  "operit-host-apple-native",
  "operit-host-native-common",
  "operit-host-native-plugin-sdk-ipc",
+ "tokio",
 ]
 
 [[package]]
@@ -2510,6 +2512,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "tokio",
  "tungstenite",
  "url",
  "uuid",

@@ -1259,11 +1259,16 @@ fn registerFile(
     Ok(())
 }
 
-/// Combines the durable clocks recorded atomically inside synchronized plugin databases.
+/// Reads committed plugin clocks independently of merge descriptor validation.
 pub fn localClock(host: Arc<dyn RuntimeSqliteHost>) -> Result<SyncClock, SqliteStoreError> {
     let mut clock = SyncClock::empty();
-    for manifest in manifests(host.clone())?.into_iter().filter(|m| m.sync) {
-        let store = SqliteStore::openWithHost(host.clone(), &manifest.path)?;
+    let databases = catalog(host.clone())?.queryRows(
+        "SELECT path FROM plugin_databases WHERE sync=1",
+        Vec::new(),
+    )?;
+    for database in databases {
+        let path: String = database.get(0)?;
+        let store = SqliteStore::openWithHost(host.clone(), &path)?;
         for row in store.queryRows(
             "SELECT origin,MAX(sequence) FROM _operit_log GROUP BY origin",
             Vec::new(),

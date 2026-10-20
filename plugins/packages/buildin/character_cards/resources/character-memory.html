@@ -63,6 +63,72 @@
 .picker-row:hover:not(:disabled){background:color-mix(in srgb,var(--onSurface) 8%,transparent)}
 .attachment-content{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:8px 0;user-select:text}
 @media(max-width:600px){.selection-toolbar{padding:8px 12px 0}.presentation-footer{padding:10px 12px}.picker-row{padding:12px 8px}}
+
+/* Material graph workspace: app bar, search, filter chips, canvas FAB and inspector. */
+.dialog.graph-dialog{border-radius:28px;background:var(--surface);border:0}
+.graph-dialog .dialog-layout{min-height:0}
+.graph-dialog .dialog-header{position:relative;z-index:2;min-height:80px;padding:12px 16px;gap:12px}
+.graph-dialog .icon-button{width:48px;height:48px;padding:12px;flex:none}
+.graph-dialog .icon-button .icon{width:24px;height:24px}
+.graph-dialog .graph-heading{flex:1;min-width:0}
+.graph-dialog .graph-heading h2{font-size:22px;line-height:28px;font-weight:500;white-space:nowrap}
+.graph-dialog .graph-heading>span{display:block;margin-top:2px;color:var(--onSurfaceVariant);font-size:12px;line-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.graph-overflow{position:relative;flex:none}
+.graph-overflow>summary{list-style:none;cursor:pointer}
+.graph-overflow>summary::-webkit-details-marker{display:none}
+.graph-overflow>summary:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.graph-overflow[open]>summary{background:var(--surfaceContainerHigh)}
+.graph-menu{position:absolute;right:0;top:calc(100% + 4px);width:220px;padding:8px 0;border-radius:12px;background:var(--surfaceContainerHigh);box-shadow:0 4px 8px #0003,0 8px 24px #0002}
+.graph-menu .button{display:flex;justify-content:flex-start;gap:12px;width:100%;min-height:48px;border-radius:0;padding:12px 16px;font-size:14px;font-weight:400;color:var(--onSurface)}
+.graph-menu .button .icon{color:var(--onSurfaceVariant)}
+.graph-menu hr{margin:8px 0;border:0;border-top:1px solid var(--outlineVariant)}
+.graph-dialog .graph-toolbar{display:flex;flex-direction:column;align-items:stretch;gap:12px;padding:0 24px 16px;flex:none;border:0}
+.graph-dialog .graph-search{display:flex;align-items:center;gap:4px;width:100%;height:56px;padding:4px 8px;border-radius:28px;background:var(--surfaceContainerHigh)}
+.graph-search:focus-within{outline:2px solid var(--primary);outline-offset:2px}
+.graph-dialog .graph-search input{flex:1;min-width:0;width:100%;height:100%;padding:0 4px;border:0;outline:none;background:transparent;color:var(--onSurface);font-size:16px;appearance:none}
+.graph-search input::placeholder{color:var(--onSurfaceVariant);opacity:1}
+.graph-search input::-webkit-search-cancel-button{display:none}
+.graph-search:has(input:placeholder-shown) [data-action="clear-search"]{visibility:hidden}
+.graph-filters{display:flex;align-items:center;gap:8px;min-width:0}
+.graph-folder{display:flex;align-items:center;position:relative;min-width:0;max-width:calc(100% - 96px);height:40px;border:1px solid var(--outlineVariant);border-radius:8px;color:var(--onSurfaceVariant)}
+.graph-folder>.icon:first-child{position:absolute;left:12px;width:18px;height:18px;pointer-events:none}
+.graph-folder>.icon:last-child{position:absolute;right:10px;width:18px;height:18px;pointer-events:none}
+.graph-folder select{width:100%;min-width:0;max-width:260px;height:100%;padding:0 34px 0 38px;border:0;border-radius:8px;appearance:none;background:transparent;color:var(--onSurface);font-size:14px;text-overflow:ellipsis;cursor:pointer}
+.graph-folder select:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.graph-folder select option{color:var(--onSurface);background:var(--surfaceContainerHigh)}
+.graph-dialog .graph-link-chip{flex:none;min-height:40px;gap:8px;padding:0 12px;border:1px solid var(--outlineVariant);border-radius:8px;color:var(--onSurfaceVariant);font-size:14px;font-weight:500}
+.graph-dialog .graph-link-chip .icon{width:18px;height:18px}
+.graph-dialog .graph-link-chip[aria-pressed="true"]{border-color:transparent;background:var(--primaryContainer);color:var(--onPrimaryContainer)}
+.graph-link-hint{color:var(--primary);font-size:12px;line-height:18px}
+.graph-dialog .graph-layout{gap:0;overflow:hidden;border-top:1px solid var(--outlineVariant)}
+.graph-dialog .graph-canvas{min-height:0;background-color:var(--surface);background-image:radial-gradient(color-mix(in srgb,var(--outlineVariant) 65%,transparent) 1px,transparent 1px);background-size:24px 24px}
+.graph-dialog .graph-canvas>svg{display:block}
+.graph-dialog .graph-tools{bottom:20px;left:20px;gap:0;padding:4px;border:0;border-radius:16px;background:var(--surfaceContainerHigh);box-shadow:0 2px 6px #0002}
+.graph-dialog .graph-fab{position:absolute;right:20px;bottom:20px;min-height:56px;padding:0 20px;gap:12px;border-radius:16px;background:var(--primaryContainer);color:var(--onPrimaryContainer);box-shadow:0 3px 6px #0003,0 6px 12px #0001;font-size:14px;font-weight:500}
+.graph-dialog .graph-fab .icon{width:24px;height:24px}
+.graph-dialog .graph-fab:hover{background:color-mix(in srgb,var(--onPrimaryContainer) 8%,var(--primaryContainer));box-shadow:0 4px 8px #0003,0 8px 16px #0001}
+.graph-dialog .graph-sidebar{width:304px;padding:16px 12px;overscroll-behavior:contain;background:var(--surfaceContainer)}
+.graph-dialog .graph-sidebar>h3{padding:0 12px;margin:0 0 12px;font-size:14px;line-height:24px;font-weight:500;color:var(--onSurfaceVariant)}
+.graph-dialog .memory-item{padding:12px;border-radius:12px;margin:0 0 4px;cursor:pointer}
+.graph-dialog .memory-item strong{font-size:14px;line-height:20px;font-weight:500;overflow-wrap:anywhere}
+.graph-dialog .memory-item small{font-size:12px;line-height:18px;color:var(--onSurfaceVariant);opacity:1;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.graph-dialog .memory-item.selected{box-shadow:none}
+.graph-dialog .memory-item.selected small{color:var(--onPrimaryContainer)}
+.graph-dialog .graph-detail{padding:16px 12px}
+@media(max-width:840px){
+  .graph-dialog .graph-layout{flex-direction:column}
+  .graph-dialog .graph-sidebar{width:100%;height:30%;min-height:120px;max-height:240px;padding:12px;border-left:0;border-top:1px solid var(--outlineVariant);border-radius:20px 20px 0 0}
+  .graph-dialog .graph-sidebar>h3{margin-bottom:8px}
+}
+@media(max-width:600px){
+  .dialog.graph-dialog{width:100vw;height:100dvh;max-height:100dvh;max-width:none;margin:0;border-radius:0}
+  .graph-dialog .dialog-layout{max-height:100dvh}
+  .graph-dialog .dialog-header{min-height:72px;padding:8px 12px;gap:8px}
+  .graph-dialog .graph-heading h2{font-size:20px;line-height:26px}
+  .graph-dialog .graph-toolbar{padding:0 16px 12px;gap:12px}
+  .graph-dialog .graph-tools{left:16px;bottom:16px}
+  .graph-dialog .graph-fab{right:16px;bottom:16px;padding:0 16px;gap:8px}
+}
 </style></head><body><main id="app" aria-label="角色卡"><div class="loading" role="status">正在加载角色卡…</div></main><div id="dialogs"></div><div id="snackbar" role="status" aria-live="polite"></div><script>"use strict";
 (() => {
   // web/shared/dom.ts
@@ -411,9 +477,17 @@
     }
     let characters = "";
     for (const card of snapshot.cards) {
-      const owner = ownerFor(card), active = isActive(snapshot.active, "card", card.id);
+      const active = isActive(snapshot.active, "card", card.id);
+      const needsRebind = card.memoryBindingMode === "SHARED" && !snapshot.stores.some((store) => store.id === card.sharedMemoryId);
+      let actions;
+      if (needsRebind) {
+        actions = button("edit-card", "\u91CD\u65B0\u7ED1\u5B9A\u8BB0\u5FC6\u5E93", "edit", `data-id="${escapeHtml(card.id)}"`, "small");
+      } else {
+        const owner = ownerFor(card);
+        actions = iconButton("owner-graph", "\u8BB0\u5FC6\u56FE\u8C31", "graph", `data-owner="${escapeHtml(owner)}" data-name="${escapeHtml(card.name)}"`) + iconButton("owner-user", "\u7528\u6237\u8D44\u6599 \xB7 USER.md", "profile", `data-owner="${escapeHtml(owner)}" data-name="${escapeHtml(card.name)}"`) + iconButton("owner-settings", "\u8BB0\u5FC6\u8BBE\u7F6E", "tune", `data-owner="${escapeHtml(owner)}" data-name="${escapeHtml(card.name)}"`);
+      }
       const source = avatarSources.get(card.avatarUri ?? "");
-      characters += `<article class="entity ${active ? "active" : ""}" data-memory-card="${escapeHtml(card.id)}"><span class="avatar" data-avatar-uri="${escapeHtml(card.avatarUri ?? "")}">${source ? `<img src="${escapeHtml(source)}" alt="">` : icon("person")}</span><div class="entity-copy"><div class="entity-title">${escapeHtml(card.name)}</div><div class="badges"><span class="badge">${card.memoryBindingMode === "SHARED" ? "\u5171\u4EAB\u8BB0\u5FC6" : "\u89D2\u8272\u8BB0\u5FC6"}</span>${active ? '<span class="active-pill">\u5F53\u524D\u4F7F\u7528</span>' : ""}</div></div><div class="entity-actions">${iconButton("owner-graph", "\u8BB0\u5FC6\u56FE\u8C31", "graph", `data-owner="${escapeHtml(owner)}" data-name="${escapeHtml(card.name)}"`)}${iconButton("owner-user", "\u7528\u6237\u8D44\u6599 \xB7 USER.md", "profile", `data-owner="${escapeHtml(owner)}" data-name="${escapeHtml(card.name)}"`)}${iconButton("owner-settings", "\u8BB0\u5FC6\u8BBE\u7F6E", "tune", `data-owner="${escapeHtml(owner)}" data-name="${escapeHtml(card.name)}"`)}</div></article>`;
+      characters += `<article class="entity ${active ? "active" : ""}" data-memory-card="${escapeHtml(card.id)}"><span class="avatar" data-avatar-uri="${escapeHtml(card.avatarUri ?? "")}">${source ? `<img src="${escapeHtml(source)}" alt="">` : icon("person")}</span><div class="entity-copy"><div class="entity-title">${escapeHtml(card.name)}</div><div class="badges"><span class="badge">${card.memoryBindingMode === "SHARED" ? "\u5171\u4EAB\u8BB0\u5FC6" : "\u89D2\u8272\u8BB0\u5FC6"}</span>${needsRebind ? '<span class="badge">\u9700\u8981\u91CD\u65B0\u7ED1\u5B9A\u8BB0\u5FC6\u5E93</span>' : ""}${active ? '<span class="active-pill">\u5F53\u524D\u4F7F\u7528</span>' : ""}</div></div><div class="entity-actions">${actions}</div></article>`;
     }
     return `<section class="section"><div class="section-head">${icon("tune")}<h2>\u5168\u5C40\u8BB0\u5FC6\u8BBE\u7F6E</h2></div>${globalSwitch("\u5411\u6A21\u578B\u63D0\u4F9B\u7528\u6237\u8D44\u6599", "\u804A\u5929\u6267\u884C\u65F6\u63D0\u4F9B\u7528\u6237\u8D44\u6599\uFF1B\u5173\u95ED\u4E0D\u4F1A\u5220\u9664 USER.md \u6216\u6539\u5199\u5386\u53F2\u8BB0\u5F55\u3002", "userDescriptionEnabled", snapshot.memoryPreferences.userDescriptionEnabled)}${globalSwitch("\u81EA\u52A8\u66F4\u65B0\u8BB0\u5FC6\u5E93", "\u5141\u8BB8\u81EA\u52A8\u5019\u9009\u5165\u961F\u548C\u5B9A\u65F6\u63D0\u53D6\uFF1B\u5173\u95ED\u4E0D\u4F1A\u53D6\u6D88\u624B\u52A8\u5386\u53F2\u91CD\u5EFA\u3002", "autoUpdateEnabled", snapshot.memoryPreferences.autoUpdateEnabled)}</section><section class="section"><div class="section-head">${icon("hub")}<h2>\u5171\u4EAB\u8BB0\u5FC6\u5E93</h2>${button("create-store", "\u521B\u5EFA", "add", "", "small")}</div>${stores === "" ? '<div class="empty">\u5F53\u524D\u8FD8\u6CA1\u6709\u5171\u4EAB\u8BB0\u5FC6\u5E93\uFF0C\u521B\u5EFA\u540E\u53EF\u88AB\u591A\u4E2A\u89D2\u8272\u5361\u6302\u8F7D\u5171\u4EAB\u3002</div>' : stores}</section><section class="section"><div class="section-head">${icon("badge")}<h2>\u89D2\u8272\u8BB0\u5FC6\u5E93</h2></div>${characters}</section>`;
   }
@@ -1682,7 +1756,8 @@
 
   // web/features/graph/view.ts
   function graphHeader(dialog) {
-    return `<div class="actions">${iconButton("owner-settings", "\u8BB0\u5FC6\u8BBE\u7F6E", "tune", `data-owner="${escapeHtml(dialog.ownerKey)}" data-name="${escapeHtml(dialog.name)}"`)}${iconButton("export-graph", "\u5BFC\u51FA\u8BB0\u5FC6 JSON", "download", dialog.loading ? "disabled" : "")}${iconButton("import-graph", "\u5BFC\u5165\u8BB0\u5FC6 JSON", "upload", dialog.loading ? "disabled" : "")}${iconButton("refresh-graph", "\u5237\u65B0", "refresh", dialog.loading ? "disabled" : "")}</div>`;
+    const disabled = dialog.loading ? "disabled" : "";
+    return `${iconButton("close-dialog", "\u5173\u95ED", "back", dialog.busy ? "disabled" : "")}<div class="graph-heading"><h2>\u8BB0\u5FC6\u56FE\u8C31</h2><span title="${escapeHtml(dialog.name)}">${escapeHtml(dialog.name)}</span></div><details class="graph-overflow"><summary class="icon-button" role="button" aria-label="\u66F4\u591A\u64CD\u4F5C" title="\u66F4\u591A\u64CD\u4F5C">${icon("more")}</summary><div class="graph-menu" role="group" aria-label="\u8BB0\u5FC6\u56FE\u8C31\u64CD\u4F5C">${button("owner-settings", "\u8BB0\u5FC6\u8BBE\u7F6E", "tune", `data-owner="${escapeHtml(dialog.ownerKey)}" data-name="${escapeHtml(dialog.name)}"`)}${button("refresh-graph", "\u5237\u65B0", "refresh", disabled)}<hr>${button("import-graph", "\u5BFC\u5165\u8BB0\u5FC6 JSON", "upload", disabled)}${button("export-graph", "\u5BFC\u51FA\u8BB0\u5FC6 JSON", "download", disabled)}</div></details>`;
   }
   function graphSpec(dialog) {
     if (dialog.data === null) return { title: `${dialog.name} \u7684\u8BB0\u5FC6\u56FE\u8C31`, style: "graph-dialog", tabs: [], body: dialog.loading ? '<div class="loading">\u6B63\u5728\u8BFB\u53D6\u8BB0\u5FC6\u56FE\u8C31\u2026</div>' : notice("\u8BB0\u5FC6\u56FE\u8C31\u672A\u52A0\u8F7D\u6210\u529F\uFF0C\u672A\u5F00\u653E\u5199\u5165\u3002"), footer: "" };
@@ -1690,7 +1765,18 @@
     for (const item of graphData(dialog).items) folders.add(item.folderPath === null ? "" : item.folderPath);
     let folderOptions = `<option value="*" ${dialog.folder === "*" ? "selected" : ""}>\u5168\u90E8\u6587\u4EF6\u5939</option>`;
     for (const folder of folders) folderOptions += `<option value="${escapeHtml(folder)}" ${dialog.folder === folder ? "selected" : ""}>${escapeHtml(folder === "" ? "\u6839\u76EE\u5F55" : folder)}</option>`;
-    return { title: `${dialog.name} \u7684\u8BB0\u5FC6\u56FE\u8C31`, style: "graph-dialog", tabs: [], body: `<div class="graph-toolbar"><input class="search" aria-label="\u641C\u7D22\u8BB0\u5FC6" data-graph-search value="${escapeHtml(dialog.query)}" placeholder="\u641C\u7D22\u8BB0\u5FC6\u2026">${iconButton("search-graph", "\u641C\u7D22", "search")}${iconButton("clear-search", "\u6E05\u9664\u641C\u7D22", "close")}<select class="search" style="flex:0;min-width:140px" data-graph-folder aria-label="\u6587\u4EF6\u5939">${folderOptions}</select>${button("create-link", "\u94FE\u63A5", "link", graphData(dialog).items.length < 2 ? "disabled" : "", dialog.linkMode ? "small tonal" : "small")}${button("create-memory", "\u521B\u5EFA\u8BB0\u5FC6", "add", "", "small tonal")}</div><div class="graph-layout"><div class="graph-canvas"><svg viewBox="-400 -260 800 520" data-graph-surface aria-label="\u8BB0\u5FC6\u56FE\u8C31\u753B\u5E03">${graphSvg(dialog)}</svg>${graphData(dialog).items.length === 0 ? '<div class="graph-empty"><span>\u6682\u65E0\u8BB0\u5FC6</span><span class="muted">\u521B\u5EFA\u8BB0\u5FC6\u540E\uFF0C\u53EF\u5728\u8FD9\u91CC\u67E5\u770B\u548C\u8FDE\u63A5\u8282\u70B9\u3002</span></div>' : ""}<div class="graph-tools">${iconButton("zoom-in", "\u653E\u5927", "add")}${iconButton("zoom-out", "\u7F29\u5C0F", "minus")}${iconButton("fit-graph", "\u9002\u5E94\u753B\u5E03", "expand")}</div></div><aside class="graph-sidebar">${graphInspector(dialog)}</aside></div>`, footer: "" };
+    const linkAttributes = `aria-pressed="${dialog.linkMode}" ${graphData(dialog).items.length < 2 ? "disabled" : ""}`;
+    return {
+      title: `${dialog.name} \u7684\u8BB0\u5FC6\u56FE\u8C31`,
+      style: "graph-dialog",
+      tabs: [],
+      body: `<div class="graph-toolbar">
+      <div class="graph-search" role="search">${iconButton("search-graph", "\u641C\u7D22", "search")}<input type="search" aria-label="\u641C\u7D22\u8BB0\u5FC6" data-graph-search value="${escapeHtml(dialog.query)}" placeholder="\u641C\u7D22\u8BB0\u5FC6\u2026">${iconButton("clear-search", "\u6E05\u9664\u641C\u7D22", "close")}</div>
+      <div class="graph-filters"><label class="graph-folder">${icon("folder")}<select data-graph-folder aria-label="\u6587\u4EF6\u5939">${folderOptions}</select>${icon("down")}</label>${button("create-link", "\u94FE\u63A5", "link", linkAttributes, "graph-link-chip")}</div>
+      ${dialog.linkMode ? '<div class="graph-link-hint" role="status">\u9009\u62E9\u4E24\u6761\u8BB0\u5FC6\u4EE5\u5EFA\u7ACB\u94FE\u63A5</div>' : ""}
+    </div><div class="graph-layout"><div class="graph-canvas"><svg viewBox="-400 -260 800 520" data-graph-surface aria-label="\u8BB0\u5FC6\u56FE\u8C31\u753B\u5E03">${graphSvg(dialog)}</svg>${graphData(dialog).items.length === 0 ? '<div class="graph-empty"><span>\u6682\u65E0\u8BB0\u5FC6</span><span class="muted">\u521B\u5EFA\u8BB0\u5FC6\u540E\uFF0C\u53EF\u5728\u8FD9\u91CC\u67E5\u770B\u548C\u8FDE\u63A5\u8282\u70B9\u3002</span></div>' : ""}<div class="graph-tools" role="group" aria-label="\u753B\u5E03\u7F29\u653E">${iconButton("zoom-in", "\u653E\u5927", "add")}${iconButton("zoom-out", "\u7F29\u5C0F", "minus")}${iconButton("fit-graph", "\u9002\u5E94\u753B\u5E03", "expand")}</div>${button("create-memory", "\u521B\u5EFA\u8BB0\u5FC6", "add", "", "graph-fab")}</div><aside class="graph-sidebar" aria-label="\u8BB0\u5FC6\u5217\u8868\u4E0E\u8BE6\u60C5">${graphInspector(dialog)}</aside></div>`,
+      footer: ""
+    };
   }
 
   // web/features/memory/item-view.ts
@@ -1793,7 +1879,8 @@
       element.setAttribute("aria-label", spec.title);
       let tabs = "";
       for (let i = 0; i < spec.tabs.length; i++) tabs += `<button type="button" class="tab" role="tab" aria-selected="${"tab" in dialog && dialog.tab === i}" data-action="select-tab" data-tab="${i}">${escapeHtml(spec.tabs[i])}</button>`;
-      const content = `<div class="dialog-layout"><header class="dialog-header"><h2>${escapeHtml(spec.title)}</h2>${dialog.type === "graph" ? graphHeader(dialog) : ""}${iconButton("close-dialog", "\u5173\u95ED", "close", dialog.busy ? "disabled" : "")}</header>${tabs === "" ? "" : `<div class="tabs" role="tablist">${tabs}</div>`}${dialog.busy ? '<div class="busy-bar"></div>' : ""}<div class="dialog-error" role="alert" ${dialog.error === "" ? "hidden" : ""}>${escapeHtml(dialog.error)}</div>${dialog.type === "graph" ? spec.body : `<div class="dialog-body" data-index="${index}">${spec.body}</div>`}${spec.footer === "" ? "" : `<footer class="dialog-footer">${spec.footer}</footer>`}</div>`;
+      const header = dialog.type === "graph" ? graphHeader(dialog) : `<h2>${escapeHtml(spec.title)}</h2>${iconButton("close-dialog", "\u5173\u95ED", "close", dialog.busy ? "disabled" : "")}`;
+      const content = `<div class="dialog-layout"><header class="dialog-header">${header}</header>${tabs === "" ? "" : `<div class="tabs" role="tablist">${tabs}</div>`}${dialog.busy ? '<div class="busy-bar"></div>' : ""}<div class="dialog-error" role="alert" ${dialog.error === "" ? "hidden" : ""}>${escapeHtml(dialog.error)}</div>${dialog.type === "graph" ? spec.body : `<div class="dialog-body" data-index="${index}">${spec.body}</div>`}${spec.footer === "" ? "" : `<footer class="dialog-footer">${spec.footer}</footer>`}</div>`;
       if (markup.get(element) !== content) {
         element.innerHTML = content;
         markup.set(element, content);
@@ -1868,6 +1955,8 @@
     }
     async function onClick(event) {
       if (!(event.target instanceof Element)) return;
+      const overflow = context.dialogsRoot.querySelector(".graph-overflow[open]");
+      if (overflow !== null && (!overflow.contains(event.target) || event.target.closest("[data-action]") !== null)) overflow.open = false;
       if (event.type === "click" && event.detail !== 0 && state.gestureMoved && event.target.closest("[data-graph-surface]") !== null) {
         event.preventDefault();
         return;
@@ -1938,6 +2027,12 @@
     async function onCancel(event) {
       event.preventDefault();
       if (state.busy || state.dialogs.length === 0) return;
+      const overflow = context.dialogsRoot.querySelector(".graph-overflow[open]");
+      if (overflow !== null) {
+        overflow.open = false;
+        requireElement(overflow.querySelector("summary"), HTMLElement).focus();
+        return;
+      }
       state.busy = true;
       try {
         await dismissDialog();

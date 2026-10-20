@@ -170,13 +170,15 @@ class _MessageContextMenuState extends State<MessageContextMenu> {
     _longPressPointer = null;
   }
 
+  /// Positions the route menu in its owning Navigator overlay coordinates.
   Future<void> _showContextMenu() async {
     _cancelLongPress();
     final position = _menuPosition;
     if (position == null) {
       return;
     }
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final overlay =
+        Navigator.of(context).overlay!.context.findRenderObject()! as RenderBox;
     final localPosition = overlay.globalToLocal(position);
     final rect = RelativeRect.fromRect(
       localPosition & const Size(1, 1),

@@ -325,3 +325,31 @@ test("pending released-data adoption is not blocked by an unknown model binding"
   const before = disk.stateBytes(); await open(disk, chat);
   assert.deepEqual(disk.stateBytes(), before);
 });
+
+/** Keeps unresolved primary selections exact while converting actual libraries and their references. */
+test("released-data import preserves missing primary libraries through UUID adoption and reopen", async t => {
+  for (const mode of ["SHARED", "CHARACTER"]) {
+    for (const sharedId of [null, "", "  ", "deleted-store"]) {
+      const { disk, state, chat } = await seed(t);
+      disk.storage.inspectPreferences("cards", values => Object.assign(values.record_operit, {
+        memoryBindingMode: mode, sharedMemoryId: sharedId,
+      }));
+      await open(disk, chat);
+      const saved = plain(disk.readState()), card = saved.cards.find(value => value.name === "Operit");
+      const other = saved.cards.find(value => value.name === state.cards[1].name);
+      assert.match(card.id, uuidPattern);
+      assert.equal(card.memoryBindingMode, mode); assert.equal(card.sharedMemoryId, sharedId);
+      assert.equal(saved.stores.length, state.stores.length);
+      assert.match(saved.stores[0].id, uuidPattern);
+      assert.equal(other.sharedMemoryId, saved.stores[0].id);
+      assert.equal(card.sharedMemoryMounts[0].sharedMemoryId, saved.stores[0].id);
+      const owner = saved.owners.find(value => value.ownerKey === "character:" + card.id);
+      assert.equal(owner.memories.length, state.owners[0].memories.length);
+      assert.equal((await bytes(disk, owner.userDocumentPath)).toString(), "# Original USER character:operit\nUnicode 用户资料");
+      assert.equal(metadata(disk).legacyImportPending, undefined);
+      const before = disk.stateBytes(); disk.clearCalls(); await open(disk, chat);
+      assert.deepEqual(disk.stateBytes(), before);
+      assert.equal(disk.calls.some(call => call.method === "storage.commit" || call.method === "storage.preferences.edit"), false);
+    }
+  }
+});

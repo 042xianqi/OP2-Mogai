@@ -1312,7 +1312,7 @@ impl RuntimePackageManager {
     }
 
     #[allow(non_snake_case)]
-    /// Deletes an external package from storage and package state.
+    /// Removes custom code from built-in identities or deletes ordinary external packages.
     pub fn deletePackage(&mut self, packageName: &str) -> bool {
         let name = match self
             .toolPkgManager()
@@ -1334,6 +1334,14 @@ impl RuntimePackageManager {
                 return false;
             }
         };
+        if record.settings["customized"] == true {
+            if let Err(error) = ExtensionStore::default().removePackageCustomization(&name) {
+                self.recordManualToolPkgLoadIssue(&name, Some(&name), "delete_failed", &error, "package");
+                return false;
+            }
+            self.loadAvailablePackages();
+            return true;
+        }
         if record.settings["builtin"] == true {
             return false;
         }
@@ -3471,9 +3479,9 @@ impl RuntimePackageManager {
                             None => ToolPkgConfigScope::Device,
                         },
                     };
-                    self.registerScope(name, &sourceName, builtin, members, scope, requiredScope)?;
+                    self.registerScope(name, &sourceName, builtin, members.clone(), scope, requiredScope)?;
                 }
-                let record = store.record("package", name)?;
+                let mut record = store.record("package", name)?;
                 if requiredScope.is_some_and(|required| required.as_str() != record.scope) {
                     return Err(format!(
                         "Package {name} is installed outside its required scope"
@@ -3513,6 +3521,11 @@ impl RuntimePackageManager {
                     if actual != expected {
                         return Err(format!("Package location conflicts with its owner: {name}"));
                     }
+                }
+                let currentMembers = serde_json::to_value(members).map_err(|error| error.to_string())?;
+                if record.settings["members"] != currentMembers {
+                    record.settings["members"] = currentMembers;
+                    store.setSettings("package", name, record.settings.clone())?;
                 }
                 self.scopeState
                     .lock()
@@ -4027,21 +4040,14 @@ impl RuntimePackageManager {
                 .fileSystemHost
                 .readFileBytes(&hostPath(&file))
                 .map_err(|error| error.to_string())?;
-            let requiredScope = ToolPkgArchiveParser::readInstallationScope(&bytes)?;
-            let scope = match requiredScope {
-                Some(scope) => scope,
-                None => ToolPkgConfigScope::Device,
-            };
+            let scope = self.importedToolPkgScope(&bytes)?;
             let (loadResult, loadIssues) = self
                 .loadToolPkgFromExternalFileWithIssues(&file, scope)
                 .map_err(|error| format!("Error importing package: {error}"))?;
             appendUniqueToolPkgLoadIssues(&mut self.manualToolPkgLoadIssues, &loadIssues);
             let packageName = loadResult.containerPackage.name.clone();
             let marketOrigin = loadResult.marketOrigin.clone();
-            if !self
-                .toolPkgManager()
-                .canRegisterToolPkg(&loadResult, self.availablePackages())
-            {
+            if !self.canImportToolPkg(&loadResult)? {
                 return Err(format!(
                     "A package with name '{}' already exists in available packages",
                     packageName
@@ -4066,7 +4072,7 @@ impl RuntimePackageManager {
                 .loadToolPkgFromExternalFileWithIssues(&destinationFile, scope)
                 .map_err(|error| format!("Error importing package: {error}"))?;
             appendUniqueToolPkgLoadIssues(&mut self.manualToolPkgLoadIssues, &importedLoadIssues);
-            if !self.registerToolPkg(importedLoadResult) {
+            if !self.registerImportedToolPkg(importedLoadResult)? {
                 return Err(format!(
                     "A package with name '{}' already exists in available packages",
                     packageName
@@ -4108,11 +4114,11 @@ impl RuntimePackageManager {
                 .map_err(|error| format!("Failed to parse {packageFormat} package file: {error}"))?
         };
 
-        if self.availablePackages().contains_key(&packageMetadata.name)
-            || self
-                .toolPkgManager()
-                .isToolPkgContainer(&packageMetadata.name)
-            || self.toolPkgManager().hasSubpackage(&packageMetadata.name)
+        let customization = self.customizablePackage(&packageMetadata.name)?;
+        if customization.is_none()
+            && (self.availablePackages().contains_key(&packageMetadata.name)
+                || self.toolPkgManager().isToolPkgContainer(&packageMetadata.name)
+                || self.toolPkgManager().hasSubpackage(&packageMetadata.name))
         {
             return Err(format!(
                 "A package with name '{}' already exists in available packages",
@@ -4126,7 +4132,14 @@ impl RuntimePackageManager {
         let fileName = file
             .file_name()
             .ok_or_else(|| "Error importing package: invalid file name".to_string())?;
-        let destinationFile = self.storePaths.packages_dir().join(fileName);
+        let scope = match &customization {
+            Some(record) => serde_json::from_value::<ToolPkgConfigScope>(serde_json::Value::String(record.scope.clone()))
+                .map_err(|error| error.to_string())?,
+            None => ToolPkgConfigScope::Device,
+        };
+        let packageRoot = self.storePaths.runtime_storage_path(&ExtensionStore::root("package", scope.as_str())?);
+        self.fileSystemHost.makeDirectory(&hostPath(&packageRoot), true).map_err(|error| error.to_string())?;
+        let destinationFile = packageRoot.join(fileName);
         if file != destinationFile {
             self.fileSystemHost
                 .copyFile(&hostPath(&file), &hostPath(&destinationFile), false)
@@ -4142,18 +4155,24 @@ impl RuntimePackageManager {
         } else {
             None
         };
-        self.registerScope(
-            &packageMetadata.name,
-            &fileName.to_string_lossy(),
-            false,
-            vec![packageMetadata.name.clone()],
-            ToolPkgConfigScope::Device,
-            None,
-        )?;
-        self.pluginPackageManager.registerPackage(ToolPackage {
-            is_built_in: false,
-            ..packageMetadata.clone()
-        });
+        if customization.is_some() {
+            let enabledNames = self.getEnabledPackageNames();
+            self.saveEnabledPackageNames(&enabledNames).map_err(|error| error.to_string())?;
+            ExtensionStore::default().customizePackage(
+                &packageMetadata.name, &fileName.to_string_lossy(), vec![packageMetadata.name.clone()],
+            )?;
+            self.externalPackageScanCache.remove(&hostPath(&destinationFile));
+            self.loadAvailablePackages();
+        } else {
+            self.registerScope(
+                &packageMetadata.name, &fileName.to_string_lossy(), false,
+                vec![packageMetadata.name.clone()], scope, None,
+            )?;
+            self.pluginPackageManager.registerPackage(ToolPackage {
+                is_built_in: false,
+                ..packageMetadata.clone()
+            });
+        }
         let sourceNotice = scriptMarketOrigin.map(|origin| {
             format!(
                 "this is the {} marketplace script '{}' (version: {}, author: {}). Please support the original author and beware of resales.",
@@ -4169,6 +4188,102 @@ impl RuntimePackageManager {
             storedPath: destinationFile.to_string_lossy().to_string(),
             sourceNotice,
         })
+    }
+
+    /// Lists built-in identities currently supplied by user-installed custom packages.
+    #[allow(non_snake_case)]
+    pub fn getCustomizedPackageNames(&self) -> Result<Vec<String>, String> {
+        Ok(ExtensionStore::default()
+            .records("package")?
+            .into_iter()
+            .filter(|record| record.settings["customized"] == true)
+            .map(|record| record.id)
+            .collect())
+    }
+
+    /// Resolves an installed built-in identity that accepts a custom implementation.
+    fn customizablePackage(&self, packageName: &str) -> Result<Option<ExtensionRecord>, String> {
+        Ok(ExtensionStore::default()
+            .records("package")?
+            .into_iter()
+            .find(|record| {
+                record.id == packageName
+                    && (record.settings["builtin"] == true || record.settings["customized"] == true)
+            }))
+    }
+
+    /// Resolves an archive's installation scope before executing registration code.
+    fn importedToolPkgScope(&self, bytes: &[u8]) -> Result<ToolPkgConfigScope, String> {
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|error| error.to_string())?;
+        let index = ToolPkgArchiveParser::buildZipEntryIndex(&mut archive);
+        let preview = ToolPkgArchiveParser::readToolPkgManifestPreview(&mut archive, &index)
+            .ok_or("ToolPkg manifest is missing or invalid")?;
+        if let Some(record) = self.customizablePackage(&preview.manifest.toolpkgId)? {
+            return serde_json::from_value(serde_json::Value::String(record.scope))
+                .map_err(|error| error.to_string());
+        }
+        match preview.manifest.installationScope {
+            Some(scope) => Ok(scope),
+            None => Ok(ToolPkgConfigScope::Device),
+        }
+    }
+
+    /// Checks package names with the replaced built-in container removed from the candidate registry.
+    fn canImportToolPkg(&self, loadResult: &ToolPkgLoadResult) -> Result<bool, String> {
+        if self
+            .customizablePackage(&loadResult.containerPackage.name)?
+            .is_none()
+        {
+            return Ok(self
+                .toolPkgManager()
+                .canRegisterToolPkg(loadResult, self.availablePackages()));
+        }
+        let mut packages = self.availablePackages().clone();
+        let mut containers = self.toolPkgManager().getToolPkgContainerRuntimeMap();
+        let mut subpackages = self.toolPkgManager().getToolPkgSubpackageRuntimeMap();
+        Self::removeToolPkgContainerFromTargets(
+            &loadResult.containerPackage.name,
+            &mut packages,
+            &mut containers,
+            &mut subpackages,
+        );
+        packages.remove(&loadResult.containerPackage.name);
+        Ok(Self::registerToolPkgInto(
+            loadResult.clone(),
+            &mut packages,
+            &mut containers,
+            &mut subpackages,
+        ))
+    }
+
+    /// Registers an imported archive or switches its built-in owner to the custom source.
+    fn registerImportedToolPkg(&mut self, loadResult: ToolPkgLoadResult) -> Result<bool, String> {
+        let name = loadResult.containerPackage.name.clone();
+        if self.customizablePackage(&name)?.is_none() {
+            return Ok(self.registerToolPkg(loadResult));
+        }
+        let path = loadResult.containerRuntime.sourcePath.clone();
+        let source = Path::new(&path)
+            .file_name()
+            .ok_or("Package source filename is missing")?
+            .to_string_lossy();
+        let mut members = vec![name.clone()];
+        members.extend(
+            loadResult
+                .subpackagePackages
+                .iter()
+                .map(|package| package.name.clone()),
+        );
+        let enabledNames = self.getEnabledPackageNames();
+        self.saveEnabledPackageNames(&enabledNames)
+            .map_err(|error| error.to_string())?;
+        ExtensionStore::default().customizePackage(&name, &source, members)?;
+        self.externalPackageScanCache.remove(&path);
+        self.loadAvailablePackages();
+        Ok(self
+            .getToolPkgContainerRuntime(&name)
+            .is_some_and(|runtime| runtime.sourcePath == path))
     }
 
     /// Reads an archive from its registered ToolPkg source through the existing host abstractions.
@@ -4451,9 +4566,8 @@ impl RuntimePackageManager {
                     )
                 }
             };
-        let scope = match ToolPkgArchiveParser::readInstallationScope(&rawArchive) {
-            Ok(Some(scope)) => scope,
-            Ok(None) => ToolPkgConfigScope::Device,
+        let scope = match self.importedToolPkgScope(&rawArchive) {
+            Ok(scope) => scope,
             Err(error) => {
                 return self.recordAndReturnPackageError(
                     filePath,
@@ -4495,10 +4609,7 @@ impl RuntimePackageManager {
                 self.loadToolPkgFromMarketFileWithIssues(&stagingFile, scope)?;
             appendUniqueToolPkgLoadIssues(&mut self.manualToolPkgLoadIssues, &previewIssues);
             let packageName = preview.containerPackage.name.clone();
-            if !self
-                .toolPkgManager()
-                .canRegisterToolPkg(&preview, self.availablePackages())
-            {
+            if !self.canImportToolPkg(&preview)? {
                 return Err(format!(
                     "A package with name '{}' already exists in available packages",
                     packageName
@@ -4520,7 +4631,7 @@ impl RuntimePackageManager {
             let (loaded, loadedIssues) =
                 self.loadToolPkgFromMarketFileWithIssues(&destinationFile, scope)?;
             appendUniqueToolPkgLoadIssues(&mut self.manualToolPkgLoadIssues, &loadedIssues);
-            if !self.registerToolPkg(loaded) {
+            if !self.registerImportedToolPkg(loaded)? {
                 return Err(format!(
                     "Failed to register toolpkg '{}' due to naming conflict",
                     packageName
@@ -5240,6 +5351,7 @@ impl RuntimePackageManager {
         Ok(())
     }
 
+    /// Retains explicit disablement for built-in identities and their custom implementations.
     #[allow(non_snake_case)]
     pub(crate) fn addToDisabledIfDefaultEnabled(
         &self,
@@ -5249,7 +5361,10 @@ impl RuntimePackageManager {
         let Some(toolPackage) = self.availablePackages().get(&normalizedPackageName) else {
             return Ok(());
         };
-        if !toolPackage.is_built_in || !toolPackage.enabled_by_default {
+        if !(toolPackage.is_built_in && toolPackage.enabled_by_default)
+            && self.customizablePackage(&normalizedPackageName)
+                .map_err(PreferencesDataStoreError::Message)?.is_none()
+        {
             return Ok(());
         }
         let mut disabledPackageNames =

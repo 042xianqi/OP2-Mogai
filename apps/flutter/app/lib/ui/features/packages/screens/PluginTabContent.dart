@@ -17,6 +17,7 @@ class PluginTabContent extends StatelessWidget {
     required this.morePlugins,
     required this.loadIssues,
     required this.scopes,
+    this.customizedPackageNames = const <String>{},
     required this.onMoveScope,
     required this.enabledPluginNames,
     required this.isSearchActive,
@@ -32,6 +33,7 @@ class PluginTabContent extends StatelessWidget {
   final List<core_proxy.BundledExternalPackageCandidate> morePlugins;
   final List<core_proxy.ToolPkgLoadIssue> loadIssues;
   final Map<String, String> scopes;
+  final Set<String> customizedPackageNames;
   final ValueChanged<String> onMoveScope;
 
   final Set<String> enabledPluginNames;
@@ -89,6 +91,10 @@ class PluginTabContent extends StatelessWidget {
                     key: ValueKey<String>('plugin:${plugin.packageName}'),
                     icon: Icons.extension_outlined,
                     title: toolPkgContainerDisplayName(plugin),
+                    statusLabel:
+                        customizedPackageNames.contains(plugin.packageName)
+                        ? '自定义'
+                        : null,
                     subtitle: localizedText(plugin.description),
                     metadata: <String>[
                       plugin.packageName,

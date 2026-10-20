@@ -625,6 +625,9 @@ class _ClassicInputBody extends StatelessWidget {
             inputExpanded: inputExpanded,
             readOnly: isSpeechRecording || isSpeechTranscribing,
             hasDraftText: hasDraftText,
+            transparentSurface: OperitTheme.of(
+              context,
+            ).themePreferenceSnapshot.transparentSurfaceEnabled,
             settings: KeyedSubtree(
               key: settingsKey,
               child: _ClassicIconTapTarget(

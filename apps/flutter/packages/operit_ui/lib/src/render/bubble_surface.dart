@@ -5,12 +5,11 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
-import 'package:liquid_glass_widgets/widgets/shared/glass_effect.dart';
 
-import '../model/theme_preference_defaults.dart';
 import '../assets/theme_asset_resolver.dart';
 import '../assets/theme_image_decoder.dart';
+import '../model/theme_preference_defaults.dart';
+import 'liquid_glass.dart';
 
 class BubbleImageStyle {
   /// Creates image slicing parameters for a bubble surface asset.
@@ -61,6 +60,7 @@ class BubbleSurface extends StatelessWidget {
   final BubbleImageStyle? imageStyle;
   final bool transparentSurface;
 
+  /// Paints imported image decorations or the shared liquid material.
   @override
   Widget build(BuildContext context) {
     final useImage = imageStyle != null;
@@ -88,94 +88,17 @@ class BubbleSurface extends StatelessWidget {
       ],
     );
     if (transparentSurface && !useImage) {
-      final transparentGlassSettings = _bubbleTransparentGlassSettings(color);
       return ClipRRect(
         borderRadius: borderRadius,
-        child: Stack(
-          children: <Widget>[
-            Positioned.fill(
-              child: BackdropFilter(
-                filter: ui.ImageFilter.blur(
-                  sigmaX: transparentGlassSettings.blur,
-                  sigmaY: transparentGlassSettings.blur,
-                ),
-                child: const ColoredBox(color: Colors.transparent),
-              ),
-            ),
-            Positioned.fill(
-              child: _BubbleTransparentGlassSurface(
-                glassRadius: _dominantCornerRadius(borderRadius),
-                settings: transparentGlassSettings,
-                child: const SizedBox.expand(),
-              ),
-            ),
-            child,
-          ],
+        child: LiquidGlassSurface(
+          borderRadius: borderRadius,
+          tint: color.withValues(alpha: 0.025),
+          child: child,
         ),
       );
     }
     return ClipRRect(borderRadius: borderRadius, child: content);
   }
-}
-
-class _BubbleTransparentGlassSurface extends StatelessWidget {
-  /// Creates the transparent glass layer used by bubble surfaces.
-  const _BubbleTransparentGlassSurface({
-    required this.glassRadius,
-    required this.settings,
-    required this.child,
-  });
-
-  final double glassRadius;
-  final LiquidGlassSettings settings;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassEffect(
-      quality: GlassQuality.standard,
-      shape: LiquidRoundedSuperellipse(borderRadius: glassRadius),
-      settings: settings,
-      interactionIntensity: 0.85,
-      ambientRim: 0.11,
-      baseAlphaMultiplier: 0.75,
-      edgeAlphaMultiplier: 0.75,
-      rimThickness: 1.48,
-      rimSmoothing: 8,
-      child: child,
-    );
-  }
-}
-
-/// Builds glass settings for transparent bubble surfaces.
-LiquidGlassSettings _bubbleTransparentGlassSettings(Color color) {
-  return LiquidGlassSettings(
-    glassColor: color.withValues(alpha: 0.018),
-    thickness: 80,
-    blur: 5,
-    chromaticAberration: 0.18,
-    lightIntensity: 0.42,
-    ambientStrength: 0.3,
-    refractiveIndex: 1.16,
-    saturation: 1.04,
-    glowIntensity: 0.17,
-    specularSharpness: GlassSpecularSharpness.soft,
-    standardOpacityMultiplier: 0.12,
-  );
-}
-
-/// Returns the largest corner radius in a border radius.
-double _dominantCornerRadius(BorderRadius borderRadius) {
-  return <double>[
-    borderRadius.topLeft.x,
-    borderRadius.topLeft.y,
-    borderRadius.topRight.x,
-    borderRadius.topRight.y,
-    borderRadius.bottomRight.x,
-    borderRadius.bottomRight.y,
-    borderRadius.bottomLeft.x,
-    borderRadius.bottomLeft.y,
-  ].reduce(math.max);
 }
 
 class BubbleImageBackgroundSurface extends StatelessWidget {
