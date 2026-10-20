@@ -3451,16 +3451,19 @@ impl RuntimePackageManager {
                     }
                 };
                 let store = ExtensionStore::default();
-                let existing = store
-                    .records("package")?
-                    .into_iter()
-                    .any(|record| record.id == *name);
                 let requiredScope = snapshot
                     .toolPkgContainers
                     .get(name)
                     .map(Self::requiredInstallationScope)
                     .transpose()?
                     .flatten();
+                if let Some(required) = requiredScope {
+                    store.reconcileBuiltinScopeDuplicates("package", name, required.as_str())?;
+                }
+                let existing = store
+                    .records("package")?
+                    .into_iter()
+                    .any(|record| record.id == *name);
                 if !existing {
                     let scope = match snapshot.toolPkgContainers.get(name) {
                         Some(container) if !builtin => {
