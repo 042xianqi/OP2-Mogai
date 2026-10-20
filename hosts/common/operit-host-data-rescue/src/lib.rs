@@ -10,7 +10,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use fs2::FileExt;
 use operit_data_rescue::{DataRescue, RescueFile, RescueHost, RescueManifest, payload_bytes, validate_path};
 use operit_host_api::{HostSecretStore, RuntimeStorageHost};
-use operit_host_native_storage::{NativeArchiveStagingHost, NativeFileSecretStore, NativeRuntimeStorageHost};
+use operit_host_native_storage::{ARCHIVE_STAGING_DIRECTORY_NAME, NativeArchiveStagingHost, NativeFileSecretStore, NativeRuntimeStorageHost};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -31,7 +31,11 @@ impl StorageLease {
         fs::create_dir_all(&application).map_err(text)?;
         let file = private_file(&application.join(".operit-data.lock"), false)?;
         let result = if maintenance { file.try_lock_exclusive() } else { FileExt::try_lock_shared(&file) };
-        result.map_err(|error| format!("Data is in use. Close all Operit windows, background services, and CLI processes before data maintenance: {error}"))?;
+        result.map_err(|error| match (maintenance, error.kind()) {
+            (true, std::io::ErrorKind::WouldBlock) => format!("Data is in use. Close all Operit windows, background services, and CLI processes before data maintenance: {error}"),
+            (false, std::io::ErrorKind::WouldBlock) => format!("Data maintenance is active. Close the Data Rescue session before normal startup: {error}"),
+            _ => format!("Cannot acquire {} storage access at {}: {error}", if maintenance { "exclusive maintenance" } else { "shared runtime" }, application.display()),
+        })?;
         if !maintenance && application.join("data-rescue/commit.json").exists() {
             return Err("An interrupted data import must be completed from Data Rescue before normal startup".into());
         }
@@ -156,8 +160,10 @@ impl NativeRescueSession {
             let mut host = NativeRescueHost::new(&self.default_runtime, roots, self.secret_store.clone())?;
             host.profile_file_secrets = self.profile_file_secrets;
             host.progress = self.progress.clone();
+            host.cleanup_abandoned_archives()?;
             let host = Arc::new(host);
             let archives = Arc::new(NativeArchiveStagingHost::new(application_root(&self.default_runtime)?.join("data-rescue/staging")));
+            archives.cleanupAbandonedArchivesDuringMaintenance().map_err(text)?;
             self.service = Some(DataRescue { host, archives });
             return self.service.as_ref().ok_or("Rescue service was not created")?.host.describe();
         }
@@ -227,6 +233,20 @@ struct SecretEnvelope { nonce: String, ciphertext: String }
 struct JournalSecrets { imported: BTreeMap<String, String>, previous: BTreeMap<String, String> }
 
 impl NativeRescueHost {
+    /// Removes interrupted archive transfers from the exact Host-owned staging namespaces.
+    fn cleanup_abandoned_archives(&self) -> Result<(), String> {
+        for parent in [&self.application, &self.roots["runtime"], &self.roots["runtime"].join("identities")] {
+            NativeArchiveStagingHost::cleanupAbandonedArchivesForRuntimeParent(parent).map_err(text)?;
+        }
+        Ok(())
+    }
+
+    /// Identifies temporary Host archives inside the selected complete runtime tree.
+    fn is_archive_staging_path(&self, path: &Path) -> bool {
+        path.starts_with(self.roots["runtime"].join(ARCHIVE_STAGING_DIRECTORY_NAME))
+            || path.starts_with(self.roots["runtime"].join("identities").join(ARCHIVE_STAGING_DIRECTORY_NAME))
+    }
+
     /// Enumerates complete filesystem structure without decoding any business records.
     fn inventory(&self) -> Result<(Vec<RescueFile>, Vec<StorageNode>), String> {
         let mut files = Vec::new();
@@ -326,13 +346,15 @@ impl NativeRescueHost {
             return checked_descendant(&self.application, relative);
         }
         let root = self.roots.get(role).ok_or("Unknown rescue namespace")?;
-        checked_descendant(root, relative)
+        let path = checked_descendant(root, relative)?;
+        if self.is_archive_staging_path(&path) { return Err("Archive addresses temporary archive staging".into()); }
+        Ok(path)
     }
 
     /// Keeps generated executables, maintenance files, and declared roots out of the extra-data namespace.
     fn excluded_application_entry(&self, name: &str) -> bool {
         let path = self.application.join(name);
-        [".operit-data.lock", "data-rescue", "archive_staging", "android-runtime"].contains(&name)
+        [".operit-data.lock", "data-rescue", ARCHIVE_STAGING_DIRECTORY_NAME, "android-runtime"].contains(&name)
             || name.starts_with(".operit-rescue-") || name.starts_with(".operit-retained-")
             || self.roots.values().any(|root| root == &path)
     }
@@ -802,7 +824,8 @@ impl RescueHost for NativeRescueHost {
 }
 
 /// Enumerates raw regular files without opening SQLite, plugins, or application preferences.
-fn collect_files(path: &Path, logical: &str, output: &mut Vec<RescueFile>, nodes: &mut Vec<StorageNode>, host: &dyn RescueHost) -> Result<(), String> {
+fn collect_files(path: &Path, logical: &str, output: &mut Vec<RescueFile>, nodes: &mut Vec<StorageNode>, host: &NativeRescueHost) -> Result<(), String> {
+    if host.is_archive_staging_path(path) { return Ok(()); }
     validate_path(logical)?;
     let metadata = fs::symlink_metadata(path).map_err(text)?;
     if is_storage_link(&metadata) { return Err(format!("Filesystem links require an explicit archival policy: {}", path.display())); }

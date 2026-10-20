@@ -1220,26 +1220,31 @@ fn legacyEntities(path: &str, entity: &str) -> Result<Vec<Value>, String> {
         .collect()
 }
 
-/// Resolves the original human-name binding exactly once and rejects missing or ambiguous source records.
-pub fn resolveBinding(cards: &[Value], groups: &[Value], old: &Value) -> Result<Value, String> {
+/// Resolves unique historical targets and leaves missing or ambiguous references unbound.
+pub fn resolveBinding(
+    cards: &[Value],
+    groups: &[Value],
+    old: &Value,
+) -> Result<Option<Value>, String> {
     let selection = if let Some(id) = old["characterGroupId"].as_str().filter(|id| !id.is_empty()) {
         if groups.iter().filter(|group| group["id"] == id).count() != 1 {
-            return Err(format!("Missing legacy character group: {id}"));
+            return Ok(None);
         }
         format!("group:{id}")
     } else {
-        let Some(name) = old["characterCardName"].as_str().filter(|name| !name.is_empty()) else {
-            return Ok(json!({"version":1,"selection":"model:chat"}));
+        let Some(name) = old["characterCardName"]
+            .as_str()
+            .filter(|name| !name.is_empty())
+        else {
+            return Ok(Some(json!({"version":1,"selection":"model:chat"})));
         };
         let matches: Vec<_> = cards.iter().filter(|card| card["name"] == name).collect();
         if matches.len() != 1 {
-            return Err(format!(
-                "Legacy character binding is missing or ambiguous: {old}"
-            ));
+            return Ok(None);
         }
         format!("card:{}", requiredString(matches[0], "id")?)
     };
-    Ok(json!({"version":1,"selection":selection}))
+    Ok(Some(json!({"version":1,"selection":selection})))
 }
 
 /// Publishes committed drafts and retires drafts whose Core chat was never committed.
@@ -1353,22 +1358,32 @@ fn adoptCoreConfigurationRows(
             let mut extensions: BTreeMap<String, Value> =
                 serde_json::from_str(&row.get::<_, String>(1).map_err(|error| error.to_string())?)
                     .map_err(|error| error.to_string())?;
-            let Some(legacy) = extensions.remove(LEGACY_BINDING_NAMESPACE) else { continue; };
+            let Some(legacy) = extensions.remove(LEGACY_BINDING_NAMESPACE) else {
+                continue;
+            };
             let value = resolveBinding(&cards, &groups, &legacy)?;
             match table {
                 "chats" => {
                     let id: String = row.get(2).map_err(|error| error.to_string())?;
-                    writer.adoptRecord("chat_bindings", &id, value)?;
+                    if let Some(value) = value {
+                        writer.adoptRecord("chat_bindings", &id, value)?;
+                    }
                 }
                 "sync_sql_chat_rows" => {}
                 _ => {
-                    if let Some(id) = value["selection"].as_str().and_then(|selection| selection.strip_prefix("card:")) {
+                    if let Some(id) = value
+                        .as_ref()
+                        .and_then(|binding| binding["selection"].as_str())
+                        .and_then(|selection| selection.strip_prefix("card:"))
+                    {
                         attachMessageAuthor(&mut extensions, PLUGIN_ID, id);
                     }
                 }
             }
             let encoded = serde_json::to_string(&extensions).map_err(|error| error.to_string())?;
-            if encoded == row.get::<_, String>(1).map_err(|error| error.to_string())? { continue; }
+            if encoded == row.get::<_, String>(1).map_err(|error| error.to_string())? {
+                continue;
+            }
             database
                 .execute(
                     &format!("UPDATE {table} SET pluginExtensions=?1 WHERE rowid=?2"),
@@ -1805,7 +1820,14 @@ impl CharacterPluginWriter {
         let mut plan = ThemeMigrationPlan {
             bindings: Vec::new(),
             activeConfigId: None,
-            sourceEntries: Vec::new(),
+            sourceEntries: preferences
+                .iterEntries()
+                .filter(|(key, _)| {
+                    key.starts_with("character_card_theme_")
+                        || key.starts_with("character_group_theme_")
+                })
+                .map(|(key, value)| (key.to_string(), value.clone()))
+                .collect(),
             complete: false,
         };
         let mut identities = BTreeSet::new();
@@ -1818,7 +1840,7 @@ impl CharacterPluginWriter {
                 .ok_or_else(|| format!("Legacy theme target is missing: {id}"))?;
             let role = &role["value"];
             let prefix = themePrefix(collection, id)?;
-            let (snapshot, entries) = readLegacyCharacterThemeSnapshot(preferences, &prefix)
+            let (snapshot, _) = readLegacyCharacterThemeSnapshot(preferences, &prefix)
                 .map_err(|error| error.to_string())?;
             let config = ThemeConfig {
                 // Persist the allocated identity in the plan before publishing either owner.
@@ -1851,22 +1873,6 @@ impl CharacterPluginWriter {
                 key: id.clone(),
                 config,
             });
-            plan.sourceEntries.extend(entries);
-        }
-        let migrated_keys = plan
-            .sourceEntries
-            .iter()
-            .map(|(key, _)| key.as_str())
-            .collect::<BTreeSet<_>>();
-        for (key, _) in preferences.iterEntries() {
-            if (key.starts_with("character_card_theme_")
-                || key.starts_with("character_group_theme_"))
-                && !migrated_keys.contains(key)
-            {
-                return Err(format!(
-                    "Legacy theme preference has no imported role target: {key}"
-                ));
-            }
         }
         Ok(plan)
     }

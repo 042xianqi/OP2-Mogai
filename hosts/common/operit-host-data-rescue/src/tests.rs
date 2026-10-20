@@ -109,6 +109,42 @@ fn plaintext_roundtrip_preserves_identities_workspaces_secrets_and_originals() {
     assert!(!completed.windows(STANDARD.encode(b"portable key bytes").len()).any(|part| part == STANDARD.encode(b"portable key bytes").as_bytes()));
 }
 
+/// Excludes real identity staging from payloads and metadata while preserving user directories.
+#[test]
+fn export_excludes_host_archive_namespaces_from_the_complete_runtime_tree() {
+    use operit_host_api::ArchiveStagingHost;
+    let fixture = Fixture::new();
+    fixture.write("runtime/identities/identity-test/data/record", b"user data");
+    fixture.write("runtime/identities/identity-test/data/archive_staging/record", b"user-owned directory");
+    fixture.write("workspaces/project/archive_staging/record", b"workspace data");
+    let active = NativeArchiveStagingHost::new(fixture.0.join("runtime/identities/identity-test"));
+    active.createExportArchive("previous").unwrap();
+    active.writeExportArchive("previous", 0, &vec![37; 2 * 1024]).unwrap();
+    active.sealArchive("previous").unwrap();
+    fixture.write("runtime/identities/archive_staging/removed-identity/interrupted.sealed", b"abandoned archive");
+    fixture.write("runtime/archive_staging/legacy/old.upload", b"legacy partial archive");
+    let mut session = fixture.session(None);
+    assert!(!fixture.0.join("runtime/identities/archive_staging/removed-identity/interrupted.sealed").exists());
+    assert!(!fixture.0.join("runtime/archive_staging/legacy/old.upload").exists());
+    assert!(Path::new(&active.archiveFileReference("previous").unwrap()).exists());
+    let archive = session.execute(json!({"operation":"export"})).unwrap();
+    let manifest = session.execute(json!({"operation":"inspect", "archiveId":archive["archiveId"]})).unwrap();
+    let paths: BTreeSet<_> = manifest["files"].as_array().unwrap().iter()
+        .map(|file| file["path"].as_str().unwrap()).collect();
+    assert!(paths.contains("runtime/identities/identity-test/data/record"));
+    assert!(paths.contains("runtime/identities/identity-test/data/archive_staging/record"));
+    assert!(paths.contains("workspaces/project/archive_staging/record"));
+    for path in paths.iter().copied().chain(manifest["metadata"]["storageNodes"].as_array().unwrap().iter()
+        .map(|node| node["path"].as_str().unwrap())) {
+        assert!(!path.starts_with("runtime/identities/archive_staging"), "{path}");
+        assert!(!path.starts_with("runtime/archive_staging"), "{path}");
+    }
+    let exported = PathBuf::from(archive["fileReference"].as_str().unwrap());
+    drop(session);
+    assert!(!exported.exists());
+    drop(active);
+}
+
 /// Rejects changed published payloads on resume while retaining every displaced original.
 #[test]
 fn interrupted_import_rechecks_payloads_before_resuming() {
@@ -646,4 +682,24 @@ fn profile_file_key_contract_rejects_missing_keys_without_reading_legacy_storage
         "{storage_path}: Cannot export preferences {storage_path}: Preferences encryption key is missing from the Host secret store"
     ));
     assert_eq!(fs::read(source.0.join("runtime/config/preferences/model_configs.preferences.json")).unwrap(), encrypted);
+}
+
+/// Keeps all normal processes protected while distinguishing maintenance conflicts from normal-startup conflicts.
+#[test]
+fn storage_leases_share_runtime_access_and_release_maintenance() {
+    let fixture = Fixture::new();
+    let runtime = fixture.0.join("runtime");
+    let first = StorageLease::acquire(&runtime, false).unwrap();
+    let second = StorageLease::acquire(&runtime, false).unwrap();
+    let maintenance_error = StorageLease::acquire(&runtime, true).err().unwrap();
+    drop(first);
+    assert!(StorageLease::acquire(&runtime, true).is_err());
+    drop(second);
+    let maintenance = NativeRescueSession::open(runtime.clone(), None).unwrap();
+    let runtime_error = StorageLease::acquire(&runtime, false).err().unwrap();
+    assert_ne!(runtime_error, maintenance_error);
+    assert!(!runtime_error.contains("Close all Operit windows"));
+    drop(maintenance);
+    let normal = StorageLease::acquire(&runtime, false).unwrap();
+    drop(normal);
 }

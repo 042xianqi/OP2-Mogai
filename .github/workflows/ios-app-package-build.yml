@@ -158,6 +158,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: operit2-ios-${{ github.sha }}
-          path: tools/release/dist/operit2-app-ios-arm64.zip
+          path: tools/release/dist/operit2-app-ios-arm64-*.zip
           if-no-files-found: error
           retention-days: 14

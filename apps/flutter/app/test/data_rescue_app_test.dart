@@ -71,6 +71,16 @@ void main() {
     expect(find.text('已准备就绪，可以导出全部数据或选择备份恢复。'), findsOneWidget);
   });
 
+  /// Returns the maintenance lease when the owning screen is removed without pressing its close button.
+  testWidgets('disposal closes the maintenance session', (tester) async {
+    final host = _MaintenanceHost();
+    await tester.pumpWidget(DataRescueApp(request: host.request));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+    expect(host.operations, ['open', 'configureAutomatic', 'close']);
+  });
+
   testWidgets('pending import is ready to resume without path confirmation', (
     tester,
   ) async {
@@ -325,6 +335,8 @@ class _MaintenanceHost {
     }
     operations.add(operation);
     switch (operation) {
+      case 'close':
+        return null;
       case 'open':
         return <String, Object?>{'commitPending': pending};
       case 'configureAutomatic':

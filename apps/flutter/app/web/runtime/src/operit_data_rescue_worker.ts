@@ -97,7 +97,10 @@ async function copy(source: Source, target: FileHandle, progress: Progress): Pro
 
 /** Enumerates origin files excluding maintenance catalogs. */
 async function collect(base: Directory, prefix: string, result: Map<string, Source>): Promise<void> {
+  const segments = prefix.split('/');
+  const identityRoot = segments.length === 3 && segments[0] === 'runtime' && segments[1] === 'identities';
   for await (const [name, entry] of base.entries()) {
+    if (identityRoot && (name === 'operit_archive_staging.data' || name === 'snapshot_exports')) continue;
     if (prefix === '' && name === 'data-rescue') continue;
     const path = prefix === '' ? name : `${prefix}/${name}`;
     if (entry.kind === 'directory') await collect(entry, path, result);

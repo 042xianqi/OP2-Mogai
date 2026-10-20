@@ -8,6 +8,8 @@ import sys
 import tarfile
 from pathlib import Path
 
+from release_artifacts import release_asset_name
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
@@ -76,6 +78,7 @@ def copy_required_file(source: Path, destination: Path) -> None:
     shutil.copy2(source, destination)
 
 
+# Creates a ZIP archive while preserving the complete versioned filename.
 def compress_zip(source_dir: Path, destination: Path) -> None:
     if not source_dir.exists():
         raise RuntimeError(f"Expected build directory not found: {source_dir}")
@@ -83,9 +86,6 @@ def compress_zip(source_dir: Path, destination: Path) -> None:
         destination.unlink()
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.make_archive(str(destination.with_suffix("")), "zip", source_dir)
-    produced = destination.with_suffix("").with_suffix(".zip")
-    if produced != destination:
-        produced.replace(destination)
 
 
 def compress_tar_gz(source_dir: Path, destination: Path) -> None:

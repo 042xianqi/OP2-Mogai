@@ -245,6 +245,11 @@ class _MessageContextMenuState extends State<MessageContextMenu> {
           label: '重新生成',
         ),
         _menuItem(
+          value: _MessageMenuAction.modifyMemory,
+          icon: Icons.auto_fix_high,
+          label: '修改记忆',
+        ),
+        _menuItem(
           value: _MessageMenuAction.playVoice,
           icon: Icons.volume_up,
           label: '生成/播放语音',
@@ -361,6 +366,7 @@ class _MessageContextMenuState extends State<MessageContextMenu> {
         );
         break;
       case _MessageMenuAction.editAndResend:
+      case _MessageMenuAction.modifyMemory:
         widget.onSelectMessageToEdit?.call(widget.message);
         break;
       case _MessageMenuAction.rollback:
@@ -639,6 +645,7 @@ class _MessageContextMenuState extends State<MessageContextMenu> {
 enum _MessageMenuAction {
   copy,
   editAndResend,
+  modifyMemory,
   rollback,
   regenerate,
   deleteVariant,

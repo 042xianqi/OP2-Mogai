@@ -9,7 +9,7 @@ import 'package:operit2/core/proxy/generated/CoreProxyClients.g.dart';
 import 'package:operit2/core/proxy/generated/CoreProxyModels.g.dart';
 import 'package:operit2/ui/features/chat/components/MessageContextMenu.dart';
 
-/// Verifies every selected reply can be deleted when another revision exists.
+/// Verifies message editing, selected-revision deletion and generic plugin menu dispatch.
 void main() {
   test(
     'copy preserves plugin-owned markup without interpreting its business',
@@ -20,7 +20,7 @@ void main() {
   );
 
   for (final sender in ['user', 'ai']) {
-    testWidgets('native $sender menu has no hardcoded plugin business', (
+    testWidgets('native $sender menu preserves its editing action', (
       tester,
     ) async {
       await _openMenu(
@@ -30,8 +30,33 @@ void main() {
         variantCount: 1,
       );
       expect(find.text('加入记忆队列'), findsNothing);
-      expect(find.text('修改记忆'), findsNothing);
+      expect(find.text('修改记忆'), sender == 'ai' ? findsOneWidget : findsNothing);
     });
+  }
+
+  for (final selectedVariantIndex in <int>[0, 1, 2]) {
+    testWidgets(
+      'AI memory edit forwards selected revision $selectedVariantIndex to the message editor',
+      (tester) async {
+        final selected = <ChatMessage>[];
+        await _openMenu(
+          tester,
+          selectedVariantIndex: selectedVariantIndex,
+          variantCount: 3,
+          onSelectMessageToEdit: selected.add,
+        );
+        await tester.tap(find.text('修改记忆'));
+        await tester.pumpAndSettle();
+        expect(selected, hasLength(1));
+        expect(selected.single.timestamp, 123);
+        expect(selected.single.sender, 'ai');
+        expect(selected.single.selectedVariantIndex, selectedVariantIndex);
+        expect(selected.single.pluginExtensions, {
+          'arbitrary.plugin': {'opaque': 'unchanged'},
+        });
+        expect(tester.takeException(), isNull);
+      },
+    );
   }
 
   testWidgets(
@@ -110,6 +135,7 @@ Future<void> _openMenu(
   String sender = 'ai',
   _MessageMenuBridge? bridge,
   MessageVariantAction? onDeleteMessageVariant,
+  MessageSelectionAction? onSelectMessageToEdit,
   Future<void> Function()? onRefresh,
 }) async {
   await tester.binding.setSurfaceSize(const Size(800, 1200));
@@ -149,6 +175,7 @@ Future<void> _openMenu(
             packageManager: clients.application.packageManager(),
             onToggleFavoriteMessage: (timestamp, isFavorite) async {},
             onDeleteMessageVariant: onDeleteMessageVariant,
+            onSelectMessageToEdit: onSelectMessageToEdit,
             onRefresh: onRefresh,
             child: const SizedBox(
               width: 200,

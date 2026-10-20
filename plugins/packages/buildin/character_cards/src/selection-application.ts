@@ -46,6 +46,8 @@ export interface SelectionCommit<T> { readonly references: SelectionReferences; 
 
 /** Coordinates validation, one real selection commit, and awaited independent applications without compensation. */
 export interface SelectionApplication {
+  /** Applies the persisted chat selection theme in the same queue without rewriting selection or speech. */
+  applyTheme(readReferences: () => Promise<SelectionReferences | null>): Promise<void>;
   /** Serializes user selection operations through their full application sequence, preserving every rejection. */
   commit<T>(prepareAndCommit: (validate: ValidateReferences) => Promise<SelectionCommit<T>>): Promise<T>;
 }
@@ -146,6 +148,18 @@ export function createSelectionApplication(access: IndependentConfigurationAcces
     else next();
   }
   return {
+    /** Serializes navigation with explicit selection applications and propagates exact theme owner failures. */
+    async applyTheme(readReferences: () => Promise<SelectionReferences | null>): Promise<void> {
+      await acquire();
+      try {
+        const references = await readReferences();
+        if (references === null) return;
+        const checked = copyReferences(references);
+        if (checked.themeConfigId === null) return;
+        await access.validateTheme(checked.themeConfigId);
+        await access.applyTheme(checked.themeConfigId);
+      } finally { release(); }
+    },
     /** Performs all explicit-reference validation before committing the selection, then awaits every requested apply. */
     async commit<T>(prepareAndCommit: (validate: ValidateReferences) => Promise<SelectionCommit<T>>): Promise<T> {
       await acquire();

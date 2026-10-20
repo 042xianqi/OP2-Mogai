@@ -586,6 +586,63 @@ pub(crate) fn readThemePreferenceSnapshot(
     Ok(snapshot)
 }
 
+/// Converts released string scalars and signed ARGB integers through the current field schema.
+pub(crate) fn decodeLegacyThemePreference(
+    field: &SnapshotField,
+    value: Value,
+) -> Result<Value, PreferencesDataStoreError> {
+    let mut decoded = match (field.kind, value) {
+        (
+            FieldKind::Boolean | FieldKind::OptionalColor | FieldKind::Number { .. },
+            Value::String(encoded),
+        ) => serde_json::from_str::<Value>(&encoded)?,
+        (_, value) => value,
+    };
+    if matches!(field.kind, FieldKind::OptionalColor) && !decoded.is_null() {
+        let number = decoded.as_i64().ok_or_else(|| {
+            invalidSnapshot(
+                field.json_key,
+                &format!("invalid legacy ARGB value: {decoded}"),
+            )
+        })?;
+        if number < i32::MIN as i64 || number > u32::MAX as i64 {
+            return Err(invalidSnapshot(
+                field.json_key,
+                &format!("legacy ARGB value outside 32-bit range: {decoded}"),
+            ));
+        }
+        decoded = Value::from(number as u32);
+    }
+    validateField(field, &decoded)?;
+    Ok(decoded)
+}
+
+/// Converts ordinary appearance preferences before publishing the new user schema version.
+pub(crate) fn migrateLegacyThemePreferences(
+    preferences: &mut Preferences,
+) -> Result<(), PreferencesDataStoreError> {
+    for field in snapshotFields() {
+        let key = stringPreferencesKey(field.preference_key);
+        if let Some(value) = preferences.get(&key).cloned() {
+            preferences.set(&key, decodeLegacyThemePreference(field, value)?);
+        }
+    }
+    Ok(())
+}
+
+/// Converts historical snapshots at the migration boundary and removes fields the current schema no longer owns.
+pub(crate) fn migrateLegacyThemeSnapshot(
+    snapshot: &mut BTreeMap<String, Value>,
+) -> Result<(), PreferencesDataStoreError> {
+    snapshot.retain(|key, _| snapshotFields().any(|field| field.json_key == key));
+    for field in snapshotFields() {
+        if let Some(value) = snapshot.get_mut(field.json_key) {
+            *value = decodeLegacyThemePreference(field, value.clone())?;
+        }
+    }
+    validateThemePreferenceSnapshot(snapshot)
+}
+
 /// Collects exact cleanup inputs and converts only legacy settings supported by the current theme schema.
 pub(crate) fn readLegacyCharacterThemeSnapshot(
     preferences: &Preferences,
@@ -600,21 +657,20 @@ pub(crate) fn readLegacyCharacterThemeSnapshot(
             if matches!(field, "custom_user_avatar_uri" | "custom_ai_avatar_uri") {
                 continue;
             }
-            let descriptor = snapshotFields().find(|entry| entry.preference_key == field);
-            // Unsupported historical settings are cleanup inputs, not current snapshot fields.
-            if descriptor.is_none() && field != "use_system_theme" {
-                continue;
-            }
-            let encoded = serde_json::from_value::<String>(value.clone())?;
-            let decoded = match descriptor.map(|entry| entry.kind) {
-                Some(FieldKind::Boolean | FieldKind::OptionalColor | FieldKind::Number { .. }) => {
-                    serde_json::from_str::<Value>(&encoded)?
+            let descriptor = match field {
+                "use_system_theme" => SnapshotField {
+                    json_key: "useSystemTheme",
+                    preference_key: "use_system_theme",
+                    kind: FieldKind::Boolean,
+                },
+                _ => {
+                    let Some(descriptor) = snapshotFields().find(|entry| entry.preference_key == field) else {
+                        continue;
+                    };
+                    *descriptor
                 }
-                _ if field == "use_system_theme" => {
-                    serde_json::to_value(serde_json::from_str::<bool>(&encoded)?)?
-                }
-                _ => Value::String(encoded),
             };
+            let decoded = decodeLegacyThemePreference(&descriptor, value.clone())?;
             scoped.set(&stringPreferencesKey(field), decoded);
         }
     }

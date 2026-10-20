@@ -83,6 +83,31 @@ class _DataRescueScreenState extends State<_DataRescueScreen> {
     unawaited(_open());
   }
 
+  /// Releases the maintenance session when its owning screen leaves the widget tree.
+  @override
+  void dispose() {
+    unawaited(_releaseMaintenance());
+    super.dispose();
+  }
+
+  /// Closes Host access after accepted work finishes and reports any resource-release failure.
+  Future<void> _releaseMaintenance() async {
+    if (_closed) return;
+    _closed = true;
+    try {
+      await widget.request({'operation': 'close'});
+    } catch (error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: 'data rescue',
+          context: ErrorDescription('while closing the maintenance session'),
+        ),
+      );
+    }
+  }
+
   /// Validates a structured response at the independent maintenance boundary.
   Future<Map<String, Object?>> _map(Map<String, Object?> request) async =>
       Map<String, Object?>.from((await widget.request(request))! as Map);

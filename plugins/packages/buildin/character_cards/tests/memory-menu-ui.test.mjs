@@ -48,6 +48,31 @@ test("plugin memory section retains main's exact collapsed and expanded controls
   assert.deepEqual(clock.pending, []);
 });
 
+for (const selection of [null, "model:chat", "group:controlled-group"]) {
+  /** Keeps conversations without a single character owner out of the role-memory controls. */
+  test(`memory menu omits role-memory controls for selection ${selection}`, async t => {
+    const clock = timers(), runtime = await selectorEnvironment(t, {}, clock.globals);
+    if (selection !== null) await runtime.seedBinding("selector-chat", { version: 1, selection });
+    const ui = menu(runtime, "selector-chat"); await ui.load();
+    const tree = ui.render().tree;
+    assert.equal(tree.props.key, "memory-menu-unavailable");
+    assert.deepEqual(texts(tree), []);
+    assert.deepEqual(composeNodes(tree,
+      /** Finds actions that must not be exposed without a character memory owner. */
+      node => node.props.onClick !== undefined || node.props.onLoad !== undefined,
+    ), []);
+    assert.deepEqual(clock.pending, []);
+  });
+}
+
+/** Preserves genuine ownership errors instead of hiding a broken character binding. */
+test("memory menu reports a missing selected character", async t => {
+  const runtime = await selectorEnvironment(t);
+  await runtime.seedBinding("selector-chat", { version: 1, selection: "card:missing-character" });
+  const ui = menu(runtime, "selector-chat");
+  await assert.rejects(ui.load(), /missing-character/);
+});
+
 test("memory info reads fresh queue status on demand without background polling", async t => {
   const clock = timers(), harness = await createMemoryJobsHarness(t), runtime = harness.openRuntime(clock.globals);
   await runtime.initialize(); await runtime.bind();

@@ -5,7 +5,7 @@ let runtimeAccess: Promise<void> | null = null;
 let maintenanceWorker: Worker | null = null;
 let nextRequest = 0;
 let nextJob = 0;
-interface Job { id: number; requestId: number; progress: unknown; done: boolean; response?: Record<string, unknown>; }
+interface Job { id: number; requestId: number; progress: unknown; done: boolean; completion: Promise<void>; response?: Record<string, unknown>; }
 let job: Job | null = null;
 const pending = new Map<number, { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void }>();
 
@@ -131,6 +131,15 @@ async function execute(encoded: string): Promise<string> {
     if (request.operation === 'launchMode') return JSON.stringify({ ok: true, value: { rescue: isDataRescuePage() } });
     if (request.operation === 'runtimeLease') { await acquireRuntimeAccess(); return JSON.stringify({ ok: true, value: null }); }
     if (!isDataRescuePage()) throw new Error('请通过独立数据救援页面打开维护功能。');
+    if (request.operation === 'close') {
+      const active = job;
+      if (active !== null) {
+        await active.completion;
+        if (job === active) job = null;
+      }
+      if (maintenanceWorker === null) return JSON.stringify({ ok: true, value: null });
+      return JSON.stringify(await executeWorker(request));
+    }
     if (request.operation === 'poll') {
       if (job === null || request.jobId !== job.id) throw new Error('Unknown maintenance job');
       if (!job.done) return JSON.stringify({ ok: true, value: { done: false, progress: job.progress } });
@@ -143,11 +152,13 @@ async function execute(encoded: string): Promise<string> {
     if (request.operation === 'start') {
       const operation = request.request as Record<string, unknown>;
       if (!['export', 'inspect', 'restore', 'resumeRestore', 'configureAutomatic'].includes(operation.operation as string)) throw new Error('Unsupported background maintenance operation');
-      const started: Job = { id: ++nextJob, requestId: 0, progress: null, done: false };
+      let complete!: () => void;
+      const completion = new Promise<void>(resolve => { complete = resolve; });
+      const started: Job = { id: ++nextJob, requestId: 0, progress: null, done: false, completion };
       job = started;
       void executeWorker(operation).then(response => { started.response = response; started.done = true; }, error => {
         started.response = { ok: false, error: String(error) }; started.done = true;
-      });
+      }).finally(complete);
       return JSON.stringify({ ok: true, value: { jobId: started.id } });
     }
     return JSON.stringify(await executeWorker(request));

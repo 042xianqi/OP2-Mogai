@@ -87,6 +87,8 @@ interface TagPlan {
   attachedIds: string[];
 }
 export interface CharacterCardsService extends ChatConfigurationService {
+  /** Applies the opened chat's own bound theme without modifying active selection, bindings or speech. */
+  applyChatTheme(chatId: string): Promise<void>;
   readGlobalMemoryPreferences(): Promise<
     import("./model").GlobalMemoryPreferences
   >;
@@ -163,6 +165,18 @@ export function createCharacterCardsService(
     );
   }
   const service: CharacterCardsService = {
+    /** Reads the real chat binding inside the shared application queue before applying its exact theme reference. */
+    applyChatTheme(chatId: string): Promise<void> {
+      requireId(chatId, "chat id");
+      return application.applyTheme(
+        /** Reads only persisted role references; an unbound chat has no theme application to request. */
+        async () => {
+          const binding = await findChatBinding(chatId);
+          if (binding === null) return null;
+          return readSelectionReferences(owner, binding.selection);
+        },
+      );
+    },
     /** Runs the private job scheduler without constructing another store or business service. */
     runMemoryJobs: () => jobs.tick(),
     /** Reads only the metadata flags needed by prompt composition. */

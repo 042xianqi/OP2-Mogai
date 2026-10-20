@@ -474,3 +474,79 @@ fn objectbox_table_preserves_long_ids_and_explicit_scalar_defaults() {
     let broken = FlatObjectBoxTable::new(&bytes).unwrap();
     assert!(broken.scalarI32(0, "chunkIndex").is_err());
 }
+
+/// Imports historical chats without a deleted role and emits draft references only for resolved bindings.
+#[test]
+fn archive_binding_migration_cleans_unresolved_references_without_replacing_them() {
+    use crate::data::backup::CharacterPluginMigration::{
+        CharacterPluginWriter, LEGACY_BINDING_NAMESPACE, PLUGIN_ID,
+    };
+    use operit_host_native_storage::NativeRuntimeStorageHost;
+    for (legacy, expected_binding) in [
+        (
+            serde_json::json!({"characterCardName":"Operit","characterGroupId":null}),
+            None,
+        ),
+        (
+            serde_json::json!({"characterCardName":"Operit","characterGroupId":"deleted-group"}),
+            None,
+        ),
+        (
+            serde_json::json!({"characterCardName":null,"characterGroupId":null}),
+            Some(serde_json::json!({"version":1,"selection":"model:chat"})),
+        ),
+    ] {
+        let root =
+            std::env::temp_dir().join(format!("operit1-unresolved-binding-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        {
+            let host = Arc::new(NativeRuntimeStorageHost::new(
+                root.join("runtime"),
+                root.join("workspaces"),
+            ));
+            let fixture = completeSnapshotFixture(10);
+            let mut connection = TestSqliteConnection::open(&fixture.databasePath);
+            let bridge = prepareOperit1RoomImport(&mut connection).unwrap();
+            let mut archive = buildChatArchiveFromOperit1ToOperit2DatabaseBridge(
+                bridge,
+                &mut connection,
+                &SnapshotFileImportPlan::new(),
+                &mut |_| {},
+            )
+            .unwrap();
+            archive.chats[0]
+                .pluginExtensions
+                .insert(LEGACY_BINDING_NAMESPACE.to_string(), legacy);
+            archive.chats[0]
+                .pluginExtensions
+                .insert("other.plugin".to_string(), serde_json::json!({"keep":true}));
+            let mut expected = archive.clone();
+            expected.chats[0]
+                .pluginExtensions
+                .remove(LEGACY_BINDING_NAMESPACE);
+            if expected_binding.is_some() {
+                let id = expected.chats[0].id.clone();
+                expected.chats[0].pluginExtensions.insert(
+                    PLUGIN_ID.to_string(),
+                    serde_json::json!({"recordId":id,"schemaVersion":1}),
+                );
+            }
+            resolveOperit1ArchiveBindings(&mut archive, host.clone(), host.clone()).unwrap();
+            assert_eq!(archive, expected);
+            let writer = CharacterPluginWriter::open(host.clone(), host.clone()).unwrap();
+            let drafts = writer.list("chat_drafts").unwrap();
+            match expected_binding {
+                Some(binding) => {
+                    assert_eq!(drafts.len(), 1);
+                    assert_eq!(drafts[0]["value"], binding);
+                }
+                None => assert!(drafts.is_empty()),
+            }
+            assert!(writer.list("chat_bindings").unwrap().is_empty());
+            assert!(writer.list("cards").unwrap().is_empty());
+            assert!(writer.list("groups").unwrap().is_empty());
+        }
+        assert_eq!(root.parent().unwrap(), std::env::temp_dir());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}

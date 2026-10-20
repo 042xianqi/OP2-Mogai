@@ -12,6 +12,7 @@ from cli_macos_signing import sign_cli_macos
 
 from common import (
     DIST_DIR,
+    release_asset_name,
     REPO_ROOT,
     copy_required_file,
     compress_tar_gz,
@@ -79,8 +80,8 @@ def cli_package_dir(target: CliBuildTarget) -> Path:
 
 # Returns the release archive path for one packaged CLI target.
 def cli_package_path(target: CliBuildTarget) -> Path:
-    return DIST_DIR / (
-        f"operit2-cli-{target.platform}-{target.arch}.{cli_archive_extension(target.platform)}"
+    return DIST_DIR / release_asset_name(
+        "cli", target.platform, target.arch, cli_archive_extension(target.platform)
     )
 
 

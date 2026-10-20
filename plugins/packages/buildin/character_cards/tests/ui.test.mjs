@@ -634,7 +634,7 @@ function plain(value) { return JSON.parse(JSON.stringify(value)); }
 /** Runs the current main bundle with native file IO and explicit readonly directory fixtures, never fixture storage. */
 async function fileBackedPlugin(t, bundle, uiScripts = undefined, settings = null) {
   const disk = await createDiskHarness(t, { legacyIdentity: "default" }), readonly = fixture(), native = createNativeChatHost(new Map([["chat-dom", { extension: null }]])), hostCalls = native.calls, records = native.records;
-  const apis = new Map(), channels = new Map(), commands = new Map(), routes = [], navigation = [], appHooks = [], messageHooks = [], hostHooks = [], chatLifecycleHooks = [], toolLifecycleHooks = [], toolPromptHooks = [];
+  const apis = new Map(), channels = new Map(), commands = new Map(), routes = [], navigation = [], appHooks = [], messageHooks = [], hostHooks = [], chatLifecycleHooks = [], chatViewHooks = [], toolLifecycleHooks = [], toolPromptHooks = [];
   const tools = { Files: disk.files, Storage: disk.storage, Models: {
     /** Supplies only the explicitly labelled readonly model directory required by the actual service. */
     async listSummaries() { return { models: plain(readonly.snapshot.models) }; }
@@ -676,6 +676,8 @@ async function fileBackedPlugin(t, bundle, uiScripts = undefined, settings = nul
     registerHostEventHook(value) { hostHooks.push(value); },
     /** Captures the genuine pre-create hook without creating a chat or providing a replacement initializer. */
     registerChatLifecycleHook(value) { chatLifecycleHooks.push(value); },
+    /** Captures the bound-theme view callback without emitting navigation during registration. */
+    registerChatViewHook(value) { chatViewHooks.push(value); },
     /** Requires the actual group input callback to remain exported and uniquely registered. */
     registerChatInputHook(value) { assert.equal(value.id, "group-input-submit"); assert.equal(value.function.name, "onGroupInputSubmit"); },
     /** Captures the real tool-execution policy without calling it during registration. */
@@ -714,6 +716,8 @@ async function fileBackedPlugin(t, bundle, uiScripts = undefined, settings = nul
   assert.equal(hostHooks.length, 1); assert.equal(hostHooks[0].id, "memory-jobs-interval");
   assert.equal(hostHooks[0].source, "interval"); assert.deepEqual(plain(hostHooks[0].trigger), { kind: "interval", intervalMs: 60000 });
   assert.equal(hostHooks[0].function, module.exports.onMemoryInterval);
+  assert.equal(chatViewHooks.length, 1); assert.equal(chatViewHooks[0].id, "character-bound-theme");
+  assert.equal(chatViewHooks[0].function, module.exports.onChatViewTheme);
   assert.equal(chatLifecycleHooks.length, 1); assert.equal(chatLifecycleHooks[0].id, "chat-initialization");
   assert.equal(chatLifecycleHooks[0].function, module.exports.beforeChatCreate);
   assert.equal(toolLifecycleHooks.length, 1); assert.equal(toolLifecycleHooks[0].id, "participant-tool-execution");

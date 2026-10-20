@@ -2004,25 +2004,25 @@ x86_64
 App assets：
 
 ```text
-operit2-app-windows-x86_64.zip
-operit2-app-windows-aarch64.zip
-operit2-app-linux-x86_64.tar.gz
-operit2-app-linux-aarch64.tar.gz
-operit2-app-macos-universal.zip
-operit2-app-android-arm64-v8a.apk
-operit2-app-android-armeabi-v7a.apk
-operit2-app-android-x86_64.apk
+operit2-app-windows-x86_64-<release-version>.zip
+operit2-app-windows-aarch64-<release-version>.zip
+operit2-app-linux-x86_64-<release-version>.tar.gz
+operit2-app-linux-aarch64-<release-version>.tar.gz
+operit2-app-macos-universal-<release-version>.zip
+operit2-app-android-arm64-v8a-<release-version>.apk
+operit2-app-android-armeabi-v7a-<release-version>.apk
+operit2-app-android-x86_64-<release-version>.apk
 ```
 
 CLI assets：
 
 ```text
-operit2-cli-windows-x86_64.zip
-operit2-cli-windows-aarch64.zip
-operit2-cli-linux-x86_64.tar.gz
-operit2-cli-linux-aarch64.tar.gz
-operit2-cli-macos-x86_64.tar.gz
-operit2-cli-macos-aarch64.tar.gz
+operit2-cli-windows-x86_64-<release-version>.zip
+operit2-cli-windows-aarch64-<release-version>.zip
+operit2-cli-linux-x86_64-<release-version>.tar.gz
+operit2-cli-linux-aarch64-<release-version>.tar.gz
+operit2-cli-macos-x86_64-<release-version>.tar.gz
+operit2-cli-macos-aarch64-<release-version>.tar.gz
 ```
 
 下载要求：

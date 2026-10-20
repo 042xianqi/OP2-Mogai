@@ -8,6 +8,13 @@ Build outputs and transient logs belong under `tools/release/work` and
 `tools/release/dist`. Private credentials belong under `tools/release/secrets`.
 These ignored directories are not used to store reusable build scripts.
 
+Release package filenames use
+`operit2-<product>-<platform>-<architecture>-<release-version>.<extension>`.
+`release_artifacts.py` validates the shared App runtime and CLI version and keeps
+prerelease identifiers and compound extensions intact. App packages for macOS
+use `universal` and `.zip`; macOS CLI packages use their target architecture and
+`.tar.gz`. Separate checksum files are not produced.
+
 ## Entry points
 
 - `build_flutter_<platform>.py`: Flutter builds for Android, iOS, Linux, macOS,

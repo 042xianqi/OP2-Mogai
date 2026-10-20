@@ -92,3 +92,41 @@ test('browser rescue reports an invalid record range and closes its temporary ou
   assert.equal(instance.outputs.has(instance.dataPath), false);
   assert.equal(instance.data.closed, false);
 });
+
+/** Runs the actual browser maintenance dispatcher with controllable worker completion. */
+function maintenanceDispatcher(executeWorker, workerOpen = true) {
+  const source = readFileSync(new URL('../../apps/flutter/app/web/runtime/src/operit_data_rescue.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('async function execute(encoded: string)');
+  assert.ok(start >= 0);
+  const code = stripTypeScriptTypes(source.slice(start), { mode: 'transform' });
+  return new Function('executeWorker', 'workerOpen', 
+    'const globals = {}; let nextJob = 0; let job = null; const maintenanceWorker = workerOpen ? {} : null; const isDataRescuePage = () => true; ' + code + '; return globals.__operitDataRescue;'
+  )(executeWorker, workerOpen);
+}
+
+/** Closes the session only after an accepted browser maintenance task has completed. */
+test('browser maintenance close waits for active work before releasing its worker', async () => {
+  let finish;
+  const running = new Promise(resolve => { finish = resolve; });
+  const operations = [];
+  const execute = maintenanceDispatcher(async request => {
+    operations.push(request.operation);
+    if (request.operation === 'configureAutomatic') return await running;
+    assert.equal(request.operation, 'close');
+    return { ok: true, value: null };
+  });
+  const started = JSON.parse(await execute(JSON.stringify({ operation: 'start', request: { operation: 'configureAutomatic' } })));
+  assert.equal(started.ok, true);
+  const closing = execute(JSON.stringify({ operation: 'close' }));
+  await Promise.resolve();
+  assert.deepEqual(operations, ['configureAutomatic']);
+  finish({ ok: true, value: {} });
+  assert.deepEqual(JSON.parse(await closing), { ok: true, value: null });
+  assert.deepEqual(operations, ['configureAutomatic', 'close']);
+});
+
+/** Disposing an unopened or already released session does not create a new worker or acquire a lock. */
+test('browser maintenance close is idle when its worker is absent', async () => {
+  const execute = maintenanceDispatcher(() => { throw new Error('must not create maintenance work'); }, false);
+  assert.deepEqual(JSON.parse(await execute(JSON.stringify({ operation: 'close' }))), { ok: true, value: null });
+});

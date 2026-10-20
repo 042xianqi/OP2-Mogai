@@ -129,6 +129,7 @@ __export(main_exports, {
   memoryUserWriteApi: () => memoryUserWriteApi,
   onActivePromptCommand: () => onActivePromptCommand,
   onCharacterCommand: () => onCharacterCommand,
+  onChatViewTheme: () => onChatViewTheme,
   onGroupCommand: () => onGroupCommand,
   onGroupInputSubmit: () => onGroupInputSubmit,
   onMemoryCommand: () => onMemoryCommand,
@@ -4547,6 +4548,22 @@ function createSelectionApplication(access) {
     else next();
   }
   return {
+    /** Serializes navigation with explicit selection applications and propagates exact theme owner failures. */
+    applyTheme(readReferences) {
+      return __async(this, null, function* () {
+        yield acquire();
+        try {
+          const references = yield readReferences();
+          if (references === null) return;
+          const checked = copyReferences(references);
+          if (checked.themeConfigId === null) return;
+          yield access.validateTheme(checked.themeConfigId);
+          yield access.applyTheme(checked.themeConfigId);
+        } finally {
+          release();
+        }
+      });
+    },
     /** Performs all explicit-reference validation before committing the selection, then awaits every requested apply. */
     commit(prepareAndCommit) {
       return __async(this, null, function* () {
@@ -4795,6 +4812,18 @@ function createCharacterCardsService(owner2, configurations = independentConfigu
     );
   }
   const service = {
+    /** Reads the real chat binding inside the shared application queue before applying its exact theme reference. */
+    applyChatTheme(chatId) {
+      requireId(chatId, "chat id");
+      return application.applyTheme(
+        /** Reads only persisted role references; an unbound chat has no theme application to request. */
+        () => __async(null, null, function* () {
+          const binding = yield findChatBinding(chatId);
+          if (binding === null) return null;
+          return readSelectionReferences(owner2, binding.selection);
+        })
+      );
+    },
     /** Runs the private job scheduler without constructing another store or business service. */
     runMemoryJobs: () => jobs.tick(),
     /** Reads only the metadata flags needed by prompt composition. */
@@ -10444,6 +10473,18 @@ function registerSidebarChannel() {
   ToolPkg.ipc.on("character-sidebar.catalog", readSidebarCatalog);
 }
 
+// src/chat-view-theme.ts
+function onChatViewTheme(event) {
+  return __async(this, null, function* () {
+    if (event.eventName !== "view_opened") return;
+    const chatId = requireId(event.eventPayload.chatId, "opened chat id");
+    yield (yield getService()).applyChatTheme(chatId);
+  });
+}
+function registerChatViewTheme() {
+  ToolPkg.registerChatViewHook({ id: "character-bound-theme", function: onChatViewTheme });
+}
+
 // src/main.ts
 connectDirectorySources({
   /** Reads the actual configured model directory only when the shared service requests it. */
@@ -10467,6 +10508,7 @@ function registerToolPkg() {
   registerMemoryJobHooks();
   registerToolPolicies();
   registerChatInitialization();
+  registerChatViewTheme();
   registerGroupExecutionHooks();
   registerUiContributionApis();
   ToolPkg.registerApi({ name: "chat.sidebar.prepare", function: chatSidebarPrepareApi });

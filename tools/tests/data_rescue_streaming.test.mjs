@@ -152,3 +152,38 @@ test('browser rescue rejects oversized export metadata before opening a destinat
   }, 'snapshotBytes');
   await assert.rejects(snapshotBytes('browser/catalog.json', new VirtualBlob()), /exceeds 16 MiB/);
 });
+
+/** Excludes only the real browser archive namespace before any payload handle is opened. */
+test('browser rescue excludes identity staging and saved export copies from inventory', async () => {
+  const opened = [];
+  /** Creates a source file that records accidental reads of temporary payloads. */
+  function file(path) {
+    return { kind: 'file', async createSyncAccessHandle() { opened.push(path); return {}; } };
+  }
+  /** Exposes a deterministic OPFS directory tree to the production enumerator. */
+  function directory(entries) {
+    return { kind: 'directory', async *entries() { yield* entries; } };
+  }
+  const identity = directory([
+    ['operit_archive_staging.data', file('temporary archive container')],
+    ['snapshot_exports', directory([['old.zip', file('temporary export copy')]])],
+    ['operit_runtime_storage.data', file('runtime data')],
+    ['data', directory([['snapshot_exports', directory([['user.zip', file('user export')]])]])],
+  ]);
+  const root = directory([
+    ['runtime', directory([['identities', directory([['identity-test', identity]])]])],
+    ['workspaces', directory([['snapshot_exports', directory([['project.zip', file('workspace export')]])]])],
+    ['data-rescue', directory([['archive.zip', file('maintenance archive')]])],
+  ]);
+  const collect = implementation('async function collect(', '/** Converts a database request', {
+    reportProgress() {},
+  }, 'collect');
+  const inventory = new Map();
+  await collect(root, '', inventory);
+  assert.deepEqual(opened, ['runtime data', 'user export', 'workspace export']);
+  assert.deepEqual([...inventory.keys()], [
+    'opfs/runtime/identities/identity-test/operit_runtime_storage.data',
+    'opfs/runtime/identities/identity-test/data/snapshot_exports/user.zip',
+    'opfs/workspaces/snapshot_exports/project.zip',
+  ]);
+});
