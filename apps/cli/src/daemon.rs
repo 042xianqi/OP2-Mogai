@@ -26,6 +26,10 @@ use crate::create_cli_core_application;
 
 /// One control request or response; a command line must stay below this cap.
 const MAX_CONTROL_BYTES: usize = 16 * 1024 * 1024;
+/// Size cap for the detached daemon output file.
+const DAEMON_OUT_MAX_BYTES: u64 = 4 * 1024 * 1024;
+/// Newest bytes kept when the detached daemon output file is trimmed.
+const DAEMON_OUT_KEEP_BYTES: usize = 1024 * 1024;
 /// A routed command may wait for a model response for a long time.
 const CONTROL_READ_TIMEOUT: Duration = Duration::from_secs(3600);
 const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -889,11 +893,44 @@ async fn start_background(args: &[String]) -> Result<(), String> {
     }
 }
 
+/// Keeps the detached daemon output bounded by dropping its oldest records
+/// before the new daemon reopens the file. Best effort: a failed trim must
+/// never block daemon startup.
+fn trim_daemon_output(path: &Path) {
+    let Ok(metadata) = fs::metadata(path) else {
+        return;
+    };
+    if !metadata.is_file() || metadata.len() <= DAEMON_OUT_MAX_BYTES {
+        return;
+    }
+    let Ok(content) = fs::read(path) else {
+        return;
+    };
+    // Raw process output may not be UTF-8: cut on byte boundaries only,
+    // resuming at the next line start so every kept record stays whole.
+    let mut cut = content.len().saturating_sub(DAEMON_OUT_KEEP_BYTES);
+    while cut < content.len() && (content[cut] & 0xC0) == 0x80 {
+        cut += 1;
+    }
+    while cut < content.len() && content[cut] != b'\n' {
+        cut += 1;
+    }
+    let kept = if cut < content.len() {
+        &content[cut + 1..]
+    } else {
+        &content[content.len()..]
+    };
+    let mut trimmed = b"daemon output trimmed; oldest records evicted\n".to_vec();
+    trimmed.extend_from_slice(kept);
+    let _ = fs::write(path, &trimmed);
+}
+
 fn spawn_detached(args: &[String], paths: &DaemonPaths) -> Result<u32, String> {
     use std::os::unix::process::CommandExt;
     if let Some(parent) = paths.output_log_path.parent() {
         ensure_private_dir(parent)?;
     }
+    trim_daemon_output(&paths.output_log_path);
     let executable =
         std::env::current_exe().map_err(|error| format!("cannot resolve operit2: {error}"))?;
     let mut options = OpenOptions::new();
@@ -1126,6 +1163,43 @@ mod tests {
         drop(first);
         let third = OwnerGuard::acquire_at(paths, "test").expect("lock must be released");
         drop(third);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn daemon_output_is_trimmed_to_newest_records() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let root = std::env::temp_dir().join(format!(
+            "operit-daemon-trim-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("daemon.out");
+        let line = format!("{}x\n", "y".repeat(4096));
+        let records = (DAEMON_OUT_MAX_BYTES / 4096 as u64 + 64) as usize;
+        let body: String = (0..records).map(|index| format!("record-{index} {line}")).collect();
+        fs::write(&path, &body).unwrap();
+
+        trim_daemon_output(&path);
+        let trimmed = fs::read(&path).unwrap();
+        assert!(
+            (trimmed.len() as u64) <= DAEMON_OUT_MAX_BYTES,
+            "trimmed output must stay under the cap"
+        );
+        assert!(trimmed.starts_with(b"daemon output trimmed; oldest records evicted\n"));
+        let text = String::from_utf8_lossy(&trimmed);
+        assert!(!text.contains("record-0 "), "oldest records must be evicted");
+        assert!(
+            text.contains(&format!("record-{} ", records - 1)),
+            "newest records must survive"
+        );
+
+        let before = fs::read(&path).unwrap();
+        trim_daemon_output(&path);
+        assert_eq!(fs::read(&path).unwrap(), before, "must be a no-op under the cap");
         let _ = fs::remove_dir_all(root);
     }
 }
