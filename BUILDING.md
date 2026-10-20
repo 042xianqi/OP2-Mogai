@@ -186,6 +186,26 @@ The iOS workflow runs on `macos-15` and records the installed Xcode SDK,
 Clang, Meson, and Ninja versions in its cache key. Keep those runner and source
 pins synchronized with `.github/workflows/ios-flutter-build.yml` and
 `.github/workflows/ios-app-package-build.yml`.
+
+## Generated Plugin Assets
+
+`core/crates/runtime/application/assets/plugins/{buildin,external}` is generated
+at build time and gitignored. `operit-runtime`'s `build.rs` embeds those files
+into every binary, so they must be regenerated from `plugins/packages/` before
+compiling:
+
+```bash
+python3 plugins/tools/sync_plugin_packages.py --source runtime --no-hot-reload
+```
+
+Flutter platform builds run this automatically through their native build hooks,
+and the CLI build scripts (`build_cli_*.py`, `tools/release/build_release.py`)
+run it before `cargo build`. Running `cargo build --release` by hand without that
+step fails in `build.rs` when assets are missing or stale; debug `cargo check`
+only warns. CLI packaging also rejects a binary that omits any generated asset
+name. Never copy this directory between machines: a stale snapshot builds a
+binary whose plugin set silently differs from the source tree.
+
 ## Built-In Workflow Plugin
 
 The workflow plugin is a pnpm project. Its `package.json` pins the package

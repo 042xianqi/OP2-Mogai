@@ -27,6 +27,17 @@ use `universal` and `.zip`; macOS CLI packages use their target architecture and
 - `check_build_environment.py`: shared local/CI environment checker.
 - `common.py`, `cli_common.py`, and `appstore_connect_common.py`: shared helpers.
 
+## Generated plugin assets
+
+Every App/CLI build embeds the ToolPkg assets generated from `plugins/packages/`
+into `core/crates/runtime/application/assets/plugins/{buildin,external}`.
+`prepare_plugin_assets()` in `common.py` runs
+`plugins/tools/sync_plugin_packages.py --source runtime --no-hot-reload`; the
+CLI entry points call it before `cargo build`, and Flutter builds trigger it
+from their native hooks. `verify_cli_plugin_assets()` rejects a packaged CLI
+whose binary omits any generated asset name. Do not commit or reuse stale
+asset directories across machines.
+
 ## Apple release helpers
 
 ```bash
