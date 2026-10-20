@@ -4543,22 +4543,6 @@ function createSelectionApplication(access) {
     else next();
   }
   return {
-    /** Serializes navigation with explicit selection applications and propagates exact theme owner failures. */
-    applyTheme(readReferences) {
-      return __async(this, null, function* () {
-        yield acquire();
-        try {
-          const references = yield readReferences();
-          if (references === null) return;
-          const checked = copyReferences(references);
-          if (checked.themeConfigId === null) return;
-          yield access.validateTheme(checked.themeConfigId);
-          yield access.applyTheme(checked.themeConfigId);
-        } finally {
-          release();
-        }
-      });
-    },
     /** Performs all explicit-reference validation before committing the selection, then awaits every requested apply. */
     commit(prepareAndCommit) {
       return __async(this, null, function* () {
@@ -4592,6 +4576,7 @@ function isSelectionOperation(operation) {
   switch (operation) {
     case "character.setActive":
     case "group.setActive":
+    case "activePrompt.setModel":
     case "activePrompt.setCard":
     case "activePrompt.setGroup":
     case "activePrompt.activateForChat":
@@ -4618,6 +4603,9 @@ function editorSelection(request) {
 function domainSelection(operation, input, repository) {
   return __async(this, null, function* () {
     switch (operation) {
+      case "activePrompt.setModel":
+        parseDomainPayload("activePrompt.setModel", input);
+        return "model:chat";
       case "character.setActive":
       case "activePrompt.setCard":
         return "card:" + parseDomainPayload("activePrompt.setCard", input).id;
@@ -4807,17 +4795,25 @@ function createCharacterCardsService(owner2, configurations = independentConfigu
     );
   }
   const service = {
-    /** Reads the real chat binding inside the shared application queue before applying its exact theme reference. */
-    applyChatTheme(chatId) {
-      requireId(chatId, "chat id");
-      return application.applyTheme(
-        /** Reads only persisted role references; an unbound chat has no theme application to request. */
-        () => __async(null, null, function* () {
-          const binding = yield findChatBinding(chatId);
-          if (binding === null) return null;
-          return readSelectionReferences(owner2, binding.selection);
-        })
-      );
+    /** Applies the exact persisted actor through the same validated operations used by explicit selection. */
+    activateChatSelection(chatId) {
+      return __async(this, null, function* () {
+        requireId(chatId, "chat id");
+        const binding = yield findChatBinding(chatId);
+        if (binding === null) return;
+        const selection = parseChatSelection(binding.selection);
+        switch (selection.kind) {
+          case "card":
+            yield service.dispatchDomain("activePrompt.setCard", { id: selection.id });
+            break;
+          case "group":
+            yield service.dispatchDomain("activePrompt.setGroup", { id: selection.id });
+            break;
+          case "model":
+            yield service.dispatchDomain("activePrompt.setModel", {});
+            break;
+        }
+      });
     },
     /** Runs the private job scheduler without constructing another store or business service. */
     runMemoryJobs: () => jobs.tick(),
@@ -10473,7 +10469,7 @@ function onChatViewTheme(event) {
   return __async(this, null, function* () {
     if (event.eventName !== "view_opened") return;
     const chatId = requireId(event.eventPayload.chatId, "opened chat id");
-    yield (yield getService()).applyChatTheme(chatId);
+    yield (yield getService()).activateChatSelection(chatId);
   });
 }
 function registerChatViewTheme() {
