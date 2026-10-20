@@ -533,6 +533,8 @@ runtime/exports/
 workspaces/
 ```
 
+日志保留策略：`runtime/logs/` 下的 `operit.log` 与 `toolpkg.log` 由 `AppLogger` 写入，单文件上限 4 MiB，超限后淘汰最早的记录并保留最新约 2 MiB（淘汰处留一行标记）。
+
 路径约定：
 
 ```text
