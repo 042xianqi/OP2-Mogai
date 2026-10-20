@@ -65,6 +65,7 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
   Object? _mcpTabToken;
   Widget? _mcpTabWidget;
   bool _loading = true;
+  bool _actionsExpanded = false;
   bool _searchFiltering = false;
   String _searchInput = '';
   String _searchQuery = '';
@@ -667,9 +668,10 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
     );
   }
 
-  /// Builds package management actions, including the shared environment editor.
+  /// Builds the expandable action button used across the package tabs.
   Widget _buildFloatingActions(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
+    final colorScheme = Theme.of(context).colorScheme;
     final marketTab = switch (_selectedTab) {
       PackageTab.plugins => MarketHomeTab.all,
       PackageTab.packages => MarketHomeTab.all,
@@ -682,36 +684,90 @@ class _PackageManagerScreenState extends State<PackageManagerScreen>
       PackageTab.skills => '打开技能市场',
       PackageTab.mcp => '打开 MCP 市场',
     };
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        FloatingActionButton.small(
-          heroTag: null,
-          tooltip: l10n.packageConfigureEnvironmentVariables,
-          backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
-          foregroundColor: Theme.of(context).colorScheme.onSecondaryContainer,
-          onPressed: () => PackageEnvironmentVariablesDialog.show(
-            context: context,
-            clients: widget.clients,
+    return TapRegion(
+      onTapOutside: (_) => _setActionsExpanded(false),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: <Widget>[
+          AnimatedSize(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.bottomRight,
+            clipBehavior: Clip.none,
+            child: _actionsExpanded
+                ? Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: <Widget>[
+                        FloatingActionButton.small(
+                          heroTag: null,
+                          tooltip: l10n.packageConfigureEnvironmentVariables,
+                          backgroundColor: colorScheme.secondaryContainer,
+                          foregroundColor: colorScheme.onSecondaryContainer,
+                          onPressed: () {
+                            _setActionsExpanded(false);
+                            PackageEnvironmentVariablesDialog.show(
+                              context: context,
+                              clients: widget.clients,
+                            );
+                          },
+                          child: const Icon(Icons.settings_outlined),
+                        ),
+                        const SizedBox(height: 12),
+                        FloatingActionButton.small(
+                          heroTag: null,
+                          tooltip: marketTooltip,
+                          backgroundColor: colorScheme.secondaryContainer,
+                          foregroundColor: colorScheme.onSecondaryContainer,
+                          onPressed: () {
+                            _setActionsExpanded(false);
+                            _openMarket(marketTab);
+                          },
+                          child: const Icon(Icons.storefront_outlined),
+                        ),
+                        const SizedBox(height: 12),
+                        FloatingActionButton.small(
+                          heroTag: null,
+                          tooltip: _addActionTooltip,
+                          backgroundColor: colorScheme.secondaryContainer,
+                          foregroundColor: colorScheme.onSecondaryContainer,
+                          onPressed: () {
+                            _setActionsExpanded(false);
+                            _handleAddAction();
+                          },
+                          child: const Icon(Icons.add),
+                        ),
+                      ],
+                    ),
+                  )
+                : const SizedBox.shrink(),
           ),
-          child: const Icon(Icons.settings_outlined),
-        ),
-        const SizedBox(height: 12),
-        FloatingActionButton(
-          heroTag: null,
-          onPressed: () => _openMarket(marketTab),
-          tooltip: marketTooltip,
-          child: const Icon(Icons.store_outlined),
-        ),
-        const SizedBox(height: 12),
-        FloatingActionButton(
-          heroTag: null,
-          onPressed: _handleAddAction,
-          tooltip: _addActionTooltip,
-          child: const Icon(Icons.add),
-        ),
-      ],
+          FloatingActionButton(
+            heroTag: null,
+            tooltip: _actionsExpanded ? '收起操作' : '更多操作',
+            onPressed: () => _setActionsExpanded(!_actionsExpanded),
+            child: AnimatedRotation(
+              turns: _actionsExpanded ? 0.25 : 0,
+              duration: const Duration(milliseconds: 180),
+              child: const Icon(Icons.more_horiz),
+            ),
+          ),
+        ],
+      ),
     );
+  }
+
+  /// Updates the expanded state of the floating action menu.
+  void _setActionsExpanded(bool expanded) {
+    if (_actionsExpanded == expanded || !mounted) {
+      return;
+    }
+    setState(() {
+      _actionsExpanded = expanded;
+    });
   }
 
   String get _searchHintText {
