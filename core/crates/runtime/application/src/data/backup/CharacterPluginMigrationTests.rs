@@ -175,6 +175,117 @@ fn imports_pages_and_reopens_without_replacing_completed_data() {
     );
 }
 
+/// Builds a legacy group with explicit identities and unchanged source ordering metadata.
+fn group(id: &str, members: &[(&str, i32)]) -> CharacterGroupCard {
+    CharacterGroupCard {
+        id: id.to_string(),
+        name: "Original group".to_string(),
+        description: "Retained description".to_string(),
+        members: members
+            .iter()
+            .map(|(id, order)| GroupMemberConfig {
+                characterCardId: id.to_string(),
+                orderIndex: *order,
+            })
+            .collect(),
+        createdAt: 100,
+        updatedAt: 200,
+    }
+}
+
+/// Repairs only missing member identities and leaves the same snapshot unchanged on a second pass.
+#[test]
+fn removes_missing_group_members_without_changing_surviving_records() {
+    let mut source = data();
+    source.groups = vec![
+        group("mixed", &[("deleted", 0), ("legacy", 7), ("also-deleted", 9)]),
+        group("valid", &[("legacy", 3)]),
+    ];
+    let valid = source.groups[1].clone();
+    let mut expected = source.groups[0].clone();
+    expected.members = vec![expected.members[1].clone()];
+    let dropped = dropUnresolvableRecords(&mut source);
+    assert_eq!(dropped.groupMembers, 2);
+    assert_eq!(dropped.relationships, 0);
+    assert_eq!(dropped.documentChunks, 0);
+    assert_eq!(source.groups, vec![expected, valid]);
+    assert_eq!(dropUnresolvableRecords(&mut source), DroppedLegacyRecords::default());
+    validateMigrationData(&source).unwrap();
+}
+
+/// Imports both legacy formats without rebinding a deleted role to a same-name replacement.
+#[test]
+fn imports_groups_with_deleted_characters_from_both_legacy_sources() {
+    for source_id in ["operit2-v27", "operit1:test:100"] {
+        let fixture = Fixture::new();
+        let mut source = data();
+        source.cards[0].name = "Viya".to_string();
+        source.groups = vec![
+            group("012f6aeb", &[("c6292a6b-b552-4d83-8491-e9f7381b24e8", 0), ("legacy", 7)]),
+            group("fc7d15e6", &[("legacy", 3)]),
+        ];
+        source.active = Some(json!({"CharacterGroup":{"id":"012f6aeb"}}));
+        let expected_active = source.active.clone().unwrap();
+        let mut expected_groups = source.groups.clone();
+        expected_groups[0].members.remove(0);
+        fixture.writer().import(source_id, source).unwrap();
+        let reopened = CharacterPluginWriter::open(fixture.host.clone(), fixture.host.clone()).unwrap();
+        for expected in expected_groups {
+            let mut value = serde_json::to_value(&expected).unwrap();
+            value["themeConfigId"] = Value::Null;
+            assert_eq!(reopened.get("groups", &expected.id).unwrap().unwrap()["value"], value);
+        }
+        assert_eq!(reopened.list("cards").unwrap().len(), 1);
+        assert_eq!(reopened.get("cards", "legacy").unwrap().unwrap()["value"]["name"], "Viya");
+        let metadata = reopened.get("meta", "state").unwrap().unwrap()["value"].clone();
+        assert_eq!(metadata["active"], expected_active);
+        assert_eq!(metadata["migrationStatus"], "complete");
+        assert!(reopened.get("imports", source_id).unwrap().is_some());
+        reopened.import(source_id, CharacterMigrationData::default()).unwrap();
+        assert_eq!(reopened.list("groups").unwrap().len(), 2);
+        assert_eq!(reopened.get("groups", "012f6aeb").unwrap().unwrap()["value"]["members"],
+            json!([{"characterCardId":"legacy","orderIndex":7}]));
+    }
+}
+
+/// Retains a group's identity and active selection even when every former member was deleted.
+#[test]
+fn keeps_active_group_after_removing_all_deleted_members() {
+    let fixture = Fixture::new();
+    let mut source = data();
+    source.groups.push(group("empty", &[("deleted", 0)]));
+    source.active = Some(json!({"CharacterGroup":{"id":"empty"}}));
+    let mut expected = serde_json::to_value(&source.groups[0]).unwrap();
+    expected["members"] = json!([]);
+    expected["themeConfigId"] = Value::Null;
+    fixture.writer().import("operit2-v27", source).unwrap();
+    assert_eq!(fixture.writer().get("groups", "empty").unwrap().unwrap()["value"], expected);
+    assert_eq!(fixture.writer().get("meta", "state").unwrap().unwrap()["value"]["active"],
+        json!({"CharacterGroup":{"id":"empty"}}));
+}
+
+/// Keeps malformed identities and unrelated reference errors subject to validation before publication.
+#[test]
+fn group_reference_repair_does_not_hide_invalid_source_data() {
+    for malformed_member in [true, false] {
+        let fixture = Fixture::new();
+        let mut source = data();
+        let member_id = if malformed_member { "" } else { "deleted" };
+        source.groups.push(group("group", &[(member_id, 0)]));
+        let expected_error = if malformed_member {
+            "Imported group character is missing"
+        } else {
+            source.cards[0].attachedTagIds.push("absent".to_string());
+            "Missing imported tag: absent"
+        };
+        assert_eq!(fixture.writer().import("operit2-v27", source).unwrap_err(), expected_error);
+        assert!(fixture.writer().get("meta", "state").unwrap().is_none());
+        assert!(fixture.writer().get("imports", "operit2-v27").unwrap().is_none());
+        assert!(fixture.writer().list("groups").unwrap().is_empty());
+        assert!(fixture.writer().list("cards").unwrap().is_empty());
+    }
+}
+
 /// Keeps resolvable relationships and drops references to a legacy memory that was deleted without cleanup.
 #[test]
 fn drops_relationships_whose_legacy_target_was_deleted() {
@@ -1276,4 +1387,38 @@ fn restored_legacy_theme_labels_do_not_occupy_new_theme_identities() {
     let committed = manager.list().unwrap();
     fixture.writer().migrateCoreThemes().unwrap();
     assert_eq!(manager.list().unwrap(), committed);
+}
+
+/// Converts the documented fixed-mode alias and preserves explicit provider/model identities in persisted records.
+#[test]
+fn migrates_fixed_model_modes_without_erasing_provider_bindings() {
+    for mode in ["FIXED_CONFIG", "FIXED_MODEL"] {
+        let fixture = Fixture::new();
+        let mut source = data();
+        source.cards[0].chatModelBindingMode = mode.to_string();
+        source.cards[0].chatProviderId = Some("original-provider".to_string());
+        source.cards[0].chatModelId = Some("original-model".to_string());
+        fixture.writer().import("fixed-model-binding", source).unwrap();
+        let entry = fixture.writer().get("cards", "legacy").unwrap().unwrap();
+        assert_eq!(entry["value"]["chatModelBindingMode"], "FIXED_MODEL");
+        assert_eq!(entry["value"]["chatProviderId"], "original-provider");
+        assert_eq!(entry["value"]["chatModelId"], "original-model");
+        assert_eq!(entry["value"]["characterSetting"], "setting");
+    }
+}
+
+/// Retains incomplete and unknown source selections so the installed plugin can offer explicit rebinding.
+#[test]
+fn retains_unresolved_model_bindings_without_selecting_a_replacement() {
+    for mode in ["UNRECOGNIZED_MODE", "FIXED_CONFIG", "FIXED_MODEL"] {
+        let fixture = Fixture::new();
+        let mut source = data();
+        source.cards[0].chatModelBindingMode = mode.to_string();
+        fixture.writer().import("unresolved-model-binding", source).unwrap();
+        let entry = fixture.writer().get("cards", "legacy").unwrap().unwrap();
+        let expected = if mode == "FIXED_CONFIG" { "FIXED_MODEL" } else { mode };
+        assert_eq!(entry["value"]["chatModelBindingMode"], expected);
+        assert_eq!(entry["value"]["chatProviderId"], Value::Null);
+        assert_eq!(entry["value"]["chatModelId"], Value::Null);
+    }
 }

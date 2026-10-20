@@ -278,13 +278,16 @@ impl CharacterPluginWriter {
         if work.data().map_err(|error| error.to_string())?.get(&stringPreferencesKey("plan")).is_some() {
             return Err("Character legacy import is incomplete in TypeScript".into());
         }
+        for card in &mut data.cards {
+            migrateCharacterModelBinding(card);
+        }
         let dropped = dropUnresolvableRecords(&mut data);
         if dropped != DroppedLegacyRecords::default() {
             AppLogger::w(
                 "CharacterPluginMigration",
                 &format!(
-                    "source={source} dropped {} relationships and {} document chunks whose legacy owner was deleted without a reference cleanup",
-                    dropped.relationships, dropped.documentChunks
+                    "source={source} dropped {} group members, {} relationships and {} document chunks whose legacy owner was deleted without a reference cleanup",
+                    dropped.groupMembers, dropped.relationships, dropped.documentChunks
                 ),
             );
         }
@@ -323,8 +326,6 @@ impl CharacterPluginWriter {
             let mut value = serde_json::to_value(&card).map_err(|error| error.to_string())?;
             value.as_object_mut().ok_or("Character must be an object")?.remove("isDefault");
             value["themeConfigId"] = Value::Null;
-            // The legacy record predates the provider link; the plugin derives it from the model binding.
-            value["chatProviderId"] = Value::Null;
             rows.push(("cards".to_string(), card.id, value));
         }
         for group in data.groups {
@@ -511,19 +512,44 @@ fn validateResourcePath(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Counts the legacy records an import dropped because their owning record is absent from the same snapshot.
+/// Counts legacy references removed because their target is absent from the same snapshot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DroppedLegacyRecords {
+    pub groupMembers: usize,
     pub relationships: usize,
     pub documentChunks: usize,
 }
 
-/// Drops relationships and document chunks whose owning record is absent from the same snapshot.
-/// The retired Core deleted memories without clearing their references, and the plugin storage rejects
-/// any record with an unresolvable endpoint, so only resolvable records can be imported.
+/// Removes group members, relationships and document chunks whose target is absent from the snapshot.
+/// The retired Core deleted characters and memories without clearing their references.
+/// Group identities, retained member order indices and timestamps remain unchanged.
 /// Records with malformed fields stay for validateMigrationData to report precisely.
 pub fn dropUnresolvableRecords(data: &mut CharacterMigrationData) -> DroppedLegacyRecords {
     let mut dropped = DroppedLegacyRecords::default();
+    let cards = data
+        .cards
+        .iter()
+        .map(|card| card.id.as_str())
+        .collect::<BTreeSet<_>>();
+    for group in &mut data.groups {
+        let group_id = &group.id;
+        group.members.retain(|member| {
+            if member.characterCardId.trim().is_empty()
+                || cards.contains(member.characterCardId.as_str())
+            {
+                return true;
+            }
+            AppLogger::w(
+                "CharacterPluginMigration",
+                &format!(
+                    "group={group_id} removed reference to missing legacy characterCardId={}",
+                    member.characterCardId
+                ),
+            );
+            dropped.groupMembers += 1;
+            false
+        });
+    }
     let mut memories = BTreeSet::new();
     let mut documents = BTreeSet::new();
     for (collection, _, envelope) in &data.records {
@@ -579,7 +605,14 @@ pub fn dropUnresolvableRecords(data: &mut CharacterMigrationData) -> DroppedLega
     dropped
 }
 
-/// Checks domain references before any migration write or source deletion.
+/// Converts the documented legacy fixed mode while retaining unresolved selections for user rebinding.
+fn migrateCharacterModelBinding(card: &mut CharacterCard) {
+    if card.chatModelBindingMode == "FIXED_CONFIG" {
+        card.chatModelBindingMode = "FIXED_MODEL".to_string();
+    }
+}
+
+/// Validates imported structural references without rejecting repairable model selections.
 fn validateMigrationData(data: &CharacterMigrationData) -> Result<(), String> {
     let cards = data
         .cards

@@ -289,3 +289,19 @@ test("malformed persisted migration work fails before filesystem or record chang
   disk.clearCalls(); await assert.rejects(open(disk, chat), /cursor exceeds its work/);
   assert.equal(disk.calls.some(call => call.method === "storage.commit" || call.method === "deleteFile"), false);
 });
+
+/** Completes pending released-data adoption while preserving an unresolved binding for the installed editor. */
+test("pending released-data adoption is not blocked by an unknown model binding", async t => {
+  const { disk, chat } = await seed(t);
+  disk.storage.inspectPreferences("cards", values => Object.assign(values.record_operit, {
+    chatModelBindingMode: "UNRECOGNIZED_MODE", chatProviderId: null, chatModelId: null,
+  }));
+  await open(disk, chat);
+  const state = plain(disk.readState()), card = state.cards.find(value => value.name === "Operit");
+  assert.match(card.id, uuidPattern);
+  assert.equal(card.chatModelBindingMode, "UNRECOGNIZED_MODE");
+  assert.equal(card.chatProviderId, null); assert.equal(card.chatModelId, null);
+  assert.equal(metadata(disk).legacyImportPending, undefined);
+  const before = disk.stateBytes(); await open(disk, chat);
+  assert.deepEqual(disk.stateBytes(), before);
+});

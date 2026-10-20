@@ -179,3 +179,43 @@ test("configuration reads: the final privacy check observes a flag changed durin
   assert.equal(result.profile.userPreferencesText, "");
   assert.equal(result.participants[0].userPreferencesText, "");
 });
+
+/** Resolves the exact legacy fixed binding even when the request's global model cannot be used. */
+test("legacy FIXED_CONFIG executes its stored provider and model without rewriting the card", async t => {
+  const h = await environment(t), model = h.directories.models[0];
+  h.disk.storage.inspectPreferences("cards", values => Object.assign(values.record_default, {
+    chatModelBindingMode: "FIXED_CONFIG", chatProviderId: model.providerId, chatModelId: model.modelId,
+  }));
+  const before = h.disk.stateBytes();
+  const result = plain(await h.resolve(request("card:default", { defaultModelBinding: { providerId: "unused-global-provider", modelId: "unused-global-model" } })));
+  assert.deepEqual(result.profile.modelBinding, { providerId: model.providerId, modelId: model.modelId });
+  assert.deepEqual(h.disk.stateBytes(), before);
+});
+
+/** Keeps damaged selections local to their execution while allowing content edits and an explicit replacement binding. */
+test("invalid installed bindings allow ordinary edits and explicit rebinding through the real service", async t => {
+  for (const binding of [
+    { chatModelBindingMode: "UNRECOGNIZED_MODE", chatModelId: "old-model", chatProviderId: "old-provider" },
+    { chatModelBindingMode: "FIXED_CONFIG", chatModelId: "old-model", chatProviderId: null },
+    { chatModelBindingMode: "FIXED_MODEL", chatModelId: null, chatProviderId: null },
+  ]) {
+    const h = await environment(t), model = h.directories.models[0];
+    h.disk.storage.inspectPreferences("cards", values => Object.assign(values.record_default, binding));
+    const saved = await h.service.dispatchDomain("character.update", { id: "default", changes: { description: "Content remains editable" } });
+    assert.equal(saved.description, "Content remains editable");
+    for (const [key, value] of Object.entries(binding)) assert.equal(saved[key], value);
+    const other = await h.service.dispatchDomain("character.create", { values: { name: "Working unaffected role" } });
+    assert.equal((await h.resolve(request("card:" + other.id))).profile.id, other.id);
+    const failure = binding.chatModelBindingMode === "UNRECOGNIZED_MODE" ? /模型绑定模式无效/ : /profile.fixedModelId|Fixed model provider must be explicitly selected/;
+    await assert.rejects(h.resolve(request("card:default")), failure);
+    const before = h.disk.stateBytes();
+    await assert.rejects(h.service.dispatchDomain("character.update", { id: "default", changes: { chatModelBindingMode: "FIXED_MODEL", chatProviderId: "explicit-provider", chatModelId: null } }), /固定聊天模型/);
+    assert.deepEqual(h.disk.stateBytes(), before);
+    const repaired = await h.service.dispatchDomain("character.update", { id: "default", changes: {
+      chatModelBindingMode: "FIXED_MODEL", chatProviderId: model.providerId, chatModelId: model.modelId,
+    } });
+    assert.equal(repaired.chatModelBindingMode, "FIXED_MODEL");
+    const result = plain(await h.resolve(request("card:default")));
+    assert.deepEqual(result.profile.modelBinding, { providerId: model.providerId, modelId: model.modelId });
+  }
+});

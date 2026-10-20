@@ -166,6 +166,14 @@ var import_index_ui7 = __toESM(require("./ui/selection/index.ui.js"));
 var import_index_ui8 = __toESM(require("./ui/chat-input-menu/index.ui.js"));
 var import_index_ui9 = __toESM(require("./ui/group-execution/index.ui.js"));
 
+// src/model-binding.ts
+function characterModelBindingMode(mode) {
+  return mode === "FIXED_CONFIG" ? "FIXED_MODEL" : mode;
+}
+function sameCharacterModelBinding(left, right) {
+  return left.chatModelBindingMode === right.chatModelBindingMode && left.chatProviderId === right.chatProviderId && left.chatModelId === right.chatModelId;
+}
+
 // src/identity.ts
 function uuid() {
   const bytes = [];
@@ -1060,7 +1068,7 @@ function chatParticipant(card, request, service) {
     nonblank(card.name, "profile.name");
     const models = yield service.listModels();
     let modelBinding;
-    switch (card.chatModelBindingMode) {
+    switch (characterModelBindingMode(card.chatModelBindingMode)) {
       case "FOLLOW_GLOBAL":
         modelBinding = { ...request.defaultModelBinding };
         break;
@@ -1078,7 +1086,7 @@ function chatParticipant(card, request, service) {
         break;
       }
       default:
-        throw new Error("Invalid model binding mode: " + card.chatModelBindingMode);
+        throw new Error("\u89D2\u8272\u5361\u201C" + card.name + "\u201D\u7684\u6A21\u578B\u7ED1\u5B9A\u6A21\u5F0F\u65E0\u6548\uFF0C\u8BF7\u5728\u89D2\u8272\u5361\u8BBE\u7F6E\u4E2D\u91CD\u65B0\u7ED1\u5B9A\u6A21\u578B\uFF1A" + card.chatModelBindingMode);
     }
     const resolvedModels = models.filter(
       /** Requires the actual configured provider/model pair. */
@@ -1733,8 +1741,6 @@ function assertCharacterState(value) {
     assertCard(card);
     requireId(card.id, "card id");
     for (const id2 of card.attachedTagIds) if (!tagIds.has(id2)) throw new Error("Missing attached tag: " + id2);
-    if (card.chatModelBindingMode !== "FOLLOW_GLOBAL" && card.chatModelBindingMode !== "FIXED_MODEL") throw new Error("Invalid model binding mode");
-    if (card.chatModelBindingMode === "FIXED_MODEL") requireId(card.chatModelId, "fixed model id");
     if (card.memoryBindingMode !== "CHARACTER" && card.memoryBindingMode !== "SHARED") throw new Error("Invalid memory binding mode");
     if (card.memoryBindingMode === "SHARED" && !storeIds.has(requireId(card.sharedMemoryId, "shared memory id"))) throw new Error("Missing primary shared library");
     for (const mount2 of card.sharedMemoryMounts) if (!storeIds.has(mount2.sharedMemoryId)) throw new Error("Missing shared memory mount: " + mount2.sharedMemoryId);
@@ -5081,15 +5087,18 @@ function commitTagChanges(plan, host) {
     return normalizeNames(ids);
   });
 }
-function normalizedCharacter(card) {
-  if (card.chatModelBindingMode !== "FOLLOW_GLOBAL" && card.chatModelBindingMode !== "FIXED_MODEL")
-    throw new Error("\u804A\u5929\u6A21\u578B\u7ED1\u5B9A\u6A21\u5F0F\u65E0\u6548");
-  if (card.memoryBindingMode !== "CHARACTER" && card.memoryBindingMode !== "SHARED")
-    throw new Error("\u8BB0\u5FC6\u7ED1\u5B9A\u6A21\u5F0F\u65E0\u6548");
-  if (card.chatModelBindingMode === "FIXED_MODEL") {
+function assertCharacterModelBinding(card) {
+  const mode = characterModelBindingMode(card.chatModelBindingMode);
+  if (mode !== "FOLLOW_GLOBAL" && mode !== "FIXED_MODEL")
+    throw new Error("\u804A\u5929\u6A21\u578B\u7ED1\u5B9A\u6A21\u5F0F\u65E0\u6548\uFF0C\u8BF7\u91CD\u65B0\u7ED1\u5B9A\u6A21\u578B");
+  if (mode === "FIXED_MODEL") {
     requireId(card.chatProviderId, "\u56FA\u5B9A\u804A\u5929\u6A21\u578B\u63D0\u4F9B\u5546");
     requireId(card.chatModelId, "\u56FA\u5B9A\u804A\u5929\u6A21\u578B");
   }
+}
+function normalizedCharacter(card) {
+  if (card.memoryBindingMode !== "CHARACTER" && card.memoryBindingMode !== "SHARED")
+    throw new Error("\u8BB0\u5FC6\u7ED1\u5B9A\u6A21\u5F0F\u65E0\u6548");
   if (card.memoryBindingMode === "SHARED")
     requireId(card.sharedMemoryId, "\u5171\u4EAB\u8BB0\u5FC6\u5E93");
   if (card.ttsConfigId !== null) requireId(card.ttsConfigId, "TTS \u914D\u7F6E");
@@ -5133,11 +5142,13 @@ function saveCharacter(card, create, tagChanges, host) {
     assertBoolean(create, "\u89D2\u8272\u65B0\u5EFA\u6807\u8BC6");
     let value = normalizedCharacter(card);
     if (create) {
+      assertCharacterModelBinding(value);
       value = { ...value, id: "", createdAt: 0, updatedAt: 0 };
     } else {
       const id2 = requireId(value.id, "\u89D2\u8272\u5361\u6807\u8BC6");
       const original = yield host.getCharacter(id2);
       assertCard(original);
+      if (!sameCharacterModelBinding(original, value)) assertCharacterModelBinding(value);
       value = {
         ...value,
         id: original.id,

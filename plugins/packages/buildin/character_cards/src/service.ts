@@ -1,3 +1,4 @@
+import { characterModelBindingMode, sameCharacterModelBinding } from "./model-binding";
 import type { DomainInput, DomainOperation, DomainOutput } from "./api";
 import { executeDomain, resolveConfiguration } from "./operations";
 import { parseDomainPayload } from "./domain";
@@ -492,22 +493,24 @@ async function commitTagChanges(
   return normalizeNames(ids);
 }
 
-/** Normalizes every editable character field while retaining complete binding and policy records. */
+/** Validates an explicitly created or changed model binding before publishing it. */
+function assertCharacterModelBinding(card: Card): void {
+  const mode = characterModelBindingMode(card.chatModelBindingMode);
+  if (mode !== "FOLLOW_GLOBAL" && mode !== "FIXED_MODEL")
+    throw new Error("聊天模型绑定模式无效，请重新绑定模型");
+  if (mode === "FIXED_MODEL") {
+    requireId(card.chatProviderId, "固定聊天模型提供商");
+    requireId(card.chatModelId, "固定聊天模型");
+  }
+}
+
+/** Normalizes editable content while preserving the stored model selection for unrelated edits. */
 function normalizedCharacter(card: Card): Card {
-  if (
-    card.chatModelBindingMode !== "FOLLOW_GLOBAL" &&
-    card.chatModelBindingMode !== "FIXED_MODEL"
-  )
-    throw new Error("聊天模型绑定模式无效");
   if (
     card.memoryBindingMode !== "CHARACTER" &&
     card.memoryBindingMode !== "SHARED"
   )
     throw new Error("记忆绑定模式无效");
-  if (card.chatModelBindingMode === "FIXED_MODEL") {
-    requireId(card.chatProviderId, "固定聊天模型提供商");
-    requireId(card.chatModelId, "固定聊天模型");
-  }
   if (card.memoryBindingMode === "SHARED")
     requireId(card.sharedMemoryId, "共享记忆库");
   if (card.ttsConfigId !== null) requireId(card.ttsConfigId, "TTS 配置");
@@ -563,11 +566,13 @@ export async function saveCharacter(
   assertBoolean(create, "角色新建标识");
   let value = normalizedCharacter(card);
   if (create) {
+    assertCharacterModelBinding(value);
     value = { ...value, id: "", createdAt: 0, updatedAt: 0 };
   } else {
     const id = requireId(value.id, "角色卡标识");
     const original = await host.getCharacter(id);
     assertCard(original);
+    if (!sameCharacterModelBinding(original, value)) assertCharacterModelBinding(value);
     value = {
       ...value,
       id: original.id,

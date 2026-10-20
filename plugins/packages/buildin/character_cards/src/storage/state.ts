@@ -58,8 +58,7 @@ export function assertCharacterState(value: unknown): asserts value is Character
     assertCard(card);
     requireId(card.id, "card id");
     for (const id of card.attachedTagIds) if (!tagIds.has(id)) throw new Error("Missing attached tag: " + id);
-    if (card.chatModelBindingMode !== "FOLLOW_GLOBAL" && card.chatModelBindingMode !== "FIXED_MODEL") throw new Error("Invalid model binding mode");
-    if (card.chatModelBindingMode === "FIXED_MODEL") requireId(card.chatModelId, "fixed model id");
+    // Model binding validity belongs to explicit binding writes and chat execution, so damaged bindings remain editable.
     if (card.memoryBindingMode !== "CHARACTER" && card.memoryBindingMode !== "SHARED") throw new Error("Invalid memory binding mode");
     if (card.memoryBindingMode === "SHARED" && !storeIds.has(requireId(card.sharedMemoryId, "shared memory id"))) throw new Error("Missing primary shared library");
     for (const mount of card.sharedMemoryMounts) if (!storeIds.has(mount.sharedMemoryId)) throw new Error("Missing shared memory mount: " + mount.sharedMemoryId);
