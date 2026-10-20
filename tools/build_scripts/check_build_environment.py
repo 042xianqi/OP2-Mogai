@@ -156,6 +156,7 @@ def check_common_tools(products: str) -> list[CheckResult]:
         check_command("dart", ["--version"]),
         check_command("node", ["--version"]),
         check_command("npm", ["--version"]),
+        check_command("corepack", ["--version"]),
         check_file("Flutter FVM pin", FLUTTER_APP_DIR / ".fvmrc"),
         check_file("Flutter pubspec lock", FLUTTER_APP_DIR / "pubspec.lock"),
     ]

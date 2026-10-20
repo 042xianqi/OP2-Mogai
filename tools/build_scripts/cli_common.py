@@ -18,9 +18,11 @@ from common import (
     compress_tar_gz,
     compress_zip,
     host_platform,
+    prepare_plugin_assets,
     require_command,
     reset_dir,
     run,
+    verify_cli_plugin_assets,
 )
 
 
@@ -298,6 +300,7 @@ def build_cli_target(
     use_default_target: bool = False,
 ) -> Path:
     require_command("cargo")
+    prepare_plugin_assets()
     binary_name = cli_binary_name(target.platform)
     package_dir = cli_package_dir(target)
     package_path = cli_package_path(target)
@@ -325,6 +328,7 @@ def build_cli_target(
         )
         binary_source = cli_target_binary_path(target)
 
+    verify_cli_plugin_assets(binary_source)
     reset_dir(package_dir)
     copy_required_file(binary_source, package_dir / binary_name)
     write_cli_installer_files(package_dir, target.platform)
