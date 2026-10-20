@@ -212,7 +212,7 @@ impl HostJavaScriptRuntime for WebHostJavaScriptRuntime {
             .map(|_| ())
     }
 
-    /// Releases all outstanding Promise completions belonging to a cancelled scope.
+    /// Rejects the cancelled scope's pending Promises so JavaScript cleanup can run.
     fn cancelHostJavaScriptPromises(&mut self, scope: &str) -> HostResult<()> {
         self.execute(serde_json::json!({"operation":"cancel","args":[scope]}))
             .map(|_| ())

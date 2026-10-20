@@ -1824,7 +1824,6 @@ function assertMemorySpace(value) {
     if (indices.has(identity3)) throw new Error("Duplicate document chunk index");
     indices.add(identity3);
   }
-  const candidateSources = /* @__PURE__ */ new Set();
   for (const candidate of value.candidates) {
     assertObject(candidate, "candidate");
     requireId(candidate.id, "candidate id");
@@ -1834,9 +1833,6 @@ function assertMemorySpace(value) {
     if (candidate.status !== "pending" && candidate.status !== "processing" && candidate.status !== "failed") throw new Error("Invalid candidate status");
     if (candidate.sourceType !== "reply_finalized_auto" && candidate.sourceType !== "selected_user_message") throw new Error("Invalid candidate source type");
     if (typeof candidate.triggerVariantIndex !== "number" || candidate.triggerVariantIndex > 2147483647) throw new Error("Candidate message variant exceeds the host range");
-    const sourceKey = JSON.stringify([candidate.chatId, candidate.triggerMessageTimestamp, candidate.triggerVariantIndex, candidate.sourceType]);
-    if (candidateSources.has(sourceKey)) throw new Error("Duplicate persisted candidate source");
-    candidateSources.add(sourceKey);
   }
   assertMemorySettings(value.settings);
   assertSearchConfig(value.searchConfig);
@@ -3393,9 +3389,8 @@ function enqueueCandidate(input, repository) {
         /** Uses the full owner-scoped source identity for genuine hook idempotency. */
         (candidate) => candidate.chatId === input.chatId && candidate.triggerMessageTimestamp === input.timestamp && candidate.triggerVariantIndex === input.variantIndex && candidate.sourceType === input.sourceType
       );
-      if (previous.length > 1) throw new Error("Duplicate persisted memory candidate source");
-      if (previous.length === 1) {
-        result2.candidateIds.push(previous[0].id);
+      if (previous.length !== 0) {
+        for (const candidate of previous) result2.candidateIds.push(candidate.id);
         continue;
       }
       const id2 = yield repository.allocateRecordId();

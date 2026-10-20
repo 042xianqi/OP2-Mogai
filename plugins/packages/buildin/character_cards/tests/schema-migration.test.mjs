@@ -96,6 +96,26 @@ async function seed(t, count = 3) {
   return { disk, state, chat: chatHost() };
 }
 
+/** Preserves independently queued requests that map to the same exact revision during released-data import. */
+test("released-data import retains repeated candidate sources with independent IDs and original states", async t => {
+  const { disk, state, chat } = await seed(t), original = state.owners[0].candidates[0];
+  state.owners[0].candidates.push({ ...original, id: "2", status: "failed", updatedAt: 3, attemptCount: 5, lastError: "Original extraction failure" });
+  const expected = state.owners[0].candidates.map(({ id, ...record }) => record);
+  disk.replaceState(state);
+  disk.storage.inspectPreferences("meta", values => { values.__operit_preferences_schema_version = 0; values.state.legacyImportPending = true; });
+  await open(disk, chat);
+  const saved = plain(disk.readState()), card = saved.cards.find(value => value.name === state.cards[0].name);
+  const owner = saved.owners.find(value => value.ownerKey === "character:" + card.id);
+  assert.equal(owner.candidates.length, 2);
+  assert.equal(new Set(owner.candidates.map(value => value.id)).size, 2);
+  for (const record of owner.candidates) assert.match(record.id, uuidPattern);
+  assert.deepEqual(owner.candidates.map(({ id, ...record }) => record).sort((left, right) => left.attemptCount - right.attemptCount), expected);
+  assert.equal(owner.memories.length, state.owners[0].memories.length);
+  assert.equal(metadata(disk).legacyImportPending, undefined);
+  const before = disk.stateBytes(); await open(disk, chat);
+  assert.deepEqual(disk.stateBytes(), before);
+});
+
 test("TS released-data import into v1 converts every owned identity and reference and preserves user content", async t => {
   const { disk, state: old, chat } = await seed(t), database = await open(disk, chat), state = plain(disk.readState());
   assert.equal(state.version, 1); assert.equal(disk.storage.inspectPreferences("migration", values => values.plan), undefined);

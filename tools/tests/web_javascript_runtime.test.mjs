@@ -102,8 +102,10 @@ await import(workerData);
       assert.equal(call(runtime, { operation: 'evaluateString', name: 'answer.js', source: 'String(answer)' }), '42');
     });
     await t.test('cancels scoped completions and preserves the realm after script errors', () => {
-      call(runtime, { operation: 'evaluateVoid', name: 'cancel.js', source: 'hostAsync("cancelled").then(()=>{answer=99;});' }, () => null);
+      call(runtime, { operation: 'evaluateVoid', name: 'cancel.js', source: 'globalThis.cancelCleanup=0;globalThis.cancelReason=null;hostAsync("cancelled").then(()=>{answer=99;},reason=>{cancelReason=reason;}).finally(()=>{cancelCleanup++;});' }, () => null);
       call(runtime, { operation: 'cancel', args: ['cancelled'] });
+      assert.equal(call(runtime, { operation: 'evaluateString', name: 'cleanup.js', source: 'String(cancelCleanup)' }), '1');
+      assert.equal(call(runtime, { operation: 'evaluateString', name: 'reason.js', source: 'cancelReason' }), 'JavaScript execution was cancelled');
       call(runtime, { operation: 'settle', args: [2, 99, false] });
       assert.equal(call(runtime, { operation: 'evaluateString', name: 'unchanged.js', source: 'String(answer)' }), '42');
       assert.throws(() => call(runtime, { operation: 'evaluateVoid', name: 'throw.js', source: 'throw new Error("script exception");' }), /script exception/);

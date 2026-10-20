@@ -46,8 +46,6 @@ export interface SelectionCommit<T> { readonly references: SelectionReferences; 
 
 /** Coordinates validation, one real selection commit, and awaited independent applications without compensation. */
 export interface SelectionApplication {
-  /** Applies the persisted chat selection theme in the same queue without rewriting selection or speech. */
-  applyTheme(readReferences: () => Promise<SelectionReferences | null>): Promise<void>;
   /** Serializes user selection operations through their full application sequence, preserving every rejection. */
   commit<T>(prepareAndCommit: (validate: ValidateReferences) => Promise<SelectionCommit<T>>): Promise<T>;
 }
@@ -148,18 +146,6 @@ export function createSelectionApplication(access: IndependentConfigurationAcces
     else next();
   }
   return {
-    /** Serializes navigation with explicit selection applications and propagates exact theme owner failures. */
-    async applyTheme(readReferences: () => Promise<SelectionReferences | null>): Promise<void> {
-      await acquire();
-      try {
-        const references = await readReferences();
-        if (references === null) return;
-        const checked = copyReferences(references);
-        if (checked.themeConfigId === null) return;
-        await access.validateTheme(checked.themeConfigId);
-        await access.applyTheme(checked.themeConfigId);
-      } finally { release(); }
-    },
     /** Performs all explicit-reference validation before committing the selection, then awaits every requested apply. */
     async commit<T>(prepareAndCommit: (validate: ValidateReferences) => Promise<SelectionCommit<T>>): Promise<T> {
       await acquire();
@@ -187,12 +173,12 @@ export function createSelectionApplication(access: IndependentConfigurationAcces
 }
 
 /** Enumerates the real service entrypoints that change an explicitly selected actor. */
-export type SelectionOperation = Extract<DomainOperation, "character.setActive" | "group.setActive" | "activePrompt.setCard" | "activePrompt.setGroup" | "activePrompt.activateForChat" | "chat.configuration.binding.write">;
+export type SelectionOperation = Extract<DomainOperation, "character.setActive" | "group.setActive" | "activePrompt.setModel" | "activePrompt.setCard" | "activePrompt.setGroup" | "activePrompt.activateForChat" | "chat.configuration.binding.write">;
 
 /** Narrows only actual selection mutations; initialization and configuration reads never apply global preferences. */
 export function isSelectionOperation(operation: DomainOperation): operation is SelectionOperation {
   switch (operation) {
-    case "character.setActive": case "group.setActive": case "activePrompt.setCard": case "activePrompt.setGroup": case "activePrompt.activateForChat": case "chat.configuration.binding.write": return true;
+    case "character.setActive": case "group.setActive": case "activePrompt.setModel": case "activePrompt.setCard": case "activePrompt.setGroup": case "activePrompt.activateForChat": case "chat.configuration.binding.write": return true;
     default: return false;
   }
 }
@@ -218,6 +204,7 @@ export function domainSelection<K extends DomainOperation>(operation: K & Select
 /** Validates each explicit selection operation against its declared input fields before resolving its record. */
 export async function domainSelection(operation: SelectionOperation, input: DomainInput<DomainOperation>, repository: Pick<CharacterRepository, "listCharacters">): Promise<string> {
   switch (operation) {
+    case "activePrompt.setModel": parseDomainPayload("activePrompt.setModel", input); return "model:chat";
     case "character.setActive": case "activePrompt.setCard": return "card:" + parseDomainPayload("activePrompt.setCard", input).id;
     case "group.setActive": case "activePrompt.setGroup": return "group:" + parseDomainPayload("activePrompt.setGroup", input).id;
     case "chat.configuration.binding.write": return parseDomainPayload("chat.configuration.binding.write", input).selection;

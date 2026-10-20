@@ -142,7 +142,7 @@ impl Drop for NativeArchiveFiles {
 fn lockArchiveDirectory(root: &Path) -> HostResult<fs::File> {
     let file = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true)
         .open(root.join(".staging.lock"))?;
-    file.lock()?;
+    fs2::FileExt::lock_exclusive(&file)?;
     Ok(file)
 }
 
@@ -246,13 +246,13 @@ impl NativeArchiveStagingHost {
             let leasePath = self.stagingRoot.join(format!("{id}.lease"));
             if !includeLegacy && !leasePath.try_exists()? { continue; }
             let lease = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(&leasePath)?;
-            match lease.try_lock() {
+            match fs2::FileExt::try_lock_exclusive(&lease) {
                 Ok(()) => {
                     let mut lease = Some(lease);
                     removeLeasedArchiveFiles(&self.stagingRoot, &id, &mut lease)?;
                 }
-                Err(fs::TryLockError::WouldBlock) => {},
-                Err(fs::TryLockError::Error(error)) => return Err(error.into()),
+                Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {},
+                Err(error) => return Err(error.into()),
             }
         }
         Ok(())
@@ -281,7 +281,7 @@ impl NativeArchiveStagingHost {
         }
         let lease = fs::OpenOptions::new().create_new(true).read(true).write(true)
             .open(self.stagingRoot.join(format!("{archiveId}.lease")))?;
-        lease.lock()?;
+        fs2::FileExt::lock_exclusive(&lease)?;
         if let Err(error) = fs::OpenOptions::new().create_new(true).write(true).open(path) {
             drop(lease);
             removeArchiveFile(&self.stagingRoot.join(format!("{archiveId}.lease")))
@@ -1292,6 +1292,40 @@ mod tests {
         assert!(active.sealedArchivePath("active").unwrap().exists());
         drop(next);
         drop(active);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Keeps another process's live upload and export leased while reclaiming an abandoned archive.
+    #[test]
+    fn archive_staging_preserves_live_archives_across_processes() {
+        const ROOT_ENV: &str = "OPERIT_ARCHIVE_LIVE_TEST_ROOT";
+        if let Some(root) = std::env::var_os(ROOT_ENV) {
+            let host = NativeArchiveStagingHost::new(std::path::PathBuf::from(root).join("runtime"));
+            host.cleanupAbandonedArchivesDuringMaintenance().unwrap();
+            assert!(host.sealedArchivePath("active").unwrap().exists());
+            assert!(host.uploadingArchivePath("uploading").unwrap().exists());
+            assert!(!host.uploadingArchivePath("abandoned").unwrap().exists());
+            host.createArchive("child", 4).unwrap();
+            host.appendArchive("child", b"test").unwrap();
+            host.sealArchive("child").unwrap();
+            assert_eq!(host.readArchive("child", 0, 4).unwrap(), b"test");
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("operit-archive-live-{}", uuid::Uuid::new_v4()));
+        let host = NativeArchiveStagingHost::new(root.join("runtime"));
+        host.createExportArchive("active").unwrap();
+        host.writeExportArchive("active", 0, b"live export").unwrap();
+        host.sealArchive("active").unwrap();
+        host.createArchive("uploading", 100).unwrap();
+        host.appendArchive("uploading", b"live upload").unwrap();
+        fs::write(host.uploadingArchivePath("abandoned").unwrap(), b"abandoned").unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::archive_staging_preserves_live_archives_across_processes"])
+            .env(ROOT_ENV, &root).status().unwrap();
+        assert!(status.success());
+        assert_eq!(host.readArchive("active", 0, 11).unwrap(), b"live export");
+        assert_eq!(fs::read(host.uploadingArchivePath("uploading").unwrap()).unwrap(), b"live upload");
+        drop(host);
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -125,7 +125,7 @@ export function assertMemorySpace(value: unknown): asserts value is MemorySpace 
     const identity = JSON.stringify([chunk.memoryUuid, chunk.chunkIndex]);
     if (indices.has(identity)) throw new Error("Duplicate document chunk index"); indices.add(identity);
   }
-  const candidateSources = new Set<string>();
+  // Released queues may contain independent task IDs for the same migrated message revision.
   for (const candidate of value.candidates) {
     assertObject(candidate, "candidate"); requireId(candidate.id, "candidate id"); requireId(candidate.chatId, "candidate chat id");
     for (const field of ["triggerMessageTimestamp", "triggerVariantIndex", "createdAt", "updatedAt", "attemptCount"] as const) assertInteger(candidate[field], field, 0);
@@ -133,8 +133,6 @@ export function assertMemorySpace(value: unknown): asserts value is MemorySpace 
     if (candidate.status !== "pending" && candidate.status !== "processing" && candidate.status !== "failed") throw new Error("Invalid candidate status");
     if (candidate.sourceType !== "reply_finalized_auto" && candidate.sourceType !== "selected_user_message") throw new Error("Invalid candidate source type");
     if (typeof candidate.triggerVariantIndex !== "number" || candidate.triggerVariantIndex > 2147483647) throw new Error("Candidate message variant exceeds the host range");
-    const sourceKey = JSON.stringify([candidate.chatId, candidate.triggerMessageTimestamp, candidate.triggerVariantIndex, candidate.sourceType]);
-    if (candidateSources.has(sourceKey)) throw new Error("Duplicate persisted candidate source"); candidateSources.add(sourceKey);
   }
   assertMemorySettings(value.settings); assertSearchConfig(value.searchConfig); assertString(value.userDocumentPath, "USER.md path");
   if (value.userDocumentPath !== userDocumentPath(requireId(value.ownerKey, "owner key"))) throw new Error("Invalid owner USER.md path");

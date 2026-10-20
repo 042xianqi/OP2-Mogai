@@ -1780,11 +1780,13 @@ async fn call_environment_updates_survive_state_turns() {
     engine.destroy();
 }
 
-/// Abandoning an async request must cancel its session on the owning affine thread.
+/// Abandoning a host wait must run JavaScript cleanup before the affine cancellation step finishes.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn abandoned_async_request_cancels_affine_session() {
-    let engine = newTestJsEngine(Arc::new(TestPluginConfigExecutionHost::default()));
+    let host = Arc::new(TestPluginConfigExecutionHost::default());
+    let toolHost = host.clone();
+    let engine = newTestJsEngine(host.clone());
     let caller = engine.clone();
     let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let signal = started.clone();
@@ -1800,9 +1802,15 @@ fn abandoned_async_request_cancels_affine_session() {
         let task = tokio::task::spawn_local(async move {
             caller
                 .execute_script_function_async(
-                    r#"exports.wait = async function() {
-                    __operitSendIntermediateResult(globalThis.__operitCurrentCallId, 'started');
-                    return await new Promise(function() {});
+                    r#"/** Releases shared state when the owning host wait is cancelled. */
+                    exports.wait = async function() {
+                    globalThis.cancelledCleanupCount = 0;
+                    try {
+                        __operitSendIntermediateResult(globalThis.__operitCurrentCallId, 'started');
+                        return await toolCall('gate', {});
+                    } finally {
+                        globalThis.cancelledCleanupCount++;
+                    }
                 };"#
                     .to_string(),
                     "wait".to_string(),
@@ -1823,6 +1831,9 @@ fn abandoned_async_request_cancels_affine_session() {
             started.load(Ordering::Acquire),
             "aborted request must have started"
         );
+        tokio::time::timeout(Duration::from_secs(1), toolHost.gatedToolStarted.notified())
+            .await
+            .expect("host wait must have started before cancellation");
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
     });
@@ -1836,16 +1847,23 @@ fn abandoned_async_request_cancels_affine_session() {
                 1_000,
                 Box::new(|state, _| {
                     let state = state.downcast_mut::<JsEngineState>().unwrap();
-                    Ok(Box::new(state.pendingScriptExecutions.len()))
+                    let cleanup = state.runtime.evaluateHostJavaScriptString(
+                        "cancellation-cleanup",
+                        "String(globalThis.cancelledCleanupCount)",
+                    )?;
+                    Ok(Box::new((state.pendingScriptExecutions.len(), cleanup)))
                 }),
             )
             .unwrap();
-        if *output.downcast::<usize>().unwrap() == 0 {
+        let (pending, cleanup) = *output.downcast::<(usize, String)>().unwrap();
+        if pending == 0 {
+            assert_eq!(cleanup, "1", "cancelled host wait must run its finally block");
             break;
         }
         assert!(Instant::now() < deadline, "abandoned affine session leaked");
         std::thread::sleep(Duration::from_millis(1));
     }
+    finishGatedTool(&host);
     engine.destroy();
 }
 
