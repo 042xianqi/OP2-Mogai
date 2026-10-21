@@ -43,6 +43,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y curl gawk python3 qemu-user-static
       - name: Build runtime rootfs
+        if: matrix.platform != 'ohos'
+        env:
+          BUILD_SCRIPT: ${{ matrix.script }}
+        run: bash "$BUILD_SCRIPT"
+      - name: Build OHOS runtime rootfs with preserved ownership
+        if: matrix.platform == 'ohos'
         env:
           BUILD_SCRIPT: ${{ matrix.script }}
         run: sudo bash "$BUILD_SCRIPT"
