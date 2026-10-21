@@ -128,6 +128,7 @@ class _ChatAreaState extends State<ChatArea>
   );
   final Map<int, _CachedMessageRow> _messageRowCache =
       <int, _CachedMessageRow>{};
+  late final ValueNotifier<bool> _chatBusyNotifier;
   Timer? _navigatorHideTimer;
   Timer? _viewportResizeTimer;
   bool _userScrollSessionActive = false;
@@ -160,6 +161,7 @@ class _ChatAreaState extends State<ChatArea>
   @override
   void initState() {
     super.initState();
+    _chatBusyNotifier = ValueNotifier<bool>(widget.isLoading);
     _layoutScrollController = _ChatLayoutScrollController(
       delegate: widget.scrollController,
       shouldAlignBottom: _shouldAlignBottomDuringLayout,
@@ -875,6 +877,7 @@ class _ChatAreaState extends State<ChatArea>
   @override
   void didUpdateWidget(ChatArea oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _chatBusyNotifier.value = widget.isLoading;
     _layoutScrollController.delegate = widget.scrollController;
     final chatChanged = oldWidget.currentChatId != widget.currentChatId;
     if (chatChanged) {
@@ -959,12 +962,14 @@ class _ChatAreaState extends State<ChatArea>
     _messageAnchorsNotifier.dispose();
     _viewportHeightNotifier.dispose();
     _showNavigatorChipNotifier.dispose();
+    _chatBusyNotifier.dispose();
     _messageKeys.clear();
     _messageRowCache.clear();
     _disposeRowExtents();
     super.dispose();
   }
 
+  /// Reuses transcript content while each menu observes current chat activity.
   Widget _messageRowFor(int messageIndex, ChatUiMessage message) {
     final selected = widget.selectedMessageTimestamps.contains(
       message.timestamp,
@@ -1030,28 +1035,33 @@ class _ChatAreaState extends State<ChatArea>
           )
         : widget.currentChatId == null
         ? messageContent
-        : MessageContextMenu(
-            key: ValueKey<String>('menu-${_messageWidgetKey(message)}'),
-            message: message,
-            chatId: widget.currentChatId!,
-            messageIndex: messageIndex,
-            clients: widget.clients,
-            packageManager: widget.packageManager,
-            onToggleFavoriteMessage: widget.onToggleFavoriteMessage,
-            onDeleteMessage: widget.onDeleteMessage,
-            onDeleteMessagesFrom: widget.onDeleteMessagesFrom,
-            onDeleteMessageVariant: widget.onDeleteMessageVariant,
-            onRollbackToMessage: widget.onRollbackToMessage,
-            onSelectMessageToEdit: widget.onSelectMessageToEdit,
-            onRegenerateMessage: widget.onRegenerateMessage,
-            onInsertSummary: widget.onInsertSummary,
-            onCreateBranch: widget.onCreateBranch,
-            onReplyToMessage: widget.onReplyToMessage,
-            onPlayVoice: widget.onPlayVoice,
-            onToggleMultiSelectMode: widget.onToggleMultiSelectMode,
-            onRefresh: widget.onRefreshRequested,
-            splitMarkdownContent: widget.splitMarkdownContent,
+        : ValueListenableBuilder<bool>(
+            valueListenable: _chatBusyNotifier,
             child: messageContent,
+            builder: (context, isChatBusy, child) => MessageContextMenu(
+              key: ValueKey<String>('menu-${_messageWidgetKey(message)}'),
+              message: message,
+              chatId: widget.currentChatId!,
+              messageIndex: messageIndex,
+              clients: widget.clients,
+              packageManager: widget.packageManager,
+              onToggleFavoriteMessage: widget.onToggleFavoriteMessage,
+              onDeleteMessage: widget.onDeleteMessage,
+              onDeleteMessagesFrom: widget.onDeleteMessagesFrom,
+              onDeleteMessageVariant: widget.onDeleteMessageVariant,
+              onRollbackToMessage: widget.onRollbackToMessage,
+              onSelectMessageToEdit: widget.onSelectMessageToEdit,
+              onRegenerateMessage: widget.onRegenerateMessage,
+              isChatBusy: isChatBusy,
+              onInsertSummary: widget.onInsertSummary,
+              onCreateBranch: widget.onCreateBranch,
+              onReplyToMessage: widget.onReplyToMessage,
+              onPlayVoice: widget.onPlayVoice,
+              onToggleMultiSelectMode: widget.onToggleMultiSelectMode,
+              onRefresh: widget.onRefreshRequested,
+              splitMarkdownContent: widget.splitMarkdownContent,
+              child: child!,
+            ),
           );
     _messageRowCache[message.timestamp] = _CachedMessageRow(
       index: messageIndex,
@@ -1409,6 +1419,7 @@ class _SelectableMessageFrame extends StatelessWidget {
 }
 
 class _CachedMessageRow {
+  /// Records the message and rendering state represented by one retained row.
   const _CachedMessageRow({
     required this.index,
     required this.message,

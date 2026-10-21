@@ -89,6 +89,10 @@ function number(value, path) {
 function integer(value, path) {
   if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new Error(`${path} must be a safe integer`);
 }
+function nonnegativeInteger(value, path) {
+  integer(value, path);
+  nonnegative(value, path);
+}
 function messageVariant(value, path) {
   integer(value, path);
   if (typeof value !== "number" || value < 0 || value > 2147483647) throw new Error(path + " must be a nonnegative i32 message variant index");
@@ -209,7 +213,8 @@ var contentOnly = shape({ content: required(text) });
 var format = enumeration("operit", "tavern");
 var memoryQueryRequest = shape({ participantId: required(nonblank), query: required(nonblank), limit: required(nonnegative), snapshotId: required(nullable(nonblank)) });
 var validators = {
-  "memory.searchWithOptions": shape({ ownerKey: required(owner), query: required(text), folderPath: required(nullable(text)), relevanceThreshold: required(nonnegative), createdAtStartMs: required(nullable(integer)), createdAtEndMs: required(nullable(integer)) }),
+  "memory.chunks": shape({ ownerKey: required(owner), memoryId: required(nonblank), query: required(nonblank), count: required(nonnegativeInteger) }),
+  "memory.searchWithOptions": shape({ ownerKey: required(owner), query: required(nonblank), folderPath: required(nullable(text)), relevanceThreshold: required(nonnegative), createdAtStartMs: required(nullable(integer)), createdAtEndMs: required(nullable(integer)) }),
   "memory.chat.list": ownerOnly,
   "memory.chat.update": shape({ ownerKey: required(owner), chatId: required(nonblank) }),
   "memory.categorize": ownerOnly,
@@ -317,7 +322,7 @@ function Screen(ctx) {
   function close() {
     return { type: "toolpkg.presentation.cancel", requestId };
   }
-  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/memory-status/index.ui.js:16437",[input.description,close,close],__operitUiTemplate_16437);
+  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/memory-status/index.ui.js:16689",[input.description,close,close],__operitUiTemplate_16689);
 }
 
-function __operitUiTemplate_16437(__ctx,__values){return __ctx.UI.AlertDialog({key:"memory-status",title:"\u8BB0\u5FC6\u72B6\u6001",text:__values[0],confirmText:"\u5173\u95ED",onConfirm:__values[1],onDismissRequest:__values[2]}); }
+function __operitUiTemplate_16689(__ctx,__values){return __ctx.UI.AlertDialog({key:"memory-status",title:"\u8BB0\u5FC6\u72B6\u6001",text:__values[0],confirmText:"\u5173\u95ED",onConfirm:__values[1],onDismissRequest:__values[2]}); }

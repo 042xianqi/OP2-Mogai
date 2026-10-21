@@ -429,6 +429,7 @@ fn applyDeclaredOperations(
         for mut entry in entries {
             if entry.identityAlias().is_some() { continue; }
             if let Some((store, catalog)) = schema.catalogs().find(|(store, _)| store.path == entry.storagePath()) {
+                let storagePath = entry.storagePath().to_owned();
                 entry.rewriteRootEntries(|key, value| {
                     if !keyMatches(key, catalog) { return Ok(()); }
                     let id = key.strip_prefix(catalog.key_prefix.as_str())
@@ -438,7 +439,18 @@ fn applyDeclaredOperations(
                         .map_err(PreferencesDataStoreError::Message)?;
                     if let Some(value) = value {
                         if value.get(&catalog.identity_field).and_then(Value::as_str) != Some(id) {
-                            return Err(PreferencesDataStoreError::Message("Entity identity differs from its key".into()));
+                            let valueType = match value {
+                                Value::Null => "null",
+                                Value::Bool(_) => "boolean",
+                                Value::Number(_) => "number",
+                                Value::String(_) => "string",
+                                Value::Array(_) => "array",
+                                Value::Object(_) => "object",
+                            };
+                            return Err(PreferencesDataStoreError::Message(format!(
+                                "Entity identity differs from its key: path={storagePath} key={key} identityField={} expectedId={id} valueType={valueType}",
+                                catalog.identity_field,
+                            )));
                         }
                         value[&catalog.identity_field] = Value::String(canonical.clone());
                     }

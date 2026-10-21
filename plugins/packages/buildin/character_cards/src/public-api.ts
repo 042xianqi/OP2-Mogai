@@ -122,6 +122,11 @@ export async function memoryCandidateEnqueueApi(event: ToolPkg.PublicApiEvent<Do
   return dispatchDomain("memory.candidate.enqueue", parseDomainPayload("memory.candidate.enqueue", event.payload));
 }
 
+/** Queries document chunks through the same persisted repository and scoring implementation. */
+export async function memoryChunksApi(event: ToolPkg.PublicApiEvent<DomainInput<"memory.chunks">>): Promise<DomainOutput<"memory.chunks">> {
+  return dispatchDomain("memory.chunks", parseDomainPayload("memory.chunks", event.payload));
+}
+
 /** Executes full-filter search through the sole file service and its real embedding cache. */
 export async function memorySearchWithOptionsApi(event: ToolPkg.PublicApiEvent<DomainInput<"memory.searchWithOptions">>): Promise<DomainOutput<"memory.searchWithOptions">> {
   return dispatchDomain("memory.searchWithOptions", parseDomainPayload("memory.searchWithOptions", event.payload));
@@ -439,6 +444,7 @@ export function registerDomainApis(): void {
   ToolPkg.registerApi({ name: "chat.configuration.draft.abort", function: chatConfigurationDraftAbortApi });
   ToolPkg.registerApi<MemoryQueryRequest, MemoryQueryResult>({ name: "memory.query", function: memoryQueryApi });
   ToolPkg.registerApi<DomainInput<"memory.searchWithOptions">, DomainOutput<"memory.searchWithOptions">>({ name: "memory.searchWithOptions", function: memorySearchWithOptionsApi });
+  ToolPkg.registerApi<DomainInput<"memory.chunks">, DomainOutput<"memory.chunks">>({ name: "memory.chunks", function: memoryChunksApi });
   ToolPkg.registerApi<DomainInput<"memory.candidate.enqueue">, DomainOutput<"memory.candidate.enqueue">>({ name: "memory.candidate.enqueue", function: memoryCandidateEnqueueApi });
   ToolPkg.registerApi<DomainInput<"memory.embeddings.rebuild">, DomainOutput<"memory.embeddings.rebuild">>({ name: "memory.embeddings.rebuild", function: memoryEmbeddingsRebuildApi });
   ToolPkg.registerApi<DomainInput<"memory.rebuild.cancel">, DomainOutput<"memory.rebuild.cancel">>({ name: "memory.rebuild.cancel", function: memoryRebuildCancelApi });

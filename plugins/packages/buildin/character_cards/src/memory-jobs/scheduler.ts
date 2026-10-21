@@ -33,7 +33,7 @@ async function propagateJobFailure(error: unknown, publishStatus: () => Promise<
 /** Enqueues a real selected message or finalized reply for exact bound memory owners. */
 export async function enqueueCandidate(input: CandidateRequest, repository: CharacterRepository): Promise<CandidateResult> {
   if (input.sourceType === "reply_finalized_auto" && !(await repository.readGlobalMemoryPreferences()).autoUpdateEnabled) return { owners: [], candidateIds: [] };
-  await requireChat(input.chatId); assertInteger(input.timestamp, "candidate message timestamp", 0); assertInteger(input.variantIndex, "candidate variant index", 0);
+  assertInteger(input.timestamp, "candidate message timestamp", 0); assertInteger(input.variantIndex, "candidate variant index", 0);
   if (input.variantIndex > 2147483647) throw new Error("Candidate variant exceeds the host range");
   const messages = await readMessages(input.chatId), matches = messages.filter(
     /** Resolves the message by its genuine persisted timestamp. */
@@ -160,7 +160,6 @@ async function processCandidates(ownerKey: string, candidates: MemoryCandidate[]
     await owner.run(
       /** Validates the current chat owner and applies a genuine selected/automatic message batch. */
       async repository => {
-        await requireChat(chatId);
         let messages = await readMessages(chatId);
         for (const candidate of candidates) {
           const source = messages.filter(
@@ -266,7 +265,10 @@ export class MemoryJobRunner {
             const grouped = new Map<string, MemoryCandidate[]>();
             for (const candidate of pending) { const list = grouped.get(candidate.chatId); if (list === undefined) grouped.set(candidate.chatId, [candidate]); else list.push(candidate); }
             for (const records of grouped.values()) {
-              const capped = records.slice(0, 20);
+              const capped = records.sort(
+                /** Applies the Kotlin oldest-source order before the per-chat twenty-record cap. */
+                (left, right) => left.triggerMessageTimestamp - right.triggerMessageTimestamp || left.createdAt - right.createdAt,
+              ).slice(0, 20);
               for (const sourceType of ["selected_user_message", "reply_finalized_auto"] as const) {
                 const batch = capped.filter(
                   /** Preserves the original selected/automatic source partition. */
