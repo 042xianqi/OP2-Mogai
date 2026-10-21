@@ -2437,7 +2437,10 @@ fn dispatchStructuredToolCall(
         Box::pin(async move { executionHost.execute_tool_call(request).await })
     };
     let sink = callbackSink.clone();
-    let scheduled = defaultHostRuntimeTaskSchedulerHost().scheduleHostRuntimeAsyncTask(
+    // Tool executors may perform blocking host calls (terminal sessions, device
+    // commands, package I/O), so they run on the blocking pool. Coordination
+    // deadlines and promise pumps must stay responsive behind a busy tool.
+    let scheduled = defaultHostRuntimeTaskSchedulerHost().scheduleHostRuntimeBlockingAsyncTask(
         "operit-js-tool-call",
         Box::new(move || {
             Box::pin(async move {

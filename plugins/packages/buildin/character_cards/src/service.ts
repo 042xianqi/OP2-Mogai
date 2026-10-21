@@ -9,7 +9,6 @@ import { listBindableChats } from "./chat-binding-catalog";
 import { parseChatSelection } from "./chat-bindings";
 import { MemoryJobRunner } from "./memory-jobs/scheduler";
 import { listMemoryChats } from "./memory-jobs/chat";
-import { decodeMemoryBackup, exportMemoryBackup } from "./backup";
 import type {
   CharacterRepository,
   CharacterRepositoryOwner,
@@ -25,7 +24,6 @@ import type {
   MemorySearchOptions,
   MemorySettings,
   MemorySearchConfig,
-  MemoryValues,
   Request,
   RequestOutput,
   Snapshot,
@@ -45,8 +43,6 @@ import {
   assertInteger,
   assertMemory,
   assertMemorySettings,
-  assertMemoryValues,
-  assertNumber,
   assertObject,
   assertSearchConfig,
   assertSearchOptions,
@@ -820,20 +816,6 @@ export async function graph(
   return { graph: value, items };
 }
 
-/** Resolves a legacy editor title exactly and rejects ambiguous records instead of picking one. */
-function memoryByTitle(items: Memory[], title: string): Memory {
-  const name = requireName(title, "记忆标题");
-  let found: Memory | undefined;
-  for (const item of items) {
-    if (item.title !== name) continue;
-    if (found !== undefined)
-      throw new Error(`记忆标题不唯一，请使用数据库标识编辑：${name}`);
-    found = item;
-  }
-  if (found === undefined) throw new Error(`记忆不存在：${name}`);
-  return found;
-}
-
 /** Normalizes a user-selected folder using the canonical slash-delimited repository contract. */
 function normalizeFolderPath(value: string | null): string | null {
   if (value === null) return null;
@@ -843,33 +825,6 @@ function normalizeFolderPath(value: string | null): string | null {
     if (name !== "") parts.push(name);
   }
   return parts.length === 0 ? null : parts.join("/");
-}
-
-/** Persists complete editable memory values while retaining repository-owned identity and document data. */
-export async function saveMemory(
-  ownerKey: string,
-  values: MemoryValues,
-  id: string | null,
-  host: CharacterRepository,
-): Promise<Memory> {
-  assertMemoryValues(values);
-  await requireOwner(ownerKey, host);
-  const normalized = {
-    ...values,
-    title: requireName(values.title, "记忆标题"),
-    contentType: values.contentType.trim(),
-    source: values.source.trim(),
-    folderPath: normalizeFolderPath(values.folderPath),
-    tags: normalizeNames(values.tags),
-  };
-  let saved: Memory;
-  if (id === null) saved = await host.createMemory(ownerKey, normalized);
-  else {
-    requireId(id, "记忆记录标识");
-    saved = await host.updateMemory(ownerKey, id, normalized);
-  }
-  assertMemory(saved);
-  return saved;
 }
 
 /** Performs full-record canonical search with explicit owner scope and explicit filters. */
@@ -1066,19 +1021,10 @@ export async function dispatch(
       return host.readToolCatalog();
     case "resolveMemoryOwner":
       return resolveMemoryOwner(request.characterId, host);
-    case "readUser": {
-      await requireOwner(request.ownerKey, host);
-      const user = await host.readUser(request.ownerKey);
-      assertObject(user, "用户资料");
-      assertString(user.content, "用户资料内容");
-      if (user.ownerKey !== request.ownerKey)
-        throw new Error("用户资料 owner 与请求不一致");
-      return user;
-    }
+    case "readUser":
+      return executeDomain("memory.user.read", { ownerKey: request.ownerKey }, host);
     case "writeUser":
-      await requireOwner(request.ownerKey, host);
-      assertString(request.content, "用户资料内容");
-      await host.writeUser(request.ownerKey, request.content);
+      await executeDomain("memory.user.write", { ownerKey: request.ownerKey, content: request.content }, host);
       return { saved: true };
     case "graph":
       return graph(request.ownerKey, host);
@@ -1099,70 +1045,34 @@ export async function dispatch(
     case "searchMemories":
       return searchMemories(request.options, host);
     case "saveMemory": {
-      assertString(request.tags, "记忆标签");
-      assertString(request.folderPath, "记忆文件夹");
-      const values: MemoryValues = {
+      const values = {
         title: request.title,
         content: request.content,
-        contentType: request.contentType,
-        source: request.source,
+        contentType: request.contentType.trim(),
+        source: request.source.trim(),
         credibility: request.credibility,
         importance: request.importance,
         folderPath: request.folderPath,
         tags: normalizeNames(request.tags.split(",")),
       };
-      const id =
-        request.originalTitle === null
-          ? null
-          : memoryByTitle(
-              await listMemories(request.ownerKey, host),
-              request.originalTitle,
-            ).id;
-      await saveMemory(request.ownerKey, values, id, host);
+      if (request.originalTitle === null) await executeDomain("memory.create", { ownerKey: request.ownerKey, values }, host);
+      else await executeDomain("memory.update", { ownerKey: request.ownerKey, originalTitle: request.originalTitle, changes: values }, host);
       return graph(request.ownerKey, host);
     }
     case "deleteMemory": {
-      const memory = memoryByTitle(
-        await listMemories(request.ownerKey, host),
-        request.title,
-      );
-      await host.deleteMemory(request.ownerKey, memory.id);
+      const { item } = await executeDomain("memory.get", { ownerKey: request.ownerKey, title: request.title }, host);
+      await executeDomain("memory.delete", { ownerKey: request.ownerKey, id: item.id }, host);
       return graph(request.ownerKey, host);
     }
-    case "createLink": {
-      assertNumber(request.weight, "关系强度", 0, 1);
-      assertString(request.description, "关系描述");
-      const type_ = requireName(request.linkType, "关系类型");
-      const items = await listMemories(request.ownerKey, host);
-      const source = memoryByTitle(items, request.sourceTitle),
-        target = memoryByTitle(items, request.targetTitle);
-      if (source.id === target.id) throw new Error("不能创建记忆自身关系");
-      await host.createLink(request.ownerKey, {
-        sourceMemoryId: source.id,
-        targetMemoryId: target.id,
-        type_,
-        weight: request.weight,
-        description: request.description,
-      });
+    case "createLink":
+      await executeDomain("memory.link.create", { ownerKey: request.ownerKey, sourceTitle: request.sourceTitle, targetTitle: request.targetTitle, linkType: request.linkType, weight: request.weight, description: request.description }, host);
       return graph(request.ownerKey, host);
-    }
     case "deleteLink":
-      await requireOwner(request.ownerKey, host);
-      requireId(request.linkId, "记忆关系标识");
-      await host.deleteLink(request.ownerKey, request.linkId);
+      await executeDomain("memory.link.delete", { ownerKey: request.ownerKey, linkId: request.linkId }, host);
       return graph(request.ownerKey, host);
-    case "updateLink": {
-      await requireOwner(request.ownerKey, host);
-      requireId(request.linkId, "记忆关系标识");
-      assertNumber(request.weight, "关系强度", 0, 1);
-      assertString(request.description, "关系描述");
-      await host.updateLink(request.ownerKey, request.linkId, {
-        type_: requireName(request.linkType, "关系类型"),
-        weight: request.weight,
-        description: request.description,
-      });
+    case "updateLink":
+      await executeDomain("memory.link.update", { ownerKey: request.ownerKey, linkId: request.linkId, changes: { linkType: request.linkType, weight: request.weight, description: request.description } }, host);
       return graph(request.ownerKey, host);
-    }
     case "readMemorySettings": {
       await requireOwner(request.ownerKey, host);
       const settings = await host.readMemorySettings(request.ownerKey);
@@ -1271,28 +1181,9 @@ export async function dispatch(
         host,
       );
     case "exportMemory":
-      await requireOwner(request.ownerKey, host);
-      return {
-        ownerKey: request.ownerKey,
-        content: await exportMemoryBackup(request.ownerKey, host),
-      };
-    case "importMemory": {
-      await requireOwner(request.ownerKey, host);
-      if (
-        request.strategy !== "SKIP" &&
-        request.strategy !== "UPDATE" &&
-        request.strategy !== "CREATE_NEW"
-      )
-        throw new Error("记忆导入策略无效");
-      const document = decodeMemoryBackup(request.content);
-      const result = await host.importMemorySpace(
-        request.ownerKey,
-        document.space,
-        request.strategy,
-      );
-      await host.writeUser(request.ownerKey, document.userMarkdown);
-      return { ownerKey: request.ownerKey, result };
-    }
+      return executeDomain("memory.export", { ownerKey: request.ownerKey }, host);
+    case "importMemory":
+      return executeDomain("memory.import", { ownerKey: request.ownerKey, content: request.content, strategy: request.strategy }, host);
     default: {
       const action: never = request;
       throw new Error(`未知角色卡请求：${JSON.stringify(action)}`);

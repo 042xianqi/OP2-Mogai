@@ -426,6 +426,257 @@ fn adopted_preference_projection_propagates_invalid_workspace_path() {
     assert!(result.is_err());
 }
 
+/// Restores Kotlin custom parameter records with omitted defaults and preserves text byte for byte.
+#[test]
+fn custom_model_parameters_preserve_text_and_kotlin_defaults() {
+    let mut parsed = ParsedOperit1Snapshot::fromSource(completeSnapshotFixture(20)).unwrap();
+    let config = &mut parsed.configs[0];
+    config.hasCustomParameters = true;
+    for value in ["plain text", "", "123", "true", "null", "{\"key\":1}", "\"quoted\"", "中文\ntext"] {
+        for valueType in ["STRING", "OBJECT"] {
+            config.customParameters = serde_json::json!([{
+                "id": "custom-text", "name": "Text", "apiName": "text",
+                "defaultValue": "", "currentValue": value,
+                "isEnabled": true, "valueType": valueType
+            }]).to_string();
+            let parameters = buildModelParameters(config).unwrap();
+            let parameter = parameters.iter().find(|item| item.id == "custom-text").unwrap();
+            assert_eq!(parameter.currentValue, Value::String(value.to_string()));
+            assert_eq!(parameter.defaultValue, Value::String(String::new()));
+            assert_eq!(parameter.description, "");
+            assert_eq!(parameter.category, ParameterCategory::OTHER);
+            assert_eq!(parameter.valueType, parseParameterValueType(valueType).unwrap());
+            assert_eq!(parameter.minValue, None);
+            assert_eq!(parameter.maxValue, None);
+            assert!(parameter.isEnabled);
+            assert!(parameter.isCustom);
+        }
+    }
+}
+
+/// Restores numeric and boolean parameter values and limits with their declared source types.
+#[test]
+fn custom_model_parameters_restore_declared_scalar_types() {
+    let mut parsed = ParsedOperit1Snapshot::fromSource(completeSnapshotFixture(20)).unwrap();
+    let config = &mut parsed.configs[0];
+    config.hasCustomParameters = true;
+    config.customParameters = serde_json::json!([
+        {
+            "id": "custom-int", "name": "Integer", "apiName": "integer",
+            "description": "Preserved description", "category": "GENERATION",
+            "defaultValue": "0", "currentValue": "2147483647",
+            "minValue": "-2147483648", "maxValue": "2147483647",
+            "isEnabled": true, "valueType": "INT"
+        },
+        {
+            "id": "custom-float", "name": "Float", "apiName": "float",
+            "defaultValue": "0.0", "currentValue": "1.25",
+            "minValue": "-2.5", "maxValue": "3.5",
+            "isEnabled": false, "valueType": "FLOAT"
+        },
+        {
+            "id": "custom-bool", "name": "Boolean", "apiName": "boolean",
+            "defaultValue": "false", "currentValue": "true",
+            "isEnabled": true, "valueType": "BOOLEAN"
+        }
+    ]).to_string();
+    let parameters = buildModelParameters(config).unwrap();
+    let integer = parameters.iter().find(|item| item.id == "custom-int").unwrap();
+    assert_eq!(integer.currentValue, serde_json::json!(i32::MAX));
+    assert_eq!(integer.minValue, Some(serde_json::json!(i32::MIN)));
+    assert_eq!(integer.maxValue, Some(serde_json::json!(i32::MAX)));
+    assert_eq!(integer.description, "Preserved description");
+    assert_eq!(integer.category, ParameterCategory::GENERATION);
+    let float = parameters.iter().find(|item| item.id == "custom-float").unwrap();
+    assert_eq!(float.currentValue, serde_json::json!(1.25));
+    assert_eq!(float.minValue, Some(serde_json::json!(-2.5)));
+    assert_eq!(float.maxValue, Some(serde_json::json!(3.5)));
+    assert!(!float.isEnabled);
+    let boolean = parameters.iter().find(|item| item.id == "custom-bool").unwrap();
+    assert_eq!(boolean.defaultValue, Value::Bool(false));
+    assert_eq!(boolean.currentValue, Value::Bool(true));
+}
+
+/// Rejects values outside the declared source scalar type rather than storing another JSON type.
+#[test]
+fn custom_model_parameters_reject_mismatched_scalar_values() {
+    let mut parsed = ParsedOperit1Snapshot::fromSource(completeSnapshotFixture(20)).unwrap();
+    let config = &mut parsed.configs[0];
+    config.hasCustomParameters = true;
+    for (valueType, defaultValue, currentValue) in [
+        ("INT", "0", "2147483648"),
+        ("INT", "0", "1.5"),
+        ("INT", "0", "\"123\""),
+        ("FLOAT", "0.0", "null"),
+        ("FLOAT", "0.0", "\"1.25\""),
+        ("BOOLEAN", "false", "1"),
+        ("BOOLEAN", "false", "\"true\""),
+    ] {
+        config.customParameters = serde_json::json!([{
+            "id": "invalid", "name": "Invalid", "apiName": "invalid",
+            "defaultValue": defaultValue, "currentValue": currentValue,
+            "isEnabled": true, "valueType": valueType
+        }]).to_string();
+        assert!(buildModelParameters(config).unwrap_err()
+            .starts_with("Operit1 自定义参数值与声明类型"));
+    }
+}
+
+/// Runs the actual preference importer and reads signed ARGB colors through the current theme schema.
+#[test]
+fn user_preference_import_completes_theme_migrations_after_native_values() {
+    use crate::data::preferences::ThemePreferenceSnapshot::readThemePreferenceSnapshot;
+    use crate::data::preferences::UserPreferencesManager::UserPreferencesManager;
+    use operit_host_native_storage::NativeRuntimeStorageHost;
+
+    let root = std::env::temp_dir().join(format!("operit1-theme-import-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    {
+        let paths = RuntimeStorePaths::new(root.join("runtime"), root.join("workspaces"));
+        let host = Arc::new(NativeRuntimeStorageHost::new(
+            root.join("runtime"), root.join("workspaces"),
+        ));
+        let manager = Operit1SnapshotImportManager::new(
+            paths, host.clone(), host.clone(), host.clone(),
+        );
+        let mut parsed = ParsedOperit1Snapshot::fromSource(completeSnapshotFixture(20)).unwrap();
+        parsed.archive.datastorePreferences.clear();
+        parsed.archive.datastorePreferences.insert(
+            ENTRY_USER_PREFERENCES.to_string(),
+            HashMap::from([
+                ("custom_primary_color".to_string(), Operit1PreferenceValue::Int(-16711936)),
+                ("custom_secondary_color".to_string(), Operit1PreferenceValue::Int(-1)),
+                ("use_system_theme".to_string(), Operit1PreferenceValue::Boolean(false)),
+                ("theme_mode".to_string(), Operit1PreferenceValue::String("dark".to_string())),
+                ("background_image_opacity".to_string(), Operit1PreferenceValue::Float(0.5)),
+                ("app_language".to_string(), Operit1PreferenceValue::String("zh-CN".to_string())),
+            ]),
+        );
+        assert_eq!(manager.importDataStorePreferences(&parsed, &SnapshotFileImportPlan::new()).unwrap(), (1, 6));
+        let preferences = UserPreferencesManager::store(host).data().unwrap();
+        let initial = serde_json::from_str(include_str!("../../preferences/theme_snapshot_fixture.json")).unwrap();
+        let snapshot = readThemePreferenceSnapshot(&preferences, &initial).unwrap();
+        assert_eq!(snapshot["customPrimaryColor"], serde_json::json!(0xff00ff00_u32));
+        assert_eq!(snapshot["customSecondaryColor"], serde_json::json!(u32::MAX));
+        assert_eq!(snapshot["themeMode"], "dark");
+        assert_eq!(snapshot["backgroundImageOpacity"], serde_json::json!(0.5));
+        assert_eq!(preferences.getTyped::<String>(&stringPreferencesKey("app_language")).unwrap().as_deref(), Some("zh-CN"));
+    }
+    assert_eq!(root.parent().unwrap(), std::env::temp_dir());
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Migrates legacy Long IDs exactly and preserves the complete profile through the target schema.
+#[test]
+fn operit1_github_user_info_migrates_numeric_ids_and_profile_fields() {
+    use crate::data::preferences::GitHubAuthPreferences::{GitHubAuthPreferences, GitHubUser};
+
+    for id in [60804726_i64, i64::MAX, i64::MIN] {
+        let source = serde_json::json!({
+            "id": id,
+            "login": "snapshot-user",
+            "name": "Snapshot User",
+            "email": null,
+            "avatar_url": "https://fixture.invalid/avatar.png",
+            "bio": "Preserved profile",
+            "public_repos": 17,
+            "followers": 23,
+            "following": 5
+        });
+        let mut preferences = operit_store::PreferencesDataStore::emptyPreferences();
+        preferences.set(&stringPreferencesKey("user_info"), source.to_string());
+        preferences.set(&stringPreferencesKey("is_logged_in"), "true");
+        preferences.set(&stringPreferencesKey("auth_version"), "3");
+        preferences.set(&stringPreferencesKey("access_token"), "snapshot-token");
+
+        migrateOperit1GitHubUserInfo(&mut preferences).unwrap();
+        GitHubAuthPreferences::migratePreferences(1, &mut preferences).unwrap();
+
+        let user = preferences
+            .getTyped::<GitHubUser>(&stringPreferencesKey("user_info"))
+            .unwrap()
+            .unwrap();
+        let mut expected = source;
+        expected["id"] = Value::String(id.to_string());
+        assert_eq!(serde_json::to_value(user).unwrap(), expected);
+        assert_eq!(
+            preferences.getTyped::<bool>(&stringPreferencesKey("is_logged_in")).unwrap(),
+            Some(true),
+        );
+        assert_eq!(
+            preferences.getTyped::<i64>(&stringPreferencesKey("auth_version")).unwrap(),
+            Some(3),
+        );
+        assert_eq!(
+            preferences.getTyped::<String>(&stringPreferencesKey("access_token")).unwrap().as_deref(),
+            Some("snapshot-token"),
+        );
+    }
+}
+
+/// Accepts an absent profile and nullable fields omitted by the legacy Kotlin serializer.
+#[test]
+fn operit1_github_user_info_preserves_optional_profile_fields() {
+    use crate::data::preferences::GitHubAuthPreferences::{GitHubAuthPreferences, GitHubUser};
+
+    let mut preferences = operit_store::PreferencesDataStore::emptyPreferences();
+    migrateOperit1GitHubUserInfo(&mut preferences).unwrap();
+    assert!(preferences
+        .getTyped::<String>(&stringPreferencesKey("user_info"))
+        .unwrap()
+        .is_none());
+
+    preferences.set(
+        &stringPreferencesKey("user_info"),
+        r#"{"id":60804726,"login":"snapshot-user","avatar_url":"https://fixture.invalid/avatar.png"}"#,
+    );
+    migrateOperit1GitHubUserInfo(&mut preferences).unwrap();
+    GitHubAuthPreferences::migratePreferences(1, &mut preferences).unwrap();
+    let user = preferences
+        .getTyped::<GitHubUser>(&stringPreferencesKey("user_info"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(user.id, "60804726");
+    assert_eq!(user.name, None);
+    assert_eq!(user.email, None);
+    assert_eq!(user.bio, None);
+    assert_eq!(user.publicRepos, None);
+    assert_eq!(user.followers, None);
+    assert_eq!(user.following, None);
+}
+
+/// Reports malformed legacy profiles without mutating or discarding the source value.
+#[test]
+fn operit1_github_user_info_rejects_invalid_source_types() {
+    for encoded in [
+        r#"{"id":"60804726","login":"snapshot-user","avatar_url":"avatar"}"#,
+        r#"{"id":60804726.5,"login":"snapshot-user","avatar_url":"avatar"}"#,
+        r#"{"id":9223372036854775808,"login":"snapshot-user","avatar_url":"avatar"}"#,
+        r#"{"id":null,"login":"snapshot-user","avatar_url":"avatar"}"#,
+        r#"{"id":60804726,"avatar_url":"avatar"}"#,
+        r#"{"id":60804726,"login":"snapshot-user"}"#,
+        "invalid-json",
+    ] {
+        let mut preferences = operit_store::PreferencesDataStore::emptyPreferences();
+        preferences.set(&stringPreferencesKey("user_info"), encoded);
+        let error = migrateOperit1GitHubUserInfo(&mut preferences).unwrap_err();
+        assert!(error.starts_with("Operit1 GitHub user_info 格式不正确："));
+        assert_eq!(
+            preferences.getTyped::<String>(&stringPreferencesKey("user_info")).unwrap().as_deref(),
+            Some(encoded),
+        );
+    }
+
+    let mut preferences = operit_store::PreferencesDataStore::emptyPreferences();
+    preferences.set(&stringPreferencesKey("user_info"), 60804726);
+    let error = migrateOperit1GitHubUserInfo(&mut preferences).unwrap_err();
+    assert!(error.starts_with("Operit1 GitHub user_info 读取失败："));
+    assert_eq!(
+        preferences.getTyped::<i64>(&stringPreferencesKey("user_info")).unwrap(),
+        Some(60804726),
+    );
+}
+
 /// Uses exact source memory directories rather than deleting normal workspace and externally supplied USER.md files.
 #[test]
 fn memory_copy_exclusion_is_scoped_to_declared_legacy_storage_directories() {

@@ -1,4 +1,5 @@
 import { uuid } from "./identity";
+import { searchMemoryChunks } from "./memory-search";
 import type { DomainInput, DomainOperation, DomainOutput } from "./api";
 import type { CharacterRepository } from "./canonical";
 import type { Card, Memory, MemoryLink } from "./model";
@@ -78,6 +79,13 @@ export async function resolveConfiguration(
 
 /** Implements every published domain operation with typed handlers sharing the editor's actual business service. */
 const handlers: DomainHandlers = {
+  /** Ranks original chunks and commits provider vectors in the same repository operation. */
+  "memory.chunks": async (input, repository) => {
+    const space = await repository.readMemorySpace(input.ownerKey), cached = space.embeddings.length;
+    const result = await searchMemoryChunks(space, input.memoryId, input.query, input.count);
+    if (space.embeddings.length !== cached) await repository.writeMemorySpace(input.ownerKey, space);
+    return result;
+  },
   /** Keeps full-filter searches and provider embedding persistence on the same serialized service. */
   "memory.searchWithOptions": async (input, repository) => ({ ownerKey: input.ownerKey, items: await searchMemories(input, repository) }),
   /** Lists actual owner-bound generic chat summaries. */

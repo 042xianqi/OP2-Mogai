@@ -216,6 +216,7 @@ export interface MemoryQueryResult { memories: MemoryQueryMatch[]; snapshotId: s
 /** Maps every published domain method to its exact input and output contract. */
 export interface DomainOperations {
   "memory.searchWithOptions": { input: MemorySearchOptions; output: { ownerKey: string; items: MemoryRecord[] } };
+  "memory.chunks": { input: OwnerParams & { memoryId: string; query: string; count: number }; output: { total: number; chunks: { id: string; memoryUuid: string; chunkIndex: number; content: string }[] } };
   "memory.chat.list": { input: { ownerKey: string }; output: MemoryChat[] };
   "memory.chat.update": { input: { ownerKey: string; chatId: string }; output: MemoryExtractionResult };
   "memory.categorize": { input: { ownerKey: string }; output: number };

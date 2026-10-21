@@ -197,6 +197,7 @@ impl HostEnvironmentDescriptor {
             environmentParameterDescriptionCn: String::new(),
             capabilities: vec![
                 "screen.capture".to_string(),
+                "ocr.recognition".to_string(),
                 "fs.read".to_string(),
                 "fs.write".to_string(),
                 "fs.search".to_string(),
@@ -225,6 +226,7 @@ impl HostEnvironmentDescriptor {
             ],
             structuredCapabilities: hostCapabilities(&[
                 "screen.capture",
+                "ocr.recognition",
                 "fs.read",
                 "fs.write",
                 "fs.search",
@@ -2219,6 +2221,9 @@ pub trait HostRuntimeTaskSchedulerHost: Send + Sync {
     fn monotonicTimeMillis(&self) -> HostResult<u64>;
 
     /// Schedules a named one-shot runtime task through the platform execution mechanism.
+    ///
+    /// The closure is synchronous, so hosts with dedicated blocking capacity should
+    /// execute it there instead of on the coordination executor.
     fn scheduleHostRuntimeTask(&self, taskName: &str, task: HostRuntimeTask) -> HostResult<()>;
 
     /// Schedules a named asynchronous runtime task through the platform executor.
@@ -2227,6 +2232,20 @@ pub trait HostRuntimeTaskSchedulerHost: Send + Sync {
         taskName: &str,
         task: HostRuntimeAsyncTask,
     ) -> HostResult<()>;
+
+    /// Schedules an asynchronous task that may perform blocking work.
+    ///
+    /// Hosts with dedicated blocking capacity must isolate these tasks from the
+    /// coordination executor, so one blocked call cannot delay runtime deadlines,
+    /// promise pumps, notification dispatch, or engine steps. Platforms without a
+    /// separate blocking executor may reuse the asynchronous executor.
+    fn scheduleHostRuntimeBlockingAsyncTask(
+        &self,
+        taskName: &str,
+        task: HostRuntimeAsyncTask,
+    ) -> HostResult<()> {
+        self.scheduleHostRuntimeAsyncTask(taskName, task)
+    }
 
     /// Schedules a nonblocking task on the host's reusable affine executor.
     /// Callers must not block the executor or rely on exclusive thread-local state.
@@ -3005,18 +3024,11 @@ mod tests {
         }
     }
 
-    /// Verifies that OpenHarmony does not advertise unimplemented OCR capability.
+    /// Verifies that OpenHarmony advertises its packaged offline OCR implementation.
     #[test]
-    fn ohosDescriptorExcludesUnimplementedCapabilities() {
+    fn ohosDescriptorIncludesOfflineOcr() {
         let descriptor = HostEnvironmentDescriptor::ohos();
-        let actual = descriptorCapabilitySet(&descriptor);
-        let unimplemented = idSet(&["ocr.recognition"]);
-        let advertised: Vec<_> = actual.intersection(&unimplemented).cloned().collect();
-
-        assert!(
-            advertised.is_empty(),
-            "OpenHarmony host descriptor advertises unimplemented capabilities: {advertised:?}"
-        );
+        assert!(descriptorCapabilitySet(&descriptor).contains("ocr.recognition"));
     }
 
     /// Verifies that OpenHarmony onboarding exposes required runtime permissions.

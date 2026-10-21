@@ -337,6 +337,41 @@ export class RepositorySession implements CharacterRepository {
       name => ({ id: uuid(), name }),
     ) });
   }
+  /** Replaces every exact source-title match with a new identity and redirects surviving external links. */
+  async mergeMemories(ownerKey: string, sourceTitles: string[], values: MemoryValues): Promise<Memory> {
+    assertMemoryValues(values);
+    const space = this.space(ownerKey), titles = new Set<string>();
+    for (const title of sourceTitles) titles.add(requireName(title, "merge source title"));
+    const ids = new Set<string>(), uuids = new Set<string>(), found = new Set<string>();
+    for (const memory of space.memories) if (titles.has(memory.title)) {
+      ids.add(memory.id); uuids.add(memory.uuid); found.add(memory.title);
+    }
+    for (const title of titles) if (!found.has(title)) throw new Error("Memory merge source does not exist: " + title);
+    if (ids.size < 2) throw new Error("Memory merge requires at least two unique source records");
+    const remaining = space.memories.filter(
+      /** Retains only records outside the explicitly selected merge. */
+      memory => !ids.has(memory.id),
+    );
+    if (remaining.some(
+      /** Rejects a target title already held by an unrelated record. */
+      memory => memory.title === values.title.trim(),
+    )) throw new Error("Name already exists: " + values.title);
+    space.memories = remaining;
+    const merged = await this.createMemory(ownerKey, values);
+    space.chunks = space.chunks.filter(
+      /** Deletes chunks owned by source documents as Kotlin mergeMemories does. */
+      chunk => !uuids.has(chunk.memoryUuid),
+    );
+    for (const link of space.links) {
+      if (ids.has(link.sourceMemoryId)) link.sourceMemoryId = merged.id;
+      if (ids.has(link.targetMemoryId)) link.targetMemoryId = merged.id;
+    }
+    space.links = space.links.filter(
+      /** Removes internal relationships that would become forbidden self-links. */
+      link => link.sourceMemoryId !== link.targetMemoryId,
+    );
+    return merged;
+  }
   /** Deletes a memory and all referencing chunks and links in this operation. */
   async deleteMemory(ownerKey: string, id: string): Promise<void> {
     requireId(id, "memory id"); const space = this.space(ownerKey), memory = get(space.memories, id, "memory");

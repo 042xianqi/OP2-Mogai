@@ -1318,7 +1318,7 @@ fn blobPushRequest(
         .targetForSchema("services.syncBlobTransferManager")
         .ok_or_else(|| "unknown Core schema key: services.syncBlobTransferManager".to_string())?;
     Ok(CorePushRequest::new(
-        format!("space-persistence-blob-{}", currentTimeMillis()),
+        operit_link::nextCoreRouteRequestId("space-persistence-blob"),
         target,
         "syncReceiveBlob",
     )
@@ -1457,7 +1457,7 @@ fn applicationCallRequest(
     args: Value,
 ) -> Result<CoreCallRequest, String> {
     Ok(CoreCallRequest::new(
-        format!("space-persistence-{methodName}-{}", currentTimeMillis()),
+        operit_link::nextCoreRouteRequestId(&format!("space-persistence-{methodName}")),
         nodeRouter
             .targetForSchema("application")
             .ok_or_else(|| "unknown Core schema key: application".to_string())?,
@@ -1482,7 +1482,7 @@ fn serviceCallRequest(
             .ok_or_else(|| format!("unknown Core schema key: {targetPath}"))?
     };
     Ok(CoreCallRequest::new(
-        format!("space-persistence-{methodName}-{}", currentTimeMillis()),
+        operit_link::nextCoreRouteRequestId(&format!("space-persistence-{methodName}")),
         target,
         methodName,
         toCoreValue(args).map_err(|error| error.to_string())?,

@@ -167,9 +167,9 @@ test("async document ranking uses actual embedding HTTP and preserves original p
   await environment.domain("memory.searchConfig.write", { ownerKey: "character:default", config: { ...config, keywordWeight: 0, tagWeight: 0, vectorWeight: 1, edgeWeight: 0 } });
   const title = await call(environment, "get_memory_by_title", { title: "Document", query: "travel", limit: 1 });
   assert.match(title, /semantic target/); assert.doesNotMatch(title, /lexical match first/);
-  assert.equal(environment.requests.length, 4);
+  assert.equal(environment.requests.length, 3);
   const committed = (await state(environment)).owners[0].embeddings;
-  assert.deepEqual(committed.map(item => item.text).sort(), ["Document", "lexical match first", "semantic target", "travel"]);
+  assert.deepEqual(committed.map(item => item.text).sort(), ["lexical match first", "semantic target", "travel"]);
   for (const entry of committed) { assert.equal(entry.endpoint, environment.endpoint); assert.equal(entry.model, "test-vector-model"); assert.ok(entry.vector.length !== 0); }
   const result = await call(environment, "query_memory", { query: "travel", limit: 1 });
   assert.equal(result.memories.length, 1); assert.deepEqual(plain(result.memories[0].chunkIndices), [1]);

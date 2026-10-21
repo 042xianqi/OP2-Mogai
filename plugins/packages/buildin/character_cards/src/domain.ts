@@ -49,6 +49,8 @@ function number(value: unknown, path: string): void {
 function integer(value: unknown, path: string): void {
   if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new Error(`${path} must be a safe integer`);
 }
+/** Validates bounded collection counts without accepting negative slicing offsets. */
+function nonnegativeInteger(value: unknown, path: string): void { integer(value, path); nonnegative(value, path); }
 /** Requires one explicit persisted message revision inside the generic host's i32 range. */
 function messageVariant(value: unknown, path: string): void {
   integer(value, path);
@@ -152,7 +154,8 @@ export function parseMemoryQueryRequest(payload: unknown): MemoryQueryRequest {
 }
 
 const validators: Record<DomainOperation, Validator> = {
-  "memory.searchWithOptions": shape({ ownerKey: required(owner), query: required(text), folderPath: required(nullable(text)), relevanceThreshold: required(nonnegative), createdAtStartMs: required(nullable(integer)), createdAtEndMs: required(nullable(integer)) }),
+  "memory.chunks": shape({ ownerKey: required(owner), memoryId: required(nonblank), query: required(nonblank), count: required(nonnegativeInteger) }),
+  "memory.searchWithOptions": shape({ ownerKey: required(owner), query: required(nonblank), folderPath: required(nullable(text)), relevanceThreshold: required(nonnegative), createdAtStartMs: required(nullable(integer)), createdAtEndMs: required(nullable(integer)) }),
   "memory.chat.list": ownerOnly,
   "memory.chat.update": shape({ ownerKey: required(owner), chatId: required(nonblank) }),
   "memory.categorize": ownerOnly,

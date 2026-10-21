@@ -22,14 +22,17 @@ jobs:
             script: tools/ios-runtime/ish/build_alpine_rootfs_linux.sh
             archive: apps/flutter/app/ios/Runner/ish-root.tar.gz
             architecture: x86
+            package_layout: preinstalled
           - platform: android
             script: tools/android-runtime/build_alpine_rootfs_wsl.sh
             archive: apps/flutter/app/android/app/src/main/assets/android-runtime/arm64-v8a/rootfs.tar.gz.bin
             architecture: aarch64
+            package_layout: preinstalled
           - platform: ohos
             script: tools/ohos-runtime/build_alpine_rootfs_linux.sh
             archive: apps/flutter/app/ohos/entry/src/main/resources/rawfile/ohos-vroot/alpine-minirootfs-3.23.6-aarch64.tar.gz
             architecture: aarch64
+            package_layout: offline
     defaults:
       run:
         shell: bash
@@ -42,14 +45,15 @@ jobs:
       - name: Build runtime rootfs
         env:
           BUILD_SCRIPT: ${{ matrix.script }}
-        run: bash "$BUILD_SCRIPT"
+        run: sudo bash "$BUILD_SCRIPT"
       - name: Verify packaged Node 24 and SQLite
         env:
           RUNTIME_ARCHIVE: ${{ matrix.archive }}
           RUNTIME_ARCHITECTURE: ${{ matrix.architecture }}
           RUNTIME_PLATFORM: ${{ matrix.platform }}
+          RUNTIME_PACKAGE_LAYOUT: ${{ matrix.package_layout }}
         run: |
-          bash tools/runtime/smoke_alpine_node24.sh "$RUNTIME_ARCHIVE" "$RUNTIME_ARCHITECTURE" | tee node24-smoke.log
+          bash tools/runtime/smoke_alpine_node24.sh "$RUNTIME_ARCHIVE" "$RUNTIME_ARCHITECTURE" "$RUNTIME_PACKAGE_LAYOUT" | tee node24-smoke.log
           mkdir -p runtime-artifacts
           cp "$RUNTIME_ARCHIVE" runtime-artifacts/
           cp node24-smoke.log runtime-artifacts/

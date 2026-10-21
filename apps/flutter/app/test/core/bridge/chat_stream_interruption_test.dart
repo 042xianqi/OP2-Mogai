@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:operit2/core/bridge/OperitRuntimeBridge.dart';
 import 'package:operit2/core/link/CoreLinkCodec.dart';
 import 'package:operit2/core/link/CoreLinkProtocol.dart';
+import 'package:operit2/core/logging/ClientLogger.dart';
 import 'package:operit2/core/proxy/generated/CoreProxyClients.g.dart';
 import 'package:operit2/core/proxy/generated/CoreProxyModels.g.dart';
 import 'package:operit2/ui/common/markdown/MarkdownNodeGrouper.dart';
@@ -16,6 +17,8 @@ import 'package:operit2/ui/features/chat/components/part/StructuredMessagePartRe
 enum _Interruption { transportError, eofWithoutCompleted, malformedFrame }
 
 void main() {
+  setUpAll(ClientLogger.initialize);
+
   for (final interruption in _Interruption.values) {
     test(
       'live chat resumes on its next descriptor after ${interruption.name}, without cancelling AI',

@@ -2,10 +2,35 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
-import { plain } from "./runtime.mjs";
+import { loadModule, plain } from "./runtime.mjs";
 import { CONTROLLED_CHAT_ID, CONTROLLED_OWNER, createMemoryJobsHarness } from "./memory-jobs-runtime.mjs";
 
 const owner = { ownerKey: CONTROLLED_OWNER };
+
+/** Keeps candidate retrieval aligned with the Kotlin question, answer, and recent-context budgets. */
+test("candidate search query focuses recent question and answer within explicit bounds", () => {
+  const { buildCandidateSearchQuery } = loadModule("src/memory-jobs/analysis.ts");
+  const messages = [
+    { sender: "user", content: "Earlier unrelated request" },
+    { sender: "assistant", content: "<think>private reasoning</think>Answer https://example.test/path" },
+    { sender: "user", content: "Question: preserve SSH context\n<memory>injected memory</memory>" },
+  ];
+  const query = buildCandidateSearchQuery(messages);
+  assert.match(query, /Question: preserve SSH context/u);
+  assert.match(query, /Answer/u);
+  assert.doesNotMatch(query, /private reasoning|injected memory|https:/u);
+  assert.ok(query.length <= 1880);
+
+  const longMessages = [
+    ...Array.from({ length: 12 }, () => ({ sender: "user", content: "c".repeat(400) })),
+    { sender: "user", content: "q".repeat(900) },
+    { sender: "assistant", content: "a".repeat(900) },
+  ];
+  const bounded = buildCandidateSearchQuery(longMessages);
+  assert.ok(bounded.length <= 1882);
+  assert.ok(bounded.startsWith("q".repeat(500)));
+  assert.ok(bounded.includes("a".repeat(180)));
+});
 
 /** Reads one genuine owner from native bytes and rejects absent or duplicated persisted spaces. */
 async function readOwner(harness) {

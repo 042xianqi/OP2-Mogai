@@ -139,6 +139,8 @@ export interface CharacterRepository {
     id: string,
     values: MemoryValues,
   ): Promise<Memory>;
+  /** Combines all exact source-title matches into a new textual record and redirects their relationships. */
+  mergeMemories(ownerKey: string, sourceTitles: string[], values: MemoryValues): Promise<Memory>;
   /** Deletes a memory together with its chunks and links. */
   deleteMemory(ownerKey: string, id: string): Promise<void>;
   /** Moves selected memories in the same operation. */

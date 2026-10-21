@@ -203,6 +203,7 @@ class _AIChatSurfaceState extends State<_AIChatSurface> {
   late final ValueNotifier<String?> _toastMessageNotifier;
 
   bool _loading = true;
+  final Set<String> _regeneratingChatIds = <String>{};
   core_proxy.InputProcessingState _inputProcessingState =
       core_proxy.InputProcessingState.idle();
   String? _errorMessage;
@@ -2106,7 +2107,16 @@ class _AIChatSurfaceState extends State<_AIChatSurface> {
     if (chatId == null) {
       return;
     }
-    await _viewModel.regenerateSingleAiMessage(chatId, messageTimestamp);
+    if (_isQueueBlocked || _regeneratingChatIds.contains(chatId)) {
+      _showLocalToast('当前对话正在处理，请结束后再重新生成');
+      return;
+    }
+    _regeneratingChatIds.add(chatId);
+    try {
+      await _viewModel.regenerateSingleAiMessage(chatId, messageTimestamp);
+    } finally {
+      _regeneratingChatIds.remove(chatId);
+    }
   }
 
   void _insertSummary(ChatUiMessage message) {
