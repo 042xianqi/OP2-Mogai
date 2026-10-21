@@ -216,6 +216,7 @@ var validators = {
   "memory.chunks": shape({ ownerKey: required(owner), memoryId: required(nonblank), query: required(nonblank), count: required(nonnegativeInteger) }),
   "memory.searchWithOptions": shape({ ownerKey: required(owner), query: required(nonblank), folderPath: required(nullable(text)), relevanceThreshold: required(nonnegative), createdAtStartMs: required(nullable(integer)), createdAtEndMs: required(nullable(integer)) }),
   "memory.chat.list": ownerOnly,
+  "memory.chat.pruneMissing": ownerOnly,
   "memory.chat.update": shape({ ownerKey: required(owner), chatId: required(nonblank) }),
   "memory.categorize": ownerOnly,
   "memory.rebuild.start": shape({ ownerKey: required(owner), rebuild: required(shape({ chatIds: required(strings), windowMessageCount: required(integer), fromInclusive: required(nullable(integer)), toInclusive: required(nullable(integer)) })) }),
@@ -322,7 +323,7 @@ function Screen(ctx) {
   function close() {
     return { type: "toolpkg.presentation.cancel", requestId };
   }
-  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/memory-status/index.ui.js:16689",[input.description,close,close],__operitUiTemplate_16689);
+  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/memory-status/index.ui.js:16730",[input.description,close,close],__operitUiTemplate_16730);
 }
 
-function __operitUiTemplate_16689(__ctx,__values){return __ctx.UI.AlertDialog({key:"memory-status",title:"\u8BB0\u5FC6\u72B6\u6001",text:__values[0],confirmText:"\u5173\u95ED",onConfirm:__values[1],onDismissRequest:__values[2]}); }
+function __operitUiTemplate_16730(__ctx,__values){return __ctx.UI.AlertDialog({key:"memory-status",title:"\u8BB0\u5FC6\u72B6\u6001",text:__values[0],confirmText:"\u5173\u95ED",onConfirm:__values[1],onDismissRequest:__values[2]}); }

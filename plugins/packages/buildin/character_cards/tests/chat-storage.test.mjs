@@ -5,7 +5,7 @@ import { loadModule, plain } from "./runtime.mjs";
 
 /** Supplies Core metadata only; plugin binding and snapshot behavior runs against real SQLite. */
 async function environment(t, count = 3) {
-  const disk = await createDiskHarness(t, { legacyIdentity: "default" }), chats = new Map(), calls = [];
+  const disk = await createDiskHarness(t, { legacyIdentity: "default" }), chats = new Map(), messages = new Map(), calls = [];
   for (let index = 0; index < count; index++) {
     const id = "chat-" + index;
     chats.set(id, { id, title: id, messageCount: 0, createdAt: "1700000000000", updatedAt: String(1700000000000 + index), isCurrent: false, inputTokens: 0, outputTokens: 0 });
@@ -28,12 +28,18 @@ async function environment(t, count = 3) {
       assert.ok(options.chat_ids.length <= 200);
       return { totalCount: options.chat_ids.length, currentChatId: null, chats: options.chat_ids.filter(id => chats.has(id)).map(id => plain(chats.get(id))) };
     },
+    /** Serves the stored inclusive range so orphan checks can match real message revisions. */
+    async getMessagesRange(chatId, options) {
+      calls.push({ method: "getMessagesRange", options: plain(options) });
+      const list = messages.get(chatId) ?? [];
+      return { chatId, order: "asc", start: options.start, end: options.end, limit: options.end - options.start + 1, messages: list.slice(options.start, options.end + 1).map(plain) };
+    },
   };
   const globals = { ...disk.globals, Tools: { Files: disk.files, Storage: disk.storage, Chat: chat } };
   const repository = await loadModule("src/storage/database.ts", globals).DatabaseCharacterRepository.open();
   const service = loadModule("src/service.ts", globals).createCharacterCardsService(repository);
   const storage = loadModule("src/chat-storage.ts", globals);
-  return { disk, chats, calls, repository, service, storage };
+  return { disk, chats, messages, calls, repository, service, storage };
 }
 
 test("binding CRUD persists solely in SQL and role deletion respects explicit bindings", async t => {
@@ -54,15 +60,53 @@ test("425 bound chats use three bounded metadata calls without listAll or extens
   const h = await environment(t, 425), database = await h.storage.chatDatabase();
   await database.chats.edit(preferences => { for (const key of h.chats.keys()) preferences.set("binding_" + key, { version: 1, selection: "card:default" }); });
   h.disk.clearCalls();
-  const rows = plain(await h.service.dispatchDomain("memory.chat.list", { ownerKey: "character:default" }));
-  assert.equal(rows.length, 425);
-  assert.equal(rows[0].id, "chat-424");
+  const listing = plain(await h.service.dispatchDomain("memory.chat.list", { ownerKey: "character:default" }));
+  assert.equal(listing.chats.length, 425);
+  assert.equal(listing.missingChatIds.length, 0);
+  assert.equal(listing.chats[0].id, "chat-424");
   assert.deepEqual(h.calls.map(call => call.options.chat_ids.length), [200, 200, 25]);
   for (const query of h.disk.calls.filter(call => call.method === "storage.get")) assert.doesNotMatch(query.args[0], /FROM "(?:memories|embeddings|candidates)"/);
   const bindings = await h.storage.bindingsForChats([...h.chats.keys()]);
   assert.equal(bindings.size, 425);
   h.chats.delete("chat-0");
-  await assert.rejects(h.service.dispatchDomain("memory.chat.list", { ownerKey: "character:default" }), /complete|missing|incomplete/i);
+  const degraded = plain(await h.service.dispatchDomain("memory.chat.list", { ownerKey: "character:default" }));
+  assert.deepEqual(degraded.missingChatIds, ["chat-0"]);
+  assert.equal(degraded.chats.length, 424);
+  assert.equal((await h.storage.bindingsForChats(["chat-0"])).size, 1);
+});
+
+test("pruning missing bindings deletes only the dangling ones and keeps the rest", async t => {
+  const h = await environment(t, 3), database = await h.storage.chatDatabase();
+  await database.chats.edit(preferences => {
+    for (const key of h.chats.keys()) preferences.set("binding_" + key, { version: 1, selection: "card:default" });
+  });
+  h.chats.delete("chat-1");
+  assert.deepEqual(plain(await h.service.dispatchDomain("memory.chat.pruneMissing", { ownerKey: "character:default" })), { removedChatIds: ["chat-1"], removedCandidateIds: [] });
+  assert.equal(await h.storage.findChatBinding("chat-1"), null);
+  assert.deepEqual(plain(await h.storage.findChatBinding("chat-0")), { chatId: "chat-0", selection: "card:default" });
+  assert.deepEqual(plain(await h.service.dispatchDomain("memory.chat.pruneMissing", { ownerKey: "character:default" })), { removedChatIds: [], removedCandidateIds: [] });
+});
+
+test("pruneMissing also drops extraction candidates whose chat or source message disappeared", async t => {
+  const h = await environment(t, 3);
+  h.chats.set("chat-0", { ...h.chats.get("chat-0"), messageCount: 1 });
+  h.messages.set("chat-0", [{ sender: "ai", content: "Controlled reply", timestamp: 10, variantIndex: 0, variantCount: 1, provider: "p", modelName: "m" }]);
+  h.chats.delete("chat-1");
+  await h.repository.run(async repository => {
+    const space = await repository.readMemorySpace("character:default");
+    space.candidates.push(
+      { id: "keep-1", chatId: "chat-0", triggerMessageTimestamp: 10, triggerVariantIndex: 0, createdAt: 1, updatedAt: 1, status: "pending", attemptCount: 0, lastError: "", sourceType: "reply_finalized_auto" },
+      { id: "orphan-message", chatId: "chat-0", triggerMessageTimestamp: 99, triggerVariantIndex: 0, createdAt: 1, updatedAt: 1, status: "pending", attemptCount: 0, lastError: "", sourceType: "reply_finalized_auto" },
+      { id: "orphan-chat", chatId: "chat-1", triggerMessageTimestamp: 5, triggerVariantIndex: 0, createdAt: 1, updatedAt: 1, status: "failed", attemptCount: 1, lastError: "stale", sourceType: "reply_finalized_auto" },
+    );
+    await repository.writeMemorySpace("character:default", space);
+  });
+  assert.deepEqual(plain(await h.service.dispatchDomain("memory.chat.pruneMissing", { ownerKey: "character:default" })),
+    { removedChatIds: [], removedCandidateIds: ["orphan-chat", "orphan-message"] });
+  await h.repository.run(async repository => {
+    const after = await repository.readMemorySpace("character:default");
+    assert.deepEqual(plain(after.candidates.map(candidate => candidate.id)), ["keep-1"]);
+  });
 });
 
 test("group and writable mount ownership is filtered through relation tables", async t => {

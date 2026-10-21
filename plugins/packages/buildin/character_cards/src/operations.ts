@@ -7,7 +7,7 @@ import { createCharacterDraft, createGroupDraft, createTagDraft } from "./drafts
 import { parseDomainPayload, resolveChatConfiguration } from "./domain";
 import type { ChatConfigurationService } from "./domain";
 import { autoCategorizeMemory, updateChatMemory } from "./memory-jobs/analysis";
-import { listMemoryChats, requireChat } from "./memory-jobs/chat";
+import { listMemoryChats, pruneMissingMemoryChats, requireChat } from "./memory-jobs/chat";
 import { rebuildMemoryEmbeddings } from "./memory-jobs/embeddings";
 import { enqueueCandidate, startMemoryRebuild } from "./memory-jobs/scheduler";
 import { decodeCharacterBackup, decodeGroupBackup, decodeMemoryBackup, exportCharacterBackup, exportGroupBackup, exportMemoryBackup } from "./backup";
@@ -90,6 +90,7 @@ const handlers: DomainHandlers = {
   "memory.searchWithOptions": async (input, repository) => ({ ownerKey: input.ownerKey, items: await searchMemories(input, repository) }),
   /** Lists actual owner-bound generic chat summaries. */
   "memory.chat.list": (input, repository) => listMemoryChats(input.ownerKey, repository),
+  "memory.chat.pruneMissing": (input, repository) => pruneMissingMemoryChats(input.ownerKey, repository),
   /** Extracts real chat messages through the configured functional MEMORY model. */
   "memory.chat.update": (input, repository) => updateChatMemory(input.ownerKey, input.chatId, repository),
   /** Performs genuine ten-record functional categorization in the same operation. */

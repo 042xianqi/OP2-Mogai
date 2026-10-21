@@ -8,7 +8,7 @@ import { findChatBinding } from "./chat-storage";
 import { listBindableChats } from "./chat-binding-catalog";
 import { parseChatSelection } from "./chat-bindings";
 import { MemoryJobRunner } from "./memory-jobs/scheduler";
-import { listMemoryChats } from "./memory-jobs/chat";
+import { listMemoryChats, pruneMissingMemoryChats } from "./memory-jobs/chat";
 import type {
   CharacterRepository,
   CharacterRepositoryOwner,
@@ -129,6 +129,8 @@ export function createCharacterCardsService(
         return listBindableChats();
       case "listMemoryChats":
         return listMemoryChats(request.ownerKey, owner);
+      case "pruneMissingChatBindings":
+        return owner.run((repository) => pruneMissingMemoryChats(request.ownerKey, repository));
       case "readGlobalMemoryPreferences":
         return owner.readGlobalMemoryPreferences();
       case "readMemorySettings":
@@ -237,6 +239,12 @@ export function createCharacterCardsService(
             parseDomainPayload("memory.chat.list", input).ownerKey,
             owner,
           ) as Promise<DomainOutput<K>>;
+        case "memory.chat.pruneMissing":
+          return owner.run((repository) =>
+            pruneMissingMemoryChats(
+              parseDomainPayload("memory.chat.pruneMissing", input).ownerKey,
+              repository,
+            )) as Promise<DomainOutput<K>>;
         case "memory.settings.read":
           return owner.readMemorySettings(
             parseDomainPayload("memory.settings.read", input).ownerKey,
@@ -1141,6 +1149,12 @@ export async function dispatch(
     case "listMemoryChats":
       return executeDomain(
         "memory.chat.list",
+        { ownerKey: request.ownerKey },
+        host,
+      );
+    case "pruneMissingChatBindings":
+      return executeDomain(
+        "memory.chat.pruneMissing",
         { ownerKey: request.ownerKey },
         host,
       );
