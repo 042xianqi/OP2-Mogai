@@ -60,7 +60,8 @@ export function installBrowserFixture(data) {
         // Presentation-only inputs for layout tests; persistence/jobs are covered by the separate real-service suite.
         case "readMemorySettings": return copy(data.settings);
         case "readMemorySearchConfig": return copy(data.searchConfig);
-        case "listMemoryChats": return [];
+        case "listMemoryChats": return { chats: [], missingChatIds: [] };
+        case "pruneMissingChatBindings": return { removedChatIds: [], removedCandidateIds: [] };
         case "listBindableChats": return copy(data.bindingChats ?? []);
         case "writeChatBinding": {
           if (window.testBindingFailure === operation.chatId) throw new Error("TEST_BINDING_REJECTED");

@@ -92,6 +92,11 @@ export async function memoryChatUpdateApi(event: ToolPkg.PublicApiEvent<DomainIn
   return dispatchDomain("memory.chat.update", parseDomainPayload("memory.chat.update", event.payload));
 }
 
+/** Executes memory.chat.pruneMissing through the sole private database-backed service. */
+export async function memoryChatPruneMissingApi(event: ToolPkg.PublicApiEvent<DomainInput<"memory.chat.pruneMissing">>): Promise<DomainOutput<"memory.chat.pruneMissing">> {
+  return dispatchDomain("memory.chat.pruneMissing", parseDomainPayload("memory.chat.pruneMissing", event.payload));
+}
+
 /** Executes memory.categorize through the sole private database-backed service. */
 export async function memoryCategorizeApi(event: ToolPkg.PublicApiEvent<DomainInput<"memory.categorize">>): Promise<DomainOutput<"memory.categorize">> {
   return dispatchDomain("memory.categorize", parseDomainPayload("memory.categorize", event.payload));
@@ -452,6 +457,7 @@ export function registerDomainApis(): void {
   ToolPkg.registerApi<DomainInput<"memory.rebuild.start">, DomainOutput<"memory.rebuild.start">>({ name: "memory.rebuild.start", function: memoryRebuildStartApi });
   ToolPkg.registerApi<DomainInput<"memory.categorize">, DomainOutput<"memory.categorize">>({ name: "memory.categorize", function: memoryCategorizeApi });
   ToolPkg.registerApi<DomainInput<"memory.chat.update">, DomainOutput<"memory.chat.update">>({ name: "memory.chat.update", function: memoryChatUpdateApi });
+  ToolPkg.registerApi<DomainInput<"memory.chat.pruneMissing">, DomainOutput<"memory.chat.pruneMissing">>({ name: "memory.chat.pruneMissing", function: memoryChatPruneMissingApi });
   ToolPkg.registerApi<DomainInput<"memory.chat.list">, DomainOutput<"memory.chat.list">>({ name: "memory.chat.list", function: memoryChatListApi });
   registerChatConfigurationApis();
   ToolPkg.registerApi<DomainInput<"snapshot">, DomainOutput<"snapshot">>({ name: "snapshot", function: snapshotApi });

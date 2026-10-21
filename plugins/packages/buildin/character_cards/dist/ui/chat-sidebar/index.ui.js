@@ -252,6 +252,7 @@ var validators = {
   "memory.chunks": shape({ ownerKey: required(owner), memoryId: required(nonblank), query: required(nonblank), count: required(nonnegativeInteger) }),
   "memory.searchWithOptions": shape({ ownerKey: required(owner), query: required(nonblank), folderPath: required(nullable(text)), relevanceThreshold: required(nonnegative), createdAtStartMs: required(nullable(integer)), createdAtEndMs: required(nullable(integer)) }),
   "memory.chat.list": ownerOnly,
+  "memory.chat.pruneMissing": ownerOnly,
   "memory.chat.update": shape({ ownerKey: required(owner), chatId: required(nonblank) }),
   "memory.categorize": ownerOnly,
   "memory.rebuild.start": shape({ ownerKey: required(owner), rebuild: required(shape({ chatIds: required(strings), windowMessageCount: required(integer), fromInclusive: required(nullable(integer)), toInclusive: required(nullable(integer)) })) }),
@@ -421,16 +422,16 @@ function sidebarRowBuilders(ctx, current, state, actions, defaultAvatar) {
   function dragType(section) {
     return "character-sidebar.chat:" + section.id;
   }
-  const gap = (width) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:20186",[width],__operitUiTemplate_20186);
+  const gap = (width) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:20227",[width],__operitUiTemplate_20227);
   function more(kind, id2, selected = false) {
-    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:20270",["sidebar-" + kind + "-menu-" + id2 + "-visibility",selected,actions.menu(kind, id2)],__operitUiTemplate_20270);
+    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:20311",["sidebar-" + kind + "-menu-" + id2 + "-visibility",selected,actions.menu(kind, id2)],__operitUiTemplate_20311);
   }
   function chatRow(chat, section, groupId) {
     const selected = current.chatSidebar.currentChatId === chat.id;
     const titleColor = selected ? colors.onSecondaryContainer : muted;
     const running = current.chatSidebar.activeStreamingChatIds.includes(chat.id);
-    const status = OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:20706",["sidebar-status-" + chat.id,running,selected,selected ? colors.onSecondaryContainer.copy({ alpha: 0.7 }) : colors.onSurfaceVariant.copy({ alpha: 0.3 }),colors.primary],__operitUiTemplate_20706);
-    const content = [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:21027",["sidebar-chat-drag-" + chat.id,chat.id,dragType(section),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:21182",[colors.surfaceContainerHighest,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:21372",[chat.title,colors.onSurface],__operitUiTemplate_21372)],__operitUiTemplate_21182),status],__operitUiTemplate_21027), gap(5), OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:21523",[{
+    const status = OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:20747",["sidebar-status-" + chat.id,running,selected,selected ? colors.onSecondaryContainer.copy({ alpha: 0.7 }) : colors.onSurfaceVariant.copy({ alpha: 0.3 }),colors.primary],__operitUiTemplate_20747);
+    const content = [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:21068",["sidebar-chat-drag-" + chat.id,chat.id,dragType(section),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:21223",[colors.surfaceContainerHighest,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:21413",[chat.title,colors.onSurface],__operitUiTemplate_21413)],__operitUiTemplate_21223),status],__operitUiTemplate_21068), gap(5), OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:21564",[{
       key: "sidebar-chat-title-" + chat.id,
       text: chat.title,
       weight: 1,
@@ -440,14 +441,14 @@ function sidebarRowBuilders(ctx, current, state, actions, defaultAvatar) {
       overflow: "ellipsis",
       color: titleColor,
       ...{ letterSpacing: -0.1 }
-    }],__operitUiTemplate_21523)];
-    if (chat.pinned) content.push(gap(5), OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:21842",[titleColor.copy ? titleColor.copy({ alpha: 0.6 }) : titleColor],__operitUiTemplate_21842));
-    if (chat.locked) content.push(gap(5), OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:21999",[titleColor.copy ? titleColor.copy({ alpha: 0.6 }) : titleColor],__operitUiTemplate_21999));
+    }],__operitUiTemplate_21564)];
+    if (chat.pinned) content.push(gap(5), OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:21883",[titleColor.copy ? titleColor.copy({ alpha: 0.6 }) : titleColor],__operitUiTemplate_21883));
+    if (chat.locked) content.push(gap(5), OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:22040",[titleColor.copy ? titleColor.copy({ alpha: 0.6 }) : titleColor],__operitUiTemplate_22040));
     content.push(gap(4), more("chat", chat.id, selected));
-    const surface = OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:22190",["sidebar-chat-hit-" + chat.id,ctx.Modifier.clip({ cornerRadius: m.chatRadius }).background(colors.secondaryContainer.copy({ alpha: selected ? 0.78 : 0 }), { cornerRadius: m.chatRadius }).border(1, colors.onSecondaryContainer.copy({ alpha: selected ? 0.08 : 0 }), { cornerRadius: m.chatRadius }).combinedClickable({ onClick: () => actions.activate(chat.id), onLongClick: () => actions.longPress(chat.id) }),content],__operitUiTemplate_22190);
+    const surface = OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:22231",["sidebar-chat-hit-" + chat.id,ctx.Modifier.clip({ cornerRadius: m.chatRadius }).background(colors.secondaryContainer.copy({ alpha: selected ? 0.78 : 0 }), { cornerRadius: m.chatRadius }).border(1, colors.onSecondaryContainer.copy({ alpha: selected ? 0.08 : 0 }), { cornerRadius: m.chatRadius }).combinedClickable({ onClick: () => actions.activate(chat.id), onLongClick: () => actions.longPress(chat.id) }),content],__operitUiTemplate_22231);
     const indicatorColor = selected ? colors.primary : colors.onSurface.copy({ alpha: 0 });
-    const rail = OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:23025",["sidebar-chat-rail-" + chat.id,m.railWidth,m.chatHeight,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:23183",["sidebar-chat-rail-base-" + chat.id,m.chatHeight,colors.outlineVariant.copy({ alpha: 0.45 })],__operitUiTemplate_23183),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:23379",["sidebar-chat-rail-indicator-" + chat.id,selected ? 2 : 1,selected ? 16 : 0,indicatorColor,selected ? 16 : 10,selected ? colors.primary : colors.onSurface.copy({ alpha: 0.55 })],__operitUiTemplate_23379)],__operitUiTemplate_23025);
-    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:23883",["sidebar-chat-drop-" + chat.id,dragType(section),chat.id,colors.primary.copy({ alpha: 0.55 }),(id2) => actions.drop(String(id2), section.id, groupId, chat.id),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:24256",["sidebar-chat-hover-" + chat.id,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:24354",["sidebar-chat-" + chat.id,m.chatHeight,m.chatStart,m.chatEnd,rail,gap(2),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:24636",[colors.onSurfaceVariant.copy({ alpha: 0.07 }),m.chatRadius,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:24798",["sidebar-chat-swipe-" + chat.id,ctx.Modifier.clip({ cornerRadius: m.chatRadius }),() => actions.rename(chat.id),() => actions.confirmSwipeDelete(chat.id),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:25170",[colors.primary,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:25310",[m.swipeIconSize,m.swipeIconSize,m.swipeIconSize,colors.onPrimary],__operitUiTemplate_25310)],__operitUiTemplate_25170),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:25482",[colors.error,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:25616",[m.swipeIconSize,m.swipeIconSize,m.swipeIconSize,colors.onError],__operitUiTemplate_25616)],__operitUiTemplate_25482),surface],__operitUiTemplate_24798)],__operitUiTemplate_24636)],__operitUiTemplate_24354)],__operitUiTemplate_24256)],__operitUiTemplate_23883);
+    const rail = OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:23066",["sidebar-chat-rail-" + chat.id,m.railWidth,m.chatHeight,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:23224",["sidebar-chat-rail-base-" + chat.id,m.chatHeight,colors.outlineVariant.copy({ alpha: 0.45 })],__operitUiTemplate_23224),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:23420",["sidebar-chat-rail-indicator-" + chat.id,selected ? 2 : 1,selected ? 16 : 0,indicatorColor,selected ? 16 : 10,selected ? colors.primary : colors.onSurface.copy({ alpha: 0.55 })],__operitUiTemplate_23420)],__operitUiTemplate_23066);
+    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:23924",["sidebar-chat-drop-" + chat.id,dragType(section),chat.id,colors.primary.copy({ alpha: 0.55 }),(id2) => actions.drop(String(id2), section.id, groupId, chat.id),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:24297",["sidebar-chat-hover-" + chat.id,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:24395",["sidebar-chat-" + chat.id,m.chatHeight,m.chatStart,m.chatEnd,rail,gap(2),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:24677",[colors.onSurfaceVariant.copy({ alpha: 0.07 }),m.chatRadius,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:24839",["sidebar-chat-swipe-" + chat.id,ctx.Modifier.clip({ cornerRadius: m.chatRadius }),() => actions.rename(chat.id),() => actions.confirmSwipeDelete(chat.id),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:25211",[colors.primary,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:25351",[m.swipeIconSize,m.swipeIconSize,m.swipeIconSize,colors.onPrimary],__operitUiTemplate_25351)],__operitUiTemplate_25211),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:25523",[colors.error,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:25657",[m.swipeIconSize,m.swipeIconSize,m.swipeIconSize,colors.onError],__operitUiTemplate_25657)],__operitUiTemplate_25523),surface],__operitUiTemplate_24839)],__operitUiTemplate_24677)],__operitUiTemplate_24395)],__operitUiTemplate_24297)],__operitUiTemplate_23924);
   }
   function chats(values, id2, section, groupId, matchAll = false) {
     const matches = query === "" || matchAll ? values : values.filter((chat) => chat.title.toLocaleLowerCase().includes(query));
@@ -455,17 +456,17 @@ function sidebarRowBuilders(ctx, current, state, actions, defaultAvatar) {
     const preview = query !== "" || expanded ? matches : matches.filter((chat, index) => index < m.previewLimit || chat.pinned || current.chatSidebar.currentChatId === chat.id || current.chatSidebar.activeStreamingChatIds.includes(chat.id));
     const result = preview.map((chat) => () => chatRow(chat, section, groupId));
     const hidden = matches.length - preview.length;
-    if (query === "" && (hidden > 0 || expanded && matches.length > m.previewLimit)) result.push(() => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:26569",["sidebar-preview-" + id2,m.chatStart,m.chatEnd,() => actions.toggleGroup("preview:" + id2),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:26873",[expanded ? "ExpandLess" : "ExpandMore",colors.onSurfaceVariant.copy({ alpha: 0.72 })],__operitUiTemplate_26873),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:27005",[expanded ? "\u6536\u8D77" : "\u5C55\u5F00\u66F4\u591A " + hidden,colors.onSurfaceVariant.copy({ alpha: 0.72 })],__operitUiTemplate_27005)],__operitUiTemplate_26569));
+    if (query === "" && (hidden > 0 || expanded && matches.length > m.previewLimit)) result.push(() => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:26610",["sidebar-preview-" + id2,m.chatStart,m.chatEnd,() => actions.toggleGroup("preview:" + id2),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:26914",[expanded ? "ExpandLess" : "ExpandMore",colors.onSurfaceVariant.copy({ alpha: 0.72 })],__operitUiTemplate_26914),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:27046",[expanded ? "\u6536\u8D77" : "\u5C55\u5F00\u66F4\u591A " + hidden,colors.onSurfaceVariant.copy({ alpha: 0.72 })],__operitUiTemplate_27046)],__operitUiTemplate_26610));
     return result;
   }
   function category(section) {
     const collapsed = state.collapsed.includes(section.id);
-    const avatar = section.kind === "card" ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:27356",["sidebar-avatar-" + section.id,section.avatarUri ?? defaultAvatar ?? "",m.categoryAvatar,m.categoryAvatar,section.title,ctx.Modifier.clip({ type: "circle" })],__operitUiTemplate_27356) : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:27662",[m.categoryAvatar,m.categoryAvatar,colors.surfaceContainerLow.copy({ alpha: 0.72 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:27914",[section.kind === "group" ? "Groups" : "AccountTree",colors.onSurfaceVariant],__operitUiTemplate_27914)],__operitUiTemplate_27662);
-    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:28048",["sidebar-section-" + section.id,m.categoryStart,m.categoryEnd,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:28282",["sidebar-category-drop-" + section.id,dragType(section),(id2) => actions.drop(String(id2), section.id, null),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:28501",[() => actions.toggleSection(section.id),ctx.Modifier.clip({ cornerRadius: m.categoryRadius }),avatar,gap(8),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:28798",[section.title,ctx.Modifier.widthIn({ max: 170 }),colors.onSurface],__operitUiTemplate_28798),gap(8),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:29104",[String(section.chats.length),colors.onSurfaceVariant.copy({ alpha: 0.64 })],__operitUiTemplate_29104),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:29261",[colors.outlineVariant.copy({ alpha: 0.62 }),colors.outlineVariant.copy({ alpha: 0 })],__operitUiTemplate_29261),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:29450",[collapsed ? "KeyboardArrowDown" : "KeyboardArrowUp",colors.onSurfaceVariant.copy({ alpha: 0.78 })],__operitUiTemplate_29450)],__operitUiTemplate_28501)],__operitUiTemplate_28282)],__operitUiTemplate_28048);
+    const avatar = section.kind === "card" ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:27397",["sidebar-avatar-" + section.id,section.avatarUri ?? defaultAvatar ?? "",m.categoryAvatar,m.categoryAvatar,section.title,ctx.Modifier.clip({ type: "circle" })],__operitUiTemplate_27397) : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:27703",[m.categoryAvatar,m.categoryAvatar,colors.surfaceContainerLow.copy({ alpha: 0.72 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:27955",[section.kind === "group" ? "Groups" : "AccountTree",colors.onSurfaceVariant],__operitUiTemplate_27955)],__operitUiTemplate_27703);
+    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:28089",["sidebar-section-" + section.id,m.categoryStart,m.categoryEnd,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:28323",["sidebar-category-drop-" + section.id,dragType(section),(id2) => actions.drop(String(id2), section.id, null),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:28542",[() => actions.toggleSection(section.id),ctx.Modifier.clip({ cornerRadius: m.categoryRadius }),avatar,gap(8),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:28839",[section.title,ctx.Modifier.widthIn({ max: 170 }),colors.onSurface],__operitUiTemplate_28839),gap(8),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:29145",[String(section.chats.length),colors.onSurfaceVariant.copy({ alpha: 0.64 })],__operitUiTemplate_29145),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:29302",[colors.outlineVariant.copy({ alpha: 0.62 }),colors.outlineVariant.copy({ alpha: 0 })],__operitUiTemplate_29302),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:29491",[collapsed ? "KeyboardArrowDown" : "KeyboardArrowUp",colors.onSurfaceVariant.copy({ alpha: 0.78 })],__operitUiTemplate_29491)],__operitUiTemplate_28542)],__operitUiTemplate_28323)],__operitUiTemplate_28089);
   }
   function groupRow(group, section, ungrouped = false) {
     const expanded = !state.collapsed.includes("group:" + group.id);
-    const groupBody = OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:29766",[{
+    const groupBody = OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:29807",[{
       fillMaxWidth: true,
       verticalAlignment: "center",
       paddingStart: 12,
@@ -475,16 +476,16 @@ function sidebarRowBuilders(ctx, current, state, actions, defaultAvatar) {
       ...{ background: colors.surfaceContainerLow.copy({ alpha: 0.72 }), backgroundShape: { cornerRadius: m.groupRadius }, modifier: ctx.Modifier.border(1, colors.outlineVariant.copy({ alpha: 0.24 }), { cornerRadius: m.groupRadius }) },
       onClick: () => actions.toggleSection("group:" + group.id)
     },[
-      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30246",[colors.onSurfaceVariant.copy({ alpha: 0.76 })],__operitUiTemplate_30246),
+      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30287",[colors.onSurfaceVariant.copy({ alpha: 0.76 })],__operitUiTemplate_30287),
       gap(7),
-      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30370",[group.name,colors.onSurface.copy({ alpha: 1 })],__operitUiTemplate_30370),
-      ...group.pinned ? [gap(4), OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30568",[colors.onSurfaceVariant.copy({ alpha: 0.65 })],__operitUiTemplate_30568)] : [],
+      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30411",[group.name,colors.onSurface.copy({ alpha: 1 })],__operitUiTemplate_30411),
+      ...group.pinned ? [gap(4), OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30609",[colors.onSurfaceVariant.copy({ alpha: 0.65 })],__operitUiTemplate_30609)] : [],
       gap(2),
-      ungrouped ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30710",[actions.menu("ungrouped", section.id)],__operitUiTemplate_30710) : more("group", group.id),
+      ungrouped ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30751",[actions.menu("ungrouped", section.id)],__operitUiTemplate_30751) : more("group", group.id),
       gap(2),
-      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30840",[expanded ? "KeyboardArrowUp" : "KeyboardArrowDown",colors.onSurfaceVariant.copy({ alpha: 0.62 })],__operitUiTemplate_30840)
-    ]],__operitUiTemplate_29766);
-    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30996",["sidebar-group-" + group.id,m.groupStart,m.groupEnd,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:31220",["sidebar-group-drop-" + group.id,dragType(section),colors.primary.copy({ alpha: 0.55 }),m.groupRadius,(id2) => actions.drop(String(id2), section.id, ungrouped ? null : group.id),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:31573",[m.groupRadius,groupBody],__operitUiTemplate_31573)],__operitUiTemplate_31220)],__operitUiTemplate_30996);
+      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30881",[expanded ? "KeyboardArrowUp" : "KeyboardArrowDown",colors.onSurfaceVariant.copy({ alpha: 0.62 })],__operitUiTemplate_30881)
+    ]],__operitUiTemplate_29807);
+    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:31037",["sidebar-group-" + group.id,m.groupStart,m.groupEnd,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:31261",["sidebar-group-drop-" + group.id,dragType(section),colors.primary.copy({ alpha: 0.55 }),m.groupRadius,(id2) => actions.drop(String(id2), section.id, ungrouped ? null : group.id),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:31614",[m.groupRadius,groupBody],__operitUiTemplate_31614)],__operitUiTemplate_31261)],__operitUiTemplate_31037);
   }
   const sections = state.data.view === "characters" ? state.data.sections : state.data.scopes.map((scope) => ({
     id: scope.id,
@@ -514,7 +515,7 @@ function sidebarRowBuilders(ctx, current, state, actions, defaultAvatar) {
       if (!state.collapsed.includes("group:" + id2)) rows.push(...chats(ungrouped, id2, section, null, categoryMatches || "\u672A\u5206\u7EC4".includes(query)));
     }
   }
-  if (rows.length === 0) rows.push(() => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:33720",[query === "" ? "\u6682\u65E0\u4F1A\u8BDD" : "\u6CA1\u6709\u5339\u914D\u7684\u4F1A\u8BDD",m.chatHeight,muted],__operitUiTemplate_33720));
+  if (rows.length === 0) rows.push(() => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:33761",[query === "" ? "\u6682\u65E0\u4F1A\u8BDD" : "\u6CA1\u6709\u5339\u914D\u7684\u4F1A\u8BDD",m.chatHeight,muted],__operitUiTemplate_33761));
   return rows;
 }
 function nativeSidebarRows(ctx, current, state, actions, defaultAvatar) {
@@ -817,17 +818,17 @@ function renderSidebarScreen(ctx) {
   function menu(kind, id2) {
     if (kind === "chat") {
       const chat = chatFor(id2);
-      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:46709",["sidebar-chat-menu-" + id2,!state.busy,chat.pinned ? "\u53D6\u6D88\u7F6E\u9876" : "\u7F6E\u9876",chat.locked ? "\u89E3\u9501" : "\u9501\u5B9A",chat.locked ? "LockOpen" : "Lock",(index) => __async(null, null, function* () {
+      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:46750",["sidebar-chat-menu-" + id2,!state.busy,chat.pinned ? "\u53D6\u6D88\u7F6E\u9876" : "\u7F6E\u9876",chat.locked ? "\u89E3\u9501" : "\u9501\u5B9A",chat.locked ? "LockOpen" : "Lock",(index) => __async(null, null, function* () {
           if (index === 0) renameChat(id2);
           else if (index === 1) yield changeFlag(id2, true);
           else if (index === 2) yield changeFlag(id2, false);
           else if (index === 3) yield deleteChat(id2);
-        }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:47561",[colors.onSurfaceVariant.copy({ alpha: 0.78 })],__operitUiTemplate_47561)],__operitUiTemplate_46709);
+        }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:47602",[colors.onSurfaceVariant.copy({ alpha: 0.78 })],__operitUiTemplate_47602)],__operitUiTemplate_46750);
     }
     if (kind === "ungrouped") {
       const scope = scopeFor(id2);
       const pinned = scope.ungrouped.length > 0 && scope.ungrouped.every((chat) => chat.pinned);
-      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:47844",["sidebar-ungrouped-menu-" + id2,!state.busy && state.data !== null,pinned ? "\u53D6\u6D88\u7F6E\u9876" : "\u7F6E\u9876",pinned ? "PushPinOutlined" : "PushPinRounded",(index) => __async(null, null, function* () {
+      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:47885",["sidebar-ungrouped-menu-" + id2,!state.busy && state.data !== null,pinned ? "\u53D6\u6D88\u7F6E\u9876" : "\u7F6E\u9876",pinned ? "PushPinOutlined" : "PushPinRounded",(index) => __async(null, null, function* () {
           if (index === 0) return createChat(scope.ownerSelection ?? "", null);
           if (index === 1) dialog("renameUngrouped", id2, "\u672A\u5206\u7EC4");
           if (index === 2) yield run(() => __async(null, null, function* () {
@@ -836,7 +837,7 @@ function renderSidebarScreen(ctx) {
           }));
           if (index === 3) dialog("deleteUngrouped", id2, "\u672A\u5206\u7EC4");
           return null;
-        }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:49048",[colors.onSurfaceVariant.copy({ alpha: 0.78 })],__operitUiTemplate_49048)],__operitUiTemplate_47844);
+        }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:49089",[colors.onSurfaceVariant.copy({ alpha: 0.78 })],__operitUiTemplate_49089)],__operitUiTemplate_47885);
     }
     const group = scopeFor(id2).groups.find((value) => value.id === id2);
     const items = [
@@ -845,7 +846,7 @@ function renderSidebarScreen(ctx) {
       { label: group.pinned ? "\u53D6\u6D88\u7F6E\u9876" : "\u7F6E\u9876", icon: group.pinned ? "PushPinOutlined" : "PushPinRounded" },
       { label: "\u5220\u9664", icon: "DeleteOutlineRounded", danger: true, dividerBefore: true }
     ];
-    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:49646",["sidebar-group-menu-" + id2,items,!state.busy,(index) => __async(null, null, function* () {
+    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:49687",["sidebar-group-menu-" + id2,items,!state.busy,(index) => __async(null, null, function* () {
         if (index === 0) {
           const owner2 = scopeFor(id2).ownerSelection;
           return createChat(owner2 ?? "", id2);
@@ -856,7 +857,7 @@ function renderSidebarScreen(ctx) {
         }));
         else if (index === 3) dialog("delete", id2, group.name);
         return null;
-      }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:50430",[colors.onSurfaceVariant.copy({ alpha: 0.78 })],__operitUiTemplate_50430)],__operitUiTemplate_49646);
+      }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:50471",[colors.onSurfaceVariant.copy({ alpha: 0.78 })],__operitUiTemplate_50471)],__operitUiTemplate_49687);
   }
   function drop(chatId, scopeId, groupId, targetId) {
     return __async(this, null, function* () {
@@ -890,10 +891,10 @@ function renderSidebarScreen(ctx) {
   const toggleSection = (id2) => update({ collapsed: state.collapsed.includes(id2) ? state.collapsed.filter((key) => key !== id2) : [...state.collapsed, id2] });
   const toggleGroup = (id2) => update({ expandedGroups: state.expandedGroups.includes(id2) ? state.expandedGroups.filter((key) => key !== id2) : [...state.expandedGroups, id2] });
   const searchActive = state.search || state.query.trim() !== "";
-  const rows = [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:52511",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:52699",[colors.primaryContainer,colors.onPrimaryContainer,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:52942",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:53015",[() => __async(null, null, function* () {
+  const rows = [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:52552",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:52740",[colors.primaryContainer,colors.onPrimaryContainer,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:52983",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:53056",[() => __async(null, null, function* () {
             const active = yield callMainDomain("activePrompt.get", {});
             return createChat(encodeSelection(active), null);
-          }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:53441",[colors.onPrimaryContainer],__operitUiTemplate_53441),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:53531",[{ text: "\u65B0\u5EFA\u5BF9\u8BDD", fontSize: 13, fontWeight: "600", color: colors.onPrimaryContainer, ...{ letterSpacing: -0.1 } }],__operitUiTemplate_53531)],__operitUiTemplate_53015),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:53696",[colors.onPrimaryContainer.copy({ alpha: 0.16 })],__operitUiTemplate_53696),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:53803",[() => __async(null, null, function* () {
+          }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:53482",[colors.onPrimaryContainer],__operitUiTemplate_53482),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:53572",[{ text: "\u65B0\u5EFA\u5BF9\u8BDD", fontSize: 13, fontWeight: "600", color: colors.onPrimaryContainer, ...{ letterSpacing: -0.1 } }],__operitUiTemplate_53572)],__operitUiTemplate_53056),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:53737",[colors.onPrimaryContainer.copy({ alpha: 0.16 })],__operitUiTemplate_53737),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:53844",[() => __async(null, null, function* () {
             const active = yield callMainDomain("activePrompt.get", {});
             const selection = encodeSelection(active);
             const catalog = visibleCatalog();
@@ -901,9 +902,9 @@ function renderSidebarScreen(ctx) {
             const scope = catalog.view === "characters" ? catalog.sections.find((section) => section.selection === selection) : catalog.scopes.find((scope2) => scope2.ownerSelection === selection);
             if (scope === void 0) throw new Error("The active owner is absent from the actual sidebar catalog");
             dialog("create", scope.id);
-          }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:54663",[colors.onPrimaryContainer],__operitUiTemplate_54663)],__operitUiTemplate_53803)],__operitUiTemplate_52942)],__operitUiTemplate_52699),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:54824",[() => update({ search: !state.search }),ctx.Modifier.clip({ cornerRadius: 6 }),searchActive ? colors.secondaryContainer.copy({ alpha: 0.35 }) : colors.surface.copy({ alpha: 0 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:55249",[state.search ? "SearchOffRounded" : "SearchRounded",searchActive ? colors.primary : colors.onSurfaceVariant.copy({ alpha: 0.78 }),state.search ? "\u6536\u8D77\u641C\u7D22" : "\u641C\u7D22\u5BF9\u8BDD"],__operitUiTemplate_55249)],__operitUiTemplate_54824)],__operitUiTemplate_52511)];
-  rows.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:55536",[state.search ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:55735",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:55828",[state.query,(query) => update({ query }),colors.onSurface,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:56127",[colors.onSurfaceVariant.copy({ alpha: 0.72 })],__operitUiTemplate_56127),colors.surfaceContainerLow.copy({ alpha: 0.72 }),colors.primary,colors.onSurfaceVariant.copy({ alpha: 0.62 })],__operitUiTemplate_55828)],__operitUiTemplate_55735) : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:56604",null,__operitUiTemplate_56604)],__operitUiTemplate_55536));
-  if (state.error !== "") rows.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:56675",[state.error,colors.error],__operitUiTemplate_56675));
+          }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:54704",[colors.onPrimaryContainer],__operitUiTemplate_54704)],__operitUiTemplate_53844)],__operitUiTemplate_52983)],__operitUiTemplate_52740),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:54865",[() => update({ search: !state.search }),ctx.Modifier.clip({ cornerRadius: 6 }),searchActive ? colors.secondaryContainer.copy({ alpha: 0.35 }) : colors.surface.copy({ alpha: 0 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:55290",[state.search ? "SearchOffRounded" : "SearchRounded",searchActive ? colors.primary : colors.onSurfaceVariant.copy({ alpha: 0.78 }),state.search ? "\u6536\u8D77\u641C\u7D22" : "\u641C\u7D22\u5BF9\u8BDD"],__operitUiTemplate_55290)],__operitUiTemplate_54865)],__operitUiTemplate_52552)];
+  rows.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:55577",[state.search ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:55776",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:55869",[state.query,(query) => update({ query }),colors.onSurface,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:56168",[colors.onSurfaceVariant.copy({ alpha: 0.72 })],__operitUiTemplate_56168),colors.surfaceContainerLow.copy({ alpha: 0.72 }),colors.primary,colors.onSurfaceVariant.copy({ alpha: 0.62 })],__operitUiTemplate_55869)],__operitUiTemplate_55776) : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:56645",null,__operitUiTemplate_56645)],__operitUiTemplate_55577));
+  if (state.error !== "") rows.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:56716",[state.error,colors.error],__operitUiTemplate_56716));
   if (data !== null) {
     const actions = {
       activate: activate2,
@@ -930,16 +931,16 @@ function renderSidebarScreen(ctx) {
       layoutActions.current,
       state.defaultAvatar
     ));
-  } else if (state.loading) rows.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:57491",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:57575",null,__operitUiTemplate_57575)],__operitUiTemplate_57491));
+  } else if (state.loading) rows.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:57532",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:57616",null,__operitUiTemplate_57616)],__operitUiTemplate_57532));
   const content = [...rows];
   if (state.dialog !== null) {
-    const staged = state.dialog, body = [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:57720",[{ create: "\u65B0\u5EFA\u5206\u7EC4", rename: "\u91CD\u547D\u540D\u5206\u7EC4", delete: "\u5220\u9664\u5206\u7EC4\u53CA\u5176\u5BF9\u8BDD", renameUngrouped: "\u91CD\u547D\u540D\u5206\u7EC4", deleteUngrouped: "\u5220\u9664\u5206\u7EC4\u53CA\u5176\u5BF9\u8BDD", renameChat: "\u7F16\u8F91\u5BF9\u8BDD\u540D\u79F0", deleteChat: "\u5220\u9664\u5BF9\u8BDD", chatActions: "\u804A\u5929\u8BB0\u5F55" }[staged.kind]],__operitUiTemplate_57720)];
-    if (staged.kind === "create" || staged.kind === "rename" || staged.kind === "renameUngrouped" || staged.kind === "renameChat") body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:58326",[staged.name,staged.kind === "renameChat" ? "\u5BF9\u8BDD\u540D\u79F0" : "\u5206\u7EC4\u540D\u79F0",(name) => update({ dialog: { ...staged, name } }),!state.busy],__operitUiTemplate_58326));
-    if (staged.kind === "delete" || staged.kind === "deleteUngrouped" || staged.kind === "deleteChat") body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:58692",[staged.kind === "deleteChat" ? `\u786E\u8BA4\u5220\u9664\u5BF9\u8BDD\u201C${staged.name}\u201D\uFF1F\u6B64\u64CD\u4F5C\u4E0D\u53EF\u64A4\u9500\u3002` : `\u786E\u8BA4\u5220\u9664\u201C${staged.name}\u201D\u53CA\u5176\u4E2D\u7684\u5168\u90E8\u5BF9\u8BDD\uFF1F\u6B64\u64CD\u4F5C\u4E0D\u53EF\u64A4\u9500\u3002`],__operitUiTemplate_58692));
+    const staged = state.dialog, body = [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:57761",[{ create: "\u65B0\u5EFA\u5206\u7EC4", rename: "\u91CD\u547D\u540D\u5206\u7EC4", delete: "\u5220\u9664\u5206\u7EC4\u53CA\u5176\u5BF9\u8BDD", renameUngrouped: "\u91CD\u547D\u540D\u5206\u7EC4", deleteUngrouped: "\u5220\u9664\u5206\u7EC4\u53CA\u5176\u5BF9\u8BDD", renameChat: "\u7F16\u8F91\u5BF9\u8BDD\u540D\u79F0", deleteChat: "\u5220\u9664\u5BF9\u8BDD", chatActions: "\u804A\u5929\u8BB0\u5F55" }[staged.kind]],__operitUiTemplate_57761)];
+    if (staged.kind === "create" || staged.kind === "rename" || staged.kind === "renameUngrouped" || staged.kind === "renameChat") body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:58367",[staged.name,staged.kind === "renameChat" ? "\u5BF9\u8BDD\u540D\u79F0" : "\u5206\u7EC4\u540D\u79F0",(name) => update({ dialog: { ...staged, name } }),!state.busy],__operitUiTemplate_58367));
+    if (staged.kind === "delete" || staged.kind === "deleteUngrouped" || staged.kind === "deleteChat") body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:58733",[staged.kind === "deleteChat" ? `\u786E\u8BA4\u5220\u9664\u5BF9\u8BDD\u201C${staged.name}\u201D\uFF1F\u6B64\u64CD\u4F5C\u4E0D\u53EF\u64A4\u9500\u3002` : `\u786E\u8BA4\u5220\u9664\u201C${staged.name}\u201D\u53CA\u5176\u4E2D\u7684\u5168\u90E8\u5BF9\u8BDD\uFF1F\u6B64\u64CD\u4F5C\u4E0D\u53EF\u64A4\u9500\u3002`],__operitUiTemplate_58733));
     if (staged.kind === "chatActions") {
       const chat = chatFor(staged.id), ids = orderNeighbours(staged.id), index = ids.indexOf(staged.id);
-      body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:59200",[chat.title,colors.onSurfaceVariant],__operitUiTemplate_59200));
-      const tile = (label, icon, callback, enabled = true, danger = false) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:59401",[enabled ? callback : void 0,colors.surface,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:59547",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:59680",[icon,danger ? colors.error : colors.onSurfaceVariant],__operitUiTemplate_59680),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:59784",[label,danger ? colors.error : colors.onSurface],__operitUiTemplate_59784)],__operitUiTemplate_59547)],__operitUiTemplate_59401);
+      body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:59241",[chat.title,colors.onSurfaceVariant],__operitUiTemplate_59241));
+      const tile = (label, icon, callback, enabled = true, danger = false) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:59442",[enabled ? callback : void 0,colors.surface,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:59588",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:59721",[icon,danger ? colors.error : colors.onSurfaceVariant],__operitUiTemplate_59721),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:59825",[label,danger ? colors.error : colors.onSurface],__operitUiTemplate_59825)],__operitUiTemplate_59588)],__operitUiTemplate_59442);
       if (capabilities?.openInWindow === true) body.push(tile("\u5728\u65B0\u7A97\u53E3\u6253\u5F00", "OpenInNew", () => openInWindow(chat.id)));
       body.push(
         tile("\u7F16\u8F91\u540D\u79F0", "Edit", () => renameChat(chat.id)),
@@ -950,22 +951,22 @@ function renderSidebarScreen(ctx) {
         tile("\u5220\u9664", "DeleteOutline", () => deleteChat(chat.id), true, true)
       );
     }
-    if (staged.progress !== null) body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:60752",[`\u5DF2\u5220\u9664 ${staged.progress.deletedChatIds.length} \u6761\u5BF9\u8BDD
-` + staged.progress.failedChatIds.map((value) => value.chatId + ": " + value.error).join("\n"),staged.progress.failedChatIds.length === 0 ? colors.onSurface : colors.error],__operitUiTemplate_60752));
-    if (state.error !== "") body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61119",[state.error,colors.error],__operitUiTemplate_61119));
-    body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61205",[[
-      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61240",[!state.busy,() => update({ dialog: null })],__operitUiTemplate_61240),
-      ...staged.progress === null && staged.kind !== "chatActions" ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61418",[!state.busy,() => run(submit)],__operitUiTemplate_61418)] : []
-    ]],__operitUiTemplate_61205));
-    content.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61540",[!state.busy,() => {
+    if (staged.progress !== null) body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:60793",[`\u5DF2\u5220\u9664 ${staged.progress.deletedChatIds.length} \u6761\u5BF9\u8BDD
+` + staged.progress.failedChatIds.map((value) => value.chatId + ": " + value.error).join("\n"),staged.progress.failedChatIds.length === 0 ? colors.onSurface : colors.error],__operitUiTemplate_60793));
+    if (state.error !== "") body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61160",[state.error,colors.error],__operitUiTemplate_61160));
+    body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61246",[[
+      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61281",[!state.busy,() => update({ dialog: null })],__operitUiTemplate_61281),
+      ...staged.progress === null && staged.kind !== "chatActions" ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61459",[!state.busy,() => run(submit)],__operitUiTemplate_61459)] : []
+    ]],__operitUiTemplate_61246));
+    content.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61581",[!state.busy,() => {
       if (!state.busy) update({ dialog: null });
-    },OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61704",[body],__operitUiTemplate_61704)],__operitUiTemplate_61540));
+    },OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61745",[body],__operitUiTemplate_61745)],__operitUiTemplate_61581));
   }
   const onLoad = prepared === null ? refresh : () => {
     void Promise.resolve().then(refresh).catch(() => {
     });
   };
-  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61905",[onLoad,refreshInputs,content],__operitUiTemplate_61905);
+  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61946",[onLoad,refreshInputs,content],__operitUiTemplate_61946);
 }
 
 // src/ui-sidebar.ts
@@ -1095,89 +1096,89 @@ function Screen(ctx) {
   return renderSidebarScreen(ctx);
 }
 
-function __operitUiTemplate_20186(__ctx,__values){return __ctx.UI.Spacer({width:__values[0]}); }
-function __operitUiTemplate_20270(__ctx,__values){return __ctx.UI.HoverOnly({key:__values[0],alwaysVisible:__values[1]},__values[2]); }
-function __operitUiTemplate_20706(__ctx,__values){return __ctx.UI.ActivityDots({key:__values[0],width:10,height:13.5,running:__values[1],selected:__values[2],restingColor:__values[3],activeColor:__values[4]}); }
-function __operitUiTemplate_21372(__ctx,__values){return __ctx.UI.Text({text:__values[0],weight:1,maxLines:1,overflow:"ellipsis",fontSize:13,color:__values[1]}); }
-function __operitUiTemplate_21182(__ctx,__values){return __ctx.UI.Row({width:220,height:34,paddingHorizontal:10,verticalAlignment:"center",background:__values[0],backgroundShape:{cornerRadius:8}},__values[1]); }
-function __operitUiTemplate_21027(__ctx,__values){return __ctx.UI.Draggable({key:__values[0],data:__values[1],dragType:__values[2],enabled:true,feedback:__values[3]},__values[4]); }
-function __operitUiTemplate_21523(__ctx,__values){return __ctx.UI.Text(__values[0]); }
-function __operitUiTemplate_21842(__ctx,__values){return __ctx.UI.Icon({name:"PushPin",size:12,tint:__values[0]}); }
-function __operitUiTemplate_21999(__ctx,__values){return __ctx.UI.Icon({name:"Lock",size:12,tint:__values[0]}); }
-function __operitUiTemplate_22190(__ctx,__values){return __ctx.UI.Row({key:__values[0],weight:1,height:31,verticalAlignment:"center",paddingHorizontal:6,modifier:__values[1]},__values[2]); }
-function __operitUiTemplate_23183(__ctx,__values){return __ctx.UI.Box({key:__values[0],width:1,height:__values[1],backgroundColor:__values[2]}); }
-function __operitUiTemplate_23379(__ctx,__values){return __ctx.UI.Box({key:__values[0],width:__values[1],height:__values[2],backgroundColor:__values[3],backgroundShape:{cornerRadius:1.5},animation:{durationMillis:160,curve:"easeOutCubic"},hoverStyle:{width:2,height:__values[4],backgroundColor:__values[5]}}); }
-function __operitUiTemplate_23025(__ctx,__values){return __ctx.UI.Box({key:__values[0],width:__values[1],height:__values[2],contentAlignment:"center"},[__values[3],__values[4]]); }
-function __operitUiTemplate_25310(__ctx,__values){return __ctx.UI.Icon({name:"Edit",size:__values[0],width:__values[1],height:__values[2],tint:__values[3]}); }
-function __operitUiTemplate_25170(__ctx,__values){return __ctx.UI.Box({fillMaxSize:true,paddingStart:12,background:__values[0],contentAlignment:"start"},__values[1]); }
-function __operitUiTemplate_25616(__ctx,__values){return __ctx.UI.Icon({name:"Delete",size:__values[0],width:__values[1],height:__values[2],tint:__values[3]}); }
-function __operitUiTemplate_25482(__ctx,__values){return __ctx.UI.Box({fillMaxSize:true,paddingEnd:12,background:__values[0],contentAlignment:"end"},__values[1]); }
-function __operitUiTemplate_24798(__ctx,__values){return __ctx.UI.SwipeActions({key:__values[0],actionThreshold:0.5,height:31,modifier:__values[1],onStartAction:__values[2],onEndAction:__values[3],startBackground:__values[4],endBackground:__values[5]},__values[6]); }
-function __operitUiTemplate_24636(__ctx,__values){return __ctx.UI.HoverRegion({weight:1,hoverBackground:__values[0],shape:{cornerRadius:__values[1]}},__values[2]); }
-function __operitUiTemplate_24354(__ctx,__values){return __ctx.UI.Row({key:__values[0],fillMaxWidth:true,height:__values[1],paddingStart:__values[2],paddingEnd:__values[3],verticalAlignment:"center"},[__values[4],__values[5],__values[6]]); }
-function __operitUiTemplate_24256(__ctx,__values){return __ctx.UI.HoverRegion({key:__values[0],fillMaxWidth:true},__values[1]); }
-function __operitUiTemplate_23883(__ctx,__values){return __ctx.UI.DragTarget({key:__values[0],acceptedTypes:[__values[1]],excludedData:[__values[2]],hoverBorderColor:__values[3],shape:{cornerRadius:8},fillMaxWidth:true,onDrop:__values[4]},__values[5]); }
-function __operitUiTemplate_26873(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:18,tint:__values[1]}); }
-function __operitUiTemplate_27005(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"labelMedium",fontWeight:"600",color:__values[1]}); }
-function __operitUiTemplate_26569(__ctx,__values){return __ctx.UI.Row({key:__values[0],fillMaxWidth:true,paddingStart:__values[1],paddingEnd:__values[2],paddingTop:2,height:34,verticalAlignment:"center",spacing:8,onClick:__values[3]},[__values[4],__values[5]]); }
-function __operitUiTemplate_27356(__ctx,__values){return __ctx.UI.Image({key:__values[0],uri:__values[1],width:__values[2],height:__values[3],contentScale:"crop",contentDescription:__values[4],modifier:__values[5]}); }
-function __operitUiTemplate_27914(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:14,tint:__values[1]}); }
-function __operitUiTemplate_27662(__ctx,__values){return __ctx.UI.Box({width:__values[0],height:__values[1],contentAlignment:"center",background:__values[2],backgroundShape:{type:"circle"}},__values[3]); }
-function __operitUiTemplate_28798(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"titleSmall",fontWeight:"700",maxLines:1,overflow:"ellipsis",modifier:__values[1],color:__values[2]}); }
-function __operitUiTemplate_29104(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"labelSmall",fontWeight:"700",color:__values[1]}); }
-function __operitUiTemplate_29261(__ctx,__values){return __ctx.UI.GradientRule({weight:1,paddingHorizontal:10,height:2,startColor:__values[0],endColor:__values[1]}); }
-function __operitUiTemplate_29450(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:23,tint:__values[1]}); }
-function __operitUiTemplate_28501(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,verticalAlignment:"center",height:24,onClick:__values[0],modifier:__values[1]},[__values[2],__values[3],__values[4],__values[5],__values[6],__values[7],__values[8]]); }
-function __operitUiTemplate_28282(__ctx,__values){return __ctx.UI.DragTarget({key:__values[0],acceptedTypes:[__values[1]],onDrop:__values[2]},__values[3]); }
-function __operitUiTemplate_28048(__ctx,__values){return __ctx.UI.Column({key:__values[0],fillMaxWidth:true,paddingStart:__values[1],paddingEnd:__values[2],paddingTop:5,paddingBottom:5},__values[3]); }
-function __operitUiTemplate_30246(__ctx,__values){return __ctx.UI.Icon({name:"FolderOutlined",size:16,tint:__values[0]}); }
-function __operitUiTemplate_30370(__ctx,__values){return __ctx.UI.Text({text:__values[0],weight:1,style:"labelLarge",fontWeight:"700",maxLines:1,overflow:"ellipsis",color:__values[1]}); }
-function __operitUiTemplate_30568(__ctx,__values){return __ctx.UI.Icon({name:"PushPinRounded",size:12,tint:__values[0]}); }
-function __operitUiTemplate_30710(__ctx,__values){return __ctx.UI.HoverOnly({width:24,height:24},__values[0]); }
-function __operitUiTemplate_30840(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:20,tint:__values[1]}); }
-function __operitUiTemplate_29766(__ctx,__values){return __ctx.UI.Row(__values[0],__values[1]); }
-function __operitUiTemplate_31573(__ctx,__values){return __ctx.UI.HoverRegion({shape:{cornerRadius:__values[0]}},__values[1]); }
-function __operitUiTemplate_31220(__ctx,__values){return __ctx.UI.DragTarget({key:__values[0],acceptedTypes:[__values[1]],hoverBorderColor:__values[2],shape:{cornerRadius:__values[3]},onDrop:__values[4]},__values[5]); }
-function __operitUiTemplate_30996(__ctx,__values){return __ctx.UI.Column({key:__values[0],fillMaxWidth:true,paddingStart:__values[1],paddingEnd:__values[2],paddingTop:3,paddingBottom:3},__values[3]); }
-function __operitUiTemplate_33720(__ctx,__values){return __ctx.UI.Text({text:__values[0],height:__values[1],color:__values[2],fontSize:12,paddingHorizontal:20}); }
-function __operitUiTemplate_47561(__ctx,__values){return __ctx.UI.Icon({name:"MoreHoriz",size:16,tint:__values[0]}); }
-function __operitUiTemplate_46709(__ctx,__values){return __ctx.UI.PopupMenu({key:__values[0],width:22,height:22,tooltip:"\u5BF9\u8BDD\u64CD\u4F5C",enabled:__values[1],items:[{label:"\u7F16\u8F91\u540D\u79F0",icon:"Edit"},{label:__values[2],icon:"PushPin"},{label:__values[3],icon:__values[4]},{label:"\u5220\u9664",icon:"DeleteOutline",danger:true}],onSelected:__values[5]},__values[6]); }
-function __operitUiTemplate_49048(__ctx,__values){return __ctx.UI.Icon({name:"MoreHorizRounded",size:16,tint:__values[0]}); }
-function __operitUiTemplate_47844(__ctx,__values){return __ctx.UI.PopupMenu({key:__values[0],width:22,height:22,menuMaxWidth:138,tooltip:"\u5206\u7EC4\u64CD\u4F5C",enabled:__values[1],items:[{label:"\u65B0\u5EFA\u5BF9\u8BDD",icon:"AddCommentOutlined"},{label:"\u7F16\u8F91\u540D\u79F0",icon:"EditOutlined"},{label:__values[2],icon:__values[3]},{label:"\u5220\u9664",icon:"DeleteOutlineRounded",danger:true,dividerBefore:true}],onSelected:__values[4]},__values[5]); }
-function __operitUiTemplate_50430(__ctx,__values){return __ctx.UI.Icon({name:"MoreHorizRounded",size:16,tint:__values[0]}); }
-function __operitUiTemplate_49646(__ctx,__values){return __ctx.UI.PopupMenu({key:__values[0],width:22,height:22,menuMaxWidth:138,tooltip:"\u5206\u7EC4\u64CD\u4F5C",items:__values[1],enabled:__values[2],onSelected:__values[3]},__values[4]); }
-function __operitUiTemplate_53441(__ctx,__values){return __ctx.UI.Icon({name:"AddRounded",size:17,tint:__values[0]}); }
-function __operitUiTemplate_53531(__ctx,__values){return __ctx.UI.Text(__values[0]); }
-function __operitUiTemplate_53015(__ctx,__values){return __ctx.UI.Row({key:"sidebar-new-chat",weight:1,height:34,verticalAlignment:"center",horizontalArrangement:"center",onClick:__values[0],spacing:6},[__values[1],__values[2]]); }
-function __operitUiTemplate_53696(__ctx,__values){return __ctx.UI.Box({width:1,height:16,background:__values[0]}); }
-function __operitUiTemplate_54663(__ctx,__values){return __ctx.UI.Icon({name:"CreateNewFolderOutlined",size:16,tint:__values[0],contentDescription:"\u65B0\u5EFA\u5206\u7EC4"}); }
-function __operitUiTemplate_53803(__ctx,__values){return __ctx.UI.Row({key:"sidebar-new-group",width:38,height:34,verticalAlignment:"center",horizontalArrangement:"center",onClick:__values[0]},__values[1]); }
-function __operitUiTemplate_52942(__ctx,__values){return __ctx.UI.Row({fillMaxSize:true,verticalAlignment:"center"},[__values[0],__values[1],__values[2]]); }
-function __operitUiTemplate_52699(__ctx,__values){return __ctx.UI.Surface({key:"sidebar-create-bar",weight:1,height:34,containerColor:__values[0],contentColor:__values[1],shape:{type:"pill"}},__values[2]); }
-function __operitUiTemplate_55249(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:17,tint:__values[1],contentDescription:__values[2]}); }
-function __operitUiTemplate_54824(__ctx,__values){return __ctx.UI.Row({key:"sidebar-search-toggle",width:34,height:34,verticalAlignment:"center",horizontalArrangement:"center",onClick:__values[0],modifier:__values[1],background:__values[2]},__values[3]); }
-function __operitUiTemplate_52511(__ctx,__values){return __ctx.UI.Row({key:"sidebar-toolbar",fillMaxWidth:true,verticalAlignment:"center",spacing:8,paddingStart:14,paddingEnd:12,paddingBottom:8},[__values[0],__values[1]]); }
-function __operitUiTemplate_56127(__ctx,__values){return __ctx.UI.Icon({name:"Search",size:20,tint:__values[0]}); }
-function __operitUiTemplate_55828(__ctx,__values){return __ctx.UI.TextField({key:"sidebar-search",value:__values[0],onValueChange:__values[1],placeholder:"\u641C\u7D22\u5BF9\u8BDD",singleLine:true,fillMaxWidth:true,style:{color:__values[2]},leadingIcon:__values[3],decoration:{isDense:true,filled:true,fillColor:__values[4],cornerRadius:14,focusedBorderColor:__values[5],hintStyle:{color:__values[6]},contentPadding:{horizontal:12,vertical:10}}}); }
-function __operitUiTemplate_55735(__ctx,__values){return __ctx.UI.Column({fillMaxWidth:true,paddingHorizontal:12,paddingBottom:12},__values[0]); }
-function __operitUiTemplate_56604(__ctx,__values){return __ctx.UI.Spacer({height:0}); }
-function __operitUiTemplate_55536(__ctx,__values){return __ctx.UI.Box({key:"sidebar-search-container",fillMaxWidth:true,animation:{durationMillis:180,curve:"easeOutCubic",animateContentSize:true}},__values[0]); }
-function __operitUiTemplate_56675(__ctx,__values){return __ctx.UI.Text({key:"sidebar-error",text:__values[0],fontSize:11,color:__values[1],paddingHorizontal:20,paddingVertical:6}); }
-function __operitUiTemplate_57575(__ctx,__values){return __ctx.UI.LoadingIndicator({size:24}); }
-function __operitUiTemplate_57491(__ctx,__values){return __ctx.UI.Box({fillMaxWidth:true,height:80,contentAlignment:"center"},__values[0]); }
-function __operitUiTemplate_57720(__ctx,__values){return __ctx.UI.Text({text:__values[0],fontSize:16,fontWeight:"600"}); }
-function __operitUiTemplate_58326(__ctx,__values){return __ctx.UI.TextField({key:"sidebar-group-name",value:__values[0],label:__values[1],onValueChange:__values[2],enabled:__values[3]}); }
-function __operitUiTemplate_58692(__ctx,__values){return __ctx.UI.Text({text:__values[0],fontSize:12}); }
-function __operitUiTemplate_59200(__ctx,__values){return __ctx.UI.Text({text:__values[0],fillMaxWidth:true,maxLines:2,style:"titleMedium",color:__values[1]}); }
-function __operitUiTemplate_59680(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:20,tint:__values[1]}); }
-function __operitUiTemplate_59784(__ctx,__values){return __ctx.UI.Text({text:__values[0],weight:1,fontSize:14,color:__values[1]}); }
-function __operitUiTemplate_59547(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,paddingHorizontal:16,paddingVertical:10,verticalAlignment:"center",spacing:12},[__values[0],__values[1]]); }
-function __operitUiTemplate_59401(__ctx,__values){return __ctx.UI.Surface({fillMaxWidth:true,onClick:__values[0],shape:{cornerRadius:12},color:__values[1]},__values[2]); }
-function __operitUiTemplate_60752(__ctx,__values){return __ctx.UI.Text({key:"sidebar-delete-result",text:__values[0],fontSize:11,color:__values[1]}); }
-function __operitUiTemplate_61119(__ctx,__values){return __ctx.UI.Text({text:__values[0],color:__values[1],fontSize:11}); }
-function __operitUiTemplate_61240(__ctx,__values){return __ctx.UI.TextButton({text:"\u53D6\u6D88",enabled:__values[0],onClick:__values[1]}); }
-function __operitUiTemplate_61418(__ctx,__values){return __ctx.UI.Button({text:"\u786E\u8BA4",enabled:__values[0],onClick:__values[1]}); }
-function __operitUiTemplate_61205(__ctx,__values){return __ctx.UI.Row({spacing:8},__values[0]); }
-function __operitUiTemplate_61704(__ctx,__values){return __ctx.UI.Column({padding:20,spacing:12,width:320},__values[0]); }
-function __operitUiTemplate_61540(__ctx,__values){return __ctx.UI.Dialog({key:"sidebar-edit-dialog",closeOnDismissRequest:__values[0],onDismissRequest:__values[1]},__values[2]); }
-function __operitUiTemplate_61905(__ctx,__values){return __ctx.UI.Column({key:"native-character-sidebar",fillMaxWidth:true,paddingBottom:16,spacing:0,onLoad:__values[0],onInputsChanged:__values[1]},__values[2]); }
+function __operitUiTemplate_20227(__ctx,__values){return __ctx.UI.Spacer({width:__values[0]}); }
+function __operitUiTemplate_20311(__ctx,__values){return __ctx.UI.HoverOnly({key:__values[0],alwaysVisible:__values[1]},__values[2]); }
+function __operitUiTemplate_20747(__ctx,__values){return __ctx.UI.ActivityDots({key:__values[0],width:10,height:13.5,running:__values[1],selected:__values[2],restingColor:__values[3],activeColor:__values[4]}); }
+function __operitUiTemplate_21413(__ctx,__values){return __ctx.UI.Text({text:__values[0],weight:1,maxLines:1,overflow:"ellipsis",fontSize:13,color:__values[1]}); }
+function __operitUiTemplate_21223(__ctx,__values){return __ctx.UI.Row({width:220,height:34,paddingHorizontal:10,verticalAlignment:"center",background:__values[0],backgroundShape:{cornerRadius:8}},__values[1]); }
+function __operitUiTemplate_21068(__ctx,__values){return __ctx.UI.Draggable({key:__values[0],data:__values[1],dragType:__values[2],enabled:true,feedback:__values[3]},__values[4]); }
+function __operitUiTemplate_21564(__ctx,__values){return __ctx.UI.Text(__values[0]); }
+function __operitUiTemplate_21883(__ctx,__values){return __ctx.UI.Icon({name:"PushPin",size:12,tint:__values[0]}); }
+function __operitUiTemplate_22040(__ctx,__values){return __ctx.UI.Icon({name:"Lock",size:12,tint:__values[0]}); }
+function __operitUiTemplate_22231(__ctx,__values){return __ctx.UI.Row({key:__values[0],weight:1,height:31,verticalAlignment:"center",paddingHorizontal:6,modifier:__values[1]},__values[2]); }
+function __operitUiTemplate_23224(__ctx,__values){return __ctx.UI.Box({key:__values[0],width:1,height:__values[1],backgroundColor:__values[2]}); }
+function __operitUiTemplate_23420(__ctx,__values){return __ctx.UI.Box({key:__values[0],width:__values[1],height:__values[2],backgroundColor:__values[3],backgroundShape:{cornerRadius:1.5},animation:{durationMillis:160,curve:"easeOutCubic"},hoverStyle:{width:2,height:__values[4],backgroundColor:__values[5]}}); }
+function __operitUiTemplate_23066(__ctx,__values){return __ctx.UI.Box({key:__values[0],width:__values[1],height:__values[2],contentAlignment:"center"},[__values[3],__values[4]]); }
+function __operitUiTemplate_25351(__ctx,__values){return __ctx.UI.Icon({name:"Edit",size:__values[0],width:__values[1],height:__values[2],tint:__values[3]}); }
+function __operitUiTemplate_25211(__ctx,__values){return __ctx.UI.Box({fillMaxSize:true,paddingStart:12,background:__values[0],contentAlignment:"start"},__values[1]); }
+function __operitUiTemplate_25657(__ctx,__values){return __ctx.UI.Icon({name:"Delete",size:__values[0],width:__values[1],height:__values[2],tint:__values[3]}); }
+function __operitUiTemplate_25523(__ctx,__values){return __ctx.UI.Box({fillMaxSize:true,paddingEnd:12,background:__values[0],contentAlignment:"end"},__values[1]); }
+function __operitUiTemplate_24839(__ctx,__values){return __ctx.UI.SwipeActions({key:__values[0],actionThreshold:0.5,height:31,modifier:__values[1],onStartAction:__values[2],onEndAction:__values[3],startBackground:__values[4],endBackground:__values[5]},__values[6]); }
+function __operitUiTemplate_24677(__ctx,__values){return __ctx.UI.HoverRegion({weight:1,hoverBackground:__values[0],shape:{cornerRadius:__values[1]}},__values[2]); }
+function __operitUiTemplate_24395(__ctx,__values){return __ctx.UI.Row({key:__values[0],fillMaxWidth:true,height:__values[1],paddingStart:__values[2],paddingEnd:__values[3],verticalAlignment:"center"},[__values[4],__values[5],__values[6]]); }
+function __operitUiTemplate_24297(__ctx,__values){return __ctx.UI.HoverRegion({key:__values[0],fillMaxWidth:true},__values[1]); }
+function __operitUiTemplate_23924(__ctx,__values){return __ctx.UI.DragTarget({key:__values[0],acceptedTypes:[__values[1]],excludedData:[__values[2]],hoverBorderColor:__values[3],shape:{cornerRadius:8},fillMaxWidth:true,onDrop:__values[4]},__values[5]); }
+function __operitUiTemplate_26914(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:18,tint:__values[1]}); }
+function __operitUiTemplate_27046(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"labelMedium",fontWeight:"600",color:__values[1]}); }
+function __operitUiTemplate_26610(__ctx,__values){return __ctx.UI.Row({key:__values[0],fillMaxWidth:true,paddingStart:__values[1],paddingEnd:__values[2],paddingTop:2,height:34,verticalAlignment:"center",spacing:8,onClick:__values[3]},[__values[4],__values[5]]); }
+function __operitUiTemplate_27397(__ctx,__values){return __ctx.UI.Image({key:__values[0],uri:__values[1],width:__values[2],height:__values[3],contentScale:"crop",contentDescription:__values[4],modifier:__values[5]}); }
+function __operitUiTemplate_27955(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:14,tint:__values[1]}); }
+function __operitUiTemplate_27703(__ctx,__values){return __ctx.UI.Box({width:__values[0],height:__values[1],contentAlignment:"center",background:__values[2],backgroundShape:{type:"circle"}},__values[3]); }
+function __operitUiTemplate_28839(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"titleSmall",fontWeight:"700",maxLines:1,overflow:"ellipsis",modifier:__values[1],color:__values[2]}); }
+function __operitUiTemplate_29145(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"labelSmall",fontWeight:"700",color:__values[1]}); }
+function __operitUiTemplate_29302(__ctx,__values){return __ctx.UI.GradientRule({weight:1,paddingHorizontal:10,height:2,startColor:__values[0],endColor:__values[1]}); }
+function __operitUiTemplate_29491(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:23,tint:__values[1]}); }
+function __operitUiTemplate_28542(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,verticalAlignment:"center",height:24,onClick:__values[0],modifier:__values[1]},[__values[2],__values[3],__values[4],__values[5],__values[6],__values[7],__values[8]]); }
+function __operitUiTemplate_28323(__ctx,__values){return __ctx.UI.DragTarget({key:__values[0],acceptedTypes:[__values[1]],onDrop:__values[2]},__values[3]); }
+function __operitUiTemplate_28089(__ctx,__values){return __ctx.UI.Column({key:__values[0],fillMaxWidth:true,paddingStart:__values[1],paddingEnd:__values[2],paddingTop:5,paddingBottom:5},__values[3]); }
+function __operitUiTemplate_30287(__ctx,__values){return __ctx.UI.Icon({name:"FolderOutlined",size:16,tint:__values[0]}); }
+function __operitUiTemplate_30411(__ctx,__values){return __ctx.UI.Text({text:__values[0],weight:1,style:"labelLarge",fontWeight:"700",maxLines:1,overflow:"ellipsis",color:__values[1]}); }
+function __operitUiTemplate_30609(__ctx,__values){return __ctx.UI.Icon({name:"PushPinRounded",size:12,tint:__values[0]}); }
+function __operitUiTemplate_30751(__ctx,__values){return __ctx.UI.HoverOnly({width:24,height:24},__values[0]); }
+function __operitUiTemplate_30881(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:20,tint:__values[1]}); }
+function __operitUiTemplate_29807(__ctx,__values){return __ctx.UI.Row(__values[0],__values[1]); }
+function __operitUiTemplate_31614(__ctx,__values){return __ctx.UI.HoverRegion({shape:{cornerRadius:__values[0]}},__values[1]); }
+function __operitUiTemplate_31261(__ctx,__values){return __ctx.UI.DragTarget({key:__values[0],acceptedTypes:[__values[1]],hoverBorderColor:__values[2],shape:{cornerRadius:__values[3]},onDrop:__values[4]},__values[5]); }
+function __operitUiTemplate_31037(__ctx,__values){return __ctx.UI.Column({key:__values[0],fillMaxWidth:true,paddingStart:__values[1],paddingEnd:__values[2],paddingTop:3,paddingBottom:3},__values[3]); }
+function __operitUiTemplate_33761(__ctx,__values){return __ctx.UI.Text({text:__values[0],height:__values[1],color:__values[2],fontSize:12,paddingHorizontal:20}); }
+function __operitUiTemplate_47602(__ctx,__values){return __ctx.UI.Icon({name:"MoreHoriz",size:16,tint:__values[0]}); }
+function __operitUiTemplate_46750(__ctx,__values){return __ctx.UI.PopupMenu({key:__values[0],width:22,height:22,tooltip:"\u5BF9\u8BDD\u64CD\u4F5C",enabled:__values[1],items:[{label:"\u7F16\u8F91\u540D\u79F0",icon:"Edit"},{label:__values[2],icon:"PushPin"},{label:__values[3],icon:__values[4]},{label:"\u5220\u9664",icon:"DeleteOutline",danger:true}],onSelected:__values[5]},__values[6]); }
+function __operitUiTemplate_49089(__ctx,__values){return __ctx.UI.Icon({name:"MoreHorizRounded",size:16,tint:__values[0]}); }
+function __operitUiTemplate_47885(__ctx,__values){return __ctx.UI.PopupMenu({key:__values[0],width:22,height:22,menuMaxWidth:138,tooltip:"\u5206\u7EC4\u64CD\u4F5C",enabled:__values[1],items:[{label:"\u65B0\u5EFA\u5BF9\u8BDD",icon:"AddCommentOutlined"},{label:"\u7F16\u8F91\u540D\u79F0",icon:"EditOutlined"},{label:__values[2],icon:__values[3]},{label:"\u5220\u9664",icon:"DeleteOutlineRounded",danger:true,dividerBefore:true}],onSelected:__values[4]},__values[5]); }
+function __operitUiTemplate_50471(__ctx,__values){return __ctx.UI.Icon({name:"MoreHorizRounded",size:16,tint:__values[0]}); }
+function __operitUiTemplate_49687(__ctx,__values){return __ctx.UI.PopupMenu({key:__values[0],width:22,height:22,menuMaxWidth:138,tooltip:"\u5206\u7EC4\u64CD\u4F5C",items:__values[1],enabled:__values[2],onSelected:__values[3]},__values[4]); }
+function __operitUiTemplate_53482(__ctx,__values){return __ctx.UI.Icon({name:"AddRounded",size:17,tint:__values[0]}); }
+function __operitUiTemplate_53572(__ctx,__values){return __ctx.UI.Text(__values[0]); }
+function __operitUiTemplate_53056(__ctx,__values){return __ctx.UI.Row({key:"sidebar-new-chat",weight:1,height:34,verticalAlignment:"center",horizontalArrangement:"center",onClick:__values[0],spacing:6},[__values[1],__values[2]]); }
+function __operitUiTemplate_53737(__ctx,__values){return __ctx.UI.Box({width:1,height:16,background:__values[0]}); }
+function __operitUiTemplate_54704(__ctx,__values){return __ctx.UI.Icon({name:"CreateNewFolderOutlined",size:16,tint:__values[0],contentDescription:"\u65B0\u5EFA\u5206\u7EC4"}); }
+function __operitUiTemplate_53844(__ctx,__values){return __ctx.UI.Row({key:"sidebar-new-group",width:38,height:34,verticalAlignment:"center",horizontalArrangement:"center",onClick:__values[0]},__values[1]); }
+function __operitUiTemplate_52983(__ctx,__values){return __ctx.UI.Row({fillMaxSize:true,verticalAlignment:"center"},[__values[0],__values[1],__values[2]]); }
+function __operitUiTemplate_52740(__ctx,__values){return __ctx.UI.Surface({key:"sidebar-create-bar",weight:1,height:34,containerColor:__values[0],contentColor:__values[1],shape:{type:"pill"}},__values[2]); }
+function __operitUiTemplate_55290(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:17,tint:__values[1],contentDescription:__values[2]}); }
+function __operitUiTemplate_54865(__ctx,__values){return __ctx.UI.Row({key:"sidebar-search-toggle",width:34,height:34,verticalAlignment:"center",horizontalArrangement:"center",onClick:__values[0],modifier:__values[1],background:__values[2]},__values[3]); }
+function __operitUiTemplate_52552(__ctx,__values){return __ctx.UI.Row({key:"sidebar-toolbar",fillMaxWidth:true,verticalAlignment:"center",spacing:8,paddingStart:14,paddingEnd:12,paddingBottom:8},[__values[0],__values[1]]); }
+function __operitUiTemplate_56168(__ctx,__values){return __ctx.UI.Icon({name:"Search",size:20,tint:__values[0]}); }
+function __operitUiTemplate_55869(__ctx,__values){return __ctx.UI.TextField({key:"sidebar-search",value:__values[0],onValueChange:__values[1],placeholder:"\u641C\u7D22\u5BF9\u8BDD",singleLine:true,fillMaxWidth:true,style:{color:__values[2]},leadingIcon:__values[3],decoration:{isDense:true,filled:true,fillColor:__values[4],cornerRadius:14,focusedBorderColor:__values[5],hintStyle:{color:__values[6]},contentPadding:{horizontal:12,vertical:10}}}); }
+function __operitUiTemplate_55776(__ctx,__values){return __ctx.UI.Column({fillMaxWidth:true,paddingHorizontal:12,paddingBottom:12},__values[0]); }
+function __operitUiTemplate_56645(__ctx,__values){return __ctx.UI.Spacer({height:0}); }
+function __operitUiTemplate_55577(__ctx,__values){return __ctx.UI.Box({key:"sidebar-search-container",fillMaxWidth:true,animation:{durationMillis:180,curve:"easeOutCubic",animateContentSize:true}},__values[0]); }
+function __operitUiTemplate_56716(__ctx,__values){return __ctx.UI.Text({key:"sidebar-error",text:__values[0],fontSize:11,color:__values[1],paddingHorizontal:20,paddingVertical:6}); }
+function __operitUiTemplate_57616(__ctx,__values){return __ctx.UI.LoadingIndicator({size:24}); }
+function __operitUiTemplate_57532(__ctx,__values){return __ctx.UI.Box({fillMaxWidth:true,height:80,contentAlignment:"center"},__values[0]); }
+function __operitUiTemplate_57761(__ctx,__values){return __ctx.UI.Text({text:__values[0],fontSize:16,fontWeight:"600"}); }
+function __operitUiTemplate_58367(__ctx,__values){return __ctx.UI.TextField({key:"sidebar-group-name",value:__values[0],label:__values[1],onValueChange:__values[2],enabled:__values[3]}); }
+function __operitUiTemplate_58733(__ctx,__values){return __ctx.UI.Text({text:__values[0],fontSize:12}); }
+function __operitUiTemplate_59241(__ctx,__values){return __ctx.UI.Text({text:__values[0],fillMaxWidth:true,maxLines:2,style:"titleMedium",color:__values[1]}); }
+function __operitUiTemplate_59721(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:20,tint:__values[1]}); }
+function __operitUiTemplate_59825(__ctx,__values){return __ctx.UI.Text({text:__values[0],weight:1,fontSize:14,color:__values[1]}); }
+function __operitUiTemplate_59588(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,paddingHorizontal:16,paddingVertical:10,verticalAlignment:"center",spacing:12},[__values[0],__values[1]]); }
+function __operitUiTemplate_59442(__ctx,__values){return __ctx.UI.Surface({fillMaxWidth:true,onClick:__values[0],shape:{cornerRadius:12},color:__values[1]},__values[2]); }
+function __operitUiTemplate_60793(__ctx,__values){return __ctx.UI.Text({key:"sidebar-delete-result",text:__values[0],fontSize:11,color:__values[1]}); }
+function __operitUiTemplate_61160(__ctx,__values){return __ctx.UI.Text({text:__values[0],color:__values[1],fontSize:11}); }
+function __operitUiTemplate_61281(__ctx,__values){return __ctx.UI.TextButton({text:"\u53D6\u6D88",enabled:__values[0],onClick:__values[1]}); }
+function __operitUiTemplate_61459(__ctx,__values){return __ctx.UI.Button({text:"\u786E\u8BA4",enabled:__values[0],onClick:__values[1]}); }
+function __operitUiTemplate_61246(__ctx,__values){return __ctx.UI.Row({spacing:8},__values[0]); }
+function __operitUiTemplate_61745(__ctx,__values){return __ctx.UI.Column({padding:20,spacing:12,width:320},__values[0]); }
+function __operitUiTemplate_61581(__ctx,__values){return __ctx.UI.Dialog({key:"sidebar-edit-dialog",closeOnDismissRequest:__values[0],onDismissRequest:__values[1]},__values[2]); }
+function __operitUiTemplate_61946(__ctx,__values){return __ctx.UI.Column({key:"native-character-sidebar",fillMaxWidth:true,paddingBottom:16,spacing:0,onLoad:__values[0],onInputsChanged:__values[1]},__values[2]); }
