@@ -83,9 +83,10 @@ class KeepAlivePlugin final : public flutter::Plugin {
         });
   }
 
-  /// Deletes the shell resource before its associated engine messenger disappears.
+  /// Releases native resources during plugin registrar destruction.
   ~KeepAlivePlugin() override {
-    channel_->SetMethodCallHandler(nullptr);
+    // Flutter has already detached the engine from its messenger at this point.
+    // The registrar owns the messenger and releases its handlers after plugins.
     registrar_->UnregisterTopLevelWindowProcDelegate(delegate_);
     if (tray_added_) Shell_NotifyIconW(NIM_DELETE, &tray_);
   }
