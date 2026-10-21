@@ -768,8 +768,11 @@ impl AsyncToolExecutor for ChatManagerToolExecutor {
         let request = tool.clone();
         let context = ToolExecutionManager::currentToolRuntimeContext();
         let (sender, receiver) = tokio::sync::oneshot::channel();
+        // Chat operations read the conversation database synchronously, so they
+        // must never occupy the coordination workers that drive JS deadlines and
+        // promise pumps.
         let scheduled = operit_host_api::HostManager::defaultHostRuntimeTaskSchedulerHost()
-            .scheduleHostRuntimeAsyncTask("chat-tool-invocation", Box::new(move || {
+            .scheduleHostRuntimeBlockingAsyncTask("chat-tool-invocation", Box::new(move || {
                 Box::pin(async move {
                     let invocation = async move {
                         let tool = request;

@@ -2219,6 +2219,9 @@ pub trait HostRuntimeTaskSchedulerHost: Send + Sync {
     fn monotonicTimeMillis(&self) -> HostResult<u64>;
 
     /// Schedules a named one-shot runtime task through the platform execution mechanism.
+    ///
+    /// The closure is synchronous, so hosts with dedicated blocking capacity should
+    /// execute it there instead of on the coordination executor.
     fn scheduleHostRuntimeTask(&self, taskName: &str, task: HostRuntimeTask) -> HostResult<()>;
 
     /// Schedules a named asynchronous runtime task through the platform executor.
@@ -2227,6 +2230,20 @@ pub trait HostRuntimeTaskSchedulerHost: Send + Sync {
         taskName: &str,
         task: HostRuntimeAsyncTask,
     ) -> HostResult<()>;
+
+    /// Schedules an asynchronous task that may perform blocking work.
+    ///
+    /// Hosts with dedicated blocking capacity must isolate these tasks from the
+    /// coordination executor, so one blocked call cannot delay runtime deadlines,
+    /// promise pumps, notification dispatch, or engine steps. Platforms without a
+    /// separate blocking executor may reuse the asynchronous executor.
+    fn scheduleHostRuntimeBlockingAsyncTask(
+        &self,
+        taskName: &str,
+        task: HostRuntimeAsyncTask,
+    ) -> HostResult<()> {
+        self.scheduleHostRuntimeAsyncTask(taskName, task)
+    }
 
     /// Schedules a nonblocking task on the host's reusable affine executor.
     /// Callers must not block the executor or rely on exclusive thread-local state.
