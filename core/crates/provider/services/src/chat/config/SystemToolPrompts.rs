@@ -891,6 +891,16 @@ fn basic_tools_en() -> SystemToolPromptCategory {
                     None,
                 )],
             ),
+            tool(
+                "plan",
+                "Manage the execution plan shown to the user. For multi-step tasks (3+ steps), research-then-implement work, or when the user asks for an approach first, create a plan so the user can see progress; advance step status as you go and clear it when done. The plan renders above the user's input box in real time.",
+                vec![
+                    param("action", "string", "replace_active=create or replace the plan (needs goal and steps); advance=update step statuses (needs steps); get_active=read the current plan; clear_active=discard the plan", true, None),
+                    param("goal", "string", "One-sentence overall objective of the plan", false, None),
+                    param("steps", "string", "JSON array of steps, each like {\"title\":\"read code\",\"status\":\"pending\"}; status is pending/in_progress/completed/failed. A plain string array is also accepted and treated as all-pending", false, None),
+                    param("status", "string", "Overall plan status: active/completed/cancelled, defaults to active", false, None),
+                ],
+            ),
         ],
     )
 }
@@ -924,6 +934,16 @@ fn basic_tools_cn() -> SystemToolPromptCategory {
                 "switch_core",
                 "为当前设备空间内另一台当前可达的设备输出目标标记；此工具本身不会切换运行时。目标不是可达的空间成员时会返回失败。接受设备名、用户名、唯一 ID 前缀或 list_core_nodes 返回的完整 ID。",
                 vec![param("node_id", "string", "目标设备：list_core_nodes 返回的设备名或完整 ID，或唯一 ID 前缀", true, None)],
+            ),
+            tool(
+                "plan",
+                "管理与用户的执行计划。多步骤任务（3 步及以上）、需要先调研再动手、或用户要求「先给个方案」时，先调用本工具建立计划并展示给用户；每完成一步就推进状态，全部结束后清空。计划会实时显示在用户输入框上方。",
+                vec![
+                    param("action", "string", "replace_active=建立/替换当前计划（需 goal 和 steps）；advance=更新步骤状态（需 steps）；get_active=读取当前计划；clear_active=清空计划", true, None),
+                    param("goal", "string", "计划总目标，一句话描述要达成什么", false, None),
+                    param("steps", "string", "步骤 JSON 数组，每项形如 {\"title\":\"读代码\",\"status\":\"pending\"}；status 取值 pending/in_progress/completed/failed。也接受字符串数组，此时全部视为 pending", false, None),
+                    param("status", "string", "计划整体状态：active/completed/cancelled，默认 active", false, None),
+                ],
             ),
         ],
     )

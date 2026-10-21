@@ -683,6 +683,24 @@ impl MessageCoordinationDelegate {
                 );
                 (0, 0.0)
             });
+        // 关键可验证点：把解析到的真实预算与阈值打出来。
+        // 用于确认设置页的「总结阈值 10%」确实被换算成 0.10 传到了超限判定，
+        // 而不是像修复前那样恒为 maxTokens=0 / threshold=0.0（超限分支永不进入）。
+        ChainLogger::info(
+            SEND_CHAIN,
+            "send.context.budget.resolved",
+            &[
+                ("chatId", chatId.clone()),
+                ("providerId", sendModelProviderId.clone()),
+                ("modelId", sendModelId.clone()),
+                ("maxTokens", maxTokens.to_string()),
+                ("tokenUsageThreshold", format!("{tokenUsageThreshold:.4}")),
+                (
+                    "triggerAtTokens",
+                    (((maxTokens as f64) * tokenUsageThreshold) as i64).to_string(),
+                ),
+            ],
+        );
         let result = self
             .messageProcessingDelegate
             .sendUserMessage(SendUserMessageProcessingRequest {
