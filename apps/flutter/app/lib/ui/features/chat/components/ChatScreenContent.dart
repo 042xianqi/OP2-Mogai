@@ -24,6 +24,7 @@ import 'ChatScrollNavigator.dart';
 import 'MessageContextMenu.dart';
 import 'share/ChatShareImageGenerator.dart';
 import 'share/ChatShareImagePreviewDialog.dart';
+import 'plan/PlanBoardHost.dart';
 import 'style/input/agent/AgentChatInputSection.dart';
 import 'style/input/classic/ClassicChatInputSection.dart';
 import 'style/input/common/InputProcessingStatusLane.dart';
@@ -344,11 +345,25 @@ class ChatScreenContent extends StatelessWidget {
   }
 
   /// Builds the chat input section selected by the saved input style.
+  ///
+  /// 计划条挂在输入框正上方（两种输入风格共用）：
+  /// 状态直接从消息流里的 plan 工具调用派生，因此重启会话后依然存在，
+  /// 不需要额外建表或 migration。
   Widget _buildChatInputSection(String inputStyle) {
-    return ChatRouteStatusHint(
-      chatId: currentChatId,
-      viewModel: viewModel,
-      builder: (hint) => _buildChatInputWithRouteHint(inputStyle, hint),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        PlanBoardHost(
+          chatId: currentChatId,
+          viewModel: viewModel,
+        ),
+        ChatRouteStatusHint(
+          chatId: currentChatId,
+          viewModel: viewModel,
+          builder: (hint) => _buildChatInputWithRouteHint(inputStyle, hint),
+        ),
+      ],
     );
   }
 

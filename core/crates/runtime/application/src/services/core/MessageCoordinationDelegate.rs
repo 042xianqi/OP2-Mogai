@@ -54,6 +54,9 @@ pub struct MessageCoordinationDelegate {
     pub currentChatModelIdOverride: Option<String>,
     pub nonFatalErrorCollectorJob: Option<String>,
     pub pendingAutoContinuationByChatId: HashMap<String, PendingAutoContinuationRequest>,
+    /// 命中上下文超限、等待回合结束后做摘要的会话（chatId -> participantId）。
+    /// 用队列而不是内联调用，避免 summarizeHistory 收尾再进发送链造成的 async 递归。
+    pub pendingTokenLimitSummaryByChatId: HashMap<String, Option<String>>,
 }
 
 impl MessageCoordinationDelegate {
@@ -78,6 +81,7 @@ impl MessageCoordinationDelegate {
             currentChatModelIdOverride: None,
             nonFatalErrorCollectorJob: None,
             pendingAutoContinuationByChatId: HashMap::new(),
+            pendingTokenLimitSummaryByChatId: HashMap::new(),
         };
         delegate.ensureNonFatalErrorCollectorStarted();
         delegate
@@ -648,6 +652,37 @@ impl MessageCoordinationDelegate {
             .as_ref()
             .map(|chat| self.chatHistoryDelegate.workspaceFolderPathsForChat(chat))
             .unwrap_or_default();
+        // 自动压缩的前提：maxTokens 必须是非 0 的真实窗口值，tokenUsageThreshold 必须取
+        // 模型配置里的真实阈值。此前这里硬编码 maxTokens: 0 / tokenUsageThreshold: 0.0，
+        // 而下游 EnhancedAIService 的超限检查是 `if maxTokens > 0 { ... }`，
+        // 导致超限分支永远不会进入，自动摘要链路整条死掉。
+        let sendModelProviderId = chatProviderIdOverride
+            .clone()
+            .or_else(|| self.currentChatProviderIdOverride.clone())
+            .unwrap_or_else(|| configuration.profile.modelBinding.providerId.clone());
+        let sendModelId = chatModelIdOverride
+            .clone()
+            .or_else(|| self.currentChatModelIdOverride.clone())
+            .unwrap_or_else(|| configuration.profile.modelBinding.modelId.clone());
+        let (maxTokens, tokenUsageThreshold) = self
+            .messageProcessingDelegate
+            .modelConfigManager
+            .getResolvedModelConfig(&sendModelProviderId, &sendModelId)
+            .map(|settings| {
+                (
+                    (settings.context.maxContextLength * 1024.0)
+                        .clamp(0.0, i32::MAX as f32) as i32,
+                    settings.summary.summaryTokenThreshold as f64,
+                )
+            })
+            .unwrap_or_else(|error| {
+                ChainLogger::error(
+                    SEND_CHAIN,
+                    "send.context.budget.unresolved",
+                    &[("chatId", chatId.clone()), ("error", error.to_string())],
+                );
+                (0, 0.0)
+            });
         let result = self
             .messageProcessingDelegate
             .sendUserMessage(SendUserMessageProcessingRequest {
@@ -665,8 +700,8 @@ impl MessageCoordinationDelegate {
                 attachments,
                 replyToMessage,
                 enableThinking,
-                maxTokens: 0,
-                tokenUsageThreshold: 0.0,
+                maxTokens,
+                tokenUsageThreshold,
                 chatProviderIdOverride,
                 chatModelIdOverride,
                 proxySenderNameOverride,
@@ -694,6 +729,28 @@ impl MessageCoordinationDelegate {
                 return Err(error.to_string());
             }
         };
+        // 消费「本轮是否命中上下文超限」标记。
+        //
+        // 这里【只消费、不内联跑摘要】：summarizeHistory(autoContinue=true) 收尾会再调用
+        // sendMessageInternal，直接在发送链里内联调用会让 async fn 变成递归
+        //（编译器报 E0733: recursion in an async fn requires boxing）。
+        // 因此改为把「需要压缩」记进待处理队列，由回合结束后的外层调度执行，
+        // 既保留自动压缩语义，又不制造递归。
+        if self
+            .messageProcessingDelegate
+            .takeTokenLimitExceeded(chatId.as_str())
+        {
+            ChainLogger::warn(
+                SEND_CHAIN,
+                "send.token_limit.detected",
+                &[("chatId", chatId.clone())],
+            );
+            self.queuePendingTokenLimitSummary(
+                chatId.clone(),
+                participantId.clone(),
+            );
+        }
+
         self.tokenStatisticsDelegate
             .updateCumulativeStatistics(Some(chatId.clone()), Some(enhancedAiService));
         let (inputTokens, outputTokens) = self
@@ -731,6 +788,15 @@ impl MessageCoordinationDelegate {
         if isAutoContinuation {
             self.removePendingAutoContinuation(chatId);
         }
+        // 回合已正常收尾：此时消费「超限待摘要」队列，执行一次真实压缩。
+        // 放在这里而不是超限当场执行，是为了避开 summarizeHistory 收尾再度进入
+        // sendMessageInternal 造成的 async 递归（E0733）。队列每条只消费一次。
+        if !isAutoContinuation && !self.pendingTokenLimitSummaryByChatId.is_empty() {
+            // Box::pin 打断 async 递归：
+            // flush → handleTokenLimitExceeded → summarizeHistory(autoContinue=true)
+            //      → sendMessageInternal →（本段）形成自递归，编译器要求显式装箱。
+            Box::pin(self.flushPendingTokenLimitSummary(enhancedAiService)).await;
+        }
         Ok(result.completion)
     }
 
@@ -753,6 +819,50 @@ impl MessageCoordinationDelegate {
             None,
             None)
         .await;
+    }
+
+    /// 登记「这个会话命中过上下文超限，需要在回合结束后做摘要」。
+    fn queuePendingTokenLimitSummary(&mut self, chatId: String, participantId: Option<String>) {
+        self.pendingTokenLimitSummaryByChatId
+            .insert(chatId, participantId);
+    }
+
+    /// 取出并清除某会话的待摘要登记（消费一次即失效）。
+    fn takePendingTokenLimitSummary(&mut self, chatId: &str) -> Option<Option<String>> {
+        self.pendingTokenLimitSummaryByChatId.remove(chatId)
+    }
+
+    /// 若存在待处理的超限摘要，则执行一次（供回合收尾调度调用）。
+    ///
+    /// 与 `handleTokenLimitExceeded` 的区别：这里从队列里取任务，天然不会与正在进行的
+    /// 发送链重叠；并且每条待办只会被消费一次，不会重复触发摘要。
+    pub async fn flushPendingTokenLimitSummary(
+        &mut self,
+        enhancedAiService: &mut EnhancedAIService,
+    ) -> bool {
+        let pendingChatId = self
+            .pendingTokenLimitSummaryByChatId
+            .keys()
+            .next()
+            .cloned();
+        let Some(chatId) = pendingChatId else {
+            return false;
+        };
+        if self.isSummarizing {
+            // 已有摘要在进行，保持待办，下一轮再处理。
+            return false;
+        }
+        let participantId = self
+            .takePendingTokenLimitSummary(chatId.as_str())
+            .flatten();
+        ChainLogger::info(
+            SEND_CHAIN,
+            "send.token_limit.summary.start",
+            &[("chatId", chatId.clone())],
+        );
+        self.handleTokenLimitExceeded(enhancedAiService, Some(chatId), participantId)
+            .await;
+        true
     }
 
     /// Summarizes history after context limits are exceeded, then continues the turn.

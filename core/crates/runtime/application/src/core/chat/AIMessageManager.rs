@@ -415,6 +415,16 @@ impl AIMessageManager {
         options.chatModelIdOverride = request.chatModelIdOverride;
         options.disableWarning = request.disableWarning;
         options.callbacks = request.callbacks;
+        // SendMessageOptions.onTokenLimitExceeded 与 SendMessageCallbacks 是两条独立通路：
+        // 前者是 provider 超限分支直接调用的裸回调字段，后者只是事件总线。
+        // 此前该字段从未被赋值（恒为 None），导致 processToolResults 里
+        // `if let Some(callback) = onTokenLimitExceeded` 永远不成立 —— 超限没有任何下游动作。
+        // 这里把它桥接到同一个 callbacks 实例的 onTokenLimitExceeded()，保持单一事实源。
+        options.onTokenLimitExceeded = options.callbacks.as_ref().map(|callbacks| {
+            let callbacks = callbacks.clone();
+            std::sync::Arc::new(move || callbacks.onTokenLimitExceeded())
+                as operit_providers::chat::EnhancedAIService::TokenLimitCallback
+        });
         options.onToolInvocation = request.onToolInvocation;
         options.stream = enableStream;
 

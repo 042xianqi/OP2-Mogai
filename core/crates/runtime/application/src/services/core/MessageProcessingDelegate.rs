@@ -451,12 +451,19 @@ pub struct MessageProcessingDelegate {
     pub lastScrollEmitMsByChatKey: Arc<Mutex<HashMap<String, i64>>>,
     pub suppressIdleCompletedStateByChatId: Arc<Mutex<HashMap<String, bool>>>,
     pub pendingAsyncSummaryUiByChatId: Arc<Mutex<HashMap<String, bool>>>,
+    /// 记录「本轮发送是否真的命中上下文超限」，供发送链在回合结束后消费。
+    /// 用共享标记而不是直接在回调里跑摘要：超限回调发生在 provider 层同步分支，
+    /// 那里拿不到 `&mut MessageCoordinationDelegate`（summarizeHistory 需要 &mut self）。
+    pub tokenLimitExceededByChatId: Arc<Mutex<HashMap<String, bool>>>,
     pub speakMessageHandler: Option<fn(String, bool)>,
 }
 
 /// Bridges enhanced AI callbacks back into processing delegate state flows.
 struct MessageProcessingCallbacks {
     nonFatalErrorEventFlow: MutableStateFlow<Option<String>>,
+    /// 当前轮次所属 chat，用于把超限标记精确归到这条会话。
+    chatId: String,
+    tokenLimitExceededByChatId: Arc<Mutex<HashMap<String, bool>>>,
 }
 
 impl SendMessageCallbacks for MessageProcessingCallbacks {
@@ -465,9 +472,28 @@ impl SendMessageCallbacks for MessageProcessingCallbacks {
     fn onNonFatalError(&self, error: String) {
         self.nonFatalErrorEventFlow.set_value(Some(error));
     }
+
+    /// 记录「本轮请求因上下文超限被截断」。
+    ///
+    /// 这里只置标记，真正的摘要在发送链回合收尾时消费标记后执行
+    /// （summarizeHistory 需要 &mut 的协调者，provider 层拿不到）。
+    #[allow(non_snake_case)]
+    fn onTokenLimitExceeded(&self) {
+        if let Ok(mut guard) = self.tokenLimitExceededByChatId.lock() {
+            guard.insert(self.chatId.clone(), true);
+        }
+    }
 }
 
 impl MessageProcessingDelegate {
+    /// 取出并清除本 chat 的超限标记（消费一次即失效，避免重复触发摘要）。
+    pub fn takeTokenLimitExceeded(&self, chatId: &str) -> bool {
+        self.tokenLimitExceededByChatId
+            .lock()
+            .map(|mut guard| guard.remove(chatId).unwrap_or(false))
+            .unwrap_or(false)
+    }
+
     /// Creates a processing delegate backed by the supplied config managers.
     pub fn new(
         functionalConfigManager: FunctionalConfigManager,
@@ -481,6 +507,7 @@ impl MessageProcessingDelegate {
             scrollToBottomEvent: Vec::new(),
             nonFatalErrorEvent: Vec::new(),
             nonFatalErrorEventFlow: mutableStateFlow(None),
+            tokenLimitExceededByChatId: Arc::new(Mutex::new(HashMap::new())),
             toastEventFlow: mutableStateFlow(None),
             turnCompleteCounterByChatId: HashMap::new(),
             turnCompleteCounterByChatIdFlow: mutableStateFlow(HashMap::new()),
@@ -506,6 +533,7 @@ impl MessageProcessingDelegate {
             scrollToBottomEvent: self.scrollToBottomEvent.clone(),
             nonFatalErrorEvent: self.nonFatalErrorEvent.clone(),
             nonFatalErrorEventFlow: self.nonFatalErrorEventFlow.clone(),
+            tokenLimitExceededByChatId: self.tokenLimitExceededByChatId.clone(),
             toastEventFlow: self.toastEventFlow.clone(),
             turnCompleteCounterByChatId: self.turnCompleteCounterByChatIdFlow.value(),
             turnCompleteCounterByChatIdFlow: self.turnCompleteCounterByChatIdFlow.clone(),
@@ -1699,6 +1727,8 @@ impl MessageProcessingDelegate {
             disableWarning: request.turnOptions.disableWarning,
             callbacks: Some(Arc::new(MessageProcessingCallbacks {
                 nonFatalErrorEventFlow: self.nonFatalErrorEventFlow.clone(),
+                chatId: chatId.clone(),
+                tokenLimitExceededByChatId: self.tokenLimitExceededByChatId.clone(),
             })),
             onToolInvocation: None,
             resume: request.isResume,

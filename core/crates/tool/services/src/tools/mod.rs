@@ -59,3 +59,6 @@ pub mod EdgePortTool;
 
 #[path = "DeviceTools.rs"]
 pub mod DeviceTools;
+
+#[path = "PlanTool.rs"]
+pub mod PlanTool;

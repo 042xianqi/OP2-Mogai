@@ -56,6 +56,8 @@ use crate::tools::defaultTool::standard::{
 pub fn registerAllTools(handler: &mut AIToolHandler, context: &HostManager) {
     registerPublicTools(handler, context);
     registerInternalTools(handler, context);
+    // 任务计划看板：普通公开工具，不进入 BuiltinToolName 契约。
+    crate::tools::PlanTool::registerPlanTool(handler);
 }
 
 #[allow(non_snake_case)]

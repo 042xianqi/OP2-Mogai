@@ -175,6 +175,13 @@ pub struct TurnTokenSnapshot {
     pub cachedInputTokens: i64,
 }
 
+/// 上下文超限回调。
+///
+/// 用 `Arc<dyn Fn() + Send + Sync>` 而不是裸函数指针 `fn()`：
+/// 裸函数指针不能捕获环境，调用方无法把 chatId / delegate 带进来，
+/// 导致 runtime 侧此前只能传 `None`，超限分支永远是死代码。
+pub type TokenLimitCallback = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 pub trait SendMessageCallbacks: Send + Sync {
     fn onNonFatalError(&self, _error: String) {}
 
@@ -212,7 +219,7 @@ pub struct SendMessageOptions {
     pub promptFunctionType: PromptFunctionType,
     pub enableThinking: bool,
     pub onNonFatalError: Option<fn(String)>,
-    pub onTokenLimitExceeded: Option<fn()>,
+    pub onTokenLimitExceeded: Option<TokenLimitCallback>,
     pub customSystemPromptTemplate: Option<String>,
     pub isSubTask: bool,
     pub participantName: Option<String>,
@@ -2092,7 +2099,7 @@ impl EnhancedAIService {
         promptFunctionType: PromptFunctionType,
         enableThinking: bool,
         onNonFatalError: Option<fn(String)>,
-        onTokenLimitExceeded: Option<fn()>,
+        onTokenLimitExceeded: Option<TokenLimitCallback>,
         maxTokens: i32,
         tokenUsageThreshold: f64,
         isSubTask: bool,
@@ -2486,7 +2493,7 @@ impl EnhancedAIService {
         promptFunctionType: PromptFunctionType,
         enableThinking: bool,
         onNonFatalError: Option<fn(String)>,
-        onTokenLimitExceeded: Option<fn()>,
+        onTokenLimitExceeded: Option<TokenLimitCallback>,
         maxTokens: i32,
         tokenUsageThreshold: f64,
         isSubTask: bool,
@@ -2729,7 +2736,7 @@ impl EnhancedAIService {
         promptFunctionType: PromptFunctionType,
         enableThinking: bool,
         onNonFatalError: Option<fn(String)>,
-        onTokenLimitExceeded: Option<fn()>,
+        onTokenLimitExceeded: Option<TokenLimitCallback>,
         maxTokens: i32,
         tokenUsageThreshold: f64,
         isSubTask: bool,
@@ -2958,9 +2965,11 @@ impl EnhancedAIService {
         callbacks: Option<Arc<dyn SendMessageCallbacks + Send + Sync>>,
     ) {
         self.shared_state().last_reply_content = Some(content.to_string());
-        if let Some(callbacks) = callbacks {
-            callbacks.onTokenLimitExceeded();
-        }
+        // 注意：这里【不能】调用 onTokenLimitExceeded。
+        // 该回调语义是「本轮请求因上下文超限被截断」，只有 processToolResults 中
+        // 真实命中 `usageRatio >= tokenUsageThreshold` 才允许触发。
+        // 此前无条件在此触发，会让每一轮正常回复都误报超限，进而误触发摘要与自动续跑。
+        let _ = callbacks;
         self.notifyReplyCompleted(chatId, participantName, avatarUri, notifyReplyOverride);
     }
 
