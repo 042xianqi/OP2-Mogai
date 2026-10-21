@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { stripTypeScriptTypes } from 'node:module';
+import { createServer } from 'node:net';
+import { stripTypeScriptTypes, createRequire } from 'node:module';
 import test from 'node:test';
 import vm from 'node:vm';
 import { readSdkScript } from '../runtime/compose_scripts.mjs';
@@ -56,7 +57,7 @@ function adapter(version = '1.0.0', respond) {
   const canonicalCalls = [];
   const context = vm.createContext({ version, __operitCurrentCallId: 'test-call',
     /** Provides the active ToolPkg contract on every invocation. */
-    __operitGetCallState() { return { params: { __operit_toolpkg_api_version: context.version } }; },
+    __operitGetCallState() { return { params: { __operit_toolpkg_api_version: context.version, containerPackageName: context.owner } }; },
     /** Publishes bootstrap globals just as the execution runtime does. */
     __operitExpose(name, value) { context[name] = value; },
     /** Tracks host requests through the production structured transport. */
@@ -357,4 +358,253 @@ test('Alpine shims remain available in nested Bash without accumulating PATH ent
     assert.match(result.stdout,/add\r?\n--no-cache\r?\nnodejs/);
     assert.equal(result.stdout.split(prefix+'/.operit-v1/bin').length-1,1);
   } finally { rmSync(temporary,{recursive:true,force:true}); }
+});
+
+/** Connects the production SDK and runtime provider through their real structured transport. */
+function cacheFixture(directory, owner = 'v1.cache.test.' + process.pid) {
+  const native = provider('linux', command => {
+    const result = spawnSync('/bin/bash', ['-c', command], { encoding: 'utf8', timeout: 15000 });
+    assert.ifError(result.error);
+    return { output: result.stdout, exitCode: result.status, timedOut: false };
+  });
+  const runtime = adapter('1.0.0', async (name, params) => JSON.stringify(await native.tools[name.split(':')[1]](params)));
+  runtime.context.owner = owner;
+  let hash = 0;
+  for (const unit of owner) hash = (Math.imul(hash, 31) + unit.charCodeAt(0)) | 0;
+  const cacheName = owner + '-' + (hash >>> 0).toString(16);
+  const vfs = '/app/data/cache/toolpkg/' + cacheName;
+  const guest = '/tmp/operit-v1/toolpkg/' + cacheName;
+  let lists = 0;
+  const canonical = runtime.context.__operitCanonicalTools.Files;
+  canonical.list = async path => {
+    lists++;
+    assert.ok(path === vfs || path.startsWith(vfs + '/'));
+    const local = directory + path.slice(vfs.length);
+    return { path, entries: readdirSync(local).map(name => ({ name, isDirectory: statSync(join(local, name)).isDirectory() })) };
+  };
+  canonical.readBinary = async path => ({ path, contentBase64: path === vfs + '/.toolpkg-cache-signature'
+    ? Buffer.from('fixture-revision-1').toString('base64')
+    : readFileSync(directory + path.slice(vfs.length)).toString('base64') });
+  return { ...runtime, native, owner, guest, lists: () => lists,
+    old: '/data/user/0/com.ai.assistance.operit/files/toolpkg_cache/' + owner + '-*' };
+}
+
+/** Runs the exact nested bash/file-test shape emitted by the unmodified marketplace plugin. */
+test('v1 cache translation imports through existing file APIs and preserves nested shell quoting', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'operit-cache-source-'));
+  mkdirSync(join(directory, 'resources/quizapp/server'), { recursive: true });
+  writeFileSync(join(directory, 'resources/quizapp/server/index.js'), '// original resource 雪');
+  const runtime = cacheFixture(directory);
+  try {
+    const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
+    const target = runtime.old + '/resources/quizapp/server/index.js';
+    const command = 'bash -lc ' + quote('if [ -f ' + quote(target) + ' ]; then echo ok; else echo missing; fi');
+    runtime.context.command = command;
+    const [checked, repeated] = await Promise.all([
+      vm.runInContext("Tools.System.terminal.exec('',command,5000)", runtime.context),
+      vm.runInContext("Tools.System.terminal.exec('',command,5000)", runtime.context),
+    ]);
+    assert.equal(checked.output.trim(), 'ok');
+    assert.equal(repeated.output.trim(), 'ok');
+    assert.equal(runtime.lists(), 4); // One import despite concurrent first accesses.
+    const expected = command.replaceAll(runtime.old, runtime.guest);
+    assert.equal(runtime.calls.filter(call => call.name === 'v1_runtime:execute')[0].params.command, expected);
+    assert.equal(readFileSync(join(runtime.guest, 'resources/quizapp/server/index.js'), 'utf8'), '// original resource 雪');
+    runtime.context.oldFile = runtime.old + '/bridge_config.json';
+    await vm.runInContext("Tools.Files.write(oldFile,'{\"port\":4000}')", runtime.context);
+    const file = await vm.runInContext('Tools.Files.read(oldFile)', runtime.context);
+    assert.equal(file.path, runtime.context.oldFile);
+    assert.equal(file.content, '{"port":4000}');
+    assert.equal(readFileSync(join(runtime.guest, 'bridge_config.json'), 'utf8'), file.content);
+    // A fresh SDK execution reuses the same revision and preserves terminal-written data.
+    writeFileSync(join(runtime.guest, 'resources/quizapp/server/index.js'), '// retained runtime data');
+    const restarted = cacheFixture(directory);
+    restarted.context.command = command;
+    await vm.runInContext("Tools.System.terminal.exec('',command,5000)", restarted.context);
+    assert.equal(restarted.lists(), 0);
+    assert.equal(readFileSync(join(runtime.guest, 'resources/quizapp/server/index.js'), 'utf8'), '// retained runtime data');
+    // Refresh a changed package revision in a new SDK execution.
+    const updated = cacheFixture(directory);
+    const readBinary = updated.context.__operitCanonicalTools.Files.readBinary;
+    updated.context.__operitCanonicalTools.Files.readBinary = async path => path.endsWith('/.toolpkg-cache-signature')
+      ? { path, contentBase64: Buffer.from('fixture-revision-2').toString('base64') } : readBinary(path);
+    updated.context.command = command;
+    await vm.runInContext("Tools.System.terminal.exec('',command,5000)", updated.context);
+    assert.equal(updated.lists(), 4);
+    assert.equal(readFileSync(join(runtime.guest, 'resources/quizapp/server/index.js'), 'utf8'), '// original resource 雪');
+
+    runtime.context.command = "printf '%s\\n' " + quote('space 雪 $HOME `echo unsafe`') + ' ' + quote(runtime.old + '/resource with space.txt');
+    const output = await vm.runInContext("Tools.System.terminal.exec('',command,5000)", runtime.context);
+    assert.equal(output.output, 'space 雪 $HOME `echo unsafe`\n' + runtime.guest + '/resource with space.txt\n');
+  } finally {
+    rmSync(runtime.guest, { recursive: true, force: true });
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+/** A version switch or another container must not select the previous package's cache. */
+test('cache compatibility is version scoped, owner scoped, and retries failed imports', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'operit-cache-source-'));
+  const runtime = cacheFixture(directory);
+  try {
+    runtime.context.command = 'echo ' + runtime.old;
+    runtime.context.version = '2.0.0';
+    await vm.runInContext("Tools.System.terminal.exec('native',command)", runtime.context);
+    assert.equal(runtime.canonicalCalls.at(-1)[2], runtime.context.command);
+    assert.equal(runtime.lists(), 0);
+    runtime.context.version = '1.0.1';
+    runtime.context.owner = 'another.container';
+    await vm.runInContext("Tools.System.terminal.exec('',command)", runtime.context);
+    assert.equal(runtime.calls.at(-1).params.command, runtime.context.command);
+    assert.equal(runtime.lists(), 0);
+    runtime.context.owner = runtime.owner;
+    const list = runtime.context.__operitCanonicalTools.Files.list;
+    runtime.context.__operitCanonicalTools.Files.list = async () => { throw new Error('source unavailable'); };
+    await assert.rejects(vm.runInContext("Tools.System.terminal.exec('',command)", runtime.context), /source unavailable/);
+    runtime.context.__operitCanonicalTools.Files.list = list;
+    await vm.runInContext("toolCall({name:'super_admin:terminal',params:{command}})", runtime.context);
+    assert.equal(runtime.calls.at(-1).params.command, 'echo ' + runtime.guest);
+    assert.equal(runtime.lists(), 1);
+    assert.ok(existsSync(runtime.guest));
+  } finally {
+    rmSync(runtime.guest, { recursive: true, force: true });
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+/** Optional local integration against a downloaded, unmodified marketplace archive extraction. */
+test('unmodified marketplace package validates its own cached server through v1 adapters', {
+  skip: !process.env.OPERIT_V1_MARKET_PACKAGE,
+}, async () => {
+  const directory = resolve(process.env.OPERIT_V1_MARKET_PACKAGE);
+  const manifest = JSON.parse(readFileSync(join(directory, 'manifest.json'), 'utf8'));
+  const runtime = cacheFixture(directory, manifest.toolpkg_id);
+  const previousTools = globalThis.Tools;
+  try {
+    globalThis.Tools = runtime.context.Tools;
+    const launcher = createRequire(import.meta.url)(join(directory, 'dist/shared/server_launcher_runtime.js'));
+    const checked = await launcher.validateServerJsPath(launcher.DEFAULT_SERVER_ENTRY);
+    assert.equal(checked.ok, true, checked.message);
+    const extracted = await launcher.ensureQuizappExtracted();
+    assert.equal(extracted.status, 'already_present', extracted.message);
+    assert.equal(extracted.success, true);
+  } finally {
+    globalThis.Tools = previousTools;
+    rmSync(runtime.guest, { recursive: true, force: true });
+  }
+});
+
+/** Runs the original Node/SQLite service and its public APIs through the v1 terminal adapter. */
+test('unmodified Ferry server starts with SQLite, serves chat APIs, and runs its import tool', {
+  skip: !process.env.OPERIT_V1_MARKET_PACKAGE,
+}, async () => {
+  const directory = resolve(process.env.OPERIT_V1_MARKET_PACKAGE);
+  const manifest = JSON.parse(readFileSync(join(directory, 'manifest.json'), 'utf8'));
+  const runtime = cacheFixture(directory, manifest.toolpkg_id);
+  const previousTools = globalThis.Tools;
+  const previousPath = process.env.PATH;
+  const testBin = mkdtempSync(join(tmpdir(), 'operit-v1-test-bin-'));
+  writeFileSync(join(testBin, 'timeout'), '#!/bin/sh\n[ "$1" = 2 ] && shift\nexec "$@"\n', { mode: 0o700 });
+  const bash = bashExecutable();
+  const portProbe = createServer();
+  await new Promise(resolve => portProbe.listen(0, '127.0.0.1', resolve));
+  const port = portProbe.address().port;
+  await new Promise(resolve => portProbe.close(resolve));
+  try {
+    process.env.PATH = testBin + requirePathDelimiter() + previousPath;
+    globalThis.Tools = runtime.context.Tools;
+    const require = createRequire(join(directory, 'package.json'));
+    const launcher = require('./dist/shared/server_launcher_runtime.js');
+    const started = await launcher.ensureFerryServer({ port, serverJsPath: launcher.DEFAULT_SERVER_ENTRY });
+    const serverLog = join(runtime.guest, 'logs/quizapp.log');
+    let directHealth = 'unreachable';
+    try { directHealth = `${(await fetch(`http://127.0.0.1:${port}/api/chat/health`)).status}`; } catch (error) { directHealth = String(error); }
+    assert.equal(started.success, true, `${started.message}\ndirect HTTP: ${directHealth}\n${existsSync(serverLog) ? readFileSync(serverLog, 'utf8') : 'server log was not created'}`);
+    assert.equal(started.status, 'started');
+
+    const request = async (path, method = 'GET', body) => {
+      const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+        method,
+        headers: body === undefined ? {} : { 'content-type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return { status: response.status, body: await response.json() };
+    };
+    const health = await request('/api/chat/health');
+    assert.equal(health.status, 200);
+    assert.equal(health.body.code, 0);
+
+    const question = await request('/api/admin/questions', 'POST', {
+      type: 'single', code: 'v1-test', question: 'Adapter DB check',
+      options: ['yes', 'no'], answer: ['yes'], explanation: '', subject: 'adapter-test',
+    });
+    assert.equal(question.status, 200);
+    assert.equal(question.body.code, 0);
+    const listed = await request('/api/admin/questions');
+    assert.ok(listed.body.data.some(item => item.code === 'v1-test'));
+
+    const userMessage = await request('/api/chat/send', 'POST', { content: 'integration prompt', page_context: { page: 'test' } });
+    assert.equal(userMessage.body.code, 0);
+    const pending = await request('/api/chat/pending');
+    assert.equal(pending.body.data.length, 1);
+    assert.equal(pending.body.data[0].content, 'integration prompt');
+    await request('/api/chat/reply', 'POST', { content: 'integration reply' });
+    const messages = await request('/api/chat/messages');
+    assert.deepEqual(messages.body.data.map(item => item.content), ['integration prompt', 'integration reply']);
+
+    const admin = require('./dist/packages/ferry_admin.js');
+    const imported = await admin.list_questions({ limit: 20 });
+    assert.equal(imported.success, true, imported.message);
+    assert.ok(imported.rows.some(item => item.code === 'v1-test'));
+
+    const chatContext = vm.createContext({});
+    vm.runInContext(source(sdk + 'compat/v1/chat.js'), chatContext);
+    chatContext.currentChat = {
+      async listAll() { return { currentChatId: 'adapter-test-chat', chats: [] }; },
+      async *sendMessageStreaming() { yield { type: 'completed', result: { aiResponse: 'unused' } }; },
+    };
+    vm.runInContext(`globalThis.legacyChat = __operitCreateV1Chat(currentChat, async () => ({}), async () => ({}), async () => ({ cards: [] }));`, chatContext);
+    globalThis.Tools.Chat = {
+      async listAll() { return { currentChatId: 'adapter-test-chat', chats: [] }; },
+      sendMessageStreaming(...args) { return chatContext.legacyChat.sendMessageStreaming(...args); },
+    };
+    globalThis.Tools.Net = {
+      async httpGet(url) {
+        const response = await fetch(url);
+        return { statusCode: response.status, content: await response.text() };
+      },
+      async httpPost(url, body) {
+        const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        return { statusCode: response.status, content: await response.text() };
+      },
+    };
+    const poller = require('./dist/shared/chat_poller.js');
+    poller.applyBridgeBase(`http://127.0.0.1:${port}`);
+    await request('/api/chat/send', 'POST', { content: 'poller compatibility check' });
+    await assert.rejects(poller.pollOnce('compat-test'), /senderName has no equivalent/);
+    const failedReply = await request('/api/chat/messages');
+    assert.match(failedReply.body.data.at(-1).content, /senderName has no equivalent/);
+
+    assert.equal(Object.hasOwn(runtime.context.Tools.System, 'file'), false);
+    const bridgeConfigPath = require.resolve('./dist/shared/bridge_config.js');
+    const config = require(bridgeConfigPath);
+    await config.saveBridgeConfig({ port: port + 1 });
+    delete require.cache[bridgeConfigPath];
+    const reloaded = require(bridgeConfigPath).getBridgeConfig();
+    assert.equal(reloaded.port, 3000);
+  } finally {
+    const entry = join(runtime.guest, 'resources/quizapp/server/index.js');
+    const processes = execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' })
+      .split(/\r?\n/)
+      .map(line => /^\s*(\d+)\s+(.*)$/.exec(line))
+      .filter(match => match && match[2].includes(entry) && !match[2].includes('ps -eo'));
+    for (const match of processes) {
+      try { process.kill(Number(match[1]), 'SIGTERM'); } catch { /* already exited */ }
+    }
+    await new Promise(resolve => setTimeout(resolve, 300));
+    process.env.PATH = previousPath;
+    globalThis.Tools = previousTools;
+    rmSync(runtime.guest, { recursive: true, force: true });
+    rmSync(testBin, { recursive: true, force: true });
+  }
 });

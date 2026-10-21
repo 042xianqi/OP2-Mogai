@@ -79,7 +79,7 @@ SPEC CHECKSUMS:
   record_ios: 3b171007ae5de51221a3a76d2b379a7105ca98b5
   url_launcher_ios: bb13df5870e8c4234ca12609d04010a21be43dfa
   video_player_avfoundation: e54d03b3b19f64f2c557354f72ce538387541ba6
-  webview_flutter_wkwebview: 29eb20d43355b48fe7d07113835b9128f84e3af4
+  webview_flutter_wkwebview: 08f7e3ddafd07a1c7319987f5af4ddb173964b24
 
 PODFILE CHECKSUM: c3e2fd0b8ba159429b3132aec1be7ffad37086e9
 

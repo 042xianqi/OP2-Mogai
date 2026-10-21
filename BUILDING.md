@@ -22,7 +22,7 @@ Common tools:
 ```text
 Rust stable toolchain with rustup
 Python virtual environment at .venv
-Node.js with Corepack enabled
+Node.js 24 with Corepack enabled
 pnpm 10.7.0 for plugins/packages/buildin/workflow
 Git
 ```
@@ -127,9 +127,10 @@ and remains the supported configuration for Windows builds.
 
 ## Pinned Build Inputs and Source of Truth
 
-The following values are the repository build contract validated on September 27,
-2026. Keep these values synchronized with the referenced source files and CI
-workflows when changing a build dependency.
+The following values are the repository build contract. The baseline was
+validated on September 27, 2026; later dependency changes still require their
+platform builds and runtime smoke tests. Keep these values synchronized with
+the referenced source files and CI workflows when changing a build dependency.
 
 | Input | Version or pin | Source of truth |
 | --- | --- | --- |
@@ -137,11 +138,10 @@ workflows when changing a build dependency.
 | FVM | 4.3.0 | `FVM_VERSION` in the Flutter CI workflows; Dart pub global package |
 | Dart SDK | `^3.10.8` | `apps/flutter/app/pubspec.yaml`; supplied by the pinned Flutter SDK |
 | Rust toolchain | 1.95.0 | `RUST_TOOLCHAIN_VERSION` in `.github/workflows/`; rustup |
-| Node.js | 22 | `actions/setup-node` in the CI workflows |
+| Node.js | 24 | `actions/setup-node` in the CI workflows |
 | Java | Temurin 17 | `actions/setup-java` in `.github/workflows/android-flutter-build.yml` |
 | Gradle | 8.14 | `apps/flutter/app/android/gradle/wrapper/gradle-wrapper.properties` |
 | Workflow package manager | pnpm 10.7.0 | `plugins/packages/buildin/workflow/package.json` |
-| Apple scientific-runtime host Python | 3.13 | `tools/ios-runtime/native/build_scientific.py` and `tools/ios-runtime/prepare.py` |
 
 Dependency source rules:
 
@@ -165,6 +165,15 @@ entry in the same change as this documentation. Merge conflicts in generated
 lockfiles must preserve both the dependency graph change and the repository's
 source policy.
 
+### Terminal Node.js versions
+
+Android, iOS/iSH, OpenHarmony, and Web runtime builders target Node.js 24 from
+Alpine v3.23 and reject an installed APK database with another Node major.
+Their generated rootfs/initramfs artifacts must be rebuilt; CI `setup-node`
+only selects the build host's Node. Desktop terminals use the user's system
+shell and Node installation, not an app-bundled Node runtime. Use Node.js 24
+on those hosts; CI configuration alone cannot upgrade an end user's machine.
+
 ## iOS Runtime Source Pins
 
 The iOS runtime source set is reproducible from the pins in
@@ -178,7 +187,7 @@ The iOS runtime source set is reproducible from the pins in
 | iSH Linux | `8ec9bf17f89c6dba818f3ed2427de4223e78644a` | GitHub archive; SHA-256 is recorded in `fetch_sources.py` |
 | libarchive | `fc6563f5130d8a7ee1fc27c0e55baef35119f26c` | GitHub archive; SHA-256 is recorded in `fetch_sources.py` |
 | iSH Alpine rootfs | `g00712ff0a54b2839c5aa1a8ed758003ca65357dc` | GitHub release archive; SHA-256 is recorded in `build_alpine_rootfs_linux.sh` |
-| iSH Alpine repository | Alpine v3.19, x86 | `https://dl-cdn.alpinelinux.org/alpine/v3.19` |
+| iSH Alpine repository | Alpine v3.23, x86 | `https://dl-cdn.alpinelinux.org/alpine/v3.23` |
 | uv | 0.12.1, i686 musl | GitHub release archive; SHA-256 is recorded in `build_alpine_rootfs_linux.sh` |
 | pnpm in iSH rootfs | 10.12.1 | npm registry archive; SHA-256 is recorded in `build_alpine_rootfs_linux.sh` |
 

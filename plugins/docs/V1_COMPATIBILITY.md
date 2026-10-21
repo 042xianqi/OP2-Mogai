@@ -210,6 +210,30 @@ package. These exact historical tool identities also dispatch there:
 - `ffmpeg:ffmpeg_execute`
 - `ffmpeg:ffmpeg_info`
 
+The existing v1 runtime adapter also translates the executing container's old
+`/data/user/0/com.ai.assistance.operit/files/toolpkg_cache/<package>-*` namespace
+(and the `/data/data` spelling). Concrete hexadecimal cache suffixes are accepted.
+It reads the already extracted `/app/data/cache/toolpkg` tree through canonical
+Files APIs and imports it through `v1_runtime:file` into the terminal's existing
+`/tmp/operit-v1/toolpkg` directory. File calls using these legacy addresses and
+terminal commands then access that same copy. No host bindings or mounts are added.
+
+Translation replaces only that container's cache prefix with a shell-safe concrete
+prefix. It keeps shell quotes, nested `bash -lc` quoting, and suffix globs intact;
+the same namespace is translated when it appears in command text or diagnostics.
+It does not provide a general VFS mount or resolve arbitrary shell expressions.
+The host's existing `.toolpkg-cache-signature` avoids repeated imports across SDK
+executions; it is committed after a successful copy. Concurrent first calls in one
+SDK execution share an import and failed copies can retry. Revisions are refreshed
+when the SDK execution is recreated. The terminal copy is a cache, not a durable
+plugin data directory, and is not synchronized back to the host cache.
+
+An empty session ID uses the existing caller/chat-scoped default compatibility
+session. Missing or malformed IDs still fail. The undocumented synchronous
+`Tools.System.file` object used by some plugins is not emulated by these async
+Files adapters. Installed Node, SQLite support, background execution, and iOS
+WebView integration still require validation in the real host environment.
+
 API 2.0.0 retains canonical host calls and tool identities. Native host errors,
 nonzero exit codes and timeouts are retained. Program helpers reject unsuccessful
 execution. Node source uses UTF-8 hex encoding before native invocation because

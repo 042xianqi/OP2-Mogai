@@ -10,8 +10,8 @@ work_dir="$cache_dir/work"
 apk_static_dir="$cache_dir/apk-static"
 
 mirror="https://dl-cdn.alpinelinux.org/alpine"
-release_branch="v3.22"
-release_version="3.22.1"
+release_branch="v3.23"
+release_version="3.23.6"
 alpine_arch="aarch64"
 host_arch="x86_64"
 archive_name="alpine-minirootfs-${release_version}-${alpine_arch}.tar.gz"
@@ -20,7 +20,7 @@ archive_url="$mirror/$release_branch/releases/$alpine_arch/$archive_name"
 packages=(
     bash
     python3
-    nodejs
+    "nodejs~24"
     npm
     uv
     pnpm
@@ -142,6 +142,8 @@ build_rootfs() {
         --no-scripts \
         --initdb \
         add "${packages[@]}"
+
+    python3 "$repo_dir/tools/runtime/verify_alpine_node24.py" "$root_dir/lib/apk/db/installed"
 
     rm -rf "$root_dir/var/cache/apk"
     mkdir -p "$root_dir/var/cache/apk"

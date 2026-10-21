@@ -4,8 +4,8 @@ This directory produces the OpenHarmony PC terminal runtime:
 
 - `qemu-harmonix-aarch64`, the QEMU-vroot executable built from Harmonix;
 - an HNP package containing the executable and its OpenHarmony libraries;
-- the Alpine 3.22.1 aarch64 rootfs and a SHA-256 checksum. It includes
-  `bash`, `python3`, `nodejs`, `npm`, `uv`, `pnpm`, and `ca-certificates`, so
+- the Alpine 3.23.6 aarch64 rootfs and a SHA-256 checksum. It includes
+  `bash`, `python3`, `nodejs` (Node.js 24), `npm`, `uv`, `pnpm`, and `ca-certificates`, so
   tools and plugins have their standard command-line runtimes immediately.
 
 The generated HNP files are copied to:

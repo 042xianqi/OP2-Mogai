@@ -322,10 +322,14 @@ async function v1CreateSession(params: V1RuntimeParams) {
     return session;
 }
 
-/** Runs an unchanged command in an explicitly created compatibility session. */
+/** Runs a command in its explicit session, or the legacy caller-scoped default session. */
 async function v1Execute(params: V1RuntimeParams) {
     v1RuntimeState();
-    return Tools.System.terminal.exec(v1RequiredText(params.sessionId, "sessionId"), v1RequiredText(params.command, "command"), v1Timeout(params.timeoutMs, 15000));
+    const command = v1RequiredText(params.command, "command");
+    const sessionId = params.sessionId === ""
+        ? (await v1CreateSession({ sessionName: "default_" + getChatId() })).sessionId
+        : v1RequiredText(params.sessionId, "sessionId");
+    return Tools.System.terminal.exec(sessionId, command, v1Timeout(params.timeoutMs, 15000));
 }
 
 /** Preserves the legacy terminal result and keeps foreground sessions isolated by caller and chat. */
