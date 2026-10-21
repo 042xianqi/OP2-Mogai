@@ -1898,7 +1898,7 @@ dependencies = [
 
 [[package]]
 name = "operit-js-bridge"
-version = "2.0.0-preview.16"
+version = "2.0.0-preview.17"
 dependencies = [
  "aes",
  "base64",
@@ -1937,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "operit-local-models"
-version = "2.0.0-preview.16"
+version = "2.0.0-preview.17"
 dependencies = [
  "bzip2",
  "bzip2-rs",
@@ -1953,7 +1953,7 @@ dependencies = [
 
 [[package]]
 name = "operit-model"
-version = "2.0.0-preview.16"
+version = "2.0.0-preview.17"
 dependencies = [
  "chrono",
  "operit-host-api",
@@ -2034,7 +2034,7 @@ dependencies = [
 
 [[package]]
 name = "operit-plugin-sdk"
-version = "2.0.0-preview.16"
+version = "2.0.0-preview.17"
 dependencies = [
  "chacha20poly1305",
  "chrono",
@@ -2058,7 +2058,7 @@ dependencies = [
 
 [[package]]
 name = "operit-plugin-sdk-codegen"
-version = "2.0.0-preview.16"
+version = "2.0.0-preview.17"
 dependencies = [
  "operit-proxy-scan",
  "operit-rslink-codegen",
@@ -2070,7 +2070,7 @@ dependencies = [
 
 [[package]]
 name = "operit-plugin-sdk-ipc"
-version = "2.0.0-preview.16"
+version = "2.0.0-preview.17"
 dependencies = [
  "async-trait",
  "operit-host-api",
@@ -2082,7 +2082,7 @@ dependencies = [
 
 [[package]]
 name = "operit-plugin-sdk-ipc-bridge"
-version = "2.0.0-preview.16"
+version = "2.0.0-preview.17"
 dependencies = [
  "operit-host-api",
  "operit-link",
@@ -2091,7 +2091,7 @@ dependencies = [
 
 [[package]]
 name = "operit-plugin-sdk-macros"
-version = "2.0.0-preview.16"
+version = "2.0.0-preview.17"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -2115,7 +2115,7 @@ dependencies = [
 
 [[package]]
 name = "operit-providers"
-version = "2.0.0-preview.16"
+version = "2.0.0-preview.17"
 dependencies = [
  "async-trait",
  "base64",
@@ -2253,7 +2253,7 @@ dependencies = [
 
 [[package]]
 name = "operit-runtime"
-version = "2.0.0-preview.16"
+version = "2.0.0-preview.17"
 dependencies = [
  "aes",
  "async-trait",
@@ -2328,7 +2328,7 @@ dependencies = [
 
 [[package]]
 name = "operit-tools"
-version = "2.0.0-preview.16"
+version = "2.0.0-preview.17"
 dependencies = [
  "aes",
  "async-trait",
@@ -2367,7 +2367,7 @@ dependencies = [
 
 [[package]]
 name = "operit-util"
-version = "2.0.0-preview.16"
+version = "2.0.0-preview.17"
 dependencies = [
  "chrono",
  "flate2",

@@ -1746,7 +1746,7 @@ dependencies = [
 
 [[package]]
 name = "operit-util"
-version = "2.0.0-preview.16"
+version = "2.0.0-preview.17"
 dependencies = [
  "chrono",
  "flate2",
