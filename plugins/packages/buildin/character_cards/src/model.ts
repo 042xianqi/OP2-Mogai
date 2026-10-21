@@ -298,6 +298,7 @@ export type Request =
   | { action: "listMemoryFolders"; ownerKey: string }
   | { action: "readMemoryAutoSaveStatus"; ownerKey: string }
   | { action: "listMemoryChats"; ownerKey: string }
+  | { action: "pruneMissingChatBindings"; ownerKey: string }
   | { action: "updateChatMemory"; ownerKey: string; chatId: string }
   | { action: "autoCategorizeMemory"; ownerKey: string }
   | { action: "startMemoryRebuild"; ownerKey: string; rebuild: MemoryRebuild }
@@ -324,6 +325,9 @@ export interface MemoryChat {
   id: string; title: string; messageCount: number; createdAt: string; updatedAt: string;
   isCurrent: boolean; inputTokens: number; outputTokens: number;
 }
+
+/** Reports surviving bound chats alongside bindings whose Core conversation no longer exists. */
+export interface MemoryChatListing { chats: MemoryChat[]; missingChatIds: string[] }
 
 /** Uses only message fields actually supplied by the generic chat message reader. */
 export interface MemoryChatMessage {
@@ -486,7 +490,8 @@ export interface RequestResults {
   exportGroup: string;
   listMemoryFolders: string[];
   readMemoryAutoSaveStatus: MemoryAutoSaveStatus;
-  listMemoryChats: MemoryChat[];
+  listMemoryChats: MemoryChatListing;
+  pruneMissingChatBindings: { removedChatIds: string[]; removedCandidateIds: string[] };
   updateChatMemory: MemoryExtractionResult;
   autoCategorizeMemory: number;
   startMemoryRebuild: MemoryRebuildProgress;

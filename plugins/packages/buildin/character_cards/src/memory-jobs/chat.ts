@@ -1,5 +1,5 @@
 import type { CharacterRepository } from "../canonical";
-import type { Card, MemoryChat, MemoryChatMessage, MemoryJobWindow, MemoryRebuild } from "../model";
+import type { Card, MemoryChat, MemoryChatListing, MemoryChatMessage, MemoryJobWindow, MemoryRebuild } from "../model";
 import { requireChatSelection } from "../chat-bindings";
 import type { ChatResourceRoute } from "../api";
 import { readMessageAuthor, chatsForMemoryOwner } from "../chat-storage";
@@ -101,25 +101,60 @@ export async function requireMessagesOwner(chatId: string, messages: MemoryChatM
   }
   throw new Error("History has no assistant author currently writable for this memory owner: " + ownerKey);
 }
-/** Lists real host summaries under their stored plugin binding, excluding genuinely unbound chats. */
-export async function listMemoryChats(ownerKey: string, repository: Pick<CharacterRepository, "readMemorySettings">): Promise<MemoryChat[]> {
+/** Lists real host summaries under their stored plugin binding, reporting bindings whose Core conversation disappeared instead of failing the whole listing. */
+export async function listMemoryChats(ownerKey: string, repository: Pick<CharacterRepository, "readMemorySettings">): Promise<MemoryChatListing> {
   await repository.readMemorySettings(ownerKey);
   const selected = await chatsForMemoryOwner(ownerKey);
-  const chats: MemoryChat[] = [];
+  const chats: MemoryChat[] = [], missingChatIds: string[] = [];
   for (let offset = 0; offset < selected.length; offset += 200) {
     const ids = selected.slice(offset, offset + 200), result = await Tools.Chat.listChats({ chat_ids: ids, limit: 200 });
-    if (result.totalCount !== ids.length || result.chats.length !== ids.length) throw new Error("Stored bindings reference missing Core conversations");
     const remaining = new Set(ids);
     for (const chat of result.chats) { assertChat(chat); if (!remaining.delete(chat.id)) throw new Error("Chat batch returned an unrelated or duplicate identity"); chats.push(chat); }
+    for (const chatId of remaining) missingChatIds.push(chatId);
   }
-  return chats.sort(
-    /** Keeps the host directory's updated-at descending presentation without limiting the bound records. */
-    (left, right) => {
-      const leftTime = Number(left.updatedAt), rightTime = Number(right.updatedAt);
-      assertInteger(leftTime, "chat updated timestamp", 0); assertInteger(rightTime, "chat updated timestamp", 0);
-      return rightTime - leftTime;
-    },
-  );
+  return {
+    chats: chats.sort(
+      /** Keeps the host directory's updated-at descending presentation without limiting the bound records. */
+      (left, right) => {
+        const leftTime = Number(left.updatedAt), rightTime = Number(right.updatedAt);
+        assertInteger(leftTime, "chat updated timestamp", 0); assertInteger(rightTime, "chat updated timestamp", 0);
+        return rightTime - leftTime;
+      },
+    ),
+    missingChatIds: missingChatIds.sort(),
+  };
+}
+
+/** Deletes bindings and extraction candidates whose Core conversation or source message no longer exists. */
+export async function pruneMissingMemoryChats(
+  ownerKey: string,
+  repository: Pick<CharacterRepository, "readMemorySettings" | "deleteChatBinding" | "readMemorySpace" | "writeMemorySpace">,
+): Promise<{ removedChatIds: string[]; removedCandidateIds: string[] }> {
+  const { missingChatIds } = await listMemoryChats(ownerKey, repository);
+  const removedChatIds: string[] = [];
+  for (const chatId of missingChatIds) {
+    if ((await repository.deleteChatBinding(chatId)).deleted) removedChatIds.push(chatId);
+  }
+  const space = await repository.readMemorySpace(ownerKey);
+  const candidateChats = [...new Set(space.candidates.map(candidate => candidate.chatId))];
+  const messagesByChat = new Map<string, MemoryChatMessage[] | null>();
+  for (let offset = 0; offset < candidateChats.length; offset += 200) {
+    const ids = candidateChats.slice(offset, offset + 200), result = await Tools.Chat.listChats({ chat_ids: ids, limit: 200 });
+    const found = new Set(result.chats.map(chat => String(chat.id)));
+    for (const chatId of ids) messagesByChat.set(chatId, found.has(chatId) ? await readMessages(chatId) : null);
+  }
+  const removedCandidateIds: string[] = [];
+  const survivors = space.candidates.filter(candidate => {
+    const messages = messagesByChat.get(candidate.chatId) ?? null;
+    const orphaned = messages === null || !messages.some(
+      /** Matches the exact claimed source revision before keeping the queued extraction. */
+      message => message.timestamp === candidate.triggerMessageTimestamp && message.variantIndex === candidate.triggerVariantIndex,
+    );
+    if (orphaned) removedCandidateIds.push(candidate.id);
+    return !orphaned;
+  });
+  if (survivors.length !== space.candidates.length) { space.candidates = survivors; await repository.writeMemorySpace(ownerKey, space); }
+  return { removedChatIds, removedCandidateIds };
 }
 
 /** Reads genuine chronological source messages; no rich ChatMessage fields are synthesized. */

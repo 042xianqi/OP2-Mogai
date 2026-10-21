@@ -93,6 +93,7 @@ __export(main_exports, {
   memoryCandidateEnqueueApi: () => memoryCandidateEnqueueApi,
   memoryCategorizeApi: () => memoryCategorizeApi,
   memoryChatListApi: () => memoryChatListApi,
+  memoryChatPruneMissingApi: () => memoryChatPruneMissingApi,
   memoryChatUpdateApi: () => memoryChatUpdateApi,
   memoryChunksApi: () => memoryChunksApi,
   memoryCreateApi: () => memoryCreateApi,
@@ -1272,6 +1273,7 @@ var validators = {
   "memory.chunks": shape({ ownerKey: required(owner), memoryId: required(nonblank), query: required(nonblank), count: required(nonnegativeInteger) }),
   "memory.searchWithOptions": shape({ ownerKey: required(owner), query: required(nonblank), folderPath: required(nullable(text)), relevanceThreshold: required(nonnegative), createdAtStartMs: required(nullable(integer)), createdAtEndMs: required(nullable(integer)) }),
   "memory.chat.list": ownerOnly,
+  "memory.chat.pruneMissing": ownerOnly,
   "memory.chat.update": shape({ ownerKey: required(owner), chatId: required(nonblank) }),
   "memory.categorize": ownerOnly,
   "memory.rebuild.start": shape({ ownerKey: required(owner), rebuild: required(shape({ chatIds: required(strings), windowMessageCount: required(integer), fromInclusive: required(nullable(integer)), toInclusive: required(nullable(integer)) })) }),
@@ -3223,26 +3225,61 @@ function listMemoryChats(ownerKey, repository) {
   return __async(this, null, function* () {
     yield repository.readMemorySettings(ownerKey);
     const selected = yield chatsForMemoryOwner(ownerKey);
-    const chats = [];
+    const chats = [], missingChatIds = [];
     for (let offset = 0; offset < selected.length; offset += 200) {
       const ids = selected.slice(offset, offset + 200), result2 = yield Tools.Chat.listChats({ chat_ids: ids, limit: 200 });
-      if (result2.totalCount !== ids.length || result2.chats.length !== ids.length) throw new Error("Stored bindings reference missing Core conversations");
       const remaining = new Set(ids);
       for (const chat of result2.chats) {
         assertChat(chat);
         if (!remaining.delete(chat.id)) throw new Error("Chat batch returned an unrelated or duplicate identity");
         chats.push(chat);
       }
+      for (const chatId of remaining) missingChatIds.push(chatId);
     }
-    return chats.sort(
-      /** Keeps the host directory's updated-at descending presentation without limiting the bound records. */
-      (left, right) => {
-        const leftTime = Number(left.updatedAt), rightTime = Number(right.updatedAt);
-        assertInteger(leftTime, "chat updated timestamp", 0);
-        assertInteger(rightTime, "chat updated timestamp", 0);
-        return rightTime - leftTime;
-      }
-    );
+    return {
+      chats: chats.sort(
+        /** Keeps the host directory's updated-at descending presentation without limiting the bound records. */
+        (left, right) => {
+          const leftTime = Number(left.updatedAt), rightTime = Number(right.updatedAt);
+          assertInteger(leftTime, "chat updated timestamp", 0);
+          assertInteger(rightTime, "chat updated timestamp", 0);
+          return rightTime - leftTime;
+        }
+      ),
+      missingChatIds: missingChatIds.sort()
+    };
+  });
+}
+function pruneMissingMemoryChats(ownerKey, repository) {
+  return __async(this, null, function* () {
+    const { missingChatIds } = yield listMemoryChats(ownerKey, repository);
+    const removedChatIds = [];
+    for (const chatId of missingChatIds) {
+      if ((yield repository.deleteChatBinding(chatId)).deleted) removedChatIds.push(chatId);
+    }
+    const space = yield repository.readMemorySpace(ownerKey);
+    const candidateChats = [...new Set(space.candidates.map((candidate) => candidate.chatId))];
+    const messagesByChat = /* @__PURE__ */ new Map();
+    for (let offset = 0; offset < candidateChats.length; offset += 200) {
+      const ids = candidateChats.slice(offset, offset + 200), result2 = yield Tools.Chat.listChats({ chat_ids: ids, limit: 200 });
+      const found = new Set(result2.chats.map((chat) => String(chat.id)));
+      for (const chatId of ids) messagesByChat.set(chatId, found.has(chatId) ? yield readMessages(chatId) : null);
+    }
+    const removedCandidateIds = [];
+    const survivors = space.candidates.filter((candidate) => {
+      const messages = messagesByChat.get(candidate.chatId) ?? null;
+      const orphaned = messages === null || !messages.some(
+        /** Matches the exact claimed source revision before keeping the queued extraction. */
+        (message) => message.timestamp === candidate.triggerMessageTimestamp && message.variantIndex === candidate.triggerVariantIndex
+      );
+      if (orphaned) removedCandidateIds.push(candidate.id);
+      return !orphaned;
+    });
+    if (survivors.length !== space.candidates.length) {
+      space.candidates = survivors;
+      yield repository.writeMemorySpace(ownerKey, space);
+    }
+    return { removedChatIds, removedCandidateIds };
   });
 }
 function readMessages(chatId) {
@@ -4332,6 +4369,7 @@ var handlers = {
   }),
   /** Lists actual owner-bound generic chat summaries. */
   "memory.chat.list": (input, repository) => listMemoryChats(input.ownerKey, repository),
+  "memory.chat.pruneMissing": (input, repository) => pruneMissingMemoryChats(input.ownerKey, repository),
   /** Extracts real chat messages through the configured functional MEMORY model. */
   "memory.chat.update": (input, repository) => updateChatMemory(input.ownerKey, input.chatId, repository),
   /** Performs genuine ten-record functional categorization in the same operation. */
@@ -5068,6 +5106,8 @@ function createCharacterCardsService(owner2, configurations = independentConfigu
         return listBindableChats();
       case "listMemoryChats":
         return listMemoryChats(request.ownerKey, owner2);
+      case "pruneMissingChatBindings":
+        return owner2.run((repository) => pruneMissingMemoryChats(request.ownerKey, repository));
       case "readGlobalMemoryPreferences":
         return owner2.readGlobalMemoryPreferences();
       case "readMemorySettings":
@@ -5179,6 +5219,11 @@ function createCharacterCardsService(owner2, configurations = independentConfigu
             parseDomainPayload("memory.chat.list", input).ownerKey,
             owner2
           );
+        case "memory.chat.pruneMissing":
+          return owner2.run((repository) => pruneMissingMemoryChats(
+            parseDomainPayload("memory.chat.pruneMissing", input).ownerKey,
+            repository
+          ));
         case "memory.settings.read":
           return owner2.readMemorySettings(
             parseDomainPayload("memory.settings.read", input).ownerKey
@@ -5967,6 +6012,12 @@ function dispatch(request, host) {
       case "listMemoryChats":
         return executeDomain(
           "memory.chat.list",
+          { ownerKey: request.ownerKey },
+          host
+        );
+      case "pruneMissingChatBindings":
+        return executeDomain(
+          "memory.chat.pruneMissing",
           { ownerKey: request.ownerKey },
           host
         );
@@ -8973,6 +9024,11 @@ function memoryChatUpdateApi(event) {
     return dispatchDomain2("memory.chat.update", parseDomainPayload("memory.chat.update", event.payload));
   });
 }
+function memoryChatPruneMissingApi(event) {
+  return __async(this, null, function* () {
+    return dispatchDomain2("memory.chat.pruneMissing", parseDomainPayload("memory.chat.pruneMissing", event.payload));
+  });
+}
 function memoryCategorizeApi(event) {
   return __async(this, null, function* () {
     return dispatchDomain2("memory.categorize", parseDomainPayload("memory.categorize", event.payload));
@@ -9332,6 +9388,7 @@ function registerDomainApis() {
   ToolPkg.registerApi({ name: "memory.rebuild.start", function: memoryRebuildStartApi });
   ToolPkg.registerApi({ name: "memory.categorize", function: memoryCategorizeApi });
   ToolPkg.registerApi({ name: "memory.chat.update", function: memoryChatUpdateApi });
+  ToolPkg.registerApi({ name: "memory.chat.pruneMissing", function: memoryChatPruneMissingApi });
   ToolPkg.registerApi({ name: "memory.chat.list", function: memoryChatListApi });
   registerChatConfigurationApis();
   ToolPkg.registerApi({ name: "snapshot", function: snapshotApi });

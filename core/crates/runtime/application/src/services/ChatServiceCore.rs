@@ -1187,7 +1187,15 @@ impl ChatServiceCore {
         if !deleted {
             return Err(format!("Core conversation deletion failed: {chatId}"));
         }
-        api.deleteConfiguration(&chatId).await?;
+        // The conversation is already gone; a failed owner cleanup must not
+        // report the deletion as failed. Dangling plugin state is recovered by
+        // the owner's own missing-binding cleanup.
+        if let Err(error) = api.deleteConfiguration(&chatId).await {
+            AppLogger::e(
+                "ChatConfiguration",
+                &format!("Post-deletion cleanup failed for {chatId}: {error}"),
+            );
+        }
         self.syncTokenStatisticsForCurrentChat();
         Ok(deleted)
     }
