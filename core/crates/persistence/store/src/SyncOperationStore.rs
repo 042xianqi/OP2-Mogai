@@ -66,6 +66,114 @@ impl SyncClock {
     }
 }
 
+/// Supplies operation membership independently of an application's materialization clock.
+pub trait SyncOperationKnowledge {
+    /// Returns the prefix below which every source sequence is already known.
+    fn sequenceFor(&self, origin: &str) -> i64;
+    /// Reports whether this exact source operation is already durably known.
+    fn containsSequence(&self, origin: &str, sequence: i64) -> bool;
+    /// Finds the next missing sequence after a cursor, skipping known intervals.
+    fn nextMissingSequence(&self, origin: &str, after: i64) -> Option<i64>;
+}
+
+impl SyncOperationKnowledge for SyncClock {
+    /// Reads the contiguous observation boundary used by store callers.
+    fn sequenceFor(&self, origin: &str) -> i64 {
+        SyncClock::sequenceFor(self, origin)
+    }
+    /// Tests membership in a complete observed prefix.
+    fn containsSequence(&self, origin: &str, sequence: i64) -> bool {
+        sequence <= self.sequenceFor(origin)
+    }
+    /// Skips the complete observed prefix before scanning source records.
+    fn nextMissingSequence(&self, origin: &str, after: i64) -> Option<i64> {
+        after.max(self.sequenceFor(origin)).checked_add(1)
+    }
+}
+
+/// Advertises exact durable receipts, including gaps between independent stores.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncReceipt {
+    pub ranges: BTreeMap<String, Vec<[i64; 2]>>,
+}
+
+impl SyncReceipt {
+    /// Rejects malformed ranges rather than acknowledging an ambiguous interval.
+    pub fn validate(&self) -> Result<(), String> {
+        for (origin, ranges) in &self.ranges {
+            if origin.is_empty() || origin.len() > 256 {
+                return Err("Invalid synchronization receipt origin".into());
+            }
+            let mut previous = 0i64;
+            for [start, end] in ranges {
+                if *start <= 0 || end < start || *start <= previous {
+                    return Err(format!(
+                        "Invalid synchronization receipt ranges for {origin}"
+                    ));
+                }
+                previous = *end;
+            }
+        }
+        Ok(())
+    }
+    /// Adds one committed operation without acknowledging any missing predecessor.
+    pub fn observe(&mut self, origin: &str, sequence: i64) {
+        self.observeRange(origin, sequence, sequence);
+    }
+    /// Unions one durable source interval with the existing exact intervals.
+    pub fn observeRange(&mut self, origin: &str, start: i64, end: i64) {
+        let ranges = self.ranges.entry(origin.to_owned()).or_default();
+        let first = ranges.partition_point(|range| range[1].saturating_add(1) < start);
+        let mut merged = [start, end];
+        let mut last = first;
+        while last < ranges.len() && ranges[last][0] <= merged[1].saturating_add(1) {
+            merged[0] = merged[0].min(ranges[last][0]);
+            merged[1] = merged[1].max(ranges[last][1]);
+            last += 1;
+        }
+        ranges.splice(first..last, [merged]);
+    }
+    /// Combines receipts from journals and transactional storage engines.
+    pub fn merge(&mut self, other: Self) {
+        for (origin, ranges) in other.ranges {
+            for [start, end] in ranges {
+                self.observeRange(&origin, start, end);
+            }
+        }
+    }
+}
+
+impl SyncOperationKnowledge for SyncReceipt {
+    /// Returns only an actually received prefix, leaving sparse gaps requestable.
+    fn sequenceFor(&self, origin: &str) -> i64 {
+        match self.ranges.get(origin).and_then(|ranges| ranges.first()) {
+            Some([1, end]) => *end,
+            _ => 0,
+        }
+    }
+    /// Tests exact membership even when later operations have already arrived.
+    fn containsSequence(&self, origin: &str, sequence: i64) -> bool {
+        let Some(ranges) = self.ranges.get(origin) else {
+            return false;
+        };
+        let index = ranges.partition_point(|range| range[0] <= sequence);
+        index > 0 && sequence <= ranges[index - 1][1]
+    }
+    /// Skips an exact known interval without skipping its missing predecessor.
+    fn nextMissingSequence(&self, origin: &str, after: i64) -> Option<i64> {
+        let next = after.checked_add(1)?;
+        let Some(ranges) = self.ranges.get(origin) else {
+            return Some(next);
+        };
+        let index = ranges.partition_point(|range| range[0] <= next);
+        if index > 0 && next <= ranges[index - 1][1] {
+            ranges[index - 1][1].checked_add(1)
+        } else {
+            Some(next)
+        }
+    }
+}
+
 /// Declares whether one operation is a replaceable entity state or an ordered transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -260,6 +368,15 @@ struct SyncOperationStoreSharedState {
     exportFloors: Mutex<SyncOperationCachedValue<BTreeMap<String, i64>>>,
     localDeviceId: Mutex<SyncOperationCachedValue<Option<String>>>,
     operationLogs: Mutex<HashMap<String, Arc<Mutex<SyncOperationLogIndex>>>>,
+    receiveState: Mutex<SyncOperationCachedValue<SyncReceiveState>>,
+    application: Mutex<()>,
+}
+
+/// Keeps durable receipt membership after completed native history is compacted.
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct SyncReceiveState {
+    receipt: SyncReceipt,
+    pending: BTreeMap<String, SyncOperation>,
 }
 
 struct SyncOperationCachedValue<T> {
@@ -564,6 +681,7 @@ impl SyncOperationStore {
         let mut clock = self
             .loadCachedJson(&mut clockState, &self.clockPath())?
             .clone();
+        self.registerDevices(&operationsByOrigin.keys().cloned().collect())?;
         let mut clockChanged = false;
         let mut appendedOrigins = BTreeSet::new();
         for (originDeviceId, originOperations) in operationsByOrigin {
@@ -584,9 +702,6 @@ impl SyncOperationStore {
                     }
                     continue;
                 }
-                if operation.sequence <= clock.sequenceFor(&originDeviceId) {
-                    continue;
-                }
                 let storedOperation =
                     self.encodeOperationPayloadWithEncryption(operation, encryption.as_ref())?;
                 let mut line = serde_json::to_vec(&storedOperation)?;
@@ -600,8 +715,10 @@ impl SyncOperationStore {
                 appendedOperationIds.insert(operation.opId.clone());
                 appendedOperations.push((operation, nextOffset, lineLength));
                 nextOffset += lineLength;
-                clock.setSequence(originDeviceId.clone(), operation.sequence);
-                clockChanged = true;
+                if operation.sequence > clock.sequenceFor(&originDeviceId) {
+                    clock.setSequence(originDeviceId.clone(), operation.sequence);
+                    clockChanged = true;
+                }
             }
             if !content.is_empty() {
                 self.storageHost
@@ -629,7 +746,6 @@ impl SyncOperationStore {
         }
         drop(clockState);
         let didMutate = clockChanged || !appendedOrigins.is_empty();
-        self.registerDevices(&appendedOrigins)?;
         if didMutate {
             publishSyncMutation();
         }
@@ -666,29 +782,26 @@ impl SyncOperationStore {
     }
 
     /// Returns operations whose sequence is newer than the provided clock.
-    pub fn operationsSince(
+    pub fn operationsSince<K: SyncOperationKnowledge>(
         &self,
-        clock: &SyncClock,
+        clock: &K,
         domains: &[String],
         limit: usize,
     ) -> Result<Vec<SyncOperation>, SyncOperationStoreError> {
-        self.operationsSinceWithBudget(clock, domains, limit, usize::MAX)
+        self.operationsSinceWithBudget(clock, domains, limit, usize::MAX, |_| true)
     }
 
-    /// Returns one byte-bounded page of operations newer than the provided clock.
-    ///
-    /// The page is cut after compaction, so a single large preference payload
-    /// cannot grow the exported page past the budget. The first operation is
-    /// always kept: the send path reports an operation that cannot fit any
-    /// message instead of stalling the pass here.
-    pub fn operationsSinceWithBudget(
+    /// Exports eligible missing operations, filtering before compaction and page limits.
+    /// Keeps the first operation even when it exceeds the byte budget so transport can report it.
+    pub fn operationsSinceWithBudget<K: SyncOperationKnowledge>(
         &self,
-        clock: &SyncClock,
+        clock: &K,
         domains: &[String],
         limit: usize,
         maxBytes: usize,
+        retain: impl Fn(&SyncOperation) -> bool,
     ) -> Result<Vec<SyncOperation>, SyncOperationStoreError> {
-        self.operationsSinceWithExportPolicy(clock, domains, limit, true, maxBytes)
+        self.operationsSinceWithExportPolicy(clock, domains, limit, true, maxBytes, retain)
     }
 
     /// Reads local preference provenance without treating an export boundary as a conflict boundary.
@@ -699,17 +812,19 @@ impl SyncOperationStore {
             usize::MAX,
             false,
             usize::MAX,
+            |_| true,
         )
     }
 
     /// Uses the shared journal cache for exports and internal deterministic state replay.
-    fn operationsSinceWithExportPolicy(
+    fn operationsSinceWithExportPolicy<K: SyncOperationKnowledge>(
         &self,
-        clock: &SyncClock,
+        clock: &K,
         domains: &[String],
         limit: usize,
         applyExportFloors: bool,
         maxBytes: usize,
+        retain: impl Fn(&SyncOperation) -> bool,
     ) -> Result<Vec<SyncOperation>, SyncOperationStoreError> {
         let domainSet = domains.iter().cloned().collect::<BTreeSet<_>>();
         let exportFloors = if applyExportFloors {
@@ -752,8 +867,8 @@ impl SyncOperationStore {
                             operit_util::AppLogger::AppLogger::w(
                                 "SyncOperationStore",
                                 &format!(
-                                "skipped {skipped} corrupt operation-log line(s) for {deviceId}"
-                            ),
+                                    "skipped {skipped} corrupt operation-log line(s) for {deviceId}"
+                                ),
                             );
                         }
                         index.domainOperations.extend(domains);
@@ -764,7 +879,10 @@ impl SyncOperationStore {
                     domainSet
                         .iter()
                         .flat_map(|domain| index.domainOperations[domain].iter())
-                        .filter(|operation| operation.sequence > minimumSequence)
+                        .filter(|operation| {
+                            operation.sequence > minimumSequence
+                                && !clock.containsSequence(&deviceId, operation.sequence)
+                        })
                         .cloned()
                         .collect::<Vec<_>>()
                 };
@@ -785,8 +903,8 @@ impl SyncOperationStore {
                     let startOffset = operationLog
                         .sequenceOffsets
                         .range((minimumSequence + 1)..)
-                        .next()
                         .map(|(_, offset)| *offset)
+                        .min()
                         .ok_or_else(|| {
                             SyncOperationStoreError::Message(format!(
                                 "sync operation log index is missing sequence after {minimumSequence} for {deviceId}"
@@ -811,7 +929,7 @@ impl SyncOperationStore {
                 }
             };
             for operation in self.decodeOperationLog(&content)? {
-                if operation.sequence <= clock.sequenceFor(&deviceId) {
+                if clock.containsSequence(&deviceId, operation.sequence) {
                     continue;
                 }
                 if operation.sequence <= exportFloors.get(&deviceId).copied().unwrap_or(0) {
@@ -823,6 +941,7 @@ impl SyncOperationStore {
                 out.push(operation);
             }
         }
+        out.retain(retain);
         out.sort_by(|left, right| {
             left.createdAt
                 .cmp(&right.createdAt)
@@ -832,6 +951,160 @@ impl SyncOperationStore {
         let mut out = compactSyncOperations(out);
         out.truncate(limit);
         Ok(boundSyncOperationPage(out, maxBytes))
+    }
+
+    /// Serializes receipt and materialization so concurrent peers cannot replay one transaction.
+    pub fn lockApplication(&self) -> Result<MutexGuard<'_, ()>, SyncOperationStoreError> {
+        lockSyncState(&self.sharedState.application, "sync application")
+    }
+
+    /// Persists originals and exact receipt membership before acknowledging delivery.
+    pub fn receiveOperations(
+        &self,
+        operations: &[SyncOperation],
+    ) -> Result<(), SyncOperationStoreError> {
+        let mut cached = lockSyncState(&self.sharedState.receiveState, "receive state")?;
+        let mut state = self
+            .loadCachedJson(&mut cached, &self.receiveStatePath())?
+            .clone();
+        let mut changed = false;
+        for operation in operations {
+            if operation.originDeviceId.is_empty()
+                || operation.originDeviceId.len() > 256
+                || operation.sequence <= 0
+                || operation.opId != format!("{}:{}", operation.originDeviceId, operation.sequence)
+            {
+                return Err(SyncOperationStoreError::Message(
+                    "Invalid received operation identity".into(),
+                ));
+            }
+            if let Some(existing) = state.pending.get(&operation.opId) {
+                if self.decodeOperationPayload(existing.clone())? != *operation {
+                    return Err(SyncOperationStoreError::Message(format!(
+                        "Conflicting immutable operation {}",
+                        operation.opId
+                    )));
+                }
+                continue;
+            }
+            let journaled = self.containsIdenticalOperation(operation)?;
+            if state
+                .receipt
+                .containsSequence(&operation.originDeviceId, operation.sequence)
+            {
+                continue;
+            }
+            if !journaled {
+                state.pending.insert(
+                    operation.opId.clone(),
+                    self.encodeOperationPayload(operation)?,
+                );
+            }
+            state
+                .receipt
+                .observe(&operation.originDeviceId, operation.sequence);
+            changed = true;
+        }
+        if changed {
+            self.writeJson(&self.receiveStatePath(), &state)?;
+            cached.value = state;
+        }
+        drop(cached);
+        if changed {
+            publishSyncMutation();
+        }
+        Ok(())
+    }
+
+    /// Reads unapplied original operations after restarts or partial application.
+    pub fn pendingOperations(&self) -> Result<Vec<SyncOperation>, SyncOperationStoreError> {
+        let mut cached = lockSyncState(&self.sharedState.receiveState, "receive state")?;
+        let mut operations = self
+            .loadCachedJson(&mut cached, &self.receiveStatePath())?
+            .pending
+            .values()
+            .cloned()
+            .map(|operation| self.decodeOperationPayload(operation))
+            .collect::<Result<Vec<_>, _>>()?;
+        operations.sort_by(|left, right| {
+            (&left.originDeviceId, left.sequence).cmp(&(&right.originDeviceId, right.sequence))
+        });
+        Ok(operations)
+    }
+
+    /// Clears completed replay intent while retaining its receipt independently of native logs.
+    pub fn completeOperations(
+        &self,
+        operations: &[SyncOperation],
+    ) -> Result<(), SyncOperationStoreError> {
+        let mut cached = lockSyncState(&self.sharedState.receiveState, "receive state")?;
+        let mut state = self
+            .loadCachedJson(&mut cached, &self.receiveStatePath())?
+            .clone();
+        let mut changed = false;
+        for operation in operations {
+            changed |= state.pending.remove(&operation.opId).is_some();
+        }
+        if changed {
+            self.writeJson(&self.receiveStatePath(), &state)?;
+            cached.value = state;
+        }
+        Ok(())
+    }
+
+    /// Combines retained receipts with exact journal sequences without acknowledging gaps.
+    pub fn receipt(&self) -> Result<SyncReceipt, SyncOperationStoreError> {
+        let mut receipt = {
+            let mut cached = lockSyncState(&self.sharedState.receiveState, "receive state")?;
+            self.loadCachedJson(&mut cached, &self.receiveStatePath())?
+                .receipt
+                .clone()
+        };
+        for origin in self.devices()? {
+            let log = self.operationLog(&origin)?;
+            let mut log = lockSyncState(&log, "operation log")?;
+            self.loadOperationLogIndex(&origin, &mut log)?;
+            for sequence in log.sequenceOffsets.keys() {
+                receipt.observe(&origin, *sequence);
+            }
+        }
+        Ok(receipt)
+    }
+
+    /// Verifies immutable content before recognizing an already journaled operation.
+    fn containsIdenticalOperation(
+        &self,
+        operation: &SyncOperation,
+    ) -> Result<bool, SyncOperationStoreError> {
+        let log = self.operationLog(&operation.originDeviceId)?;
+        let mut log = lockSyncState(&log, "operation log")?;
+        self.loadOperationLogIndex(&operation.originDeviceId, &mut log)?;
+        let Some(offset) = log.sequenceOffsets.get(&operation.sequence).copied() else {
+            return Ok(false);
+        };
+        let end = log
+            .sequenceOffsets
+            .values()
+            .copied()
+            .filter(|value| *value > offset)
+            .min()
+            .unwrap_or(log.encodedByteLength);
+        let length = usize::try_from(end - offset)
+            .map_err(|_| SyncOperationStoreError::Message("Operation length overflows usize".into()))?;
+        let content = self.readOperationLogRange(&operation.originDeviceId, offset, length)?;
+        let existing = self.decodeOperationPayload(serde_json::from_str(content.trim())?)?;
+        if existing != *operation {
+            return Err(SyncOperationStoreError::Message(format!(
+                "Conflicting immutable operation {}",
+                operation.opId
+            )));
+        }
+        Ok(true)
+    }
+
+    /// Locates durable receipts and replay intents beside the operation journal.
+    fn receiveStatePath(&self) -> String {
+        format!("{}/receive_state.json", self.rootPath)
     }
 
     /// Reads the local vector clock from storage.

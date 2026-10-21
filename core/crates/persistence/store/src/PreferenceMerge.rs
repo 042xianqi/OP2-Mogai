@@ -183,6 +183,167 @@ fn pluginDeclarations(entries: &[PreferencesSyncedEntry]) -> Result<BTreeMap<Str
     Ok(declarations)
 }
 
+/// Carries resolved aliases and availability of their owning preference stores.
+#[derive(Default)]
+pub struct PreferenceMergeContext {
+    pub references: BTreeMap<String, String>,
+    pub failedPaths: BTreeSet<String>,
+    pub historyError: Option<String>,
+}
+
+impl PreferenceMergeContext {
+    /// Rejects a declared dependency whose preference state could not be materialized.
+    pub fn require(&self, path: &str) -> Result<(), String> {
+        if let Some(error) = &self.historyError {
+            return Err(format!(
+                "Preference history is unavailable for {path}: {error}"
+            ));
+        }
+        if self.failedPaths.contains(path) {
+            return Err(format!("Preference dependency is not materialized: {path}"));
+        }
+        Ok(())
+    }
+}
+
+/// Records one dependency group's result without making another group depend on its success.
+pub struct PreferenceMergeOutcome {
+    pub paths: BTreeSet<String>,
+    pub operations: Vec<SyncOperation>,
+    pub result: Result<BTreeMap<String, String>, String>,
+}
+
+/// Partitions declared references into connected groups and runs the existing merge executor per group.
+pub fn applyIndependentOperations<F>(
+    storage: Arc<dyn RuntimeStorageHost>,
+    schema: &PreferenceMergeSchema,
+    history: &[SyncOperation],
+    incoming: &[SyncOperation],
+    retain: F,
+    complete: bool,
+) -> Vec<PreferenceMergeOutcome>
+where
+    F: Fn(&str, &str) -> bool + Copy,
+{
+    let mut outcomes = Vec::new();
+    let mut owners = BTreeMap::<String, Vec<SyncOperation>>::new();
+    let mut pending = BTreeMap::<String, Vec<SyncOperation>>::new();
+    for operation in incoming {
+        match PreferencesSyncedEntry::fromOperation(operation) {
+            Ok(entry) => pending
+                .entry(entry.storagePath().to_owned())
+                .or_default()
+                .push(operation.clone()),
+            Err(error) => outcomes.push(PreferenceMergeOutcome {
+                paths: BTreeSet::new(),
+                operations: vec![operation.clone()],
+                result: Err(format!("op={}: {error}", operation.opId)),
+            }),
+        }
+    }
+    for operation in history
+        .iter()
+        .filter(|operation| operation.domain == "preferences")
+    {
+        if let Some(path) = operation.payload.get("storagePath").and_then(Value::as_str) {
+            owners
+                .entry(path.to_owned())
+                .or_default()
+                .push(operation.clone());
+        }
+    }
+    let mut declarations = schema.stores.clone();
+    let mut errors = BTreeMap::new();
+    for (path, operations) in &owners {
+        let decoded = PreferencesDataStore::prepareSyncedEntries(&[], operations)
+            .and_then(|batch| PreferencesDataStore::filterSyncedEntries(&batch, |_, _| true));
+        match decoded
+            .map_err(|error| error.to_string())
+            .and_then(|entries| pluginDeclarations(&entries))
+        {
+            Ok(pluginStores) => declarations.extend(
+                pluginStores
+                    .into_iter()
+                    .filter(|(path, _)| retain(path, PLUGIN_MERGE_DECLARATION_KEY))
+                    .map(|(path, merge)| PreferenceMergeStore {
+                        path,
+                        encrypted: false,
+                        merge,
+                    }),
+            ),
+            Err(error) => {
+                errors.insert(path.clone(), error);
+            }
+        }
+    }
+    let mut graph = BTreeMap::<String, BTreeSet<String>>::new();
+    for path in owners.keys().chain(pending.keys()) {
+        graph.entry(path.clone()).or_default();
+    }
+    for store in &declarations {
+        graph.entry(store.path.clone()).or_default();
+        for reference in &store.merge.references {
+            graph
+                .entry(store.path.clone())
+                .or_default()
+                .insert(reference.target.clone());
+            graph
+                .entry(reference.target.clone())
+                .or_default()
+                .insert(store.path.clone());
+        }
+    }
+    while let Some(root) = graph.keys().next().cloned() {
+        let mut paths = BTreeSet::new();
+        let mut queue = vec![root];
+        while let Some(path) = queue.pop() {
+            if !paths.insert(path.clone()) {
+                continue;
+            }
+            if let Some(neighbors) = graph.remove(&path) {
+                queue.extend(neighbors);
+            }
+        }
+        let operations = paths
+            .iter()
+            .flat_map(|path| pending.remove(path).into_iter().flatten())
+            .collect::<Vec<_>>();
+        let history = paths
+            .iter()
+            .flat_map(|path| owners.remove(path).into_iter().flatten())
+            .collect::<Vec<_>>();
+        let groupSchema = PreferenceMergeSchema {
+            stores: schema
+                .stores
+                .iter()
+                .filter(|store| paths.contains(&store.path))
+                .cloned()
+                .collect(),
+        };
+        let result = match paths.iter().find_map(|path| {
+            errors
+                .get(path)
+                .map(|error| format!("path={path}: {error}"))
+        }) {
+            Some(error) => Err(error),
+            None => applyOperations(
+                storage.clone(),
+                &groupSchema,
+                &history,
+                &operations,
+                retain,
+                complete,
+            ),
+        };
+        outcomes.push(PreferenceMergeOutcome {
+            paths,
+            operations,
+            result,
+        });
+    }
+    outcomes
+}
+
 /// Composes shared Rust and plugin declarations before invoking the single merge executor.
 pub fn applyOperations<F>(
     storageHost: Arc<dyn RuntimeStorageHost>,

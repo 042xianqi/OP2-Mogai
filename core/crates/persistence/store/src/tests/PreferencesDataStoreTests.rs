@@ -2064,3 +2064,165 @@ fn catalog_merge_defers_identity_decisions_until_the_exchange_is_complete() {
     );
     assert!(journal.preferenceHistory().unwrap().is_empty());
 }
+
+/// Isolates a failed owner until a later complete migration supersedes its earlier schema history.
+#[test]
+fn independent_preferences_catch_up_after_source_migration() {
+    use crate::PreferenceMerge::{PreferenceMergeSchema, applyIndependentOperations};
+    let host = Arc::new(MemoryStorageHost::default());
+    let failedPath = "runtime/config/preferences/failed-owner.preferences.json";
+    let healthyPath = "runtime/config/preferences/healthy-owner.preferences.json";
+    let failed = PreferencesDataStore::newNodeLocalWithStorage(host.clone(), failedPath, false);
+    let mut current = Preferences::default();
+    current.set(
+        &stringPreferencesKey(PREFERENCES_SCHEMA_VERSION_KEY_NAME),
+        4,
+    );
+    failed.replace(current).unwrap();
+    let mut old = nativePreferenceOperation(failedPath, vec![("removed", json!(true))], 1);
+    old.payload["schemaVersion"] = json!(2);
+    let healthy = nativePreferenceOperation(healthyPath, vec![("ready", json!(true))], 2);
+    let incoming = vec![old.clone(), healthy];
+    let outcomes = applyIndependentOperations(
+        host.clone(),
+        &PreferenceMergeSchema::default(),
+        &incoming,
+        &incoming,
+        |_, _| true,
+        true,
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| outcome.result.is_err())
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| outcome.result.is_ok())
+            .count(),
+        1
+    );
+    assert_eq!(
+        PreferencesDataStore::newNodeLocalWithStorage(host.clone(), healthyPath, false)
+            .data()
+            .unwrap()
+            .get(&stringPreferencesKey("ready")),
+        Some(&json!(true))
+    );
+    assert!(
+        failed
+            .data()
+            .unwrap()
+            .get(&stringPreferencesKey("removed"))
+            .is_none()
+    );
+
+    let mut migrated = nativePreferenceOperation(failedPath, vec![("current", json!(true))], 3);
+    migrated.payload["schemaVersion"] = json!(4);
+    migrated.payload["migrationSnapshot"] = json!(true);
+    let mut concurrent = nativePreferenceOperation(failedPath, vec![("concurrent", json!(7))], 1);
+    concurrent.originDeviceId = "another-owner".into();
+    concurrent.opId = "another-owner:1".into();
+    concurrent.payload["schemaVersion"] = json!(4);
+    let history = vec![old.clone(), concurrent.clone(), migrated.clone()];
+    let outcomes = applyIndependentOperations(
+        host,
+        &PreferenceMergeSchema::default(),
+        &history,
+        &[old, concurrent, migrated],
+        |_, _| true,
+        true,
+    );
+    assert!(outcomes.iter().all(|outcome| outcome.result.is_ok()));
+    let data = failed.data().unwrap();
+    assert_eq!(
+        data.get(&stringPreferencesKey("current")),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        data.get(&stringPreferencesKey("concurrent")),
+        Some(&json!(7))
+    );
+    assert!(data.get(&stringPreferencesKey("removed")).is_none());
+}
+
+/// Keeps reference-linked owners atomic while an unrelated owner continues materializing.
+#[test]
+fn failed_preference_dependency_blocks_only_its_connected_group() {
+    use crate::PreferenceMerge::*;
+    use operit_host_api::PluginStorage::{
+        StoragePreferencesMergeDescriptor, StoragePreferencesMergeKey,
+        StoragePreferencesMergeReference,
+    };
+    let host = Arc::new(MemoryStorageHost::default());
+    let mut schema = identityHistorySchema();
+    let target = schema.stores[0].path.clone();
+    let dependent = "runtime/config/preferences/dependent-owner.preferences.json";
+    let unrelated = "runtime/config/preferences/unrelated-owner.preferences.json";
+    schema.stores.push(PreferenceMergeStore {
+        path: dependent.into(),
+        encrypted: false,
+        merge: StoragePreferencesMergeDescriptor {
+            version: 1,
+            catalog: None,
+            projection: None,
+            references: vec![StoragePreferencesMergeReference {
+                key: StoragePreferencesMergeKey::Exact {
+                    key: "selection".into(),
+                },
+                path: vec![],
+                target: target.clone(),
+            }],
+        },
+    });
+    let targetStore = PreferencesDataStore::newNodeLocalWithStorage(host.clone(), &target, false);
+    let mut current = Preferences::default();
+    current.set(
+        &stringPreferencesKey(PREFERENCES_SCHEMA_VERSION_KEY_NAME),
+        4,
+    );
+    targetStore.replace(current).unwrap();
+    let mut old = nativePreferenceOperation(
+        &target,
+        vec![("entity_a", json!({"id":"a", "name":"A"}))],
+        1,
+    );
+    old.payload["schemaVersion"] = json!(2);
+    let incoming = vec![
+        old,
+        nativePreferenceOperation(dependent, vec![("selection", json!("a"))], 2),
+        nativePreferenceOperation(unrelated, vec![("ready", json!(true))], 3),
+    ];
+    let outcomes = applyIndependentOperations(
+        host.clone(),
+        &schema,
+        &incoming,
+        &incoming,
+        |_, _| true,
+        true,
+    );
+    let failed = outcomes
+        .iter()
+        .find(|outcome| outcome.result.is_err())
+        .unwrap();
+    assert!(failed.paths.contains(&target));
+    assert!(failed.paths.contains(dependent));
+    assert_eq!(failed.operations.len(), 2);
+    assert!(
+        PreferencesDataStore::newNodeLocalWithStorage(host.clone(), dependent, false)
+            .data()
+            .unwrap()
+            .get(&stringPreferencesKey("selection"))
+            .is_none()
+    );
+    assert_eq!(
+        PreferencesDataStore::newNodeLocalWithStorage(host, unrelated, false)
+            .data()
+            .unwrap()
+            .get(&stringPreferencesKey("ready")),
+        Some(&json!(true))
+    );
+}

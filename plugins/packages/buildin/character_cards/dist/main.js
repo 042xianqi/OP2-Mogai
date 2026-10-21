@@ -1769,7 +1769,7 @@ function assertCharacterState(value) {
   const selected = value.active[activeKey];
   assertObject(selected, "active selection");
   const activeId = requireId(selected.id, "active id");
-  if (activeKey === "Model" ? activeId !== "chat" : !(activeKey === "CharacterCard" ? cardIds : groupIds).has(activeId)) throw new Error("Active prompt references a missing entity: " + activeId);
+  if (activeKey === "Model" && activeId !== "chat") throw new Error("Invalid active model selection: " + activeId);
   const expectedOwners = /* @__PURE__ */ new Set();
   for (const id2 of cardIds) expectedOwners.add("character:" + id2);
   for (const id2 of storeIds) expectedOwners.add("shared:" + id2);
@@ -2104,13 +2104,15 @@ function prepareVersionOne(storage, metadata, directory) {
       return identities2[key];
     }
     const sourceStoreIds = new Set(state.stores.map((store) => store.id));
+    const sourceCardIds = new Set(state.cards.map((card) => card.id));
+    const sourceGroupIds = new Set(state.groups.map((group) => group.id));
     for (const collection of configurationNames)
       for (const record2 of state[collection]) record2.id = identity3(collection, record2.id);
     function selection(value) {
-      if (value === "model:chat") return value;
-      if (value.startsWith("card:")) return "card:" + reference("cards", value.slice(5));
-      if (value.startsWith("group:")) return "group:" + reference("groups", value.slice(6));
-      throw new Error("Invalid migration selection: " + value);
+      const parsed = parseChatSelection(value);
+      if (parsed.kind === "card" && sourceCardIds.has(parsed.id)) value = "card:" + reference("cards", parsed.id);
+      if (parsed.kind === "group" && sourceGroupIds.has(parsed.id)) value = "group:" + reference("groups", parsed.id);
+      return value;
     }
     for (const card of state.cards) {
       card.attachedTagIds = card.attachedTagIds.map((id2) => reference("tags", id2));
@@ -2119,10 +2121,11 @@ function prepareVersionOne(storage, metadata, directory) {
     }
     for (const group of state.groups)
       for (const member2 of group.members) member2.characterCardId = reference("cards", member2.characterCardId);
-    for (const group of state.conversationGroups)
-      if (group.ownerSelection !== null) group.ownerSelection = selection(group.ownerSelection);
-    if ("CharacterCard" in state.active) state.active.CharacterCard.id = reference("cards", state.active.CharacterCard.id);
-    if ("CharacterGroup" in state.active) state.active.CharacterGroup.id = reference("groups", state.active.CharacterGroup.id);
+    for (const group of state.conversationGroups) {
+      if (group.ownerSelection !== null && /^(card|group):/u.test(group.ownerSelection)) group.ownerSelection = selection(group.ownerSelection);
+    }
+    if ("CharacterCard" in state.active && sourceCardIds.has(state.active.CharacterCard.id)) state.active.CharacterCard.id = reference("cards", state.active.CharacterCard.id);
+    if ("CharacterGroup" in state.active && sourceGroupIds.has(state.active.CharacterGroup.id)) state.active.CharacterGroup.id = reference("groups", state.active.CharacterGroup.id);
     const directories = [];
     for (const owner2 of state.owners) {
       const old = owner2.ownerKey;
@@ -2146,11 +2149,15 @@ function prepareVersionOne(storage, metadata, directory) {
       for (const chunk of owner2.chunks) chunk.memoryUuid = reference(scope + "/memoryUuid", chunk.memoryUuid);
       if (owner2.rebuildTask !== null) owner2.rebuildTask.id = identity3(scope + "/rebuildTask", owner2.rebuildTask.id);
     }
+    const resourceMoves = [];
+    for (const move of directories) {
+      resourceMoves.push(move, { source: absolute(directory, move.source), destination: absolute(directory, move.destination) });
+    }
     for (const owner2 of state.owners) for (const memory of owner2.memories)
       for (const field of ["documentPath", "chunkIndexFilePath"]) {
         const path = memory[field];
         if (path === null) continue;
-        for (const move of directories) if (path.startsWith(move.source + "/")) {
+        for (const move of resourceMoves) if (path.startsWith(move.source + "/")) {
           memory[field] = move.destination + path.slice(move.source.length);
           break;
         }
@@ -2203,8 +2210,7 @@ function prepareVersionOne(storage, metadata, directory) {
           assertObject(extension, "legacy message author");
           if (Object.keys(extension).length !== 1) throw new Error("Invalid legacy message author");
           const participant = requireId(extension.participantId, "legacy participant id"), next = cardIds.get(participant);
-          if (next === void 0) throw new Error("Missing message author character: " + participant);
-          if (next !== participant) authors.push({ target, before: participant, after: next });
+          if (next !== void 0 && next !== participant) authors.push({ target, before: participant, after: next });
         }
       }
     }
@@ -2391,7 +2397,7 @@ function migrateCharacterSchema(storage, preferences, directory) {
 
 // src/storage/memory-merge.json
 var memory_merge_default = {
-  version: 3,
+  version: 4,
   maxEntities: 1,
   maxReferences: 48,
   entities: [
@@ -4200,7 +4206,8 @@ var handlers = {
   "activePrompt.resolvedCard": (_input, host) => __async(null, null, function* () {
     const active = yield host.readActive();
     if (!("CharacterCard" in active)) throw new Error("An active group requires an explicit execution participant");
-    return { id: active.CharacterCard.id };
+    const card = yield host.getCharacter(active.CharacterCard.id);
+    return { id: card.id };
   }),
   /** Reads complete canonical tags. */
   "tag.list": (_input, host) => __async(null, null, function* () {

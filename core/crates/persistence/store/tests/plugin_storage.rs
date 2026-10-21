@@ -1292,19 +1292,23 @@ fn opening_a_database_heals_rows_written_under_aliased_identities() {
     fixture.dispose();
 }
 
-/// Keeps durable clocks readable while an invalid plugin contract fails export and catches up after repair.
+/// Exports immutable history without parsing an obsolete catalog merge declaration.
 #[test]
-fn invalid_merge_contract_preserves_clocks_and_pending_transactions() {
+fn obsolete_catalog_contract_does_not_block_history_export() {
     let source = Fixture::new("broken-contract-source");
     let target = Fixture::new("broken-contract-target");
     let handle = source.open("objects");
-    source.call(json!({"op":"commit","handle":handle,"mutations":[put("pending",json!(7))]})).unwrap();
+    source
+        .call(json!({"op":"commit","handle":handle,"mutations":[put("pending",json!(7))]}))
+        .unwrap();
     let pending = source.export();
     assert!(!pending.is_empty());
     let committed = PluginStorage::localClock(source.host.clone()).unwrap();
     let catalog = SqliteStore::openWithHost(
-        source.host.clone(), "runtime/extensions/device/storage/catalog.sqlite",
-    ).unwrap();
+        source.host.clone(),
+        "runtime/extensions/device/storage/catalog.sqlite",
+    )
+    .unwrap();
     let invalid = json!({
         "version": 1, "maxEntities": 1, "maxReferences": 1,
         "entities": [{
@@ -1313,30 +1317,179 @@ fn invalid_merge_contract_preserves_clocks_and_pending_transactions() {
             "keyReferences":[{"collection":"cards","prefix":"character:"}]
         }]
     });
-    catalog.execute(
-        "UPDATE plugin_databases SET merge=?1 WHERE path=?2",
-        vec![
-            operit_host_api::SqliteValue::Text(invalid.to_string()),
-            operit_host_api::SqliteValue::Text(source.path.clone()),
-        ],
-    ).unwrap();
-    assert_eq!(PluginStorage::localClock(source.host.clone()).unwrap(), committed);
-    assert!(PluginStorage::operationsSince(
-        source.host.clone(), &SyncClock::empty(), &["plugin_storage".into()], 100,
-    ).is_err());
-    assert!(PluginStorage::operationsSince(
-        source.host.clone(), &SyncClock::empty(), &["preferences".into()], 100,
-    ).unwrap().is_empty());
-    assert!(PluginStorage::localClock(target.host.clone()).unwrap().sequences.is_empty());
+    catalog
+        .execute(
+            "UPDATE plugin_databases SET merge=?1 WHERE path=?2",
+            vec![
+                operit_host_api::SqliteValue::Text(invalid.to_string()),
+                operit_host_api::SqliteValue::Text(source.path.clone()),
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        PluginStorage::localClock(source.host.clone()).unwrap(),
+        committed
+    );
+    assert_eq!(
+        PluginStorage::operationsSince(
+            source.host.clone(),
+            &SyncClock::empty(),
+            &["plugin_storage".into()],
+            100,
+        )
+        .unwrap(),
+        pending
+    );
+    assert!(
+        PluginStorage::operationsSince(
+            source.host.clone(),
+            &SyncClock::empty(),
+            &["preferences".into()],
+            100,
+        )
+        .unwrap()
+        .is_empty()
+    );
+    assert!(
+        PluginStorage::localClock(target.host.clone())
+            .unwrap()
+            .sequences
+            .is_empty()
+    );
 
-    catalog.execute("UPDATE plugin_databases SET merge=NULL", Vec::new()).unwrap();
+    catalog
+        .execute("UPDATE plugin_databases SET merge=NULL", Vec::new())
+        .unwrap();
     let retried = source.export();
     assert_eq!(retried, pending);
     target.replay(&retried);
-    assert_eq!(PluginStorage::localClock(target.host.clone()).unwrap(), committed);
+    assert_eq!(
+        PluginStorage::localClock(target.host.clone()).unwrap(),
+        committed
+    );
     let targetHandle = target.open("objects");
     assert_eq!(target.get(&targetHandle, "pending")["value"], json!(7));
     drop(catalog);
+    source.dispose();
+    target.dispose();
+}
+
+/// Migrates the historical declaration only for execution and retains byte-equivalent JSON operation content.
+#[test]
+fn historical_key_reference_payload_replays_without_mutating_operation_identity() {
+    let source = Fixture::new("historical-source");
+    let target = Fixture::new("historical-target");
+    let handle = open_object_merge_fixture(&source);
+    seed_object_card(&source, &handle, "a", "Card", "content");
+    let store = SqliteStore::openWithHost(source.host.clone(), &source.path).unwrap();
+    for mut operation in source.export() {
+        for entity in operation.payload["manifest"]["merge"]["entities"]
+            .as_array_mut()
+            .unwrap()
+        {
+            for reference in entity["keyReferences"].as_array_mut().unwrap() {
+                let collection = reference["target"]["collection"].clone();
+                reference.as_object_mut().unwrap().remove("target");
+                reference["collection"] = collection;
+            }
+        }
+        store
+            .execute(
+                "UPDATE _operit_log SET payload=?1 WHERE origin=?2 AND sequence=?3",
+                vec![
+                    operit_host_api::SqliteValue::Text(operation.payload.to_string()),
+                    operit_host_api::SqliteValue::Text(operation.originDeviceId),
+                    operit_host_api::SqliteValue::Integer(operation.sequence),
+                ],
+            )
+            .unwrap();
+    }
+    let originals = source.export();
+    assert!(originals.iter().any(|operation| {
+        operation.payload["manifest"]["merge"]["entities"][1]["keyReferences"][0]
+            .get("collection")
+            .is_some()
+    }));
+    target.replay(&originals);
+    target.replay(&originals);
+    assert_eq!(target.export(), originals);
+    drop(store);
+    source.dispose();
+    target.dispose();
+}
+
+/// Reports a broken database while exporting healthy databases in the same page.
+#[test]
+fn unavailable_database_does_not_block_healthy_database_export() {
+    use operit_store::SyncOperationStore::SyncReceipt;
+    let source = Fixture::new("independent-databases");
+    let handle = source.open("objects");
+    source
+        .call(json!({"op":"commit","handle":handle,"mutations":[put("ready",json!(7))]}))
+        .unwrap();
+    let originals = source.export();
+    let catalog = SqliteStore::openWithHost(
+        source.host.clone(),
+        "runtime/extensions/device/storage/catalog.sqlite",
+    )
+    .unwrap();
+    let brokenPath = format!("{}/broken.sqlite", source.roots[0]);
+    catalog.execute("INSERT INTO plugin_databases(path,owner,kind,sync,merge) VALUES(?1,'storage_test','objects',1,NULL)", vec![operit_host_api::SqliteValue::Text(brokenPath.clone())]).unwrap();
+    let (operations, errors) = PluginStorage::exportWithBudget(
+        source.host.clone(),
+        &SyncReceipt::default(),
+        &[],
+        100,
+        100_000,
+    )
+    .unwrap();
+    assert_eq!(operations, originals);
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].contains(&brokenPath));
+    let (receipt, errors) = PluginStorage::receipt(source.host.clone()).unwrap();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(
+        receipt.ranges[&originals[0].originDeviceId],
+        vec![[1, originals.last().unwrap().sequence]]
+    );
+    drop(catalog);
+    source.dispose();
+}
+
+/// Waits for an actual declared preference dependency and reuses the same transaction after repair.
+#[test]
+fn failed_preference_dependency_preserves_plugin_transaction_for_retry() {
+    let source = Fixture::new("dependency-source");
+    let target = Fixture::new("dependency-target");
+    let handle = open_owner_merge_fixture(&source, true);
+    source.call(json!({"op":"commit","handle":handle,"mutations":[put_in("owners", "character:a", json!({"ownerKey":"character:a", "document":"owners/character%3Aa/USER.md"}))]})).unwrap();
+    let originals = source.export();
+    let mut preferences = operit_store::PreferenceMerge::PreferenceMergeContext::default();
+    let path = "runtime/config/preferences/cards.preferences.json";
+    preferences.failedPaths.insert(path.to_owned());
+    for operation in &originals {
+        assert!(
+            PluginStorage::applyOperation(
+                target.host.clone(),
+                target.host.clone(),
+                operation,
+                &preferences
+            )
+            .is_err()
+        );
+    }
+    assert!(target.export().is_empty());
+    preferences.failedPaths.clear();
+    for operation in &originals {
+        PluginStorage::applyOperation(
+            target.host.clone(),
+            target.host.clone(),
+            operation,
+            &preferences,
+        )
+        .unwrap();
+    }
+    assert_eq!(target.export(), originals);
     source.dispose();
     target.dispose();
 }

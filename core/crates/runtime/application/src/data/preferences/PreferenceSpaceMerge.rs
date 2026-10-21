@@ -1,29 +1,60 @@
-//! Wires owner-provided declarations into the Core preference merge executor.
+//! Composes preference merge declarations and prepares source-owned migrations.
+use std::sync::Arc;
+
+use operit_host_api::RuntimeStorageHost;
 use operit_store::PreferenceMerge::PreferenceMergeSchema;
+use operit_util::RuntimeStorageLayout;
 
 use super::FunctionalConfigManager::FunctionalConfigManager;
 use super::ModelConfigManager::ModelConfigManager;
 use super::SttConfigManager::SttConfigManager;
 use super::ThemeConfigManager::ThemeConfigManager;
 use super::TtsConfigManager::TtsConfigManager;
+use super::UserPreferencesManager::UserPreferencesManager;
 
-/// Prepares owner-versioned stores before composing data-only merge declarations.
-pub(crate) fn schema(
-    storage: std::sync::Arc<dyn operit_host_api::RuntimeStorageHost>,
-) -> Result<PreferenceMergeSchema, String> {
-    let model = ModelConfigManager::spaceMergeStore();
-    let tts = TtsConfigManager::spaceMergeStore();
-    let stt = SttConfigManager::spaceMergeStore();
-    let theme = ThemeConfigManager::spaceMergeStore();
-    let functional = FunctionalConfigManager::spaceMergeStore();
-    for store in [
-        ModelConfigManager::preferenceStore(storage.clone(), model.path.clone()),
-        TtsConfigManager::preferenceStore(storage.clone(), tts.path.clone()),
-        SttConfigManager::preferenceStore(storage.clone(), stt.path.clone()),
-        super::UserPreferencesManager::UserPreferencesManager::store(storage.clone()),
-        FunctionalConfigManager::preferenceStore(storage, functional.path.clone()),
-    ] {
-        store.data().map_err(|error| error.to_string())?;
+/// Collects merge declarations without opening preference stores.
+pub(crate) fn schema() -> PreferenceMergeSchema {
+    PreferenceMergeSchema {
+        stores: vec![
+            ModelConfigManager::spaceMergeStore(),
+            TtsConfigManager::spaceMergeStore(),
+            SttConfigManager::spaceMergeStore(),
+            ThemeConfigManager::spaceMergeStore(),
+            FunctionalConfigManager::spaceMergeStore(),
+        ],
     }
-    Ok(PreferenceMergeSchema { stores: vec![model, tts, stt, theme, functional] })
+}
+
+/// Runs each owner's migrations and reports failures by storage path.
+pub(crate) fn prepare(storage: Arc<dyn RuntimeStorageHost>) -> Vec<String> {
+    let stores = [
+        ModelConfigManager::preferenceStore(
+            storage.clone(),
+            RuntimeStorageLayout::MODEL_CONFIGS_PREFERENCES_PATH,
+        ),
+        TtsConfigManager::preferenceStore(
+            storage.clone(),
+            RuntimeStorageLayout::TTS_CONFIGS_PREFERENCES_PATH,
+        ),
+        SttConfigManager::preferenceStore(
+            storage.clone(),
+            RuntimeStorageLayout::STT_CONFIGS_PREFERENCES_PATH,
+        ),
+        UserPreferencesManager::store(storage.clone()),
+        FunctionalConfigManager::preferenceStore(
+            storage,
+            RuntimeStorageLayout::FUNCTIONAL_CONFIGS_PREFERENCES_PATH,
+        ),
+    ];
+
+    let mut errors = Vec::new();
+    for store in stores {
+        if let Err(error) = store.data() {
+            errors.push(format!(
+                "preference migration path={}: {error}",
+                store.path().display(),
+            ));
+        }
+    }
+    errors
 }

@@ -84,7 +84,8 @@ export function assertCharacterState(value: unknown): asserts value is Character
   if (activeKey !== "CharacterCard" && activeKey !== "CharacterGroup" && activeKey !== "Model") throw new Error("Invalid active prompt kind");
   const selected = value.active[activeKey]; assertObject(selected, "active selection");
   const activeId = requireId(selected.id, "active id");
-  if (activeKey === "Model" ? activeId !== "chat" : !(activeKey === "CharacterCard" ? cardIds : groupIds).has(activeId)) throw new Error("Active prompt references a missing entity: " + activeId);
+  // Stored active identities remain available for explicit reselection after their role is deleted.
+  if (activeKey === "Model" && activeId !== "chat") throw new Error("Invalid active model selection: " + activeId);
   const expectedOwners = new Set<string>();
   for (const id of cardIds) expectedOwners.add("character:" + id);
   for (const id of storeIds) expectedOwners.add("shared:" + id);

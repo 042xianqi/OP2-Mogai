@@ -616,7 +616,7 @@ fn deletes_sources_only_after_verified_import_and_resumes_cleanup() {
     );
 }
 
-/// Rejects invalid references and incomplete migrations while retaining every source path.
+/// Rejects malformed active metadata and incomplete migrations while retaining every source path.
 #[test]
 fn invalid_or_incomplete_import_never_authorizes_cleanup() {
     let fixture = Fixture::new();
@@ -625,12 +625,12 @@ fn invalid_or_incomplete_import_never_authorizes_cleanup() {
         .writeBytes(CHARACTER_CARDS_PREFERENCES_PATH, b"source preferences")
         .unwrap();
     let mut source = data();
-    source.active = Some(json!({"CharacterCard":{"id":"absent"}}));
+    source.active = Some(json!({"CharacterCard":{"id":"legacy"},"CharacterGroup":{"id":"absent"}}));
     assert!(fixture
         .writer()
         .import("operit2-v27", source)
         .unwrap_err()
-        .contains("active character"));
+        .contains("Invalid imported active selection"));
     assert!(fixture
         .writer()
         .get("imports", "operit2-v27")
@@ -2421,5 +2421,64 @@ fn retains_unresolved_primary_memory_bindings_without_blocking_import() {
                 );
             }
         }
+    }
+}
+
+/// Retains a deleted active role without altering imported records or selecting a replacement role.
+#[test]
+fn retains_deleted_active_roles_through_both_legacy_imports() {
+    for source_id in ["operit1", "operit2-v27"] {
+        for active in [
+            json!({"CharacterCard":{"id":"deleted-character"}}),
+            json!({"CharacterGroup":{"id":"deleted-group"}}),
+        ] {
+            let fixture = Fixture::new();
+            let mut source = data();
+            source.active = Some(active.clone());
+            source.records.push(memory(1));
+            validateMigrationData(&source).unwrap();
+            fixture.writer().import(source_id, source).unwrap();
+            let writer =
+                CharacterPluginWriter::open(fixture.host.clone(), fixture.host.clone()).unwrap();
+            let metadata = writer.get("meta", "state").unwrap().unwrap()["value"].clone();
+            assert_eq!(metadata["active"], active);
+            assert_eq!(metadata["migrationStatus"], "complete");
+            assert_eq!(writer.list("cards").unwrap().len(), 1);
+            assert_eq!(writer.list("memories").unwrap().len(), 1);
+            assert!(writer.list("groups").unwrap().is_empty());
+            writer
+                .import(source_id, CharacterMigrationData::default())
+                .unwrap();
+            assert_eq!(
+                writer.get("meta", "state").unwrap().unwrap()["value"],
+                metadata
+            );
+        }
+    }
+}
+
+/// Rejects malformed active metadata before any record or cleanup marker is published.
+#[test]
+fn invalid_active_shapes_do_not_publish_a_legacy_import() {
+    for active in [
+        None,
+        Some(Value::Null),
+        Some(json!({})),
+        Some(json!({"CharacterCard":{"id":""}})),
+        Some(json!({"CharacterGroup":{"id":null}})),
+        Some(json!({"Unknown":{"id":"legacy"}})),
+        Some(json!({"CharacterCard":{"id":"legacy"},"CharacterGroup":{"id":"group"}})),
+    ] {
+        let fixture = Fixture::new();
+        let mut source = data();
+        source.active = active;
+        assert!(fixture.writer().import("operit2-v27", source).is_err());
+        assert!(fixture.writer().get("meta", "state").unwrap().is_none());
+        assert!(fixture
+            .writer()
+            .get("imports", "operit2-v27")
+            .unwrap()
+            .is_none());
+        assert!(fixture.writer().list("cards").unwrap().is_empty());
     }
 }

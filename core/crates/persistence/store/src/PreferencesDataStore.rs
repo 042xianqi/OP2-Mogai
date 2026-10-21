@@ -2306,12 +2306,13 @@ impl PreferencesSyncedEntry {
                         key != PREFERENCES_SCHEMA_VERSION_KEY_NAME && !keys.contains(key)
                     })
                 {
-                    return Err(PreferencesDataStoreError::Message(format!("Preference schema mismatch: local {current}, incoming {version}; synchronize the owner's complete migration first")));
+                    return Err(PreferencesDataStoreError::Message(format!("Preference schema mismatch: path={}, local {current}, incoming {version}; synchronize the owner's complete migration first", self.storagePath)));
                 }
                 preferences.set(&PreferencesDataStore::schemaVersionKey(), version);
             }
         }
         self.applyMutation(&self.mutation, preferences)
+            .map_err(|error| PreferencesDataStoreError::Message(format!("{}: {error}", self.storagePath)))
     }
 
     /// Stages every mutation in an atomic operation before the snapshot is persisted.
@@ -2685,6 +2686,19 @@ impl PreferencesDataStore {
         let operations = batch.iter().filter_map(|(operation, entry)| {
             let mut entry = entry.clone();
             entry.retainKeys(&retain).then_some((*operation, entry))
+        }).collect::<Vec<_>>();
+        // A complete owner migration replaces its source's earlier history, including removed keys.
+        let mut migrationSequences = BTreeMap::<(String, String), i64>::new();
+        for (operation, entry) in &operations {
+            if operation.payload.get("migrationSnapshot").and_then(Value::as_bool) == Some(true) {
+                migrationSequences.entry((operation.originDeviceId.clone(), entry.storagePath.clone()))
+                    .and_modify(|sequence| *sequence = (*sequence).max(operation.sequence))
+                    .or_insert(operation.sequence);
+            }
+        }
+        let operations = operations.into_iter().filter(|(operation, entry)| {
+            entry.identityAlias().is_some() || !migrationSequences.get(&(operation.originDeviceId.clone(), entry.storagePath.clone()))
+                .is_some_and(|sequence| operation.sequence < *sequence)
         }).collect::<Vec<_>>();
         let mut schemaVersions: BTreeMap<(&str, &str), u32> = BTreeMap::new();
         let mut nativeVersions: BTreeMap<

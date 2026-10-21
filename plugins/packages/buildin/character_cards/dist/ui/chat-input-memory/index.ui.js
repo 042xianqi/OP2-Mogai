@@ -989,7 +989,7 @@ function assertCharacterState(value) {
   const selected = value.active[activeKey];
   assertObject(selected, "active selection");
   const activeId = requireId(selected.id, "active id");
-  if (activeKey === "Model" ? activeId !== "chat" : !(activeKey === "CharacterCard" ? cardIds : groupIds).has(activeId)) throw new Error("Active prompt references a missing entity: " + activeId);
+  if (activeKey === "Model" && activeId !== "chat") throw new Error("Invalid active model selection: " + activeId);
   const expectedOwners = /* @__PURE__ */ new Set();
   for (const id2 of cardIds) expectedOwners.add("character:" + id2);
   for (const id2 of storeIds) expectedOwners.add("shared:" + id2);
@@ -1324,13 +1324,15 @@ function prepareVersionOne(storage, metadata, directory) {
       return identities2[key];
     }
     const sourceStoreIds = new Set(state.stores.map((store) => store.id));
+    const sourceCardIds = new Set(state.cards.map((card) => card.id));
+    const sourceGroupIds = new Set(state.groups.map((group) => group.id));
     for (const collection of configurationNames)
       for (const record2 of state[collection]) record2.id = identity(collection, record2.id);
     function selection(value) {
-      if (value === "model:chat") return value;
-      if (value.startsWith("card:")) return "card:" + reference("cards", value.slice(5));
-      if (value.startsWith("group:")) return "group:" + reference("groups", value.slice(6));
-      throw new Error("Invalid migration selection: " + value);
+      const parsed = parseChatSelection(value);
+      if (parsed.kind === "card" && sourceCardIds.has(parsed.id)) value = "card:" + reference("cards", parsed.id);
+      if (parsed.kind === "group" && sourceGroupIds.has(parsed.id)) value = "group:" + reference("groups", parsed.id);
+      return value;
     }
     for (const card of state.cards) {
       card.attachedTagIds = card.attachedTagIds.map((id2) => reference("tags", id2));
@@ -1339,10 +1341,11 @@ function prepareVersionOne(storage, metadata, directory) {
     }
     for (const group of state.groups)
       for (const member2 of group.members) member2.characterCardId = reference("cards", member2.characterCardId);
-    for (const group of state.conversationGroups)
-      if (group.ownerSelection !== null) group.ownerSelection = selection(group.ownerSelection);
-    if ("CharacterCard" in state.active) state.active.CharacterCard.id = reference("cards", state.active.CharacterCard.id);
-    if ("CharacterGroup" in state.active) state.active.CharacterGroup.id = reference("groups", state.active.CharacterGroup.id);
+    for (const group of state.conversationGroups) {
+      if (group.ownerSelection !== null && /^(card|group):/u.test(group.ownerSelection)) group.ownerSelection = selection(group.ownerSelection);
+    }
+    if ("CharacterCard" in state.active && sourceCardIds.has(state.active.CharacterCard.id)) state.active.CharacterCard.id = reference("cards", state.active.CharacterCard.id);
+    if ("CharacterGroup" in state.active && sourceGroupIds.has(state.active.CharacterGroup.id)) state.active.CharacterGroup.id = reference("groups", state.active.CharacterGroup.id);
     const directories = [];
     for (const owner2 of state.owners) {
       const old = owner2.ownerKey;
@@ -1366,11 +1369,15 @@ function prepareVersionOne(storage, metadata, directory) {
       for (const chunk of owner2.chunks) chunk.memoryUuid = reference(scope + "/memoryUuid", chunk.memoryUuid);
       if (owner2.rebuildTask !== null) owner2.rebuildTask.id = identity(scope + "/rebuildTask", owner2.rebuildTask.id);
     }
+    const resourceMoves = [];
+    for (const move of directories) {
+      resourceMoves.push(move, { source: absolute(directory, move.source), destination: absolute(directory, move.destination) });
+    }
     for (const owner2 of state.owners) for (const memory of owner2.memories)
       for (const field of ["documentPath", "chunkIndexFilePath"]) {
         const path = memory[field];
         if (path === null) continue;
-        for (const move of directories) if (path.startsWith(move.source + "/")) {
+        for (const move of resourceMoves) if (path.startsWith(move.source + "/")) {
           memory[field] = move.destination + path.slice(move.source.length);
           break;
         }
@@ -1423,8 +1430,7 @@ function prepareVersionOne(storage, metadata, directory) {
           assertObject(extension, "legacy message author");
           if (Object.keys(extension).length !== 1) throw new Error("Invalid legacy message author");
           const participant = requireId(extension.participantId, "legacy participant id"), next = cardIds.get(participant);
-          if (next === void 0) throw new Error("Missing message author character: " + participant);
-          if (next !== participant) authors.push({ target, before: participant, after: next });
+          if (next !== void 0 && next !== participant) authors.push({ target, before: participant, after: next });
         }
       }
     }
@@ -1611,7 +1617,7 @@ function migrateCharacterSchema(storage, preferences, directory) {
 
 // src/storage/memory-merge.json
 var memory_merge_default = {
-  version: 3,
+  version: 4,
   maxEntities: 1,
   maxReferences: 48,
   entities: [
@@ -2040,21 +2046,21 @@ function renderMemoryMenu(ctx) {
     });
   }
   function icon(name, color = colors.onSurfaceVariant) {
-    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:90063",[name,color],__operitUiTemplate_90063);
+    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:90423",[name,color],__operitUiTemplate_90423);
   }
   function switchRow(key, name, title) {
     if (preferences === null) throw new Error("Memory preferences are not loaded");
     const checked = preferences[key];
-    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:90287",["memory-" + key,ctx.Modifier.heightIn({ minHeight: 32 }),() => toggle(key),icon(name, checked ? colors.primary : colors.onSurfaceVariant),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:90594",null,__operitUiTemplate_90594),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:90630",[title,colors.onSurface],__operitUiTemplate_90630),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:90757",[checked ? "\u5F00" : "\u5173",colors.primary],__operitUiTemplate_90757),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:90879",null,__operitUiTemplate_90879),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:90914",[checked,() => toggle(key)],__operitUiTemplate_90914)],__operitUiTemplate_90287);
+    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:90647",["memory-" + key,ctx.Modifier.heightIn({ minHeight: 32 }),() => toggle(key),icon(name, checked ? colors.primary : colors.onSurfaceVariant),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:90954",null,__operitUiTemplate_90954),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:90990",[title,colors.onSurface],__operitUiTemplate_90990),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:91117",[checked ? "\u5F00" : "\u5173",colors.primary],__operitUiTemplate_91117),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:91239",null,__operitUiTemplate_91239),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:91274",[checked,() => toggle(key)],__operitUiTemplate_91274)],__operitUiTemplate_90647);
   }
-  if (available === false) return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:91046",null,__operitUiTemplate_91046);
-  if (preferences === null) return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:91129",[load],__operitUiTemplate_91129);
-  const children = [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:91207",[ctx.Modifier.heightIn({ minHeight: 36 }),() => {
+  if (available === false) return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:91406",null,__operitUiTemplate_91406);
+  if (preferences === null) return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:91489",[load],__operitUiTemplate_91489);
+  const children = [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:91567",[ctx.Modifier.heightIn({ minHeight: 36 }),() => {
       assertOwner();
       setExpanded(!expanded);
-    },icon("DataObjectOutlined", colors.onSurfaceVariant.copy({ alpha: 0.7 })),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:91561",null,__operitUiTemplate_91561),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:91595",null,__operitUiTemplate_91595),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:91658",null,__operitUiTemplate_91658),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:91691",[memorySummary(preferences),colors.primary],__operitUiTemplate_91691),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:91872",[showInfo,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:92102",[colors.onSurfaceVariant.copy({ alpha: 0.7 })],__operitUiTemplate_92102)],__operitUiTemplate_91872),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:92213",null,__operitUiTemplate_92213),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:92246",[expanded ? "KeyboardArrowUp" : "KeyboardArrowDown",colors.onSurfaceVariant],__operitUiTemplate_92246)],__operitUiTemplate_91207)];
-  if (expanded) children.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:92398",[ctx.Modifier.padding(12, 0, 8, 4),switchRow("userDescriptionEnabled", "AssignmentIndOutlined", "\u63D0\u4F9B\u7528\u6237\u8D44\u6599"),switchRow("autoUpdateEnabled", preferences.autoUpdateEnabled ? "Save" : "SaveOutlined", "\u81EA\u52A8\u66F4\u65B0\u8BB0\u5FC6\u5E93"),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:92744",[ctx.Modifier.heightIn({ minHeight: 32 }),!busy && chatId !== null ? manual : void 0,icon("SaveOutlined"),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:93034",null,__operitUiTemplate_93034),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:93070",[busy ? "\u6B63\u5728\u66F4\u65B0\u8BB0\u5FC6\u2026" : "\u624B\u52A8\u66F4\u65B0\u8BB0\u5FC6",!busy && chatId !== null ? colors.onSurface : colors.onSurfaceVariant.copy({ alpha: 0.45 })],__operitUiTemplate_93070)],__operitUiTemplate_92744)],__operitUiTemplate_92398));
-  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:93429",[children],__operitUiTemplate_93429);
+    },icon("DataObjectOutlined", colors.onSurfaceVariant.copy({ alpha: 0.7 })),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:91921",null,__operitUiTemplate_91921),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:91955",null,__operitUiTemplate_91955),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:92018",null,__operitUiTemplate_92018),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:92051",[memorySummary(preferences),colors.primary],__operitUiTemplate_92051),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:92232",[showInfo,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:92462",[colors.onSurfaceVariant.copy({ alpha: 0.7 })],__operitUiTemplate_92462)],__operitUiTemplate_92232),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:92573",null,__operitUiTemplate_92573),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:92606",[expanded ? "KeyboardArrowUp" : "KeyboardArrowDown",colors.onSurfaceVariant],__operitUiTemplate_92606)],__operitUiTemplate_91567)];
+  if (expanded) children.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:92758",[ctx.Modifier.padding(12, 0, 8, 4),switchRow("userDescriptionEnabled", "AssignmentIndOutlined", "\u63D0\u4F9B\u7528\u6237\u8D44\u6599"),switchRow("autoUpdateEnabled", preferences.autoUpdateEnabled ? "Save" : "SaveOutlined", "\u81EA\u52A8\u66F4\u65B0\u8BB0\u5FC6\u5E93"),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:93104",[ctx.Modifier.heightIn({ minHeight: 32 }),!busy && chatId !== null ? manual : void 0,icon("SaveOutlined"),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:93394",null,__operitUiTemplate_93394),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:93430",[busy ? "\u6B63\u5728\u66F4\u65B0\u8BB0\u5FC6\u2026" : "\u624B\u52A8\u66F4\u65B0\u8BB0\u5FC6",!busy && chatId !== null ? colors.onSurface : colors.onSurfaceVariant.copy({ alpha: 0.45 })],__operitUiTemplate_93430)],__operitUiTemplate_93104)],__operitUiTemplate_92758));
+  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-memory/index.ui.js:93789",[children],__operitUiTemplate_93789);
 }
 
 // src/ui/chat-input-memory/index.ui.ts
@@ -2062,26 +2068,26 @@ function Screen(ctx) {
   return renderMemoryMenu(ctx);
 }
 
-function __operitUiTemplate_90063(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:16,tint:__values[1]}); }
-function __operitUiTemplate_90594(__ctx,__values){return __ctx.UI.Spacer({width:12}); }
-function __operitUiTemplate_90630(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodySmall",color:__values[1],maxLines:1,overflow:"ellipsis",weight:1}); }
-function __operitUiTemplate_90757(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodySmall",color:__values[1],fontWeight:"600"}); }
-function __operitUiTemplate_90879(__ctx,__values){return __ctx.UI.Spacer({width:8}); }
-function __operitUiTemplate_90914(__ctx,__values){return __ctx.UI.Switch({checked:__values[0],width:40,height:28,onCheckedChange:__values[1]}); }
-function __operitUiTemplate_90287(__ctx,__values){return __ctx.UI.Row({key:__values[0],fillMaxWidth:true,paddingHorizontal:12,verticalAlignment:"center",modifier:__values[1],onClick:__values[2]},[__values[3],__values[4],__values[5],__values[6],__values[7],__values[8]]); }
-function __operitUiTemplate_91046(__ctx,__values){return __ctx.UI.Box({key:"memory-menu-unavailable"}); }
-function __operitUiTemplate_91129(__ctx,__values){return __ctx.UI.Box({key:"memory-menu-loading",onLoad:__values[0]}); }
-function __operitUiTemplate_91561(__ctx,__values){return __ctx.UI.Spacer({width:12}); }
-function __operitUiTemplate_91595(__ctx,__values){return __ctx.UI.Text({text:"\u8BB0\u5FC6",style:"bodySmall"}); }
-function __operitUiTemplate_91658(__ctx,__values){return __ctx.UI.Spacer({width:8}); }
-function __operitUiTemplate_91691(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodySmall",color:__values[1],fontWeight:"600",textAlign:"end",maxLines:1,overflow:"ellipsis",weight:1}); }
-function __operitUiTemplate_92102(__ctx,__values){return __ctx.UI.Icon({name:"InfoOutline",size:16,tint:__values[0]}); }
-function __operitUiTemplate_91872(__ctx,__values){return __ctx.UI.IconButton({key:"memory-info",tooltip:"\u8BB0\u5FC6\u72B6\u6001\u8BF4\u660E",width:24,height:28,contentPadding:{horizontal:0,vertical:0},onClick:__values[0],content:__values[1]}); }
-function __operitUiTemplate_92213(__ctx,__values){return __ctx.UI.Spacer({width:6}); }
-function __operitUiTemplate_92246(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:20,tint:__values[1]}); }
-function __operitUiTemplate_91207(__ctx,__values){return __ctx.UI.Row({key:"memory-section-header",fillMaxWidth:true,paddingHorizontal:12,verticalAlignment:"center",modifier:__values[0],onClick:__values[1]},[__values[2],__values[3],__values[4],__values[5],__values[6],__values[7],__values[8],__values[9]]); }
-function __operitUiTemplate_93034(__ctx,__values){return __ctx.UI.Spacer({width:12}); }
-function __operitUiTemplate_93070(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodySmall",maxLines:2,overflow:"ellipsis",weight:1,color:__values[1]}); }
-function __operitUiTemplate_92744(__ctx,__values){return __ctx.UI.Row({key:"memory-manual",fillMaxWidth:true,paddingHorizontal:12,verticalAlignment:"center",modifier:__values[0],onClick:__values[1]},[__values[2],__values[3],__values[4]]); }
-function __operitUiTemplate_92398(__ctx,__values){return __ctx.UI.Column({key:"memory-section-children",modifier:__values[0]},[__values[1],__values[2],__values[3]]); }
-function __operitUiTemplate_93429(__ctx,__values){return __ctx.UI.Column({key:"memory-section",fillMaxWidth:true},__values[0]); }
+function __operitUiTemplate_90423(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:16,tint:__values[1]}); }
+function __operitUiTemplate_90954(__ctx,__values){return __ctx.UI.Spacer({width:12}); }
+function __operitUiTemplate_90990(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodySmall",color:__values[1],maxLines:1,overflow:"ellipsis",weight:1}); }
+function __operitUiTemplate_91117(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodySmall",color:__values[1],fontWeight:"600"}); }
+function __operitUiTemplate_91239(__ctx,__values){return __ctx.UI.Spacer({width:8}); }
+function __operitUiTemplate_91274(__ctx,__values){return __ctx.UI.Switch({checked:__values[0],width:40,height:28,onCheckedChange:__values[1]}); }
+function __operitUiTemplate_90647(__ctx,__values){return __ctx.UI.Row({key:__values[0],fillMaxWidth:true,paddingHorizontal:12,verticalAlignment:"center",modifier:__values[1],onClick:__values[2]},[__values[3],__values[4],__values[5],__values[6],__values[7],__values[8]]); }
+function __operitUiTemplate_91406(__ctx,__values){return __ctx.UI.Box({key:"memory-menu-unavailable"}); }
+function __operitUiTemplate_91489(__ctx,__values){return __ctx.UI.Box({key:"memory-menu-loading",onLoad:__values[0]}); }
+function __operitUiTemplate_91921(__ctx,__values){return __ctx.UI.Spacer({width:12}); }
+function __operitUiTemplate_91955(__ctx,__values){return __ctx.UI.Text({text:"\u8BB0\u5FC6",style:"bodySmall"}); }
+function __operitUiTemplate_92018(__ctx,__values){return __ctx.UI.Spacer({width:8}); }
+function __operitUiTemplate_92051(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodySmall",color:__values[1],fontWeight:"600",textAlign:"end",maxLines:1,overflow:"ellipsis",weight:1}); }
+function __operitUiTemplate_92462(__ctx,__values){return __ctx.UI.Icon({name:"InfoOutline",size:16,tint:__values[0]}); }
+function __operitUiTemplate_92232(__ctx,__values){return __ctx.UI.IconButton({key:"memory-info",tooltip:"\u8BB0\u5FC6\u72B6\u6001\u8BF4\u660E",width:24,height:28,contentPadding:{horizontal:0,vertical:0},onClick:__values[0],content:__values[1]}); }
+function __operitUiTemplate_92573(__ctx,__values){return __ctx.UI.Spacer({width:6}); }
+function __operitUiTemplate_92606(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:20,tint:__values[1]}); }
+function __operitUiTemplate_91567(__ctx,__values){return __ctx.UI.Row({key:"memory-section-header",fillMaxWidth:true,paddingHorizontal:12,verticalAlignment:"center",modifier:__values[0],onClick:__values[1]},[__values[2],__values[3],__values[4],__values[5],__values[6],__values[7],__values[8],__values[9]]); }
+function __operitUiTemplate_93394(__ctx,__values){return __ctx.UI.Spacer({width:12}); }
+function __operitUiTemplate_93430(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodySmall",maxLines:2,overflow:"ellipsis",weight:1,color:__values[1]}); }
+function __operitUiTemplate_93104(__ctx,__values){return __ctx.UI.Row({key:"memory-manual",fillMaxWidth:true,paddingHorizontal:12,verticalAlignment:"center",modifier:__values[0],onClick:__values[1]},[__values[2],__values[3],__values[4]]); }
+function __operitUiTemplate_92758(__ctx,__values){return __ctx.UI.Column({key:"memory-section-children",modifier:__values[0]},[__values[1],__values[2],__values[3]]); }
+function __operitUiTemplate_93789(__ctx,__values){return __ctx.UI.Column({key:"memory-section",fillMaxWidth:true},__values[0]); }

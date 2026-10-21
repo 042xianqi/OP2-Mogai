@@ -132,7 +132,8 @@ test("memory settings and USER reads never query bodies or vectors", async t => 
 });
 
 
-test("batch binding catalog includes every bound and unbound host conversation using indexed SQL", async t => {
+/** Requires a single persisted preference snapshot for a catalog larger than the former SQL page limit. */
+test("batch binding catalog includes every bound and unbound host conversation using one preference snapshot", async t => {
   const h = await environment(t, 525);
   await h.storage.writeChatBinding({ chatId: "chat-1", selection: "card:default" });
   await h.storage.writeChatBinding({ chatId: "chat-2", selection: "model:chat" });
@@ -144,9 +145,9 @@ test("batch binding catalog includes every bound and unbound host conversation u
   assert.equal(rows.find(chat => chat.id === "chat-2").selection, "model:chat");
   assert.equal(rows[0].id, "chat-524");
   assert.deepEqual(h.calls.map(call => call.method), ["listAll"]);
-  const queries = h.disk.calls.filter(call => call.method === "storage.query" && /FROM "chat_bindings" WHERE/.test(call.args[0]));
-  assert.equal(queries.length, 2);
-  assert.deepEqual(queries.map(call => call.args[1].length), [500, 25]);
+  const reads = h.disk.calls.filter(call => call.method === "storage.preferences.data" && call.args[0].endsWith("/chats.preferences.json"));
+  assert.equal(reads.length, 1);
+  assert.equal(h.disk.calls.some(call => call.method === "storage.query"), false);
   assert.equal(h.disk.calls.filter(call => call.method === "storage.transaction").length, 0);
 });
 

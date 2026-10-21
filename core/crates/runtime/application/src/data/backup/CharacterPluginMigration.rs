@@ -661,11 +661,6 @@ fn validateMigrationData(data: &CharacterMigrationData) -> Result<(), String> {
         .iter()
         .map(|card| card.id.as_str())
         .collect::<BTreeSet<_>>();
-    let groups = data
-        .groups
-        .iter()
-        .map(|group| group.id.as_str())
-        .collect::<BTreeSet<_>>();
     let tags = data
         .tags
         .iter()
@@ -747,14 +742,15 @@ fn validateMigrationData(data: &CharacterMigrationData) -> Result<(), String> {
         .active
         .as_ref()
         .ok_or("Imported active selection is missing")?;
+    let active = active.as_object().ok_or("Invalid imported active selection")?;
+    if active.len() != 1 {
+        return Err("Invalid imported active selection".to_string());
+    }
+    // Preserve deleted role selections exactly; explicit activation and execution validate their targets.
     if let Some(card) = active.get("CharacterCard") {
-        if !cards.contains(requiredString(card, "id")?) {
-            return Err("Imported active character is missing".to_string());
-        }
+        requiredString(card, "id")?;
     } else if let Some(group) = active.get("CharacterGroup") {
-        if !groups.contains(requiredString(group, "id")?) {
-            return Err("Imported active group is missing".to_string());
-        }
+        requiredString(group, "id")?;
     } else {
         return Err("Invalid imported active selection".to_string());
     }

@@ -1011,7 +1011,7 @@ function assertCharacterState(value) {
   const selected = value.active[activeKey];
   assertObject(selected, "active selection");
   const activeId = requireId(selected.id, "active id");
-  if (activeKey === "Model" ? activeId !== "chat" : !(activeKey === "CharacterCard" ? cardIds : groupIds).has(activeId)) throw new Error("Active prompt references a missing entity: " + activeId);
+  if (activeKey === "Model" && activeId !== "chat") throw new Error("Invalid active model selection: " + activeId);
   const expectedOwners = /* @__PURE__ */ new Set();
   for (const id2 of cardIds) expectedOwners.add("character:" + id2);
   for (const id2 of storeIds) expectedOwners.add("shared:" + id2);
@@ -1346,13 +1346,15 @@ function prepareVersionOne(storage, metadata, directory) {
       return identities2[key];
     }
     const sourceStoreIds = new Set(state.stores.map((store) => store.id));
+    const sourceCardIds = new Set(state.cards.map((card) => card.id));
+    const sourceGroupIds = new Set(state.groups.map((group) => group.id));
     for (const collection of configurationNames)
       for (const record2 of state[collection]) record2.id = identity(collection, record2.id);
     function selection(value) {
-      if (value === "model:chat") return value;
-      if (value.startsWith("card:")) return "card:" + reference("cards", value.slice(5));
-      if (value.startsWith("group:")) return "group:" + reference("groups", value.slice(6));
-      throw new Error("Invalid migration selection: " + value);
+      const parsed = parseChatSelection(value);
+      if (parsed.kind === "card" && sourceCardIds.has(parsed.id)) value = "card:" + reference("cards", parsed.id);
+      if (parsed.kind === "group" && sourceGroupIds.has(parsed.id)) value = "group:" + reference("groups", parsed.id);
+      return value;
     }
     for (const card of state.cards) {
       card.attachedTagIds = card.attachedTagIds.map((id2) => reference("tags", id2));
@@ -1361,10 +1363,11 @@ function prepareVersionOne(storage, metadata, directory) {
     }
     for (const group of state.groups)
       for (const member2 of group.members) member2.characterCardId = reference("cards", member2.characterCardId);
-    for (const group of state.conversationGroups)
-      if (group.ownerSelection !== null) group.ownerSelection = selection(group.ownerSelection);
-    if ("CharacterCard" in state.active) state.active.CharacterCard.id = reference("cards", state.active.CharacterCard.id);
-    if ("CharacterGroup" in state.active) state.active.CharacterGroup.id = reference("groups", state.active.CharacterGroup.id);
+    for (const group of state.conversationGroups) {
+      if (group.ownerSelection !== null && /^(card|group):/u.test(group.ownerSelection)) group.ownerSelection = selection(group.ownerSelection);
+    }
+    if ("CharacterCard" in state.active && sourceCardIds.has(state.active.CharacterCard.id)) state.active.CharacterCard.id = reference("cards", state.active.CharacterCard.id);
+    if ("CharacterGroup" in state.active && sourceGroupIds.has(state.active.CharacterGroup.id)) state.active.CharacterGroup.id = reference("groups", state.active.CharacterGroup.id);
     const directories = [];
     for (const owner2 of state.owners) {
       const old = owner2.ownerKey;
@@ -1388,11 +1391,15 @@ function prepareVersionOne(storage, metadata, directory) {
       for (const chunk of owner2.chunks) chunk.memoryUuid = reference(scope + "/memoryUuid", chunk.memoryUuid);
       if (owner2.rebuildTask !== null) owner2.rebuildTask.id = identity(scope + "/rebuildTask", owner2.rebuildTask.id);
     }
+    const resourceMoves = [];
+    for (const move of directories) {
+      resourceMoves.push(move, { source: absolute(directory, move.source), destination: absolute(directory, move.destination) });
+    }
     for (const owner2 of state.owners) for (const memory of owner2.memories)
       for (const field of ["documentPath", "chunkIndexFilePath"]) {
         const path = memory[field];
         if (path === null) continue;
-        for (const move of directories) if (path.startsWith(move.source + "/")) {
+        for (const move of resourceMoves) if (path.startsWith(move.source + "/")) {
           memory[field] = move.destination + path.slice(move.source.length);
           break;
         }
@@ -1445,8 +1452,7 @@ function prepareVersionOne(storage, metadata, directory) {
           assertObject(extension, "legacy message author");
           if (Object.keys(extension).length !== 1) throw new Error("Invalid legacy message author");
           const participant = requireId(extension.participantId, "legacy participant id"), next = cardIds.get(participant);
-          if (next === void 0) throw new Error("Missing message author character: " + participant);
-          if (next !== participant) authors.push({ target, before: participant, after: next });
+          if (next !== void 0 && next !== participant) authors.push({ target, before: participant, after: next });
         }
       }
     }
@@ -1633,7 +1639,7 @@ function migrateCharacterSchema(storage, preferences, directory) {
 
 // src/storage/memory-merge.json
 var memory_merge_default = {
-  version: 3,
+  version: 4,
   maxEntities: 1,
   maxReferences: 48,
   entities: [
@@ -2039,18 +2045,18 @@ function selectedOption(data) {
 function menuAvatar(ctx, option, unboundAvatar) {
   const props = { width: 32, height: 32, contentScale: "crop", modifier: ctx.Modifier.clip({ type: "circle" }) };
   if (option === null) {
-    if (unboundAvatar === null) return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:90254",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:90320",[ctx.MaterialTheme.colorScheme.onSurfaceVariant],__operitUiTemplate_90320)],__operitUiTemplate_90254);
-    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:90429",[{ ...props, path: unboundAvatar, contentDescription: "\u672A\u7ED1\u5B9A" }],__operitUiTemplate_90429);
+    if (unboundAvatar === null) return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:90614",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:90680",[ctx.MaterialTheme.colorScheme.onSurfaceVariant],__operitUiTemplate_90680)],__operitUiTemplate_90614);
+    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:90789",[{ ...props, path: unboundAvatar, contentDescription: "\u672A\u7ED1\u5B9A" }],__operitUiTemplate_90789);
   }
   switch (option.avatar.type) {
     case "uri":
-      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:90585",[{ ...props, uri: option.avatar.uri, contentDescription: option.title }],__operitUiTemplate_90585);
+      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:90945",[{ ...props, uri: option.avatar.uri, contentDescription: option.title }],__operitUiTemplate_90945);
     case "resource":
-      return option.avatar.path === null ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:90735",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:90801",[ctx.MaterialTheme.colorScheme.onSurfaceVariant],__operitUiTemplate_90801)],__operitUiTemplate_90735) : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:90900",[{ ...props, path: option.avatar.path, contentDescription: option.title }],__operitUiTemplate_90900);
+      return option.avatar.path === null ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91095",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91161",[ctx.MaterialTheme.colorScheme.onSurfaceVariant],__operitUiTemplate_91161)],__operitUiTemplate_91095) : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91260",[{ ...props, path: option.avatar.path, contentDescription: option.title }],__operitUiTemplate_91260);
     case "model":
-      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91019",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91085",[ctx.MaterialTheme.colorScheme.onSurfaceVariant],__operitUiTemplate_91085)],__operitUiTemplate_91019);
+      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91379",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91445",[ctx.MaterialTheme.colorScheme.onSurfaceVariant],__operitUiTemplate_91445)],__operitUiTemplate_91379);
     case "group":
-      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91216",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91282",[ctx.MaterialTheme.colorScheme.onSurfaceVariant],__operitUiTemplate_91282)],__operitUiTemplate_91216);
+      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91576",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91642",[ctx.MaterialTheme.colorScheme.onSurfaceVariant],__operitUiTemplate_91642)],__operitUiTemplate_91576);
   }
 }
 function renderChatInputMenu(ctx) {
@@ -2087,17 +2093,17 @@ function renderChatInputMenu(ctx) {
     });
   }
   const colors = ctx.MaterialTheme.colorScheme;
-  if (state.error !== "") return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:93132",[state.error,colors.error],__operitUiTemplate_93132);
-  if (state.data === null) return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:93266",[load,ctx.Modifier.heightIn({ minHeight: 48 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:93429",null,__operitUiTemplate_93429)],__operitUiTemplate_93266);
+  if (state.error !== "") return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:93492",[state.error,colors.error],__operitUiTemplate_93492);
+  if (state.data === null) return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:93626",[load,ctx.Modifier.heightIn({ minHeight: 48 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:93789",null,__operitUiTemplate_93789)],__operitUiTemplate_93626);
   const option = selectedOption(state.data);
-  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:93545",[ctx.Modifier.heightIn({ minHeight: 48 }),() => {
+  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:93905",[ctx.Modifier.heightIn({ minHeight: 48 }),() => {
       assertOwner();
       return {
         type: "toolpkg.ui.present",
         routeId: chatUiRoutes.selection,
         input: { mode: "select", chatId, kind: "card", selected: option !== null && option.kind !== "group" ? option.selection : null }
       };
-    },menuAvatar(ctx, option, state.unboundAvatar),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:94196",null,__operitUiTemplate_94196),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:94230",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:94267",[colors.onSurfaceVariant],__operitUiTemplate_94267),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:94383",[option === null ? "\u672A\u7ED1\u5B9A" : option.title,colors.onSurface],__operitUiTemplate_94383)],__operitUiTemplate_94230),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:94571",[colors.onSurfaceVariant],__operitUiTemplate_94571)],__operitUiTemplate_93545);
+    },menuAvatar(ctx, option, state.unboundAvatar),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:94556",null,__operitUiTemplate_94556),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:94590",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:94627",[colors.onSurfaceVariant],__operitUiTemplate_94627),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:94743",[option === null ? "\u672A\u7ED1\u5B9A" : option.title,colors.onSurface],__operitUiTemplate_94743)],__operitUiTemplate_94590),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:94931",[colors.onSurfaceVariant],__operitUiTemplate_94931)],__operitUiTemplate_93905);
 }
 
 // src/ui/chat-input-menu/index.ui.ts
@@ -2105,23 +2111,23 @@ function Screen(ctx) {
   return renderChatInputMenu(ctx);
 }
 
-function __operitUiTemplate_90320(__ctx,__values){return __ctx.UI.Icon({name:"Person",size:24,tint:__values[0]}); }
-function __operitUiTemplate_90254(__ctx,__values){return __ctx.UI.Box({width:32,height:32,contentAlignment:"center"},__values[0]); }
-function __operitUiTemplate_90429(__ctx,__values){return __ctx.UI.Image(__values[0]); }
-function __operitUiTemplate_90585(__ctx,__values){return __ctx.UI.Image(__values[0]); }
-function __operitUiTemplate_90801(__ctx,__values){return __ctx.UI.Icon({name:"Person",size:24,tint:__values[0]}); }
-function __operitUiTemplate_90735(__ctx,__values){return __ctx.UI.Box({width:32,height:32,contentAlignment:"center"},__values[0]); }
-function __operitUiTemplate_90900(__ctx,__values){return __ctx.UI.Image(__values[0]); }
-function __operitUiTemplate_91085(__ctx,__values){return __ctx.UI.Icon({name:"SmartToy",size:24,tint:__values[0]}); }
-function __operitUiTemplate_91019(__ctx,__values){return __ctx.UI.Box({width:32,height:32,contentAlignment:"center"},__values[0]); }
-function __operitUiTemplate_91282(__ctx,__values){return __ctx.UI.Icon({name:"Groups",size:24,tint:__values[0]}); }
-function __operitUiTemplate_91216(__ctx,__values){return __ctx.UI.Box({width:32,height:32,contentAlignment:"center"},__values[0]); }
-function __operitUiTemplate_93132(__ctx,__values){return __ctx.UI.Text({text:__values[0],color:__values[1],paddingHorizontal:12,paddingVertical:6}); }
-function __operitUiTemplate_93429(__ctx,__values){return __ctx.UI.CircularProgressIndicator({width:18,height:18}); }
-function __operitUiTemplate_93266(__ctx,__values){return __ctx.UI.Box({key:"current-character-loading",onLoad:__values[0],modifier:__values[1],fillMaxWidth:true,contentAlignment:"center"},__values[2]); }
-function __operitUiTemplate_94196(__ctx,__values){return __ctx.UI.Spacer({width:10}); }
-function __operitUiTemplate_94267(__ctx,__values){return __ctx.UI.Text({text:"\u5F53\u524D\u89D2\u8272\u5361",style:"labelSmall",color:__values[0]}); }
-function __operitUiTemplate_94383(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodySmall",color:__values[1],fontWeight:"600",maxLines:1,overflow:"ellipsis"}); }
-function __operitUiTemplate_94230(__ctx,__values){return __ctx.UI.Column({weight:1},[__values[0],__values[1]]); }
-function __operitUiTemplate_94571(__ctx,__values){return __ctx.UI.Icon({name:"ChevronRight",size:20,tint:__values[0]}); }
-function __operitUiTemplate_93545(__ctx,__values){return __ctx.UI.Row({key:"current-character",fillMaxWidth:true,paddingHorizontal:12,paddingVertical:6,verticalAlignment:"center",modifier:__values[0],onClick:__values[1]},[__values[2],__values[3],__values[4],__values[5]]); }
+function __operitUiTemplate_90680(__ctx,__values){return __ctx.UI.Icon({name:"Person",size:24,tint:__values[0]}); }
+function __operitUiTemplate_90614(__ctx,__values){return __ctx.UI.Box({width:32,height:32,contentAlignment:"center"},__values[0]); }
+function __operitUiTemplate_90789(__ctx,__values){return __ctx.UI.Image(__values[0]); }
+function __operitUiTemplate_90945(__ctx,__values){return __ctx.UI.Image(__values[0]); }
+function __operitUiTemplate_91161(__ctx,__values){return __ctx.UI.Icon({name:"Person",size:24,tint:__values[0]}); }
+function __operitUiTemplate_91095(__ctx,__values){return __ctx.UI.Box({width:32,height:32,contentAlignment:"center"},__values[0]); }
+function __operitUiTemplate_91260(__ctx,__values){return __ctx.UI.Image(__values[0]); }
+function __operitUiTemplate_91445(__ctx,__values){return __ctx.UI.Icon({name:"SmartToy",size:24,tint:__values[0]}); }
+function __operitUiTemplate_91379(__ctx,__values){return __ctx.UI.Box({width:32,height:32,contentAlignment:"center"},__values[0]); }
+function __operitUiTemplate_91642(__ctx,__values){return __ctx.UI.Icon({name:"Groups",size:24,tint:__values[0]}); }
+function __operitUiTemplate_91576(__ctx,__values){return __ctx.UI.Box({width:32,height:32,contentAlignment:"center"},__values[0]); }
+function __operitUiTemplate_93492(__ctx,__values){return __ctx.UI.Text({text:__values[0],color:__values[1],paddingHorizontal:12,paddingVertical:6}); }
+function __operitUiTemplate_93789(__ctx,__values){return __ctx.UI.CircularProgressIndicator({width:18,height:18}); }
+function __operitUiTemplate_93626(__ctx,__values){return __ctx.UI.Box({key:"current-character-loading",onLoad:__values[0],modifier:__values[1],fillMaxWidth:true,contentAlignment:"center"},__values[2]); }
+function __operitUiTemplate_94556(__ctx,__values){return __ctx.UI.Spacer({width:10}); }
+function __operitUiTemplate_94627(__ctx,__values){return __ctx.UI.Text({text:"\u5F53\u524D\u89D2\u8272\u5361",style:"labelSmall",color:__values[0]}); }
+function __operitUiTemplate_94743(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodySmall",color:__values[1],fontWeight:"600",maxLines:1,overflow:"ellipsis"}); }
+function __operitUiTemplate_94590(__ctx,__values){return __ctx.UI.Column({weight:1},[__values[0],__values[1]]); }
+function __operitUiTemplate_94931(__ctx,__values){return __ctx.UI.Icon({name:"ChevronRight",size:20,tint:__values[0]}); }
+function __operitUiTemplate_93905(__ctx,__values){return __ctx.UI.Row({key:"current-character",fillMaxWidth:true,paddingHorizontal:12,paddingVertical:6,verticalAlignment:"center",modifier:__values[0],onClick:__values[1]},[__values[2],__values[3],__values[4],__values[5]]); }

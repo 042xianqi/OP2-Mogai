@@ -353,3 +353,104 @@ test("released-data import preserves missing primary libraries through UUID adop
     }
   }
 });
+
+/** Preserves historical authors after their character is deleted while converting surviving authors. */
+test("released-data audit retains a deleted message author during UUID adoption", async t => {
+  const { disk, chat } = await seed(t);
+  chat.extensions.set(2, { participantId: "deleted-character" });
+  await open(disk, chat);
+  const saved = plain(disk.readState());
+  assert.deepEqual(chat.extensions.get(2), { participantId: "deleted-character" });
+  assert.deepEqual(chat.extensions.get(0), { participantId: saved.cards.find(card => card.name === "Operit").id });
+  assert.equal(chat.writes.length, 2);
+  assert.equal(metadata(disk).legacyImportPending, undefined);
+  const before = disk.stateBytes(); await open(disk, chat);
+  assert.deepEqual(disk.stateBytes(), before); assert.equal(chat.writes.length, 2);
+});
+
+/** Retains explicit missing targets in chat bindings, drafts and archived conversation-group scopes. */
+test("released-data audit retains deleted chat targets without replacing their selection", async t => {
+  for (const selection of ["card:deleted-character", "group:deleted-group"]) {
+    const { disk, chat } = await seed(t);
+    disk.storage.inspectPreferences("conversationGroups", values => { values["record_manual-1"].ownerSelection = selection; });
+    const handle = await disk.storage.dataStore.open({ path: disk.directory + "/chats.preferences.json" });
+    await handle.edit(preferences => {
+      preferences.set("binding_core-chat", { version: 1, selection });
+      preferences.set("draft_core-draft", { version: 1, selection });
+    });
+    await handle.close();
+    const database = await open(disk, chat);
+    assert.equal((await database.chats.data()).get("binding_core-chat").selection, selection);
+    assert.equal((await database.chats.data()).get("draft_core-draft").selection, selection);
+    assert.equal(plain(disk.readState()).conversationGroups[0].ownerSelection, selection);
+    assert.equal(metadata(disk).legacyImportPending, undefined);
+    const before = disk.stateBytes(); await open(disk, chat);
+    assert.deepEqual(disk.stateBytes(), before);
+  }
+});
+
+/** Keeps the original unavailable active identity without selecting another role or model. */
+test("released-data audit retains a deleted active character or group", async t => {
+  for (const active of [{ CharacterCard: { id: "deleted-character" } }, { CharacterGroup: { id: "deleted-group" } }]) {
+    const { disk, chat } = await seed(t);
+    disk.storage.inspectPreferences("meta", values => { values.state.active = structuredClone(active); });
+    await open(disk, chat);
+    assert.deepEqual(plain(disk.readState()).active, active);
+    assert.deepEqual(metadata(disk).active, active);
+    assert.equal(metadata(disk).legacyImportPending, undefined);
+    const before = disk.stateBytes(); await open(disk, chat);
+    assert.deepEqual(disk.stateBytes(), before);
+  }
+});
+
+/** Keeps host-owned opaque section tokens out of the character identity conversion. */
+test("released-data audit retains an opaque conversation-group scope token", async t => {
+  const { disk, chat } = await seed(t), scope = "section-scope-opaque-token";
+  disk.storage.inspectPreferences("conversationGroups", values => { values["record_manual-1"].ownerSelection = scope; });
+  await open(disk, chat);
+  assert.equal(plain(disk.readState()).conversationGroups[0].ownerSelection, scope);
+  assert.equal(metadata(disk).legacyImportPending, undefined);
+});
+
+/** Rejects malformed chat tokens before publishing a migration plan or changing owner files. */
+test("released-data audit still rejects malformed chat selections before migration writes", async t => {
+  for (const selection of ["card:", "group:", "model:other", "unknown:target"]) {
+    const { disk, chat } = await seed(t);
+    const handle = await disk.storage.dataStore.open({ path: disk.directory + "/chats.preferences.json" });
+    await handle.edit(preferences => { preferences.set("binding_core-chat", { version: 1, selection }); });
+    await handle.close(); disk.clearCalls();
+    await assert.rejects(open(disk, chat), /Invalid.*selection/);
+    assert.equal(disk.storage.inspectPreferences("migration", values => values.plan), undefined);
+    assert.equal(disk.calls.some(call => ["storage.commit", "copy", "deleteFile"].includes(call.method)), false);
+  }
+});
+
+/** Keeps absolute Files API resource references aligned with the verified owner-directory move. */
+test("released-data audit rewrites absolute document paths before retiring the old owner", async t => {
+  const { disk, state, chat } = await seed(t);
+  const directory = disk.globals.ToolPkg.getSpaceDataDir();
+  const source = state.owners[0].memories[0];
+  const oldDocument = directory + "/" + source.documentPath;
+  const oldIndex = directory + "/" + source.chunkIndexFilePath;
+  source.documentPath = oldDocument; source.chunkIndexFilePath = oldIndex;
+  const external = directory + "/external-document.txt";
+  await disk.files.write(external, "Externally owned document");
+  state.owners[0].memories[1].documentPath = external;
+  disk.replaceState(state);
+  disk.storage.inspectPreferences("meta", values => { values.__operit_preferences_schema_version = 0; values.state.legacyImportPending = true; });
+  await open(disk, chat);
+  const saved = plain(disk.readState()), card = saved.cards.find(value => value.name === "Operit");
+  const owner = saved.owners.find(value => value.ownerKey === "character:" + card.id);
+  const document = owner.memories.find(memory => memory.isDocumentNode);
+  assert.equal((await disk.files.exists(document.documentPath)).exists, true);
+  assert.equal((await disk.files.exists(document.chunkIndexFilePath)).exists, true);
+  assert.equal((await disk.readBytes(document.documentPath)).toString(), "Original document 用户\u0000bytes");
+  assert.equal((await disk.readBytes(document.chunkIndexFilePath)).toString(), "Exact index bytes");
+  assert.equal(document.documentPath, directory + "/owners/" + encodeURIComponent(owner.ownerKey) + "/resources/source.txt");
+  assert.equal((await disk.files.exists(oldDocument)).exists, false);
+  assert.equal((await disk.files.exists(oldIndex)).exists, false);
+  assert.equal(owner.memories.filter(memory => memory.documentPath === external).length, 1);
+  assert.equal((await disk.readBytes(external)).toString(), "Externally owned document");
+  const before = disk.stateBytes(); await open(disk, chat);
+  assert.deepEqual(disk.stateBytes(), before);
+});

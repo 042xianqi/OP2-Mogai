@@ -180,7 +180,7 @@ const handlers: DomainHandlers = {
   /** Applies the plugin's explicit chat-binding selection logic. */
   "activePrompt.activateForChat": (input, host) => activateForChat(input, host),
   /** Resolves the real next-send actor under the canonical active card or group selection. */
-  "activePrompt.resolvedCard": async (_input, host) => { const active = await host.readActive(); if (!("CharacterCard" in active)) throw new Error("An active group requires an explicit execution participant"); return { id: active.CharacterCard.id }; },
+  "activePrompt.resolvedCard": async (_input, host) => { const active = await host.readActive(); if (!("CharacterCard" in active)) throw new Error("An active group requires an explicit execution participant"); const card = await host.getCharacter(active.CharacterCard.id); return { id: card.id }; },
   /** Reads complete canonical tags. */
   "tag.list": async (_input, host) => { const tags = await host.listTags(); for (const tag of tags) assertTag(tag); return tags; },
   /** Requires an existing complete canonical tag. */

@@ -7,6 +7,7 @@ import type { StoredRecord } from "../records";
 type RecordChange = { collection: string; key: string; expectedValue: Storage.Value | null } &
   ({ op: "put"; value: Storage.Value } | { op: "delete" });
 import { uuid } from "../../identity";
+import { parseChatSelection } from "../../chat-bindings";
 import { assertInteger, assertObject, requireId } from "../../validation";
 import { clone, equal, records, stateFromRecords, storedValue } from "../records";
 import { assertCharacterState, userDocumentPath } from "../state";
@@ -107,14 +108,16 @@ async function prepareVersionOne(storage: CharacterStorage, metadata: Document, 
     return identities[key];
   }
   const sourceStoreIds = new Set(state.stores.map(store => store.id));
+  const sourceCardIds = new Set(state.cards.map(card => card.id));
+  const sourceGroupIds = new Set(state.groups.map(group => group.id));
   for (const collection of configurationNames)
     for (const record of state[collection]) record.id = identity(collection, record.id);
-  /** Converts the documented selection variants without modifying Core model identities. */
+  /** Converts surviving role identities while preserving explicit selections of deleted roles. */
   function selection(value: string): string {
-    if (value === "model:chat") return value;
-    if (value.startsWith("card:")) return "card:" + reference("cards", value.slice(5));
-    if (value.startsWith("group:")) return "group:" + reference("groups", value.slice(6));
-    throw new Error("Invalid migration selection: " + value);
+    const parsed = parseChatSelection(value);
+    if (parsed.kind === "card" && sourceCardIds.has(parsed.id)) value = "card:" + reference("cards", parsed.id);
+    if (parsed.kind === "group" && sourceGroupIds.has(parsed.id)) value = "group:" + reference("groups", parsed.id);
+    return value;
   }
   for (const card of state.cards) {
     card.attachedTagIds = card.attachedTagIds.map(id => reference("tags", id));
@@ -124,10 +127,12 @@ async function prepareVersionOne(storage: CharacterStorage, metadata: Document, 
   }
   for (const group of state.groups)
     for (const member of group.members) member.characterCardId = reference("cards", member.characterCardId);
-  for (const group of state.conversationGroups)
-    if (group.ownerSelection !== null) group.ownerSelection = selection(group.ownerSelection);
-  if ("CharacterCard" in state.active) state.active.CharacterCard.id = reference("cards", state.active.CharacterCard.id);
-  if ("CharacterGroup" in state.active) state.active.CharacterGroup.id = reference("groups", state.active.CharacterGroup.id);
+  for (const group of state.conversationGroups) {
+    // Archived groups also carry opaque host section tokens that are not plugin role identities.
+    if (group.ownerSelection !== null && /^(card|group):/u.test(group.ownerSelection)) group.ownerSelection = selection(group.ownerSelection);
+  }
+  if ("CharacterCard" in state.active && sourceCardIds.has(state.active.CharacterCard.id)) state.active.CharacterCard.id = reference("cards", state.active.CharacterCard.id);
+  if ("CharacterGroup" in state.active && sourceGroupIds.has(state.active.CharacterGroup.id)) state.active.CharacterGroup.id = reference("groups", state.active.CharacterGroup.id);
   const directories: FileChange[] = [];
   for (const owner of state.owners) {
     const old = owner.ownerKey;
@@ -151,11 +156,16 @@ async function prepareVersionOne(storage: CharacterStorage, metadata: Document, 
     for (const chunk of owner.chunks) chunk.memoryUuid = reference(scope + "/memoryUuid", chunk.memoryUuid);
     if (owner.rebuildTask !== null) owner.rebuildTask.id = identity(scope + "/rebuildTask", owner.rebuildTask.id);
   }
+  // Core imports absolute Files API paths; existing plugin documents can use owner-relative paths.
+  const resourceMoves: FileChange[] = [];
+  for (const move of directories) {
+    resourceMoves.push(move, { source: absolute(directory, move.source), destination: absolute(directory, move.destination) });
+  }
   for (const owner of state.owners) for (const memory of owner.memories)
     for (const field of ["documentPath", "chunkIndexFilePath"] as const) {
       const path = memory[field];
       if (path === null) continue;
-      for (const move of directories) if (path.startsWith(move.source + "/")) {
+      for (const move of resourceMoves) if (path.startsWith(move.source + "/")) {
         memory[field] = move.destination + path.slice(move.source.length);
         break;
       }
@@ -207,8 +217,8 @@ async function prepareVersionOne(storage: CharacterStorage, metadata: Document, 
         assertObject(extension, "legacy message author");
         if (Object.keys(extension).length !== 1) throw new Error("Invalid legacy message author");
         const participant = requireId(extension.participantId, "legacy participant id"), next = cardIds.get(participant);
-        if (next === undefined) throw new Error("Missing message author character: " + participant);
-        if (next !== participant) authors.push({ target, before: participant, after: next });
+        // A deleted historical author has no new identity; retain its original extension and display snapshot.
+        if (next !== undefined && next !== participant) authors.push({ target, before: participant, after: next });
       }
     }
   }

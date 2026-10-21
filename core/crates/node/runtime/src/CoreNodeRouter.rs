@@ -3754,13 +3754,39 @@ mod tests {
         installTestRuntimeScheduler();
         let router = testCoreNodeRouter("grant-local", "grant-peer", "grant-binding");
         let worker = crate::SpacePersistenceSyncService::SpacePersistenceSyncService::new(
-            router.localCore.clone(), router.clone(), router.spaceStore.clone(),
+            router.localCore.clone(),
+            router.clone(),
+            router.spaceStore.clone(),
         );
-        let before = router.localCore.runtimeStorageHost().readBytes("runtime/sync/clocks.json").unwrap();
+        let before = router
+            .localCore
+            .runtimeStorageHost()
+            .readBytes("runtime/sync/clocks.json")
+            .unwrap();
         assert!(!worker.storageReplicationAllowed("grant-peer").unwrap());
         grantTestReplicaRole(&router.networkControlStore, "grant-peer");
+        let afterGrant = router
+            .localCore
+            .runtimeStorageHost()
+            .readBytes("runtime/sync/clocks.json")
+            .unwrap();
+        let beforeClock: operit_store::SyncOperationStore::SyncClock =
+            serde_json::from_slice(&before).unwrap();
+        let afterClock: operit_store::SyncOperationStore::SyncClock =
+            serde_json::from_slice(&afterGrant).unwrap();
+        // Role definition and assignment are two new authoritative commands.
+        let mut expected = beforeClock.clone();
+        expected.setSequence("grant-local", beforeClock.sequenceFor("grant-local") + 2);
+        assert_eq!(afterClock, expected);
         assert!(worker.storageReplicationAllowed("grant-peer").unwrap());
-        assert_eq!(router.localCore.runtimeStorageHost().readBytes("runtime/sync/clocks.json").unwrap(), before);
+        assert_eq!(
+            router
+                .localCore
+                .runtimeStorageHost()
+                .readBytes("runtime/sync/clocks.json")
+                .unwrap(),
+            afterGrant
+        );
     }
 
     /// Creates one real router with synthetic local runtime and in-memory route state.

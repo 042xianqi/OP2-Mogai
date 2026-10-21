@@ -17,14 +17,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::CoreNodeRouter::{CoreNodeLocalRuntime, CoreNodeRouter};
 
-const SYNC_DOMAINS: [&str; 5] = [
+const SYNC_DOMAINS: [&str; 6] = [
     "preferences",
     "chat",
     "binding",
     "runtime_file",
     "network_control",
+    "plugin_storage",
 ];
-const PLUGIN_SYNC_DOMAINS: [&str; 1] = ["plugin_storage"];
 const SPACE_SYNC_PREPARATION_DELAY_MS: u64 = 0;
 const SYNC_BLOB_CHUNK_BYTES: i64 = 64 * 1024;
 /// Wire reservation for the Link request envelope, AEAD tag and frame prefix.
@@ -67,6 +67,8 @@ struct PeerSyncGate {
     consecutiveFailures: u32,
     /// Earliest wall-clock time the next full pass may run after a failure.
     nextFullSyncAllowedAt: i64,
+    /// Business failures keep receiving new data without arming connection failure backoff.
+    pendingWork: bool,
 }
 
 impl PeerSyncGate {
@@ -545,12 +547,11 @@ impl SpacePersistenceSyncService {
         }
         let control = NetworkControlStore::new(storageHost)?;
         Ok(format!(
-            "{}#{}#{}",
-            summarizeSyncClock(
-                &serde_json::to_value(&clock).map_err(|error| error.to_string())?
-            ),
+            "{}#{}#{}#{}",
+            serde_json::to_string(&clock).map_err(|error| error.to_string())?,
             control.projectionEntryCount()?,
-            operit_store::DevicePreferencesStore::devicePreferencesMutationRevision()
+            operit_store::DevicePreferencesStore::devicePreferencesMutationRevision(),
+            operit_store::SyncOperationStore::syncMutationRevision()
         ))
     }
 
@@ -579,6 +580,8 @@ impl SpacePersistenceSyncService {
             .unwrap_or_default();
         let decision = if !gate.backoffElapsed(currentTimeMillis()) {
             false
+        } else if gate.pendingWork {
+            true
         } else if gate.consecutiveFailures > 0 {
             // Retry the failed exchange after the backoff has elapsed.
             true
@@ -680,18 +683,29 @@ impl SpacePersistenceSyncService {
             ));
         }
 
-        let mut errors = Vec::new();
-        for domains in [&SYNC_DOMAINS[..], &PLUGIN_SYNC_DOMAINS[..]] {
-            match self.synchronizeDomains(targetNodeId, limit, domains).await {
-                Ok(false) => return Ok(false),
-                Ok(true) => {}
-                Err(error) => errors.push(format!("domains={} {error}", domains.join(","))),
-            }
+        if let Ok(mut gates) = self.state.peerGates.lock() {
+            gates.entry(targetNodeId.to_owned()).or_default().pendingWork = false;
         }
-        if errors.is_empty() {
-            Ok(true)
-        } else {
-            Err(errors.join("; "))
+        self.synchronizeDomains(targetNodeId, limit, &SYNC_DOMAINS).await
+    }
+
+    /// Keeps partially materialized work eligible without delaying healthy data behind it.
+    fn recordPendingWork(&self, targetNodeId: &str, stage: &str, report: &Value) {
+        let pending = report.get("pending").and_then(Value::as_u64).unwrap_or(0);
+        let errors = report.get("errors").and_then(Value::as_array);
+        if pending > 0 || errors.is_some_and(|errors| !errors.is_empty()) {
+            if let Ok(mut gates) = self.state.peerGates.lock() {
+                gates
+                    .entry(targetNodeId.to_owned())
+                    .or_default()
+                    .pendingWork = true;
+            }
+            operit_util::AppLogger::AppLogger::w(
+                "SpacePersistenceSyncService",
+                &format!(
+                    "sync_exchange.partial target={targetNodeId} stage={stage} pending={pending} errors={errors:?}"
+                ),
+            );
         }
     }
 
@@ -709,7 +723,9 @@ impl SpacePersistenceSyncService {
         // writing continuously from holding this pass open forever.
         let mut pages = 0usize;
         loop {
-            if !self.storageReplicationAllowed(targetNodeId)? { return Ok(false); }
+            if !self.storageReplicationAllowed(targetNodeId)? {
+                return Ok(false);
+            }
             let localClock: Value = self.callLocal("syncClock", Value::Null).await?;
             validateDomainClock(&localClock, domains, "local")?;
             let remoteClock: Value = callRemote(
@@ -720,6 +736,23 @@ impl SpacePersistenceSyncService {
             )
             .await?;
             validateDomainClock(&remoteClock, domains, "remote")?;
+            self.recordPendingWork(targetNodeId, "local receipt", &localClock);
+            self.recordPendingWork(targetNodeId, "remote receipt", &remoteClock);
+            let mut pendingBlobs: Vec<RuntimeFileSyncReference> =
+                serde_json::from_value(localClock["pendingBlobs"].clone())
+                    .map_err(|error| format!("invalid local pending blobs: {error}"))?;
+            pendingBlobs.extend(
+                serde_json::from_value::<Vec<RuntimeFileSyncReference>>(
+                    remoteClock["pendingBlobs"].clone(),
+                )
+                .map_err(|error| format!("invalid remote pending blobs: {error}"))?,
+            );
+            if let Err(error) = self
+                .synchronizeBlobReferences(targetNodeId, pendingBlobs)
+                .await
+            {
+                self.recordPendingWork(targetNodeId, "pending blobs", &json!({"errors": [error]}));
+            }
             operit_util::AppLogger::AppLogger::trace(
                 "CoreSyncTrace",
                 &format!(
@@ -750,11 +783,19 @@ impl SpacePersistenceSyncService {
                 }),
             )
             .await?;
-            if !self.storageReplicationAllowed(targetNodeId)? { return Ok(false); }
-            let operations = mergeSyncOperations(localOperations, remoteOperations)?;
+            if !self.storageReplicationAllowed(targetNodeId)? {
+                return Ok(false);
+            }
+            self.recordPendingWork(targetNodeId, "local export", &localOperations);
+            self.recordPendingWork(targetNodeId, "remote export", &remoteOperations);
+            let operations = mergeSyncOperations(
+                localOperations["operations"].clone(),
+                remoteOperations["operations"].clone(),
+            )?;
             if operations.is_empty() {
+                let complete = preferenceHistoryComplete([&localOperations, &remoteOperations])?;
                 if !self
-                    .applySynchronizedOperationBatch(targetNodeId, &operations, &[], true)
+                    .applySynchronizedOperationBatch(targetNodeId, &operations, &[], complete)
                     .await?
                 {
                     return Ok(false);
@@ -762,7 +803,7 @@ impl SpacePersistenceSyncService {
                 operit_util::AppLogger::AppLogger::trace(
                     "CoreSyncTrace",
                     &format!(
-                        "sync_exchange.idle target={} reason=clocks_equal pages={}",
+                        "sync_exchange.idle target={} reason=no_exported_operations pages={}",
                         targetNodeId, pages
                     ),
                 );
@@ -801,7 +842,7 @@ impl SpacePersistenceSyncService {
             operit_util::AppLogger::AppLogger::trace(
                 "CoreSyncTrace",
                 &format!(
-                    "sync_exchange.batch_applied target={} {}",
+                    "sync_exchange.batch_received target={} {}",
                     targetNodeId,
                     summarizeSyncOperations(&operations)
                 ),
@@ -820,7 +861,12 @@ impl SpacePersistenceSyncService {
         sizes: &[usize],
         complete: bool,
     ) -> Result<bool, String> {
-        self.synchronizeRequiredBlobs(targetNodeId, operations).await?;
+        if let Err(error) = self
+            .synchronizeRequiredBlobs(targetNodeId, operations)
+            .await
+        {
+            self.recordPendingWork(targetNodeId, "blobs", &json!({"errors": [error]}));
+        }
         if !self.storageReplicationAllowed(targetNodeId)? {
             return Ok(false);
         }
@@ -829,7 +875,11 @@ impl SpacePersistenceSyncService {
         let chunks = if operations.is_empty() {
             vec![operations]
         } else {
-            syncPageChunks(operations, sizes, self.state.nodeRouter.maxPeerMessageBytes())?
+            syncPageChunks(
+                operations,
+                sizes,
+                self.state.nodeRouter.maxPeerMessageBytes(),
+            )?
         };
         for (index, chunk) in chunks.iter().copied().enumerate() {
             // A split page only closes the history boundary on its final
@@ -851,6 +901,11 @@ impl SpacePersistenceSyncService {
                     json!({ "operations": chunk, "complete": chunkComplete }),
                 )
                 .await;
+            for (side, result) in [("remote apply", &remote), ("local apply", &local)] {
+                if let Ok(report) = result {
+                    self.recordPendingWork(targetNodeId, side, report);
+                }
+            }
             let errors = [("remote", remote), ("local", local)]
                 .into_iter()
                 .filter_map(|(side, result)| result.err().map(|error| format!("{side} apply: {error}")))
@@ -932,42 +987,70 @@ impl SpacePersistenceSyncService {
         targetNodeId: &str,
         operations: &[Value],
     ) -> Result<(), String> {
-        let mut references = BTreeMap::<String, RuntimeFileSyncReference>::new();
-        for operation in operations {
-            let operation: SyncOperation = serde_json::from_value(operation.clone())
-                .map_err(|error| format!("invalid sync operation: {error}"))?;
-            let Some(reference) = RuntimeFileSyncStore::requiredBlob(&operation)? else {
-                continue;
-            };
-            if let Some(existing) = references.get(&reference.contentHash) {
-                if existing.size != reference.size {
-                    return Err(format!(
-                        "synchronization blob {} has conflicting declared sizes",
-                        reference.contentHash
-                    ));
-                }
+        let mut references = Vec::new();
+        let mut errors = Vec::new();
+        for value in operations {
+            let result = serde_json::from_value::<SyncOperation>(value.clone())
+                .map_err(|error| error.to_string())
+                .and_then(|operation| RuntimeFileSyncStore::requiredBlob(&operation));
+            match result {
+                Ok(Some(reference)) => references.push(reference),
+                Ok(None) => {}
+                Err(error) => errors.push(error),
             }
-            references.insert(reference.contentHash.clone(), reference);
         }
+        if let Err(error) = self
+            .synchronizeBlobReferences(targetNodeId, references)
+            .await
+        {
+            errors.push(error);
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+
+    /// Transfers independent content hashes without withholding durable receipt of another operation.
+    async fn synchronizeBlobReferences(
+        &self,
+        targetNodeId: &str,
+        references: Vec<RuntimeFileSyncReference>,
+    ) -> Result<(), String> {
+        let references = references
+            .into_iter()
+            .map(|reference| ((reference.contentHash.clone(), reference.size), reference))
+            .collect::<BTreeMap<_, _>>();
+        let mut errors = Vec::new();
         for reference in references.into_values() {
-            self.state.nodeRouter.requirePeerStorageProviders(&self.state.nodeRouter.localNodeId(), targetNodeId)
-                .map_err(|error| error.to_string())?;
-            let localHasBlob = self.localHasBlob(&reference).await?;
-            let remoteHasBlob =
-                remoteHasBlob(&self.state.nodeRouter, targetNodeId, &reference).await?;
-            match (localHasBlob, remoteHasBlob) {
-                (true, true) => {}
-                (true, false) => self.pushLocalBlobToRemote(targetNodeId, &reference).await?,
-                (false, true) => self.pushRemoteBlobToLocal(targetNodeId, &reference).await?,
-                (false, false) => {
-                    return Err(format!(
-                        "synchronization blob {} is missing from both direct peers",
+            let result = async {
+                self.state
+                    .nodeRouter
+                    .requirePeerStorageProviders(&self.state.nodeRouter.localNodeId(), targetNodeId)
+                    .map_err(|error| error.to_string())?;
+                let local = self.localHasBlob(&reference).await?;
+                let remote = remoteHasBlob(&self.state.nodeRouter, targetNodeId, &reference).await?;
+                match (local, remote) {
+                    (true, true) => Ok(()),
+                    (true, false) => self.pushLocalBlobToRemote(targetNodeId, &reference).await,
+                    (false, true) => self.pushRemoteBlobToLocal(targetNodeId, &reference).await,
+                    (false, false) => Err(format!(
+                        "blob {} is missing from both direct peers",
                         reference.contentHash
-                    ));
+                    )),
                 }
             }
+            .await;
+            if let Err(error) = result {
+                errors.push(error);
+            }
         }
-        Ok(())
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
     }
 
     /// Reports whether the local CoreNode owns one verified synchronization blob.
@@ -1299,18 +1382,16 @@ fn persistenceServices() -> &'static Mutex<BTreeMap<String, Arc<SpacePersistence
 
 /// Rejects only the requested domains whose durable clocks could not be read.
 #[allow(non_snake_case)]
-fn validateDomainClock(clock: &Value, domains: &[&str], side: &str) -> Result<(), String> {
-    if let Some(errors) = clock.get("domainErrors") {
-        let errors: BTreeMap<String, String> = serde_json::from_value(errors.clone())
-            .map_err(|error| format!("{side} invalid sync clock errors: {error}"))?;
-        let failures = domains.iter().filter_map(|domain| {
-            errors.get(*domain).map(|error| format!("{side} {domain} clock: {error}"))
-        }).collect::<Vec<_>>();
-        if !failures.is_empty() {
-            return Err(failures.join("; "));
-        }
+fn validateDomainClock(clock: &Value, _domains: &[&str], side: &str) -> Result<(), String> {
+    if clock.get("protocolVersion").and_then(Value::as_u64) != Some(1) {
+        return Err(format!("{side} synchronization receipt protocol mismatch"));
     }
-    Ok(())
+    let receipt: operit_store::SyncOperationStore::SyncReceipt =
+        serde_json::from_value(clock.clone())
+            .map_err(|error| format!("{side} synchronization receipt: {error}"))?;
+    receipt
+        .validate()
+        .map_err(|error| format!("{side} synchronization receipt: {error}"))
 }
 
 /// Invokes one application method through the Router.
@@ -1542,22 +1623,21 @@ fn syncPageChunks<'a>(
 /// Summarizes one synchronization clock without logging the complete vector.
 #[allow(non_snake_case)]
 fn summarizeSyncClock(value: &Value) -> String {
-    value
-        .get("sequences")
-        .and_then(Value::as_object)
-        .map(|sequences| {
-            let mut entries = sequences
-                .iter()
-                .filter_map(|(device, sequence)| {
-                    sequence
-                        .as_i64()
-                        .map(|sequence| format!("{device}:{sequence}"))
-                })
-                .collect::<Vec<_>>();
-            entries.sort();
-            entries.join(",")
-        })
-        .unwrap_or_else(|| "none".to_string())
+    format!(
+        "ranges={}#pending={}#errors={}",
+        value["ranges"], value["pending"], value["errors"]
+    )
+}
+
+/// Closes preference history only when both journals exported successfully.
+fn preferenceHistoryComplete(exports: [&Value; 2]) -> Result<bool, String> {
+    let mut complete = true;
+    for report in exports {
+        let failedDomains: Vec<String> = serde_json::from_value(report["failedDomains"].clone())
+            .map_err(|error| format!("invalid export failure domains: {error}"))?;
+        complete &= !failedDomains.iter().any(|domain| domain == "preferences");
+    }
+    Ok(complete)
 }
 
 /// Summarizes synchronization operations by domain and addressed chat entities.
@@ -1616,24 +1696,30 @@ mod page_budget_tests {
     #[test]
     fn plugin_clock_failures_are_isolated_from_core_domains() {
         let clock = json!({
-            "sequences": {"core": 7},
-            "domainErrors": {"plugin_storage": "invalid plugin catalog"},
+            "protocolVersion": 1, "ranges": {"core": [[1,7]]},
+            "errors": ["invalid plugin catalog"],
         });
         assert!(validateDomainClock(&clock, &SYNC_DOMAINS, "local").is_ok());
-        assert_eq!(
-            validateDomainClock(&clock, &PLUGIN_SYNC_DOMAINS, "remote").unwrap_err(),
-            "remote plugin_storage clock: invalid plugin catalog",
-        );
-        let durable: operit_store::SyncOperationStore::SyncClock = serde_json::from_value(clock).unwrap();
-        assert_eq!(durable.sequenceFor("core"), 7);
-        assert_eq!(durable.sequences.len(), 1);
+        let durable: operit_store::SyncOperationStore::SyncReceipt = serde_json::from_value(clock).unwrap();
+        assert_eq!(durable.ranges["core"], vec![[1,7]]);
     }
 
     /// Clears a plugin clock error only when the actual clock can be read again.
     #[test]
     fn recovered_plugin_clock_can_synchronize_again() {
-        let clock = json!({"sequences": {"plugin": 2}, "domainErrors": {}});
-        assert!(validateDomainClock(&clock, &PLUGIN_SYNC_DOMAINS, "local").is_ok());
+        let clock = json!({"protocolVersion": 1, "ranges": {"plugin": [[1,2]]}, "errors": []});
+        assert!(validateDomainClock(&clock, &SYNC_DOMAINS, "local").is_ok());
+    }
+
+    /// Requires complete preference export while leaving unrelated plugin failures independent.
+    #[test]
+    fn preference_completion_uses_structured_domain_failures() {
+        let healthy = json!({"failedDomains": []});
+        let pluginFailure = json!({"failedDomains": ["plugin_storage"]});
+        let preferenceFailure = json!({"failedDomains": ["preferences"]});
+        assert!(preferenceHistoryComplete([&healthy, &pluginFailure]).unwrap());
+        assert!(!preferenceHistoryComplete([&preferenceFailure, &healthy]).unwrap());
+        assert!(preferenceHistoryComplete([&healthy, &json!({})]).is_err());
     }
 
     /// Constructs one transport-sized plugin operation for page budget tests.

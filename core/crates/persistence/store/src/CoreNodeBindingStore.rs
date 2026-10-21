@@ -241,6 +241,7 @@ impl CoreNodeBindingStore {
         if !shouldApply {
             return Ok(());
         }
+        self.applyOperationToCache(operation)?;
         if ignoreConflict {
             self.syncOperationStore
                 .recordBootstrapAppliedOperations(std::slice::from_ref(operation))
@@ -250,7 +251,6 @@ impl CoreNodeBindingStore {
                 .recordAppliedOperation(operation)
                 .map_err(|error| error.to_string())?;
         }
-        self.applyOperationToCache(operation)?;
         Ok(())
     }
     /// Applies one directly transported Binding operation without advancing persistence clocks.
@@ -270,10 +270,10 @@ impl CoreNodeBindingStore {
         if !shouldApply {
             return Ok(());
         }
+        self.applyOperationToCache(operation)?;
         self.syncOperationStore
             .recordAppliedOperation(operation)
             .map_err(|error| error.to_string())?;
-        self.applyOperationToCache(operation)?;
         Ok(())
     }
 
