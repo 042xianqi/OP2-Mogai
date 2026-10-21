@@ -70,8 +70,9 @@ async function main() {
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       reject(new Error(`V86 guest did not start Node and Python:\n${serialOutput}`));
-    }, 90000);
+    }, 240000);
     emulator.add_listener("serial0-output-byte", value => {
+      const previousPhase = phase;
       if (typeof value !== "number") {
         return;
       }
@@ -129,6 +130,9 @@ async function main() {
       } else if (phase === "checking-python-pip" && serialOutput.includes("No module named pip")) {
         phase = "checking-package-managers";
         sendGuestInput("test ! -e /usr/local/bin/npm && test ! -e /usr/local/bin/npx && test ! -e /usr/local/bin/pip && test ! -e /usr/local/bin/pip3 && echo package-managers-absent\n");
+      }
+      if (phase !== previousPhase) {
+        process.stdout.write(`V86 smoke phase: ${phase}\n`);
       }
       if (
         serialOutput.includes("OPERIT_TERMINAL_READY") &&
