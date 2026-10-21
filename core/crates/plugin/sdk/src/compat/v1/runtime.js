@@ -263,7 +263,4 @@ function __operitInstallV1Runtime(runtime) {
             .since('2.0.0', canonical.Files[/** @type {keyof typeof canonical.Files} */ (name)])
             .build('Tools.Files.' + name);
     }
-    runtime.Tools.Files.makeDirectory = api.method()
-        .between('1.0.0', '2.0.0', legacyFiles.mkdir)
-        .build('Tools.Files.makeDirectory');
 }

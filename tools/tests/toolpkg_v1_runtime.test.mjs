@@ -327,17 +327,21 @@ test('large resource and Unicode text writes use bounded commands and retain exa
   } finally { rmSync(temporary,{recursive:true,force:true}); }
 });
 
-/** Covers the marketplace questionnaire's historical directory-creation spelling only for v1 calls. */
-test('questionnaire makeDirectory spelling uses the versioned mkdir adapter', async () => {
+/** Keeps the compatibility surface within the published v1 declarations. */
+test('v1 exposes declared mkdir and does not invent System.file or Files.makeDirectory', async () => {
   const runtime = adapter();
-  for (const version of ['1.0.0','1.0.1']) {
+  for (const version of ['1.0.0', '1.0.1', '2.0.0']) {
     runtime.context.version = version;
-    const result = await vm.runInContext("Tools.Files.makeDirectory('/root/questionnaire',true,'linux')",runtime.context);
-    assert.equal(result.env,'linux');
-    assert.deepEqual(runtime.calls.at(-1).params,{operation:'mkdir',args:{path:'/root/questionnaire',createParents:true}});
+    assert.equal(runtime.context.Tools.System.file, undefined);
+    assert.equal(runtime.context.Tools.Files.makeDirectory, undefined);
   }
-  runtime.context.version = '2.0.0';
-  assert.throws(() => vm.runInContext("Tools.Files.makeDirectory('/root/questionnaire',true,'linux')",runtime.context));
+  runtime.context.version = '1.0.0';
+  const result = await vm.runInContext("Tools.Files.mkdir('/root/questionnaire', true, 'linux')", runtime.context);
+  assert.equal(result.env, 'linux');
+  assert.deepEqual(runtime.calls.at(-1).params, { operation: 'mkdir', args: { path: '/root/questionnaire', createParents: true } });
+  await vm.runInContext("toolCall('make_directory', { path: '/sdcard/questionnaire', create_parents: true })", runtime.context);
+  assert.equal(runtime.calls.at(-1).name, 'make_directory');
+  assert.deepEqual(runtime.calls.at(-1).params, { path: '/sdcard/questionnaire', create_parents: true });
 });
 
 /** Checks repeated initialization and nested login Bash commands keep exactly one shim PATH component. */
@@ -563,7 +567,12 @@ test('unmodified Ferry server starts with SQLite, serves chat APIs, and runs its
       async listAll() { return { currentChatId: 'adapter-test-chat', chats: [] }; },
       async *sendMessageStreaming() { yield { type: 'completed', result: { aiResponse: 'unused' } }; },
     };
-    vm.runInContext(`globalThis.legacyChat = __operitCreateV1Chat(currentChat, async () => ({}), async () => ({}), async () => ({ cards: [] }));`, chatContext);
+    const sendRequests = [];
+    chatContext.sendLegacy = async params => {
+      sendRequests.push(JSON.parse(JSON.stringify(params)));
+      return { chatId: params.chat_id, message: params.message, aiResponse: '<think>private</think>Ferry adapter reply', sentAt: Date.now() };
+    };
+    vm.runInContext(`globalThis.legacyChat = __operitCreateV1Chat(currentChat, async () => ({}), sendLegacy, async () => ({ cards: [] }));`, chatContext);
     globalThis.Tools.Chat = {
       async listAll() { return { currentChatId: 'adapter-test-chat', chats: [] }; },
       sendMessageStreaming(...args) { return chatContext.legacyChat.sendMessageStreaming(...args); },
@@ -581,17 +590,24 @@ test('unmodified Ferry server starts with SQLite, serves chat APIs, and runs its
     const poller = require('./dist/shared/chat_poller.js');
     poller.applyBridgeBase(`http://127.0.0.1:${port}`);
     await request('/api/chat/send', 'POST', { content: 'poller compatibility check' });
-    await assert.rejects(poller.pollOnce('compat-test'), /senderName has no equivalent/);
-    const failedReply = await request('/api/chat/messages');
-    assert.match(failedReply.body.data.at(-1).content, /senderName has no equivalent/);
-
-    assert.equal(Object.hasOwn(runtime.context.Tools.System, 'file'), false);
-    const bridgeConfigPath = require.resolve('./dist/shared/bridge_config.js');
-    const config = require(bridgeConfigPath);
-    await config.saveBridgeConfig({ port: port + 1 });
-    delete require.cache[bridgeConfigPath];
-    const reloaded = require(bridgeConfigPath).getBridgeConfig();
-    assert.equal(reloaded.port, 3000);
+    await poller.pollOnce('compat-test');
+    const replied = await request('/api/chat/messages');
+    assert.equal(replied.body.data.at(-1).content, 'Ferry adapter reply');
+    assert.equal(sendRequests.length, 1);
+    assert.equal(sendRequests[0].sender_name, '浏览器用户');
+    assert.equal(sendRequests[0].disable_warning, true);
+    assert.ok(sendRequests[0].timeout_ms > 0);
+    assert.equal(Object.hasOwn(sendRequests[0], 'onIntermediateResult'), false);
+    assert.equal((await request('/api/chat/pending')).body.data.length, 0);
+    await poller.pollOnce('no-duplicate');
+    assert.equal(sendRequests.length, 1);
+    chatContext.sendFailure = new Error('host AI timeout');
+    chatContext.sendLegacy = async () => { throw chatContext.sendFailure; };
+    // The closure above captures its native send function; install a fresh adapter for failure propagation.
+    vm.runInContext(`globalThis.legacyChat = __operitCreateV1Chat(currentChat, async () => ({}), sendLegacy, async () => ({ cards: [] }));`, chatContext);
+    await request('/api/chat/send', 'POST', { content: 'timeout check' });
+    await assert.rejects(poller.pollOnce('timeout-test'), /host AI timeout/);
+    assert.match((await request('/api/chat/messages')).body.data.at(-1).content, /host AI timeout/);
   } finally {
     const entry = join(runtime.guest, 'resources/quizapp/server/index.js');
     const processes = execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' })
