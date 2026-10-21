@@ -5,8 +5,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 #[cfg(windows)]
 use tokio::net::windows::named_pipe::NamedPipeClient as SerialStream;
 use tokio::sync::{watch, Mutex};
-#[cfg(not(windows))]
-use tokio_serial::{SerialPortBuilderExt, SerialStream};
+#[cfg(unix)]
+#[path = "PosixSerialStream.rs"]
+mod posix;
+#[cfg(unix)]
+use posix::SerialStream;
 
 #[derive(Default)]
 pub struct NativeSerialPortHost;
@@ -51,10 +54,7 @@ async fn open_stream(port: &str, baud_rate: u32) -> HostResult<SerialStream> {
 
 #[cfg(not(windows))]
 fn try_open_stream(port: &str, baud_rate: u32) -> std::io::Result<SerialStream> {
-    tokio_serial::new(port, baud_rate)
-        .dtr_on_open(false)
-        .open_native_async()
-        .map_err(std::io::Error::from)
+    SerialStream::open(port, baud_rate)
 }
 
 #[cfg(windows)]

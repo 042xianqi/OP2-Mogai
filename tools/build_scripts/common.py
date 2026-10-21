@@ -54,9 +54,9 @@ def run(command: list[str | Path], cwd: Path = REPO_ROOT, env: dict[str, str] | 
         **subprocess_options,
     )
     if completed.returncode != 0:
-        stderr_tail = (completed.stderr or "").strip()[-4000:]
-        if stderr_tail:
-            print(stderr_tail, file=sys.stderr, flush=True)
+        stderr_output = (completed.stderr or "").strip()
+        if stderr_output:
+            print(stderr_output, file=sys.stderr, flush=True)
         raise RuntimeError(
             f"Command failed with exit code {completed.returncode}: "
             + " ".join(str(part) for part in command)
@@ -354,7 +354,7 @@ def dart_pub_get(enforce_lockfile: bool = False, env: dict[str, str] | None = No
 
 def flutter_pub_get(enforce_lockfile: bool = False, env: dict[str, str] | None = None) -> None:
     """Resolves app dependencies and generates native plugin registrants with FVM Flutter."""
-    command = [flutter_command(), "pub", "get"]
+    command = [require_command("fvm"), "flutter", "pub", "get"]
     if enforce_lockfile:
         command.append("--enforce-lockfile")
     run(command, cwd=FLUTTER_APP_DIR, env=env)

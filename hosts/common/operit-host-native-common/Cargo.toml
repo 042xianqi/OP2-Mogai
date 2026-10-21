@@ -14,7 +14,7 @@ scheduler = ["dep:operit-host-native-scheduler"]
 storage = ["dep:operit-host-native-storage"]
 terminal = ["dep:operit-host-native-terminal"]
 tcp = ["dep:async-trait", "dep:tokio"]
-serial = ["dep:async-trait", "dep:tokio", "dep:tokio-serial", "dep:windows-sys"]
+serial = ["dep:async-trait", "dep:tokio", "dep:serial2", "dep:libc", "dep:windows-sys"]
 
 [dependencies]
 bytes = "1"
@@ -25,8 +25,9 @@ operit-host-native-scheduler = { path = "../operit-host-native-scheduler", optio
 operit-host-native-storage = { path = "../operit-host-native-storage", optional = true }
 operit-host-native-terminal = { path = "../operit-host-native-terminal", optional = true }
 
-[target.'cfg(not(any(target_os = "ios", target_os = "espidf", target_arch = "wasm32")))'.dependencies]
-tokio-serial = { version = "5", optional = true }
+[target.'cfg(all(unix, not(any(target_os = "ios", target_os = "espidf"))))'.dependencies]
+serial2 = { version = "0.2.37", features = ["unix"], optional = true }
+libc = { version = "0.2", optional = true }
 [target.'cfg(not(any(target_os = "espidf", target_arch = "wasm32")))'.dependencies]
 async-trait = { version = "0.1", optional = true }
 tokio = { version = "1", features = ["io-util", "macros", "rt", "net", "sync", "time"], optional = true }

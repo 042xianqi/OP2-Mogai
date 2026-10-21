@@ -197,6 +197,7 @@ impl HostEnvironmentDescriptor {
             environmentParameterDescriptionCn: String::new(),
             capabilities: vec![
                 "screen.capture".to_string(),
+                "ocr.recognition".to_string(),
                 "fs.read".to_string(),
                 "fs.write".to_string(),
                 "fs.search".to_string(),
@@ -225,6 +226,7 @@ impl HostEnvironmentDescriptor {
             ],
             structuredCapabilities: hostCapabilities(&[
                 "screen.capture",
+                "ocr.recognition",
                 "fs.read",
                 "fs.write",
                 "fs.search",
@@ -3005,18 +3007,11 @@ mod tests {
         }
     }
 
-    /// Verifies that OpenHarmony does not advertise unimplemented OCR capability.
+    /// Verifies that OpenHarmony advertises its packaged offline OCR implementation.
     #[test]
-    fn ohosDescriptorExcludesUnimplementedCapabilities() {
+    fn ohosDescriptorIncludesOfflineOcr() {
         let descriptor = HostEnvironmentDescriptor::ohos();
-        let actual = descriptorCapabilitySet(&descriptor);
-        let unimplemented = idSet(&["ocr.recognition"]);
-        let advertised: Vec<_> = actual.intersection(&unimplemented).cloned().collect();
-
-        assert!(
-            advertised.is_empty(),
-            "OpenHarmony host descriptor advertises unimplemented capabilities: {advertised:?}"
-        );
+        assert!(descriptorCapabilitySet(&descriptor).contains("ocr.recognition"));
     }
 
     /// Verifies that OpenHarmony onboarding exposes required runtime permissions.
