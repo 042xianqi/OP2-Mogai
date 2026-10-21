@@ -722,6 +722,7 @@ impl SpacePersistenceSyncService {
         // one exchange finds nothing left; the cap only stops a device that is
         // writing continuously from holding this pass open forever.
         let mut pages = 0usize;
+        let mut seenOperationIds = BTreeSet::new();
         loop {
             if !self.storageReplicationAllowed(targetNodeId)? {
                 return Ok(false);
@@ -805,6 +806,21 @@ impl SpacePersistenceSyncService {
                     &format!(
                         "sync_exchange.idle target={} reason=no_exported_operations pages={}",
                         targetNodeId, pages
+                    ),
+                );
+                break;
+            }
+            // A domain whose acknowledgement never advances the clock returns
+            // the same page forever. Stop after the first page that adds no new
+            // operation instead of burning the whole pass cap.
+            if !pageAddsNewOperations(&mut seenOperationIds, &operations) {
+                operit_util::AppLogger::AppLogger::trace(
+                    "CoreSyncTrace",
+                    &format!(
+                        "sync_exchange.no_progress target={} pages={} count={}",
+                        targetNodeId,
+                        pages,
+                        operations.len()
                     ),
                 );
                 break;
@@ -1640,6 +1656,31 @@ fn preferenceHistoryComplete(exports: [&Value; 2]) -> Result<bool, String> {
     Ok(complete)
 }
 
+/// Records one page's operation ids and reports whether it added a new identity.
+///
+/// A page without complete ids is treated as progress so malformed data can
+/// never terminate a synchronization pass early.
+#[allow(non_snake_case)]
+fn pageAddsNewOperations(
+    seenOperationIds: &mut BTreeSet<String>,
+    operations: &[Value],
+) -> bool {
+    let pageOperationIds = operations
+        .iter()
+        .filter_map(|operation| operation.get("opId").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    if pageOperationIds.len() == operations.len()
+        && pageOperationIds
+            .iter()
+            .all(|opId| seenOperationIds.contains(opId))
+    {
+        return false;
+    }
+    seenOperationIds.extend(pageOperationIds);
+    true
+}
+
 /// Summarizes synchronization operations by domain and addressed chat entities.
 #[allow(non_snake_case)]
 fn summarizeSyncOperations(operations: &[Value]) -> String {
@@ -1826,5 +1867,18 @@ mod page_budget_tests {
         assert_eq!(order.sequence, 7);
         assert_eq!(order.createdAt, 1234);
         assert!(syncOperationOrder(&json!({"opId": "device:7"})).is_err());
+    }
+
+    #[test]
+    fn repeated_page_without_new_ids_ends_the_pass() {
+        let mut seen = BTreeSet::new();
+        let page = vec![operation("op-a", 1), operation("op-b", 1)];
+        assert!(pageAddsNewOperations(&mut seen, &page));
+        assert!(!pageAddsNewOperations(&mut seen, &page));
+        let progressed = vec![operation("op-b", 1), operation("op-c", 1)];
+        assert!(pageAddsNewOperations(&mut seen, &progressed));
+        assert!(!pageAddsNewOperations(&mut seen, &progressed));
+        // A page without complete identities must never stop a pass.
+        assert!(pageAddsNewOperations(&mut seen, &[json!({"domain": "chat"})]));
     }
 }
