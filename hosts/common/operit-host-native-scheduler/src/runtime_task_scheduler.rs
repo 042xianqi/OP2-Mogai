@@ -2,73 +2,101 @@ use operit_host_api::{
     HostError, HostResult, HostRuntimeAsyncTask, HostRuntimeTask, HostRuntimeTaskSchedulerHost,
     HostRuntimeTurnFuture,
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 const RUNTIME_WORKER_COUNT: usize = 16;
+const BLOCKING_WORKER_COUNT: usize = 16;
+const RUNTIME_WORKER_PREFIX: &str = "operit-runtime-worker";
+const BLOCKING_WORKER_PREFIX: &str = "operit-runtime-blocking-worker";
 
-/// Owns the single process-wide pool and its persistent affine I/O executors.
+/// Owns the process-wide coordination and blocking pools.
+///
+/// Every pool hands the next task to whichever worker is free. A worker stuck
+/// in a blocking call therefore stops taking new tasks instead of accumulating
+/// a private backlog that later stalls unrelated callers.
 struct RuntimeTaskPool {
-    workers: Vec<tokio::sync::mpsc::UnboundedSender<HostRuntimeAsyncTask>>,
-    next: AtomicUsize,
+    coordination: tokio::sync::mpsc::UnboundedSender<HostRuntimeAsyncTask>,
+    blocking: tokio::sync::mpsc::UnboundedSender<HostRuntimeAsyncTask>,
 }
 
-/// Initializes exactly sixteen workers shared by all native scheduler instances.
-fn runtimeTaskPool() -> HostResult<&'static RuntimeTaskPool> {
-    static WORKERS: OnceLock<Result<RuntimeTaskPool, String>> = OnceLock::new();
-    WORKERS
-        .get_or_init(|| {
-            let mut workers = Vec::with_capacity(RUNTIME_WORKER_COUNT);
-            for index in 0..RUNTIME_WORKER_COUNT {
-                let (sender, mut receiver) =
-                    tokio::sync::mpsc::unbounded_channel::<HostRuntimeAsyncTask>();
-                let (ready, started) = std::sync::mpsc::sync_channel(1);
-                std::thread::Builder::new()
-                    .name(format!("operit-runtime-worker-{index}"))
-                    .spawn(move || {
-                        let runtime = match tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                        {
-                            Ok(runtime) => runtime,
-                            Err(error) => {
-                                let _ = ready.send(Err(error.to_string()));
-                                return;
-                            }
-                        };
-                        let _ = ready.send(Ok(()));
-                        // The runtime outlives every request and keeps its I/O and
-                        // spawned children alive without additional runtime threads.
-                        let local = tokio::task::LocalSet::new();
-                        local.block_on(&runtime, async {
-                            while let Some(task) = receiver.recv().await {
-                                // A factory panic is confined to its task, not the worker.
-                                local.spawn_local(async move {
-                                    task().await;
-                                });
-                            }
+/// Creates one shared task queue consumed by the requested number of affine workers.
+fn spawnTaskPool(
+    prefix: &'static str,
+    count: usize,
+) -> Result<tokio::sync::mpsc::UnboundedSender<HostRuntimeAsyncTask>, String> {
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<HostRuntimeAsyncTask>();
+    let receiver = Arc::new(tokio::sync::Mutex::new(receiver));
+    for index in 0..count {
+        let receiver = receiver.clone();
+        let (ready, started) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name(format!("{prefix}-{index}"))
+            .spawn(move || {
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(error) => {
+                        let _ = ready.send(Err(error.to_string()));
+                        return;
+                    }
+                };
+                let _ = ready.send(Ok(()));
+                // The runtime outlives every request and keeps its I/O and
+                // spawned children alive without additional runtime threads.
+                let local = tokio::task::LocalSet::new();
+                local.block_on(&runtime, async {
+                    loop {
+                        // Only a free worker takes the next task. Holding the
+                        // receive lock across the wait keeps one worker parked
+                        // while every other worker remains available.
+                        let task = receiver.lock().await.recv().await;
+                        let Some(task) = task else { break };
+                        // A factory panic is confined to its task, not the worker.
+                        local.spawn_local(async move {
+                            task().await;
                         });
-                    })
-                    .map_err(|e| e.to_string())?;
-                started.recv().map_err(|e| e.to_string())??;
-                workers.push(sender);
-            }
-            Ok(RuntimeTaskPool {
-                workers,
-                next: AtomicUsize::new(0),
+                        // Let the LocalSet start the task and keep the receive
+                        // handoff fair when many tasks arrive in one burst.
+                        tokio::task::yield_now().await;
+                    }
+                });
             })
+            .map_err(|e| e.to_string())?;
+        started.recv().map_err(|e| e.to_string())??;
+    }
+    Ok(sender)
+}
+
+/// Initializes the process-wide coordination and blocking pools exactly once.
+fn runtimeTaskPool() -> HostResult<&'static RuntimeTaskPool> {
+    static POOL: OnceLock<Result<RuntimeTaskPool, String>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        let coordination = spawnTaskPool(RUNTIME_WORKER_PREFIX, RUNTIME_WORKER_COUNT)?;
+        let blocking = spawnTaskPool(BLOCKING_WORKER_PREFIX, BLOCKING_WORKER_COUNT)?;
+        Ok(RuntimeTaskPool {
+            coordination,
+            blocking,
         })
-        .as_ref()
-        .map_err(|e| HostError::new(format!("create runtime task pool failed: {e}")))
+    })
+    .as_ref()
+    .map_err(|e| HostError::new(format!("create runtime task pool failed: {e}")))
 }
 
 impl RuntimeTaskPool {
-    /// Enqueues one task on a persistent owner without creating a request thread.
-    fn schedule(&self, taskName: &str, task: HostRuntimeAsyncTask) -> HostResult<()> {
-        let index = self.next.fetch_add(1, Ordering::Relaxed) % self.workers.len();
-        self.workers[index]
+    /// Enqueues one coordination task on a free persistent worker.
+    fn scheduleCoordination(&self, taskName: &str, task: HostRuntimeAsyncTask) -> HostResult<()> {
+        self.coordination
             .send(task)
-            .map_err(|_| HostError::new(format!("runtime task worker closed: {taskName}")))
+            .map_err(|_| HostError::new(format!("coordination task worker closed: {taskName}")))
+    }
+
+    /// Enqueues one possibly blocking task on a free blocking worker.
+    fn scheduleBlocking(&self, taskName: &str, task: HostRuntimeAsyncTask) -> HostResult<()> {
+        self.blocking
+            .send(task)
+            .map_err(|_| HostError::new(format!("blocking task worker closed: {taskName}")))
     }
 }
 
@@ -159,7 +187,7 @@ mod tests {
     }
 }
 
-/// Schedules native runtime tasks on one process-wide pool of sixteen workers.
+/// Schedules native runtime tasks on process-wide coordination and blocking pools.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NativeHostRuntimeTaskSchedulerHost;
 
@@ -180,24 +208,31 @@ impl HostRuntimeTaskSchedulerHost for NativeHostRuntimeTaskSchedulerHost {
             .as_millis() as u64)
     }
 
-    /// Executes synchronous work on the same bounded pool as asynchronous requests.
+    /// Executes synchronous work on the dedicated blocking pool.
     fn scheduleHostRuntimeTask(&self, taskName: &str, task: HostRuntimeTask) -> HostResult<()> {
-        self.scheduleHostRuntimeAsyncTask(
-            taskName,
-            Box::new(move || Box::pin(async move { task() })),
-        )
+        runtimeTaskPool()?
+            .scheduleBlocking(taskName, Box::new(move || Box::pin(async move { task() })))
     }
 
-    /// Creates and polls an asynchronous request on one of sixteen persistent owners.
+    /// Creates and polls an asynchronous request on a free coordination worker.
     fn scheduleHostRuntimeAsyncTask(
         &self,
         taskName: &str,
         task: HostRuntimeAsyncTask,
     ) -> HostResult<()> {
-        runtimeTaskPool()?.schedule(taskName, task)
+        runtimeTaskPool()?.scheduleCoordination(taskName, task)
     }
 
-    /// Uses the same pool for cooperative callers without creating another executor.
+    /// Creates and polls a possibly blocking request on a free blocking worker.
+    fn scheduleHostRuntimeBlockingAsyncTask(
+        &self,
+        taskName: &str,
+        task: HostRuntimeAsyncTask,
+    ) -> HostResult<()> {
+        runtimeTaskPool()?.scheduleBlocking(taskName, task)
+    }
+
+    /// Uses the coordination pool for cooperative callers without creating another executor.
     fn scheduleHostRuntimeCooperativeAsyncTask(
         &self,
         taskName: &str,
@@ -206,7 +241,7 @@ impl HostRuntimeTaskSchedulerHost for NativeHostRuntimeTaskSchedulerHost {
         self.scheduleHostRuntimeAsyncTask(taskName, task)
     }
 
-    /// Waits asynchronously and executes delayed work within the same sixteen workers.
+    /// Waits asynchronously and executes delayed work on the coordination pool.
     fn scheduleDelayedHostRuntimeTask(
         &self,
         taskName: &str,
@@ -408,26 +443,51 @@ mod cooperative_tests {
 #[cfg(test)]
 mod pool_tests {
     use super::*;
-    use std::{collections::HashSet, rc::Rc, sync::mpsc, time::Duration};
+    use std::{
+        collections::HashSet,
+        rc::Rc,
+        sync::{mpsc, Mutex},
+        time::{Duration, Instant},
+    };
 
-    /// Verifies every scheduler API and scheduler instance reuses the same sixteen threads.
+    /// Serializes tests that deliberately occupy the shared blocking pool.
+    static BLOCKING_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Returns the worker name so tests can prove which pool ran a task.
+    fn threadName() -> String {
+        std::thread::current()
+            .name()
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// Verifies task kinds stay on their declared pool and the pools never overlap.
     #[test]
-    fn all_task_kinds_share_sixteen_persistent_workers() {
+    fn task_kinds_use_disjoint_persistent_pools() {
+        let _guard = BLOCKING_TEST_LOCK.lock().unwrap();
         let scheduler = NativeHostRuntimeTaskSchedulerHost::new();
         let (sender, receiver) = mpsc::channel();
-        let mut first_threads = HashSet::new();
+        let mut first_workers = HashSet::new();
         for round in 0..2 {
-            for index in 0..512 {
+            for index in 0..320 {
                 let sender = sender.clone();
                 let other = NativeHostRuntimeTaskSchedulerHost::new();
-                match index % 4 {
+                match index % 5 {
                     0 => scheduler.scheduleHostRuntimeTask(
                         "pool-sync",
                         Box::new(move || {
-                            sender.send(std::thread::current().id()).unwrap();
+                            sender.send(("blocking", threadName())).unwrap();
                         }),
                     ),
-                    1 => other.scheduleHostRuntimeAsyncTask(
+                    1 => other.scheduleHostRuntimeBlockingAsyncTask(
+                        "pool-blocking-async",
+                        Box::new(move || {
+                            Box::pin(async move {
+                                sender.send(("blocking", threadName())).unwrap();
+                            })
+                        }),
+                    ),
+                    2 => other.scheduleHostRuntimeAsyncTask(
                         "pool-async",
                         Box::new(move || {
                             Box::pin(async move {
@@ -436,15 +496,15 @@ mod pool_tests {
                                 tokio::time::sleep(Duration::from_millis(1)).await;
                                 assert_eq!(owner, std::thread::current().id());
                                 assert_eq!(*local, 42);
-                                sender.send(owner).unwrap();
+                                sender.send(("coordination", threadName())).unwrap();
                             })
                         }),
                     ),
-                    2 => other.scheduleHostRuntimeCooperativeAsyncTask(
+                    3 => other.scheduleHostRuntimeCooperativeAsyncTask(
                         "pool-cooperative",
                         Box::new(move || {
                             Box::pin(async move {
-                                sender.send(std::thread::current().id()).unwrap();
+                                sender.send(("coordination", threadName())).unwrap();
                             })
                         }),
                     ),
@@ -452,22 +512,83 @@ mod pool_tests {
                         "pool-delayed",
                         1,
                         Box::new(move || {
-                            sender.send(std::thread::current().id()).unwrap();
+                            sender.send(("coordination", threadName())).unwrap();
                         }),
                     ),
                 }
                 .unwrap();
             }
-            let threads = (0..512)
-                .map(|_| receiver.recv_timeout(Duration::from_secs(5)).unwrap())
+            let workers = (0..320)
+                .map(|_| receiver.recv_timeout(Duration::from_secs(10)).unwrap())
                 .collect::<HashSet<_>>();
-            assert_eq!(threads.len(), 16);
+            let coordination = workers
+                .iter()
+                .filter(|(pool, _)| *pool == "coordination")
+                .map(|(_, name)| name.clone())
+                .collect::<HashSet<_>>();
+            let blocking = workers
+                .iter()
+                .filter(|(pool, _)| *pool == "blocking")
+                .map(|(_, name)| name.clone())
+                .collect::<HashSet<_>>();
+            assert_eq!(coordination.len(), RUNTIME_WORKER_COUNT);
+            assert_eq!(blocking.len(), BLOCKING_WORKER_COUNT);
+            assert!(coordination.is_disjoint(&blocking));
+            assert!(coordination
+                .iter()
+                .all(|name| name.starts_with(RUNTIME_WORKER_PREFIX)));
+            assert!(blocking
+                .iter()
+                .all(|name| name.starts_with(BLOCKING_WORKER_PREFIX)));
             if round == 0 {
-                first_threads = threads;
+                first_workers = workers;
             } else {
-                assert_eq!(threads, first_threads);
+                assert_eq!(workers, first_workers);
             }
         }
+    }
+
+    /// Verifies a fully occupied blocking pool cannot delay coordination tasks.
+    #[test]
+    fn saturated_blocking_pool_does_not_delay_coordination_tasks() {
+        let _guard = BLOCKING_TEST_LOCK.lock().unwrap();
+        let scheduler = NativeHostRuntimeTaskSchedulerHost;
+        let (entered, started) = mpsc::channel();
+        for _ in 0..BLOCKING_WORKER_COUNT {
+            let entered = entered.clone();
+            scheduler
+                .scheduleHostRuntimeBlockingAsyncTask(
+                    "occupy-blocking",
+                    Box::new(move || {
+                        Box::pin(async move {
+                            entered.send(()).unwrap();
+                            std::thread::sleep(Duration::from_millis(300));
+                        })
+                    }),
+                )
+                .unwrap();
+        }
+        for _ in 0..BLOCKING_WORKER_COUNT {
+            started.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        let (done, finished) = mpsc::channel();
+        let start = Instant::now();
+        scheduler
+            .scheduleHostRuntimeAsyncTask(
+                "coordination-probe",
+                Box::new(move || {
+                    Box::pin(async move {
+                        done.send(()).unwrap();
+                    })
+                }),
+            )
+            .unwrap();
+        finished.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(
+            start.elapsed() < Duration::from_millis(200),
+            "coordination task waited behind blocked workers: {:?}",
+            start.elapsed()
+        );
     }
 
     /// Verifies more than sixteen pending streams suspend without blocking new requests.
