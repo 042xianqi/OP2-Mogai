@@ -273,6 +273,10 @@ stage_runtime_programs() {
     node_loader="$(patchelf --print-interpreter "$node_alpine_root/usr/bin/node")"
     [[ "$node_loader" == /lib/ld-musl-*.so.1 ]] || { echo "Unexpected Node loader: $node_loader" >&2; return 1; }
     install -Dm0755 "$node_alpine_root$node_loader" "$initramfs_root$node_loader"
+    # Alpine's ICU libraries load their locale data from a separate package.
+    # Copying only shared objects leaves Node unable to initialize Intl.
+    mkdir -p "$initramfs_root/usr/share"
+    cp -a "$node_alpine_root/usr/share/icu" "$initramfs_root/usr/share/"
     if [[ -d "$node_alpine_root/etc/ssl" ]]; then
         mkdir -p "$initramfs_root/etc/ssl"
         cp -a "$node_alpine_root/etc/ssl/." "$initramfs_root/etc/ssl/"
