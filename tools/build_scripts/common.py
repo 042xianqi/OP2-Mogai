@@ -202,7 +202,9 @@ def java_properties_value(value: str) -> str:
 
 
 def ensure_node_and_npm() -> None:
-    run(["node", "--version"])
+    version = subprocess.run(["node", "--version"], check=True, capture_output=True, text=True).stdout.strip()
+    if not version.startswith("v24."):
+        raise RuntimeError(f"Node.js 24 is required for builds; found {version or 'unknown version'}")
     run([node_package_command("npm"), "--version"])
 
 

@@ -452,6 +452,38 @@ test('legacy chat streaming projects growing snapshots and preserves completion'
   assert.deepEqual(events.slice(1).map(event => event.chunkIndex), [0, 1]);
 });
 
+/** Keeps declared legacy send controls on the existing native tool and preserves its actual receipt and failure. */
+test('legacy chat streaming retains declared controls through native ordinary send', async () => {
+  const { context } = engine();
+  for (const controls of [{}, { persist_turn: false }, { hide_user_message: true }, { disable_warning: true }, { timeout_ms: 4321 }]) {
+    const events = [], requests = [], roles = [];
+    const receipt = { chatId: 'current-chat', message: 'hello', aiResponse: '真实回复', sentAt: 12 };
+    const options = Object.freeze({ ...controls, runtime: 'main', notify_reply: true,
+      onIntermediateResult(event) { events.push(plain(event)); } });
+    const sender = Object.keys(controls).length === 0 ? 'Speaker' : undefined;
+    let failure;
+    const adapter = context.__operitCreateV1Chat({
+      async listAll() { return { currentChatId: 'current-chat' }; },
+      async *sendMessageStreaming() { throw new Error('Unexpected structured streaming'); },
+    }, async id => { roles.push(id); }, async params => {
+      requests.push(plain(params));
+      if (failure) throw failure;
+      return receipt;
+    }, async () => {});
+    assert.equal(await adapter.sendMessageStreaming('hello', undefined, 'role-one', sender, options), receipt);
+    assert.deepEqual(roles, ['role-one']);
+    assert.deepEqual(requests[0], { ...controls, runtime: 'main', notify_reply: true, message: 'hello',
+      chat_id: 'current-chat', participant_id: 'role-one', ...(sender === undefined ? {} : { sender_name: sender }) });
+    assert.deepEqual(events.map(event => [event.type, event.chunk, event.receivedChars]),
+      [['start', undefined, 0], ['chunk', '真实回复', 4]]);
+    assert.equal(Object.hasOwn(options, 'onIntermediateResult'), true);
+    failure = new Error('native send failed');
+    events.length = 0;
+    await assert.rejects(adapter.sendMessageStreaming('hello', undefined, 'role-one', sender, options), caught => caught === failure);
+    assert.deepEqual(events.map(event => event.type), ['start']);
+  }
+});
+
 /** Ensures malformed large identities, real host failures and rewritten snapshots never become successful empty results. */
 test('legacy adapters reject precision loss and propagate original provider failures', async t => {
   const runtime = await roleProvider(t);

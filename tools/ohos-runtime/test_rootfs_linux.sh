@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd "$script_dir/../.." && pwd)"
-archive="$repo_dir/apps/flutter/app/ohos/entry/src/main/resources/rawfile/ohos-vroot/alpine-minirootfs-3.22.1-aarch64.tar.gz"
+archive="$repo_dir/apps/flutter/app/ohos/entry/src/main/resources/rawfile/ohos-vroot/alpine-minirootfs-3.23.6-aarch64.tar.gz"
 
 if [[ "$EUID" -ne 0 ]]; then
     echo "Run the ARM64 rootfs integration checks as root with qemu-user installed." >&2

@@ -4,10 +4,10 @@ This directory produces the OpenHarmony PC terminal runtime:
 
 - `qemu-harmonix-aarch64`, the QEMU-vroot executable built from Harmonix;
 - an HNP package containing the executable and its OpenHarmony libraries;
-- the Alpine 3.22.1 aarch64 base plus an offline APK repository and checksum.
-  The owner installs `bash`, `python3`, `nodejs`, `npm`, `uv`, `pnpm`, certificates,
-  curl, Git, SSH, Tesseract language data, Poppler and fonts through apk. Package
-  upgrades preserve the user's rootfs and installed package database.
+- the Alpine 3.23.6 aarch64 base plus an offline APK repository and checksum.
+  The owner installs `bash`, `python3`, `nodejs` (Node.js 24), `npm`, `uv`, `pnpm`,
+  certificates, curl, Git, SSH, Tesseract language data, Poppler and fonts through
+  apk. Package upgrades preserve the user's rootfs and installed package database.
 
 Raw assets copy in bounded chunks when their checksum changes. Extraction and
 package installation occur on first terminal use; successful installs remove

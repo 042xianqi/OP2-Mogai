@@ -34,8 +34,8 @@ import runtimeNative from 'liboperit_runtime_ohos.so';
 
 const CHANNEL = 'operit/runtime';
 const OHOS_VROOT_RAWFILE_DIRECTORY = 'ohos-vroot';
-const OHOS_VROOT_ROOTFS_ARCHIVE = 'alpine-minirootfs-3.22.1-aarch64.tar.gz';
-const OHOS_VROOT_ROOTFS_SHA256 = 'alpine-minirootfs-3.22.1-aarch64.tar.gz.sha256';
+const OHOS_VROOT_ROOTFS_ARCHIVE = 'alpine-minirootfs-3.23.6-aarch64.tar.gz';
+const OHOS_VROOT_ROOTFS_SHA256 = 'alpine-minirootfs-3.23.6-aarch64.tar.gz.sha256';
 
 interface RescueLaunchMode {
   rescue: boolean;

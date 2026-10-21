@@ -210,6 +210,30 @@ package. These exact historical tool identities also dispatch there:
 - `ffmpeg:ffmpeg_execute`
 - `ffmpeg:ffmpeg_info`
 
+The existing v1 runtime adapter also translates the executing container's old
+`/data/user/0/com.ai.assistance.operit/files/toolpkg_cache/<package>-*` namespace
+(and the `/data/data` spelling). Concrete hexadecimal cache suffixes are accepted.
+It reads the already extracted `/app/data/cache/toolpkg` tree through canonical
+Files APIs and imports it through `v1_runtime:file` into the terminal's existing
+`/tmp/operit-v1/toolpkg` directory. File calls using these legacy addresses and
+terminal commands then access that same copy. No host bindings or mounts are added.
+
+Translation replaces only that container's cache prefix with a shell-safe concrete
+prefix. It keeps shell quotes, nested `bash -lc` quoting, and suffix globs intact;
+the same namespace is translated when it appears in command text or diagnostics.
+It does not provide a general VFS mount or resolve arbitrary shell expressions.
+The host's existing `.toolpkg-cache-signature` avoids repeated imports across SDK
+executions; it is committed after a successful copy. Concurrent first calls in one
+SDK execution share an import and failed copies can retry. Revisions are refreshed
+when the SDK execution is recreated. The terminal copy is a cache, not a durable
+plugin data directory, and is not synchronized back to the host cache.
+
+An empty session ID uses the existing caller/chat-scoped default compatibility
+session. Missing or malformed IDs still fail. The undocumented synchronous
+`Tools.System.file` object used by some plugins is not emulated by these async
+Files adapters. Installed Node, SQLite support, background execution, and iOS
+WebView integration still require validation in the real host environment.
+
 API 2.0.0 retains canonical host calls and tool identities. Native host errors,
 nonzero exit codes and timeouts are retained. Program helpers reject unsuccessful
 execution. Node source uses UTF-8 hex encoding before native invocation because
@@ -227,8 +251,11 @@ mkdir, delete, move, copy and unzip. Cross-environment file copies transfer
 actual Base64 bytes through the canonical host filesystem and the selected
 terminal filesystem. Writes are bounded to avoid native argument limits and
 preserve Unicode surrogate pairs. ZIP extraction rejects escaping entries and
-symbolic links. The marketplace questionnaire spelling `Files.makeDirectory`
-binds to the existing v1 `mkdir` adapter.
+symbolic links. Directory creation follows the v1 declarations:
+`Tools.Files.mkdir(path, create_parents?, environment?)`, or the declared
+low-level `toolCall('make_directory', params)` tool. `Tools.Files.makeDirectory`
+and synchronous `Tools.System.file` are not declared v1 interfaces and are not
+added as package-specific aliases.
 
 Required executables remain real host requirements: Windows legacy shell tools
 need the existing Git Bash host; managed file operations need Python, Node tools
@@ -253,6 +280,48 @@ routed by this adapter. Its old Android installed-package search directory and
 enhanced questionnaire also uses an Android Java clipboard API. A separately
 audited two-person phone archive 1.1.4 is missing its registered
 `ui/phone.ui.js`; runtime adaptation cannot restore an absent archive member.
+
+### Additional marketplace samples (2026-10-21)
+
+Six more unmodified market archives were inspected: BetterFileTools 1.0.0,
+Chat History Converter 1.0.1, Minesweeper 1.0.0, Standalone Multi Search 1.0.4,
+Quiz Bank Manager 1.6.1 and Messenger 0.3.0. All omit `api_version` and therefore
+select API 1.0.0, regardless of the archive's own version. Their original entry
+functions registered successfully through the production version dispatcher and
+registration bridge, and each registered initial screen rendered through the
+production Compose compiler/runtime in a Node VM.
+
+Additional business checks used the original package functions with explicit
+host fixtures, without modifying the archives:
+
+- BetterFileTools created a directory and file, then moved the actual file bytes
+  into its recycle bin and wrote the matching record through the production v1
+  Files adapter backed by temporary local files.
+- Chat History Converter read a sample ChatGPT export and wrote an Operit archive
+  containing one conversation and two messages through that same Files adapter.
+- Minesweeper's original serialized start-button callback created a 9x9 board
+  with ten mines. Its registered game handlers also passed flag/unflag/reveal
+  checks. IPC routing in this check was an in-process fixture.
+- Quiz Bank Manager created and listed a real temporary bank. Its delete call
+  removed the index entry but left the bank JSON file behind: the original code
+  only probes undeclared `Files.delete/remove/unlink` aliases, never the declared
+  `Files.deleteFile`. This is a package contract issue, not a reason to add
+  those aliases to the engine.
+
+The Quiz Bank Manager also probes undeclared clipboard and shell aliases behind
+feature checks. Missing guarded alternatives alone do not establish that its
+other features fail. Messenger depends on Android Java SharedPreferences for
+settings; successful initial rendering does not verify persistence or cross-chat
+forwarding on other platforms. Multi Search's original subpackage loaded with
+the production OkHttp wrapper, but remote searches and credentials were not
+exercised. No mobile host, platform WebView or external service was simulated as
+successful. These checks establish only the paths listed above.
+
+The v1 chat adapter also routes declared sender/control options that structured
+streaming cannot express through the existing native `send_message_to_ai` tool.
+It preserves the real result and host errors and delivers the completed response
+as one callback chunk. This fallback does not provide incremental token delivery;
+`waifu` sentence aggregation remains unsupported.
 
 ## Scope and outstanding work
 
