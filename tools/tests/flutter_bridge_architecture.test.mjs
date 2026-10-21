@@ -87,14 +87,47 @@ test('watch registration generations prevent stale completion from cancelling ne
   assert.equal((transport.match(/pub\(crate\) fn closeWatchStream/g) ?? []).length, 1);
 });
 
-/** Preserves the public transport exports while leaving shared Core dispatch unmodified by ABI choices. */
-test('C and JavaScript transport entry points retain their public names', () => {
+/** Requires ABI v2 for native Core transport and preserves lifecycle and browser entry points. */
+test('native Core transport exclusively exposes ABI v2', () => {
   const exports = source(bridge + 'BridgeExports.rs');
-  for (const name of ['create', 'create_with_storage_roots', 'destroy', 'native_call', 'push_open', 'push_item', 'push_close', 'watch_snapshot', 'watch_stream', 'close_watch_stream']) {
+  for (const name of ['create', 'create_with_storage_roots', 'destroy', 'emit_runtime_event', 'free_string']) {
     assert.match(exports, new RegExp(`fn operit_flutter_bridge_${name}\\(`));
   }
-  assert.match(exports, /pub struct OperitFlutterBridgeWasm/);
+  assert.doesNotMatch(exports, /fn operit_flutter_bridge_(?:native_call|push_open|push_item|push_close|watch_snapshot|watch_stream|close_watch_stream|next_watch_channel_event|close_watch_channel|free_bytes)\(/);
+  assert.doesNotMatch(exports, /OperitByteBuffer|bytes_to_buffer|native_core_panic_result/);
+  assert.doesNotMatch(exports, /fn bridge_(?:native_call|push_open|push_item|watch_snapshot|watch_stream)\(/);
+
   const ffi = source(bridge + 'FfiTransport.rs');
+  assert.match(ffi, /fn operit_flutter_bridge_ffi_connect\(/);
+  assert.match(ffi, /"version": 2/);
+  for (const name of ['bufferAllocate', 'bufferData', 'bufferSeal', 'bufferRetain', 'bufferRelease']) {
+    assert.match(ffi, new RegExp(`"${name}":`));
+  }
   assert.doesNotMatch(ffi, /defaultHostRuntimeTaskSchedulerHost/);
   assert.match(ffi, /bridge\s*\.runtimeTaskScheduler\(\)/);
+  assert.match(ffi, /SharedBuffer::retain\(\*handles\.add\(index\)\)/);
+
+  const dart = source('apps/flutter/app/lib/core/bridge/FfiCoreTransport.dart');
+  const versionCheck = dart.indexOf("descriptor['version'] != 2");
+  const sessionBinding = dart.indexOf("_address(descriptor, 'session')");
+  assert.notEqual(versionCheck, -1);
+  assert.ok(sessionBinding > versionCheck);
+  assert.match(dart.slice(versionCheck, sessionBinding), /throw StateError\('Unsupported Core FFI or Dart native API version'\)/);
+});
+
+/** Rejects the removed native polling queue while retaining host lifecycle scheduling. */
+test('native watches are delivered through FFI sessions without a polling queue', () => {
+  const execution = source(bridge + 'PlatformRuntimeExecution.rs');
+  assert.doesNotMatch(execution, /NativeWatchChannel|watchChannel|nextWatchChannelEvent|nextEvent/);
+  const native = section(execution.replaceAll('\r\n', '\n'), '#[cfg(not(target_arch = "wasm32"))]\nimpl OperitFlutterBridge {', '#[cfg(target_arch = "wasm32")]\nimpl OperitFlutterBridge {');
+  assert.doesNotMatch(native, /fn (?:call|pushItem|pushClose|watchSnapshot|watchStream)\(/);
+  assert.match(native, /fn runHostRuntimeAsyncTask</);
+  assert.match(native, /fn emitRuntimeEvent\(/);
+
+  const exports = source(bridge + 'BridgeExports.rs');
+  assert.match(exports, /pub struct OperitFlutterBridgeWasm/);
+  const browser = exports.slice(exports.indexOf('impl OperitFlutterBridgeWasm {'));
+  for (const name of ['call', 'pushOpen', 'pushItem', 'pushClose', 'watchSnapshot', 'watchStream', 'closeWatchStream']) {
+    assert.match(browser, new RegExp(`pub (?:async )?fn ${name}\\(`));
+  }
 });

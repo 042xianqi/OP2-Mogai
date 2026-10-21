@@ -294,13 +294,21 @@ test("cleanup response interruption resumes after the already retired source own
   assert.equal(disk.readState().version, 1); assert.equal(disk.storage.inspectPreferences("migration", values => values.plan), undefined);
 });
 
-test("a missing role reference fails before any UUID plan or domain change is committed", async t => {
+/** Keeps released cards usable after one of their group's members was deleted. */
+test("released-data migration removes a deleted group member and retains its group", async t => {
   const { disk, state, chat } = await seed(t);
   state.groups[0].members[0].characterCardId = "missing-character"; disk.replaceState(state);
-  disk.storage.inspectPreferences("meta", values => { values.__operit_preferences_schema_version = 0; values.state.legacyImportPending = true; }); disk.clearCalls();
-  await assert.rejects(open(disk, chat), /missing character|Missing.*member|Missing group|missing member/i);
-  assert.equal(disk.calls.some(call => call.method === "storage.commit"), false);
-  assert.equal(disk.storage.inspectPreferences("migration", values => values.plan), undefined);
+  disk.storage.inspectPreferences("meta", values => { values.__operit_preferences_schema_version = 0; values.state.legacyImportPending = true; });
+  await open(disk, chat);
+  const saved = plain(disk.readState());
+  assert.equal(saved.groups.length, state.groups.length);
+  assert.equal(saved.groups[0].members.length, state.groups[0].members.length - 1);
+  assert.equal(saved.cards.length, state.cards.length);
+  assert.deepEqual(
+    saved.owners.flatMap(owner => owner.memories.map(memory => memory.content)).sort(),
+    state.owners.flatMap(owner => owner.memories.map(memory => memory.content)).sort(),
+  );
+  assert.equal(metadata(disk).legacyImportPending, undefined);
 });
 
 test("malformed persisted migration work fails before filesystem or record changes", async t => {
@@ -453,4 +461,68 @@ test("released-data audit rewrites absolute document paths before retiring the o
   assert.equal((await disk.readBytes(external)).toString(), "Externally owned document");
   const before = disk.stateBytes(); await open(disk, chat);
   assert.deepEqual(disk.stateBytes(), before);
+});
+
+/** Repairs stale released lists before UUID conversion while retaining the exact missing primary binding. */
+test("released-data migration cleans deleted references without losing cards or memory text", async t => {
+  const { disk, state, chat } = await seed(t);
+  state.cards[0].attachedTagIds.push("deleted-tag", "");
+  state.cards[0].sharedMemoryMounts.push({ sharedMemoryId: "deleted-store", readable: true, writable: true });
+  state.cards[0].memoryBindingMode = "SHARED"; state.cards[0].sharedMemoryId = "deleted-primary";
+  const owner = state.owners[0];
+  owner.links.push({ ...owner.links[0], id: "stale-link", targetMemoryId: "deleted-memory" });
+  owner.chunks.push({ ...owner.chunks[0], id: "stale-chunk", memoryUuid: "deleted-document" });
+  disk.replaceState(state);
+  disk.storage.inspectPreferences("meta", values => { values.__operit_preferences_schema_version = 0; values.state.legacyImportPending = true; });
+  await open(disk, chat);
+  const saved = plain(disk.readState()), card = saved.cards.find(card => card.name === state.cards[0].name);
+  const memory = saved.owners.find(owner => owner.ownerKey === "character:" + card.id);
+  assert.equal(card.sharedMemoryId, "deleted-primary"); assert.equal(card.memoryBindingMode, "SHARED");
+  assert.equal(card.attachedTagIds.length, state.cards[0].attachedTagIds.length - 2);
+  assert.equal(card.sharedMemoryMounts.length, state.cards[0].sharedMemoryMounts.length - 1);
+  assert.equal(memory.links.length, owner.links.length - 1); assert.equal(memory.chunks.length, owner.chunks.length - 1);
+  assert.deepEqual(memory.memories.map(memory => memory.content).sort(), owner.memories.map(memory => memory.content).sort());
+  const before = disk.stateBytes(); await open(disk, chat); assert.deepEqual(disk.stateBytes(), before);
+});
+
+/** Retains self relationships that were accepted and saved by the released repository. */
+test("released-data migration preserves a historical self relationship", async t => {
+  const { disk, state, chat } = await seed(t);
+  state.owners[0].links[0].targetMemoryId = state.owners[0].links[0].sourceMemoryId;
+  disk.replaceState(state);
+  disk.storage.inspectPreferences("meta", values => { values.__operit_preferences_schema_version = 0; values.state.legacyImportPending = true; });
+  await open(disk, chat);
+  const saved = plain(disk.readState()), card = saved.cards.find(card => card.name === state.cards[0].name);
+  const owner = saved.owners.find(owner => owner.ownerKey === "character:" + card.id);
+  assert.equal(owner.links.length, state.owners[0].links.length);
+  assert.equal(owner.links[0].sourceMemoryId, owner.links[0].targetMemoryId);
+  const before = disk.stateBytes(); await open(disk, chat); assert.deepEqual(disk.stateBytes(), before);
+});
+
+/** Keeps memory text when an optional document or its index no longer exists. */
+test("released-data migration clears missing attachment paths and preserves memory content", async t => {
+  const { disk, state, chat } = await seed(t), root = disk.globals.ToolPkg.getSpaceDataDir();
+  await disk.files.deleteFile(root + "/owners/character%3Aoperit/resources/source.txt", false);
+  await disk.files.deleteFile(root + "/owners/character%3Aoperit/resources/index.bin", false);
+  await open(disk, chat);
+  const saved = plain(disk.readState()), card = saved.cards.find(card => card.name === state.cards[0].name);
+  const owner = saved.owners.find(owner => owner.ownerKey === "character:" + card.id);
+  assert.deepEqual(owner.memories.map(memory => memory.content).sort(), state.owners[0].memories.map(memory => memory.content).sort());
+  const document = owner.memories.find(memory => memory.isDocumentNode);
+  assert.equal(document.documentPath, null); assert.equal(document.chunkIndexFilePath, null);
+  const before = disk.stateBytes(); await open(disk, chat); assert.deepEqual(disk.stateBytes(), before);
+});
+
+/** Starts a fresh editable owner document after the old file was lost. */
+test("released-data migration recreates a missing USER document without changing stored memory text", async t => {
+  for (const missingDirectory of [false, true]) {
+    const { disk, state, chat } = await seed(t), owner = state.owners[1], root = disk.globals.ToolPkg.getSpaceDataDir();
+    await disk.files.deleteFile(root + "/" + (missingDirectory ? owner.userDocumentPath.slice(0, -8) : owner.userDocumentPath), missingDirectory);
+    await open(disk, chat);
+    const saved = plain(disk.readState()), card = saved.cards.find(card => card.name === state.cards[1].name);
+    const memory = saved.owners.find(owner => owner.ownerKey === "character:" + card.id);
+    assert.equal((await bytes(disk, memory.userDocumentPath)).toString(), "");
+    assert.deepEqual(memory.memories.map(memory => memory.content).sort(), owner.memories.map(memory => memory.content).sort());
+    const before = disk.stateBytes(); await open(disk, chat); assert.deepEqual(disk.stateBytes(), before);
+  }
 });

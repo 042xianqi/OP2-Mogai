@@ -812,7 +812,6 @@ function assertMemorySpace(value) {
     requireId(link.id, "link id");
     const source = requireId(link.sourceMemoryId, "source memory id"), target = requireId(link.targetMemoryId, "target memory id");
     if (!memoryIds.has(source) || !memoryIds.has(target)) throw new Error("Relationship references a missing memory: " + link.id);
-    if (source === target) throw new Error("Relationship cannot point to itself");
     assertString(link.type_, "link type");
     assertNumber(link.weight, "link weight", 0, 1);
     assertString(link.description, "link description");

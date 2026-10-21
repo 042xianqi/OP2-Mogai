@@ -128,10 +128,12 @@ void main() {
         await _expectVisiblePhoneFrost(tester, captureKey);
       }
       final transform = tester.widget<Transform>(
-        find.descendant(
-          of: find.byType(ThemeGlassStretchIndicator),
-          matching: find.byType(Transform),
-        ).first,
+        find
+            .descendant(
+              of: find.byType(ThemeGlassStretchIndicator),
+              matching: find.byType(Transform),
+            )
+            .first,
       );
       expect(transform.transform.entry(1, 1), greaterThan(1));
       expect(transform.filterQuality, isNull);

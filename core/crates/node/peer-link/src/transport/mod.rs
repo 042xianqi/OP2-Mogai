@@ -1,6 +1,7 @@
 //! 只按 transport 选择 Host 适配，不处理鉴权或配对。
 mod bluetooth;
 mod http;
+mod http_outbox;
 mod inbox;
 mod serial;
 mod stream;

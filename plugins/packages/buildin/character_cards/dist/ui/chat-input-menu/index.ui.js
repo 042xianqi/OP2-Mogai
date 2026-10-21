@@ -52,9 +52,6 @@ function assertObject(value, label) {
 function assertString(value, label) {
   if (typeof value !== "string") throw new Error(`${label} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32`);
 }
-function assertBoolean(value, label) {
-  if (typeof value !== "boolean") throw new Error(`${label} \u5FC5\u987B\u662F\u5E03\u5C14\u503C`);
-}
 function assertNumber(value, label, min, max) {
   if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max) throw new Error(`${label} \u5FC5\u987B\u5728 ${min} \u5230 ${max} \u4E4B\u95F4`);
 }
@@ -62,168 +59,10 @@ function assertInteger(value, label, min) {
   assertNumber(value, label, min, Number.MAX_SAFE_INTEGER);
   if (!Number.isSafeInteger(value)) throw new Error(`${label} \u5FC5\u987B\u662F\u5B89\u5168\u6574\u6570`);
 }
-function assertNullableString(value, label) {
-  if (value !== null) assertString(value, label);
-}
-function assertStrings(value, label) {
-  if (!Array.isArray(value)) throw new Error(`${label} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u6570\u7EC4`);
-  for (const item of value) assertString(item, label);
-}
 function requireId(value, label) {
   assertString(value, label);
   if (value.trim() === "" || value !== value.trim()) throw new Error(`${label} \u65E0\u6548`);
   return value;
-}
-function requireName(value, label) {
-  assertString(value, label);
-  const name = value.trim();
-  if (name === "") throw new Error(`${label} \u4E0D\u80FD\u4E3A\u7A7A`);
-  return name;
-}
-function assertConversationGroupScope(value) {
-  if (value !== null) requireId(value, "conversation group scope");
-}
-function assertConversationGroup(value) {
-  assertObject(value, "conversation group");
-  requireId(value.id, "conversation group id");
-  assertConversationGroupScope(value.ownerSelection);
-  const name = requireName(value.name, "conversation group name");
-  if (name !== value.name) throw new Error("Conversation group names must be stored in their trimmed form");
-  assertBoolean(value.pinned, "conversation group pinned");
-  assertStrings(value.chatIds, "conversation group chats");
-  for (const field of ["displayOrder", "createdAt", "updatedAt"]) assertInteger(value[field], field, 0);
-  const chats = /* @__PURE__ */ new Set();
-  for (const chatId of value.chatIds) {
-    requireId(chatId, "conversation group chat id");
-    if (chats.has(chatId)) throw new Error("Duplicate chat within a conversation group: " + chatId);
-    chats.add(chatId);
-  }
-}
-function assertConversationGroups(value) {
-  if (!Array.isArray(value)) throw new Error("conversationGroups must be an array");
-  const ids = /* @__PURE__ */ new Set(), names = /* @__PURE__ */ new Set(), orders = /* @__PURE__ */ new Set(), chats = /* @__PURE__ */ new Set();
-  const scopeCounts = /* @__PURE__ */ new Map();
-  for (const group of value) {
-    assertConversationGroup(group);
-    if (ids.has(group.id)) throw new Error("Duplicate conversation group id: " + group.id);
-    ids.add(group.id);
-    const nameKey = JSON.stringify([group.ownerSelection, group.name]);
-    if (names.has(nameKey)) throw new Error("Conversation group name already exists in this scope: " + group.name);
-    names.add(nameKey);
-    const orderKey = JSON.stringify([group.ownerSelection, group.displayOrder]);
-    if (orders.has(orderKey)) throw new Error("Duplicate conversation group order in one scope");
-    orders.add(orderKey);
-    const count = scopeCounts.get(group.ownerSelection);
-    scopeCounts.set(group.ownerSelection, count === void 0 ? 1 : count + 1);
-    for (const chatId of group.chatIds) {
-      if (chats.has(chatId)) throw new Error("Chat belongs to more than one conversation group: " + chatId);
-      chats.add(chatId);
-    }
-  }
-  for (const group of value) {
-    assertConversationGroup(group);
-    const count = scopeCounts.get(group.ownerSelection);
-    if (count === void 0 || group.displayOrder >= count) throw new Error("Conversation group order must be a complete zero-based scoped sequence");
-  }
-}
-function assertToolAccess(value) {
-  assertObject(value, "\u5DE5\u5177\u8BBF\u95EE\u914D\u7F6E");
-  assertBoolean(value.enabled, "\u5DE5\u5177\u8BBF\u95EE\u5F00\u5173");
-  for (const field of ["allowedBuiltinTools", "allowedPackages", "allowedSkills", "allowedMcpServers"]) assertStrings(value[field], field);
-}
-function assertCard(value) {
-  assertObject(value, "\u89D2\u8272\u5361");
-  for (const field of ["id", "name", "description", "characterSetting", "openingStatement", "otherContentChat", "otherContentVoice", "advancedCustomPrompt", "marks", "chatModelBindingMode", "memoryBindingMode"]) assertString(value[field], field);
-  for (const field of ["avatarUri", "chatProviderId", "chatModelId", "ttsConfigId", "themeConfigId", "sharedMemoryId"]) assertNullableString(value[field], field);
-  if (value.themeConfigId !== null) requireId(value.themeConfigId, "\u89D2\u8272\u4E3B\u9898\u914D\u7F6E");
-  assertStrings(value.attachedTagIds, "\u89D2\u8272\u6807\u7B7E");
-  assertInteger(value.createdAt, "\u89D2\u8272\u521B\u5EFA\u65F6\u95F4", 0);
-  assertInteger(value.updatedAt, "\u89D2\u8272\u4FEE\u6539\u65F6\u95F4", 0);
-  assertToolAccess(value.toolAccessConfig);
-  if (!Array.isArray(value.sharedMemoryMounts)) throw new Error("\u5171\u4EAB\u8BB0\u5FC6\u6302\u8F7D\u5FC5\u987B\u662F\u6570\u7EC4");
-  for (const mount2 of value.sharedMemoryMounts) {
-    assertObject(mount2, "\u5171\u4EAB\u8BB0\u5FC6\u6302\u8F7D");
-    requireId(mount2.sharedMemoryId, "\u5171\u4EAB\u8BB0\u5FC6\u6302\u8F7D\u6807\u8BC6");
-    assertBoolean(mount2.readable, "\u5171\u4EAB\u8BB0\u5FC6\u8BFB\u53D6\u5F00\u5173");
-    assertBoolean(mount2.writable, "\u5171\u4EAB\u8BB0\u5FC6\u5199\u5165\u5F00\u5173");
-  }
-}
-function assertGroupValues(value) {
-  assertObject(value, "\u89D2\u8272\u7FA4\u7EC4");
-  for (const field of ["id", "name", "description"]) assertString(value[field], field);
-  assertNullableString(value.themeConfigId, "group.themeConfigId");
-  if (value.themeConfigId !== null) requireId(value.themeConfigId, "\u7FA4\u7EC4\u4E3B\u9898\u914D\u7F6E");
-  if (!Array.isArray(value.members)) throw new Error("\u7FA4\u7EC4\u6210\u5458\u5FC5\u987B\u662F\u6570\u7EC4");
-  for (const member2 of value.members) {
-    assertObject(member2, "\u7FA4\u7EC4\u6210\u5458");
-    requireId(member2.characterCardId, "\u7FA4\u7EC4\u89D2\u8272\u6807\u8BC6");
-    assertInteger(member2.orderIndex, "\u7FA4\u7EC4\u6210\u5458\u987A\u5E8F", -2147483648);
-    if (member2.orderIndex > 2147483647) throw new Error("\u7FA4\u7EC4\u6210\u5458\u987A\u5E8F\u8D85\u51FA i32 \u8303\u56F4");
-  }
-}
-function assertGroup(value) {
-  assertObject(value, "\u89D2\u8272\u7FA4\u7EC4");
-  const record2 = value;
-  assertGroupValues(value);
-  assertInteger(record2.createdAt, "\u7FA4\u7EC4\u521B\u5EFA\u65F6\u95F4", 0);
-  assertInteger(record2.updatedAt, "\u7FA4\u7EC4\u4FEE\u6539\u65F6\u95F4", 0);
-}
-function assertTagValues(value) {
-  assertObject(value, "\u6807\u7B7E");
-  for (const field of ["name", "description", "promptContent"]) assertString(value[field], field);
-  if (value.tagType !== "TONE" && value.tagType !== "CHARACTER" && value.tagType !== "FUNCTION" && value.tagType !== "CUSTOM") throw new Error("\u6807\u7B7E\u7C7B\u578B\u65E0\u6548");
-}
-function assertTag(value) {
-  assertObject(value, "\u6807\u7B7E");
-  const record2 = value;
-  assertTagValues(value);
-  requireId(record2.id, "\u6807\u7B7E\u6807\u8BC6");
-  assertInteger(record2.createdAt, "\u6807\u7B7E\u521B\u5EFA\u65F6\u95F4", 0);
-  assertInteger(record2.updatedAt, "\u6807\u7B7E\u4FEE\u6539\u65F6\u95F4", 0);
-}
-function assertMemory(value) {
-  assertObject(value, "\u8BB0\u5FC6\u8BB0\u5F55");
-  requireId(value.id, "\u8BB0\u5FC6\u6570\u636E\u5E93\u6807\u8BC6");
-  requireId(value.uuid, "\u8BB0\u5FC6 UUID");
-  for (const field of ["title", "content", "contentType", "source"]) assertString(value[field], field);
-  assertNumber(value.credibility, "\u53EF\u4FE1\u5EA6", 0, 1);
-  assertNumber(value.importance, "\u91CD\u8981\u6027", 0, 1);
-  for (const field of ["documentPath", "chunkIndexFilePath", "folderPath"]) assertNullableString(value[field], field);
-  assertBoolean(value.isDocumentNode, "\u6587\u6863\u8282\u70B9\u6807\u8BC6");
-  for (const field of ["createdAt", "updatedAt", "lastAccessedAt"]) assertInteger(value[field], field, 0);
-  if (!Array.isArray(value.tags) || !Array.isArray(value.properties)) throw new Error("\u8BB0\u5FC6\u6807\u7B7E\u548C\u5C5E\u6027\u5FC5\u987B\u662F\u6570\u7EC4");
-  for (const tag of value.tags) {
-    assertObject(tag, "\u8BB0\u5FC6\u6807\u7B7E");
-    requireId(tag.id, "\u8BB0\u5FC6\u6807\u7B7E\u6807\u8BC6");
-    assertString(tag.name, "\u8BB0\u5FC6\u6807\u7B7E\u540D\u79F0");
-  }
-  for (const property2 of value.properties) {
-    assertObject(property2, "\u8BB0\u5FC6\u5C5E\u6027");
-    requireId(property2.id, "\u8BB0\u5FC6\u5C5E\u6027\u6807\u8BC6");
-    assertString(property2.key, "\u8BB0\u5FC6\u5C5E\u6027\u952E");
-    assertString(property2.value, "\u8BB0\u5FC6\u5C5E\u6027\u503C");
-  }
-}
-function assertMemoryChatMessage(value) {
-  assertObject(value, "chat message");
-  assertInteger(value.timestamp, "message timestamp", 0);
-  for (const key of ["sender", "content", "provider", "modelName"]) assertString(value[key], key);
-  assertInteger(value.variantIndex, "message variant index", 0);
-  assertInteger(value.variantCount, "message variant count", 1);
-  if (value.variantIndex > 2147483647 || value.variantCount > 2147483647 || value.variantIndex >= value.variantCount) throw new Error("Invalid persisted message variant identity");
-}
-function assertMemorySettings(value) {
-  assertObject(value, "\u8BB0\u5FC6\u8BBE\u7F6E");
-  assertInteger(value.autoSaveIntervalMinutes, "\u81EA\u52A8\u4FDD\u5B58\u95F4\u9694", 1);
-  if (value.autoSaveIntervalMinutes > 30) throw new Error("\u81EA\u52A8\u4FDD\u5B58\u95F4\u9694\u5FC5\u987B\u5728 1 \u5230 30 \u5206\u949F\u4E4B\u95F4");
-  assertInteger(value.nextAutoSaveRunAtMs, "\u4E0B\u6B21\u81EA\u52A8\u4FDD\u5B58\u65F6\u95F4", 0);
-  for (const field of ["memoryExtractionCustomRules", "cloudEmbeddingEndpoint", "cloudEmbeddingApiKey", "cloudEmbeddingModel"]) assertString(value[field], field);
-  for (const field of ["profileAutoUpdateEnabled", "profileAutoUpdateLocked", "cloudEmbeddingEnabled"]) assertBoolean(value[field], field);
-}
-function assertSearchConfig(value) {
-  assertObject(value, "\u8BB0\u5FC6\u641C\u7D22\u8BBE\u7F6E");
-  if (value.scoreMode !== "BALANCED" && value.scoreMode !== "KEYWORD_FIRST" && value.scoreMode !== "SEMANTIC_FIRST") throw new Error("\u8BB0\u5FC6\u8BC4\u5206\u6A21\u5F0F\u65E0\u6548");
-  for (const field of ["keywordWeight", "tagWeight", "vectorWeight", "edgeWeight"]) assertNumber(value[field], field, 0, Number.MAX_VALUE);
 }
 
 // src/chat-bindings.ts
@@ -930,210 +769,9 @@ var merge_default = {
   }
 };
 
-// src/memory-jobs/embeddings.ts
-function assertEmbedding(value) {
-  assertObject(value, "embedding");
-  requireId(value.id, "embedding id");
-  requireName(value.endpoint, "embedding endpoint");
-  requireName(value.model, "embedding model");
-  assertString(value.text, "embedding text");
-  assertInteger(value.updatedAt, "embedding timestamp", 0);
-  if (!Array.isArray(value.vector) || value.vector.length === 0) throw new Error("Embedding must contain a nonempty vector");
-  let norm = 0;
-  for (const component of value.vector) {
-    assertNumber(component, "embedding component", -Number.MAX_VALUE, Number.MAX_VALUE);
-    norm += component * component;
-  }
-  if (!Number.isFinite(norm) || norm === 0) throw new Error("Embedding vector has an invalid norm");
-}
-
 // src/storage/state.ts
 function userDocumentPath(ownerKey) {
   return "owners/" + encodeURIComponent(ownerKey) + "/USER.md";
-}
-function array2(value, label) {
-  if (!Array.isArray(value)) throw new Error(label + " must be an array");
-}
-function identities(records2, label) {
-  const ids = /* @__PURE__ */ new Set();
-  for (const record2 of records2) {
-    assertObject(record2, label);
-    const id2 = requireId(record2.id, label + " id");
-    if (ids.has(id2)) throw new Error(label + " has duplicate id: " + id2);
-    ids.add(id2);
-  }
-  return ids;
-}
-function assertCharacterState(value) {
-  assertObject(value, "character state");
-  if (value.version !== 1) throw new Error("Unsupported character database version");
-  const fields = /* @__PURE__ */ new Set(["memoryPreferences", "version", "cards", "groups", "tags", "stores", "active", "owners", "conversationGroups"]);
-  for (const key of Object.keys(value)) if (!fields.has(key)) throw new Error("Unsupported character state field: " + key);
-  assertObject(value.memoryPreferences, "global memory preferences");
-  assertBoolean(value.memoryPreferences.userDescriptionEnabled, "user description enabled");
-  assertBoolean(value.memoryPreferences.autoUpdateEnabled, "auto update enabled");
-  assertConversationGroups(value.conversationGroups);
-  const cards = value.cards, groups = value.groups, tags = value.tags, stores = value.stores, owners = value.owners;
-  array2(cards, "cards");
-  array2(groups, "groups");
-  array2(tags, "tags");
-  array2(stores, "stores");
-  array2(owners, "owners");
-  const cardIds = identities(cards, "cards"), groupIds = identities(groups, "groups"), tagIds = identities(tags, "tags"), storeIds = identities(stores, "stores");
-  for (const card of cards) {
-    assertCard(card);
-    requireId(card.id, "card id");
-    for (const id2 of card.attachedTagIds) if (!tagIds.has(id2)) throw new Error("Missing attached tag: " + id2);
-    if (card.memoryBindingMode !== "CHARACTER" && card.memoryBindingMode !== "SHARED") throw new Error("Invalid memory binding mode");
-    for (const mount2 of card.sharedMemoryMounts) if (!storeIds.has(mount2.sharedMemoryId)) throw new Error("Missing shared memory mount: " + mount2.sharedMemoryId);
-  }
-  for (const group of groups) {
-    assertGroup(group);
-    const members = /* @__PURE__ */ new Set();
-    for (const member2 of group.members) {
-      if (!cardIds.has(member2.characterCardId)) throw new Error("Missing group member: " + member2.characterCardId);
-      if (members.has(member2.characterCardId)) throw new Error("Duplicate group member: " + member2.characterCardId);
-      members.add(member2.characterCardId);
-    }
-  }
-  for (const tag of tags) assertTag(tag);
-  for (const store of stores) {
-    assertObject(store, "store");
-    assertString(store.name, "store name");
-    assertInteger(store.createdAt, "store createdAt", 0);
-    assertInteger(store.updatedAt, "store updatedAt", 0);
-  }
-  assertObject(value.active, "active");
-  const activeKeys = Object.keys(value.active);
-  if (activeKeys.length !== 1) throw new Error("Active prompt must select exactly one entity");
-  const activeKey = activeKeys[0];
-  if (activeKey !== "CharacterCard" && activeKey !== "CharacterGroup" && activeKey !== "Model") throw new Error("Invalid active prompt kind");
-  const selected = value.active[activeKey];
-  assertObject(selected, "active selection");
-  const activeId = requireId(selected.id, "active id");
-  if (activeKey === "Model" && activeId !== "chat") throw new Error("Invalid active model selection: " + activeId);
-  const expectedOwners = /* @__PURE__ */ new Set();
-  for (const id2 of cardIds) expectedOwners.add("character:" + id2);
-  for (const id2 of storeIds) expectedOwners.add("shared:" + id2);
-  const actualOwners = /* @__PURE__ */ new Set();
-  for (const owner2 of owners) {
-    assertObject(owner2, "memory space");
-    const ownerKey = requireId(owner2.ownerKey, "owner key");
-    if (!expectedOwners.has(ownerKey) || actualOwners.has(ownerKey)) throw new Error("Invalid or duplicate memory owner: " + ownerKey);
-    actualOwners.add(ownerKey);
-    assertMemorySpace(owner2);
-  }
-  if (actualOwners.size !== expectedOwners.size) throw new Error("Character state is missing an owner memory space");
-}
-function assertMemorySpace(value) {
-  assertObject(value, "memory space");
-  requireId(value.ownerKey, "memory owner");
-  array2(value.memories, "memories");
-  array2(value.links, "links");
-  array2(value.chunks, "chunks");
-  array2(value.candidates, "candidates");
-  const memoryIds = identities(value.memories, "memories");
-  identities(value.links, "links");
-  identities(value.chunks, "chunks");
-  identities(value.candidates, "candidates");
-  const memoriesByUuid = /* @__PURE__ */ new Map();
-  for (const memory of value.memories) {
-    assertMemory(memory);
-    if (memoriesByUuid.has(memory.uuid)) throw new Error("Duplicate memory UUID: " + memory.uuid);
-    memoriesByUuid.set(memory.uuid, memory);
-  }
-  for (const link of value.links) {
-    assertObject(link, "link");
-    requireId(link.id, "link id");
-    const source = requireId(link.sourceMemoryId, "source memory id"), target = requireId(link.targetMemoryId, "target memory id");
-    if (!memoryIds.has(source) || !memoryIds.has(target)) throw new Error("Relationship references a missing memory: " + link.id);
-    if (source === target) throw new Error("Relationship cannot point to itself");
-    assertString(link.type_, "link type");
-    assertNumber(link.weight, "link weight", 0, 1);
-    assertString(link.description, "link description");
-  }
-  const indices = /* @__PURE__ */ new Set();
-  for (const chunk of value.chunks) {
-    assertObject(chunk, "chunk");
-    requireId(chunk.id, "chunk id");
-    const memoryUuid = requireId(chunk.memoryUuid, "chunk memory UUID");
-    assertInteger(chunk.chunkIndex, "chunk index", 0);
-    assertString(chunk.content, "chunk content");
-    const memory = memoriesByUuid.get(memoryUuid);
-    if (memory === void 0 || !memory.isDocumentNode) throw new Error("Chunk references a missing document memory");
-    const identity = JSON.stringify([chunk.memoryUuid, chunk.chunkIndex]);
-    if (indices.has(identity)) throw new Error("Duplicate document chunk index");
-    indices.add(identity);
-  }
-  for (const candidate of value.candidates) {
-    assertObject(candidate, "candidate");
-    requireId(candidate.id, "candidate id");
-    requireId(candidate.chatId, "candidate chat id");
-    for (const field of ["triggerMessageTimestamp", "triggerVariantIndex", "createdAt", "updatedAt", "attemptCount"]) assertInteger(candidate[field], field, 0);
-    for (const field of ["status", "lastError", "sourceType"]) assertString(candidate[field], field);
-    if (candidate.status !== "pending" && candidate.status !== "processing" && candidate.status !== "failed") throw new Error("Invalid candidate status");
-    if (candidate.sourceType !== "reply_finalized_auto" && candidate.sourceType !== "selected_user_message") throw new Error("Invalid candidate source type");
-    if (typeof candidate.triggerVariantIndex !== "number" || candidate.triggerVariantIndex > 2147483647) throw new Error("Candidate message variant exceeds the host range");
-  }
-  assertMemorySettings(value.settings);
-  assertSearchConfig(value.searchConfig);
-  assertString(value.userDocumentPath, "USER.md path");
-  if (value.userDocumentPath !== userDocumentPath(requireId(value.ownerKey, "owner key"))) throw new Error("Invalid owner USER.md path");
-  assertObject(value.rebuildProgress, "rebuild progress");
-  for (const field of ["status", "currentChatTitle", "lastError"]) assertString(value.rebuildProgress[field], field);
-  for (const field of ["totalChats", "completedChats", "totalWindows", "completedWindows", "totalSourceMessages", "processedSourceMessages", "failedWindows"]) assertInteger(value.rebuildProgress[field], field, 0);
-  if (!["idle", "preparing", "running", "completed", "failed", "cancelled"].some(
-    /** Accepts only the declared durable task lifecycle states. */
-    (status) => value.rebuildProgress !== null && typeof value.rebuildProgress === "object" && "status" in value.rebuildProgress && value.rebuildProgress.status === status
-  )) throw new Error("Invalid memory rebuild status");
-  if (value.rebuildTask !== null) {
-    assertObject(value.rebuildTask, "rebuild task");
-    requireId(value.rebuildTask.id, "rebuild task id");
-    array2(value.rebuildTask.windows, "rebuild windows");
-    assertInteger(value.rebuildTask.nextWindow, "rebuild cursor", 0);
-    if (value.rebuildTask.windows.length === 0 || value.rebuildTask.nextWindow > value.rebuildTask.windows.length) throw new Error("Invalid rebuild cursor or source plan");
-    let sourceTotal = 0, processedTotal = 0, completedChats = 0, windowIndex = 0;
-    const chats = /* @__PURE__ */ new Set(), finishedChats = /* @__PURE__ */ new Set();
-    let previousChat = null;
-    for (const window of value.rebuildTask.windows) {
-      assertObject(window, "rebuild window");
-      requireId(window.chatId, "rebuild chat id");
-      assertString(window.chatTitle, "rebuild chat title");
-      assertInteger(window.sourceMessageCount, "source message count", 1);
-      array2(window.messages, "rebuild messages");
-      if (window.messages.length < window.sourceMessageCount) throw new Error("Rebuild source count exceeds the stored messages");
-      sourceTotal += window.sourceMessageCount;
-      if (windowIndex < value.rebuildTask.nextWindow) processedTotal += window.sourceMessageCount;
-      const chatId = requireId(window.chatId, "window chat id");
-      if (previousChat !== null && previousChat !== chatId) {
-        finishedChats.add(previousChat);
-        if (finishedChats.has(chatId)) throw new Error("Rebuild plan repeats a completed chat block");
-        if (windowIndex <= value.rebuildTask.nextWindow) completedChats += 1;
-      }
-      previousChat = chatId;
-      chats.add(chatId);
-      windowIndex += 1;
-      for (const message of window.messages) {
-        assertMemoryChatMessage(message);
-        if (message.sender !== "user" && message.sender !== "ai" && message.sender !== "assistant") throw new Error("Rebuild window has an unsupported source sender");
-        assertString(message.content, "source message content");
-        if (message.content.trim() === "") throw new Error("Rebuild window contains a blank source message");
-      }
-    }
-    if (value.rebuildTask.nextWindow === value.rebuildTask.windows.length) completedChats += 1;
-    if (value.rebuildProgress.totalWindows !== value.rebuildTask.windows.length || value.rebuildProgress.completedWindows !== value.rebuildTask.nextWindow) throw new Error("Rebuild plan and progress disagree");
-    if (value.rebuildProgress.totalSourceMessages !== sourceTotal || value.rebuildProgress.processedSourceMessages !== processedTotal || value.rebuildProgress.totalChats !== chats.size || value.rebuildProgress.completedChats !== completedChats) throw new Error("Rebuild counters disagree with the actual source plan");
-    if (value.rebuildProgress.status === "completed" && value.rebuildTask.nextWindow !== value.rebuildTask.windows.length) throw new Error("Completed rebuild has unprocessed source windows");
-    if (value.rebuildProgress.status === "preparing" && value.rebuildTask.nextWindow !== 0) throw new Error("Preparing rebuild already has processed source windows");
-  } else if (value.rebuildProgress.status !== "idle") throw new Error("Rebuild progress is missing its source plan");
-  array2(value.embeddings, "embeddings");
-  const embeddingKeys = /* @__PURE__ */ new Set();
-  for (const item of value.embeddings) {
-    assertEmbedding(item);
-    const key = JSON.stringify([item.endpoint, item.model, item.text]);
-    if (embeddingKeys.has(key)) throw new Error("Duplicate stored embedding input");
-    embeddingKeys.add(key);
-  }
 }
 
 // src/storage/records.ts
@@ -1207,7 +845,7 @@ function records(state) {
   }
   return result;
 }
-function stateFromRecords(metadata, rows) {
+function decodeStateFromRecords(metadata, rows) {
   assertObject(metadata, "character database metadata");
   if (metadata.migrationStatus === "writing" || metadata.legacyImportPending === true)
     throw new Error("Character migration has not completed");
@@ -1266,7 +904,6 @@ function stateFromRecords(metadata, rows) {
     }
     entries.push(row.value.record);
   }
-  assertCharacterState(state);
   return state;
 }
 
@@ -1308,7 +945,9 @@ function absolute(directory, relative) {
 }
 function ownerFiles(directory, source, destination) {
   return __async(this, null, function* () {
-    const listing = yield Tools.Files.list(absolute(directory, source));
+    const path = absolute(directory, source);
+    if (!(yield Tools.Files.exists(path)).exists) return [];
+    const listing = yield Tools.Files.list(path);
     const result = [];
     for (const entry of listing.entries) {
       if (entry.name === "." || entry.name === ".." || /[/\\:\u0000-\u001f]/u.test(entry.name))
@@ -1319,6 +958,22 @@ function ownerFiles(directory, source, destination) {
     }
     return result;
   });
+}
+function removeDeletedReferences(state) {
+  const tags = new Set(state.tags.map((tag) => tag.id));
+  const stores = new Set(state.stores.map((store) => store.id));
+  const cards = new Set(state.cards.map((card) => card.id));
+  for (const card of state.cards) {
+    card.attachedTagIds = card.attachedTagIds.filter((id2) => tags.has(id2));
+    card.sharedMemoryMounts = card.sharedMemoryMounts.filter((mount2) => stores.has(mount2.sharedMemoryId));
+  }
+  for (const group of state.groups) group.members = group.members.filter((member2) => cards.has(member2.characterCardId));
+  for (const owner2 of state.owners) {
+    const memories = new Set(owner2.memories.map((memory) => memory.id));
+    const documents2 = new Set(owner2.memories.filter((memory) => memory.isDocumentNode).map((memory) => memory.uuid));
+    owner2.links = owner2.links.filter((link) => memories.has(link.sourceMemoryId) && memories.has(link.targetMemoryId));
+    owner2.chunks = owner2.chunks.filter((chunk) => documents2.has(chunk.memoryUuid));
+  }
 }
 function prepareVersionOne(storage, metadata, directory) {
   return __async(this, null, function* () {
@@ -1332,18 +987,19 @@ function prepareVersionOne(storage, metadata, directory) {
     }
     const inputMetadata = { ...metadata, version: 1 };
     delete inputMetadata.legacyImportPending;
-    const state = stateFromRecords(inputMetadata, input);
-    const before = records(state), identities2 = {};
+    const state = decodeStateFromRecords(inputMetadata, input);
+    removeDeletedReferences(state);
+    const before = records(state), identities = {};
     function identity(scope, value) {
       requireId(value, scope + " identity");
       const key = JSON.stringify([scope, value]);
-      if (!Object.prototype.hasOwnProperty.call(identities2, key)) identities2[key] = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value) ? value : uuid();
-      return identities2[key];
+      if (!Object.prototype.hasOwnProperty.call(identities, key)) identities[key] = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value) ? value : uuid();
+      return identities[key];
     }
     function reference(scope, value) {
       const key = JSON.stringify([scope, value]);
-      if (!Object.prototype.hasOwnProperty.call(identities2, key)) throw new Error("Missing migration reference: " + key);
-      return identities2[key];
+      if (!Object.prototype.hasOwnProperty.call(identities, key)) throw new Error("Missing migration reference: " + key);
+      return identities[key];
     }
     const sourceStoreIds = new Set(state.stores.map((store) => store.id));
     const sourceCardIds = new Set(state.cards.map((card) => card.id));
@@ -1399,12 +1055,16 @@ function prepareVersionOne(storage, metadata, directory) {
       for (const field of ["documentPath", "chunkIndexFilePath"]) {
         const path = memory[field];
         if (path === null) continue;
+        const source = path.startsWith("owners/") ? absolute(directory, path) : path;
+        if (!(yield Tools.Files.exists(source)).exists) {
+          memory[field] = null;
+          continue;
+        }
         for (const move of resourceMoves) if (path.startsWith(move.source + "/")) {
           memory[field] = move.destination + path.slice(move.source.length);
           break;
         }
       }
-    assertCharacterState(state);
     const after = records(state), changes = [];
     const original = new Map(rows.map((row) => [JSON.stringify([row.collection, row.key]), row]));
     const targets = /* @__PURE__ */ new Set();
@@ -1424,6 +1084,9 @@ function prepareVersionOne(storage, metadata, directory) {
         ]);
       }
     }
+    const retained = new Set(before.map((row) => JSON.stringify([row.collection, row.key])));
+    for (const row of rows) if (!retained.has(JSON.stringify([row.collection, row.key])))
+      changes.push([{ op: "delete", collection: row.collection, key: row.key, expectedValue: row.value }]);
     for (const [key, originalValue] of (yield storage.chats.data()).entries()) {
       const collection = key.startsWith("binding_") ? "chat_bindings" : key.startsWith("draft_") ? "chat_drafts" : null;
       if (collection === null) throw new Error("Unsupported chat preference during migration: " + key);
@@ -1436,7 +1099,6 @@ function prepareVersionOne(storage, metadata, directory) {
     const files = [];
     for (const move of directories) {
       const entries = yield ownerFiles(directory, move.source, move.destination);
-      if (!entries.some((entry) => entry.source === move.source + "/USER.md")) throw new Error("Missing source owner USER.md: " + move.source);
       files.push(...entries);
     }
     const authors = [];
@@ -1456,7 +1118,7 @@ function prepareVersionOne(storage, metadata, directory) {
         }
       }
     }
-    return { from: "released", to: 1, phase: "files", cursor: 0, active: storedValue(state.active), identities: identities2, files, directories, authors, changes };
+    return { from: "released", to: 1, phase: "files", cursor: 0, active: storedValue(state.active), identities, files, directories, authors, changes };
   });
 }
 function verifyFile(directory, file) {
@@ -1540,10 +1202,16 @@ function migrateLegacyToV1(storage, preferences, directory, source) {
             if (!exists.exists) {
               completed(yield Tools.Files.mkdir(destination.slice(0, destination.lastIndexOf("/")), true));
               completed(yield Tools.Files.copy(absolute(directory, file.source), destination, false));
-            }
-            yield verifyFile(directory, file);
+            } else yield verifyFile(directory, file);
             plan.cursor += 1;
             yield publish();
+          }
+          for (const move of plan.directories) {
+            const document2 = absolute(directory, move.destination + "/USER.md");
+            if (!(yield Tools.Files.exists(document2)).exists) {
+              completed(yield Tools.Files.mkdir(document2.slice(0, document2.lastIndexOf("/")), true));
+              completed(yield Tools.Files.write(document2, ""));
+            }
           }
           plan.phase = "authors";
           plan.cursor = 0;
@@ -1555,8 +1223,6 @@ function migrateLegacyToV1(storage, preferences, directory, source) {
             if (extension === null || Object.keys(extension).length !== 1 || extension.participantId !== author.before && extension.participantId !== author.after)
               throw new Error("Message author changed during character migration");
             if (extension.participantId === author.before) yield Tools.Chat.writeExtension(author.target, { participantId: author.after });
-            const written = yield Tools.Chat.readExtension(author.target);
-            if (!equal(written.extension, { participantId: author.after })) throw new Error("Message author migration verification failed");
             plan.cursor += 1;
             yield publish();
           }
@@ -1576,38 +1242,20 @@ function migrateLegacyToV1(storage, preferences, directory, source) {
             plan.cursor = cursor;
             yield publish();
           }
-          plan.phase = "verify";
-          plan.cursor = 0;
-          yield publish();
-          break;
-        case "verify": {
-          const rows = yield migrationRecords(storage);
-          const finalMetadata = { ...metadata, version: 1, active: plan.active };
-          delete finalMetadata.legacyImportPending;
-          stateFromRecords(finalMetadata, rows);
-          for (const group of plan.changes) for (const change of group) {
-            let value;
-            const name = configurationNames.find((name2) => name2 === change.collection);
-            if (name !== void 0) value = (yield storage.configuration[name].data()).get(recordPrefix + change.key);
-            else if (change.collection === "chat_bindings" || change.collection === "chat_drafts") value = (yield storage.chats.data()).get((change.collection === "chat_bindings" ? "binding_" : "draft_") + change.key);
-            else {
-              const entry = yield storage.memory.get(change.collection, change.key);
-              value = entry === null ? void 0 : entry.value;
-            }
-            if (change.op === "put" ? !equal(value, change.value) : value !== void 0)
-              throw new Error("Character schema record verification failed: " + change.key);
-          }
-          for (const file of plan.files) yield verifyFile(directory, file);
           plan.phase = "cleanup";
           plan.cursor = 0;
           yield publish();
           break;
-        }
+        // Retains the persisted phase name so interrupted released migrations can continue.
+        case "verify":
+          plan.phase = "cleanup";
+          plan.cursor = 0;
+          yield publish();
+          break;
         case "cleanup":
           for (; plan.cursor < plan.directories.length; ) {
             const source2 = absolute(directory, plan.directories[plan.cursor].source);
             if ((yield Tools.Files.exists(source2)).exists) {
-              for (const file of plan.files) if (file.source.startsWith(plan.directories[plan.cursor].source + "/")) yield verifyFile(directory, file);
               completed(yield Tools.Files.deleteFile(source2, true));
             }
             plan.cursor += 1;
@@ -2045,18 +1693,18 @@ function selectedOption(data) {
 function menuAvatar(ctx, option, unboundAvatar) {
   const props = { width: 32, height: 32, contentScale: "crop", modifier: ctx.Modifier.clip({ type: "circle" }) };
   if (option === null) {
-    if (unboundAvatar === null) return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:90614",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:90680",[ctx.MaterialTheme.colorScheme.onSurfaceVariant],__operitUiTemplate_90680)],__operitUiTemplate_90614);
-    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:90789",[{ ...props, path: unboundAvatar, contentDescription: "\u672A\u7ED1\u5B9A" }],__operitUiTemplate_90789);
+    if (unboundAvatar === null) return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:68649",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:68715",[ctx.MaterialTheme.colorScheme.onSurfaceVariant],__operitUiTemplate_68715)],__operitUiTemplate_68649);
+    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:68824",[{ ...props, path: unboundAvatar, contentDescription: "\u672A\u7ED1\u5B9A" }],__operitUiTemplate_68824);
   }
   switch (option.avatar.type) {
     case "uri":
-      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:90945",[{ ...props, uri: option.avatar.uri, contentDescription: option.title }],__operitUiTemplate_90945);
+      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:68980",[{ ...props, uri: option.avatar.uri, contentDescription: option.title }],__operitUiTemplate_68980);
     case "resource":
-      return option.avatar.path === null ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91095",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91161",[ctx.MaterialTheme.colorScheme.onSurfaceVariant],__operitUiTemplate_91161)],__operitUiTemplate_91095) : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91260",[{ ...props, path: option.avatar.path, contentDescription: option.title }],__operitUiTemplate_91260);
+      return option.avatar.path === null ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69130",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69196",[ctx.MaterialTheme.colorScheme.onSurfaceVariant],__operitUiTemplate_69196)],__operitUiTemplate_69130) : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69295",[{ ...props, path: option.avatar.path, contentDescription: option.title }],__operitUiTemplate_69295);
     case "model":
-      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91379",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91445",[ctx.MaterialTheme.colorScheme.onSurfaceVariant],__operitUiTemplate_91445)],__operitUiTemplate_91379);
+      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69414",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69480",[ctx.MaterialTheme.colorScheme.onSurfaceVariant],__operitUiTemplate_69480)],__operitUiTemplate_69414);
     case "group":
-      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91576",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:91642",[ctx.MaterialTheme.colorScheme.onSurfaceVariant],__operitUiTemplate_91642)],__operitUiTemplate_91576);
+      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69611",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:69677",[ctx.MaterialTheme.colorScheme.onSurfaceVariant],__operitUiTemplate_69677)],__operitUiTemplate_69611);
   }
 }
 function renderChatInputMenu(ctx) {
@@ -2093,17 +1741,17 @@ function renderChatInputMenu(ctx) {
     });
   }
   const colors = ctx.MaterialTheme.colorScheme;
-  if (state.error !== "") return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:93492",[state.error,colors.error],__operitUiTemplate_93492);
-  if (state.data === null) return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:93626",[load,ctx.Modifier.heightIn({ minHeight: 48 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:93789",null,__operitUiTemplate_93789)],__operitUiTemplate_93626);
+  if (state.error !== "") return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:71527",[state.error,colors.error],__operitUiTemplate_71527);
+  if (state.data === null) return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:71661",[load,ctx.Modifier.heightIn({ minHeight: 48 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:71824",null,__operitUiTemplate_71824)],__operitUiTemplate_71661);
   const option = selectedOption(state.data);
-  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:93905",[ctx.Modifier.heightIn({ minHeight: 48 }),() => {
+  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:71940",[ctx.Modifier.heightIn({ minHeight: 48 }),() => {
       assertOwner();
       return {
         type: "toolpkg.ui.present",
         routeId: chatUiRoutes.selection,
         input: { mode: "select", chatId, kind: "card", selected: option !== null && option.kind !== "group" ? option.selection : null }
       };
-    },menuAvatar(ctx, option, state.unboundAvatar),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:94556",null,__operitUiTemplate_94556),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:94590",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:94627",[colors.onSurfaceVariant],__operitUiTemplate_94627),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:94743",[option === null ? "\u672A\u7ED1\u5B9A" : option.title,colors.onSurface],__operitUiTemplate_94743)],__operitUiTemplate_94590),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:94931",[colors.onSurfaceVariant],__operitUiTemplate_94931)],__operitUiTemplate_93905);
+    },menuAvatar(ctx, option, state.unboundAvatar),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:72591",null,__operitUiTemplate_72591),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:72625",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:72662",[colors.onSurfaceVariant],__operitUiTemplate_72662),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:72778",[option === null ? "\u672A\u7ED1\u5B9A" : option.title,colors.onSurface],__operitUiTemplate_72778)],__operitUiTemplate_72625),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-input-menu/index.ui.js:72966",[colors.onSurfaceVariant],__operitUiTemplate_72966)],__operitUiTemplate_71940);
 }
 
 // src/ui/chat-input-menu/index.ui.ts
@@ -2111,23 +1759,23 @@ function Screen(ctx) {
   return renderChatInputMenu(ctx);
 }
 
-function __operitUiTemplate_90680(__ctx,__values){return __ctx.UI.Icon({name:"Person",size:24,tint:__values[0]}); }
-function __operitUiTemplate_90614(__ctx,__values){return __ctx.UI.Box({width:32,height:32,contentAlignment:"center"},__values[0]); }
-function __operitUiTemplate_90789(__ctx,__values){return __ctx.UI.Image(__values[0]); }
-function __operitUiTemplate_90945(__ctx,__values){return __ctx.UI.Image(__values[0]); }
-function __operitUiTemplate_91161(__ctx,__values){return __ctx.UI.Icon({name:"Person",size:24,tint:__values[0]}); }
-function __operitUiTemplate_91095(__ctx,__values){return __ctx.UI.Box({width:32,height:32,contentAlignment:"center"},__values[0]); }
-function __operitUiTemplate_91260(__ctx,__values){return __ctx.UI.Image(__values[0]); }
-function __operitUiTemplate_91445(__ctx,__values){return __ctx.UI.Icon({name:"SmartToy",size:24,tint:__values[0]}); }
-function __operitUiTemplate_91379(__ctx,__values){return __ctx.UI.Box({width:32,height:32,contentAlignment:"center"},__values[0]); }
-function __operitUiTemplate_91642(__ctx,__values){return __ctx.UI.Icon({name:"Groups",size:24,tint:__values[0]}); }
-function __operitUiTemplate_91576(__ctx,__values){return __ctx.UI.Box({width:32,height:32,contentAlignment:"center"},__values[0]); }
-function __operitUiTemplate_93492(__ctx,__values){return __ctx.UI.Text({text:__values[0],color:__values[1],paddingHorizontal:12,paddingVertical:6}); }
-function __operitUiTemplate_93789(__ctx,__values){return __ctx.UI.CircularProgressIndicator({width:18,height:18}); }
-function __operitUiTemplate_93626(__ctx,__values){return __ctx.UI.Box({key:"current-character-loading",onLoad:__values[0],modifier:__values[1],fillMaxWidth:true,contentAlignment:"center"},__values[2]); }
-function __operitUiTemplate_94556(__ctx,__values){return __ctx.UI.Spacer({width:10}); }
-function __operitUiTemplate_94627(__ctx,__values){return __ctx.UI.Text({text:"\u5F53\u524D\u89D2\u8272\u5361",style:"labelSmall",color:__values[0]}); }
-function __operitUiTemplate_94743(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodySmall",color:__values[1],fontWeight:"600",maxLines:1,overflow:"ellipsis"}); }
-function __operitUiTemplate_94590(__ctx,__values){return __ctx.UI.Column({weight:1},[__values[0],__values[1]]); }
-function __operitUiTemplate_94931(__ctx,__values){return __ctx.UI.Icon({name:"ChevronRight",size:20,tint:__values[0]}); }
-function __operitUiTemplate_93905(__ctx,__values){return __ctx.UI.Row({key:"current-character",fillMaxWidth:true,paddingHorizontal:12,paddingVertical:6,verticalAlignment:"center",modifier:__values[0],onClick:__values[1]},[__values[2],__values[3],__values[4],__values[5]]); }
+function __operitUiTemplate_68715(__ctx,__values){return __ctx.UI.Icon({name:"Person",size:24,tint:__values[0]}); }
+function __operitUiTemplate_68649(__ctx,__values){return __ctx.UI.Box({width:32,height:32,contentAlignment:"center"},__values[0]); }
+function __operitUiTemplate_68824(__ctx,__values){return __ctx.UI.Image(__values[0]); }
+function __operitUiTemplate_68980(__ctx,__values){return __ctx.UI.Image(__values[0]); }
+function __operitUiTemplate_69196(__ctx,__values){return __ctx.UI.Icon({name:"Person",size:24,tint:__values[0]}); }
+function __operitUiTemplate_69130(__ctx,__values){return __ctx.UI.Box({width:32,height:32,contentAlignment:"center"},__values[0]); }
+function __operitUiTemplate_69295(__ctx,__values){return __ctx.UI.Image(__values[0]); }
+function __operitUiTemplate_69480(__ctx,__values){return __ctx.UI.Icon({name:"SmartToy",size:24,tint:__values[0]}); }
+function __operitUiTemplate_69414(__ctx,__values){return __ctx.UI.Box({width:32,height:32,contentAlignment:"center"},__values[0]); }
+function __operitUiTemplate_69677(__ctx,__values){return __ctx.UI.Icon({name:"Groups",size:24,tint:__values[0]}); }
+function __operitUiTemplate_69611(__ctx,__values){return __ctx.UI.Box({width:32,height:32,contentAlignment:"center"},__values[0]); }
+function __operitUiTemplate_71527(__ctx,__values){return __ctx.UI.Text({text:__values[0],color:__values[1],paddingHorizontal:12,paddingVertical:6}); }
+function __operitUiTemplate_71824(__ctx,__values){return __ctx.UI.CircularProgressIndicator({width:18,height:18}); }
+function __operitUiTemplate_71661(__ctx,__values){return __ctx.UI.Box({key:"current-character-loading",onLoad:__values[0],modifier:__values[1],fillMaxWidth:true,contentAlignment:"center"},__values[2]); }
+function __operitUiTemplate_72591(__ctx,__values){return __ctx.UI.Spacer({width:10}); }
+function __operitUiTemplate_72662(__ctx,__values){return __ctx.UI.Text({text:"\u5F53\u524D\u89D2\u8272\u5361",style:"labelSmall",color:__values[0]}); }
+function __operitUiTemplate_72778(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"bodySmall",color:__values[1],fontWeight:"600",maxLines:1,overflow:"ellipsis"}); }
+function __operitUiTemplate_72625(__ctx,__values){return __ctx.UI.Column({weight:1},[__values[0],__values[1]]); }
+function __operitUiTemplate_72966(__ctx,__values){return __ctx.UI.Icon({name:"ChevronRight",size:20,tint:__values[0]}); }
+function __operitUiTemplate_71940(__ctx,__values){return __ctx.UI.Row({key:"current-character",fillMaxWidth:true,paddingHorizontal:12,paddingVertical:6,verticalAlignment:"center",modifier:__values[0],onClick:__values[1]},[__values[2],__values[3],__values[4],__values[5]]); }

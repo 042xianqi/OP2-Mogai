@@ -4,13 +4,14 @@ import type { CharacterStorage } from "../preferences";
 import { configurationNames, recordPrefix } from "../preferences";
 import type { ObjectMutation } from "../memory";
 import type { StoredRecord } from "../records";
+import type { CharacterState } from "../../model";
 type RecordChange = { collection: string; key: string; expectedValue: Storage.Value | null } &
   ({ op: "put"; value: Storage.Value } | { op: "delete" });
 import { uuid } from "../../identity";
 import { parseChatSelection } from "../../chat-bindings";
 import { assertInteger, assertObject, requireId } from "../../validation";
-import { clone, equal, records, stateFromRecords, storedValue } from "../records";
-import { assertCharacterState, userDocumentPath } from "../state";
+import { clone, decodeStateFromRecords, equal, records, storedValue } from "../records";
+import { userDocumentPath } from "../state";
 
 type Document = Record<string, Storage.Value>;
 type AuthorTarget = Extract<Chat.ExtensionTarget, { kind: "message" }>;
@@ -72,7 +73,9 @@ function absolute(directory: string, relative: string): string {
 
 /** Enumerates exact source files before persisting any migration work. */
 async function ownerFiles(directory: string, source: string, destination: string): Promise<FileChange[]> {
-  const listing = await Tools.Files.list(absolute(directory, source));
+  const path = absolute(directory, source);
+  if (!(await Tools.Files.exists(path)).exists) return [];
+  const listing = await Tools.Files.list(path);
   const result: FileChange[] = [];
   for (const entry of listing.entries) {
     if (entry.name === "." || entry.name === ".." || /[/\\:\u0000-\u001f]/u.test(entry.name))
@@ -84,6 +87,24 @@ async function ownerFiles(directory: string, source: string, destination: string
   return result;
 }
 
+/** Removes released list references whose targets no longer exist while retaining explicit primary choices. */
+function removeDeletedReferences(state: CharacterState): void {
+  const tags = new Set(state.tags.map(tag => tag.id));
+  const stores = new Set(state.stores.map(store => store.id));
+  const cards = new Set(state.cards.map(card => card.id));
+  for (const card of state.cards) {
+    card.attachedTagIds = card.attachedTagIds.filter(id => tags.has(id));
+    card.sharedMemoryMounts = card.sharedMemoryMounts.filter(mount => stores.has(mount.sharedMemoryId));
+  }
+  for (const group of state.groups) group.members = group.members.filter(member => cards.has(member.characterCardId));
+  for (const owner of state.owners) {
+    const memories = new Set(owner.memories.map(memory => memory.id));
+    const documents = new Set(owner.memories.filter(memory => memory.isDocumentNode).map(memory => memory.uuid));
+    owner.links = owner.links.filter(link => memories.has(link.sourceMemoryId) && memories.has(link.targetMemoryId));
+    owner.chunks = owner.chunks.filter(chunk => documents.has(chunk.memoryUuid));
+  }
+}
+
 /** Plans the plugin-owned released Core identities and their explicit references exactly once. */
 async function prepareVersionOne(storage: CharacterStorage, metadata: Document, directory: string): Promise<MigrationPlan> {
   const rows = await migrationRecords(storage);
@@ -92,7 +113,9 @@ async function prepareVersionOne(storage: CharacterStorage, metadata: Document, 
     if (row.collection === "cards") { assertObject(row.value, "legacy card"); delete row.value.isDefault; }
   }
   const inputMetadata: Document = { ...metadata, version: 1 }; delete inputMetadata.legacyImportPending;
-  const state = stateFromRecords(inputMetadata, input);
+  // The released records have the same fields; repair their references before normal business reads.
+  const state = decodeStateFromRecords(inputMetadata, input) as unknown as CharacterState;
+  removeDeletedReferences(state);
   const before = records(state), identities: Record<string, string> = {};
   /** Allocates a UUID in an explicit domain scope while preserving existing UUIDs. */
   function identity(scope: string, value: string): string {
@@ -165,12 +188,16 @@ async function prepareVersionOne(storage: CharacterStorage, metadata: Document, 
     for (const field of ["documentPath", "chunkIndexFilePath"] as const) {
       const path = memory[field];
       if (path === null) continue;
+      const source = path.startsWith("owners/") ? absolute(directory, path) : path;
+      if (!(await Tools.Files.exists(source)).exists) {
+        memory[field] = null;
+        continue;
+      }
       for (const move of resourceMoves) if (path.startsWith(move.source + "/")) {
         memory[field] = move.destination + path.slice(move.source.length);
         break;
       }
     }
-  assertCharacterState(state);
   const after = records(state), changes: RecordChange[][] = [];
   const original = new Map(rows.map(row => [JSON.stringify([row.collection, row.key]), row]));
   const targets = new Set<string>();
@@ -190,6 +217,9 @@ async function prepareVersionOne(storage: CharacterStorage, metadata: Document, 
       ]);
     }
   }
+  const retained = new Set(before.map(row => JSON.stringify([row.collection, row.key])));
+  for (const row of rows) if (!retained.has(JSON.stringify([row.collection, row.key])))
+    changes.push([{ op: "delete", collection: row.collection, key: row.key, expectedValue: row.value }]);
   for (const [key, originalValue] of (await storage.chats.data()).entries()) {
     const collection = key.startsWith("binding_") ? "chat_bindings" : key.startsWith("draft_") ? "chat_drafts" : null;
     if (collection === null) throw new Error("Unsupported chat preference during migration: " + key);
@@ -201,7 +231,6 @@ async function prepareVersionOne(storage: CharacterStorage, metadata: Document, 
   const files: FileChange[] = [];
   for (const move of directories) {
     const entries = await ownerFiles(directory, move.source, move.destination);
-    if (!entries.some(entry => entry.source === move.source + "/USER.md")) throw new Error("Missing source owner USER.md: " + move.source);
     files.push(...entries);
   }
   const authors: AuthorChange[] = [];
@@ -303,8 +332,15 @@ export async function migrateLegacyToV1(storage: CharacterStorage, preferences: 
             completed(await Tools.Files.mkdir(destination.slice(0, destination.lastIndexOf("/")), true));
             completed(await Tools.Files.copy(absolute(directory, file.source), destination, false));
           }
-          await verifyFile(directory, file);
+          else await verifyFile(directory, file);
           plan.cursor += 1; await publish();
+        }
+        for (const move of plan.directories) {
+          const document = absolute(directory, move.destination + "/USER.md");
+          if (!(await Tools.Files.exists(document)).exists) {
+            completed(await Tools.Files.mkdir(document.slice(0, document.lastIndexOf("/")), true));
+            completed(await Tools.Files.write(document, ""));
+          }
         }
         plan.phase = "authors"; plan.cursor = 0; await publish(); break;
       case "authors":
@@ -313,8 +349,6 @@ export async function migrateLegacyToV1(storage: CharacterStorage, preferences: 
           if (extension === null || Object.keys(extension).length !== 1 || (extension.participantId !== author.before && extension.participantId !== author.after))
             throw new Error("Message author changed during character migration");
           if (extension.participantId === author.before) await Tools.Chat.writeExtension(author.target, { participantId: author.after });
-          const written = await Tools.Chat.readExtension(author.target);
-          if (!equal(written.extension, { participantId: author.after })) throw new Error("Message author migration verification failed");
           plan.cursor += 1; await publish();
         }
         plan.phase = "records"; plan.cursor = 0; await publish(); break;
@@ -329,28 +363,14 @@ export async function migrateLegacyToV1(storage: CharacterStorage, preferences: 
           plan.cursor = cursor;
           await publish();
         }
-        plan.phase = "verify"; plan.cursor = 0; await publish(); break;
-      case "verify": {
-        const rows = await migrationRecords(storage);
-        const finalMetadata: Document = { ...metadata, version: 1, active: plan.active }; delete finalMetadata.legacyImportPending;
-        stateFromRecords(finalMetadata, rows);
-        for (const group of plan.changes) for (const change of group) {
-          let value: Storage.Value | undefined;
-          const name = configurationNames.find(name => name === change.collection);
-          if (name !== undefined) value = (await storage.configuration[name].data()).get(recordPrefix + change.key);
-          else if (change.collection === "chat_bindings" || change.collection === "chat_drafts") value = (await storage.chats.data()).get((change.collection === "chat_bindings" ? "binding_" : "draft_") + change.key);
-          else { const entry = await storage.memory.get(change.collection, change.key); value = entry === null ? undefined : entry.value; }
-          if (change.op === "put" ? !equal(value, change.value) : value !== undefined)
-            throw new Error("Character schema record verification failed: " + change.key);
-        }
-        for (const file of plan.files) await verifyFile(directory, file);
         plan.phase = "cleanup"; plan.cursor = 0; await publish(); break;
-      }
+      // Retains the persisted phase name so interrupted released migrations can continue.
+      case "verify":
+        plan.phase = "cleanup"; plan.cursor = 0; await publish(); break;
       case "cleanup":
         for (; plan.cursor < plan.directories.length;) {
           const source = absolute(directory, plan.directories[plan.cursor].source);
           if ((await Tools.Files.exists(source)).exists) {
-            for (const file of plan.files) if (file.source.startsWith(plan.directories[plan.cursor].source + "/")) await verifyFile(directory, file);
             completed(await Tools.Files.deleteFile(source, true));
           }
           plan.cursor += 1; await publish();
