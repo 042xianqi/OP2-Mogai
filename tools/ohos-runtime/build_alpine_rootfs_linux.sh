@@ -134,6 +134,7 @@ build_rootfs() {
 
     env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy \
         "$apk_static_dir/sbin/apk.static" \
+        --usermode \
         --root "$root_dir" \
         --arch "$alpine_arch" \
         --keys-dir "$root_dir/etc/apk/keys" \
