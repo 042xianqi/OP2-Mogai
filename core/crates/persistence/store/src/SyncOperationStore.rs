@@ -179,7 +179,10 @@ impl SyncOperationKnowledge for SyncReceipt {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncOperationSemantics {
+    /// Replaces one declared entity state according to its owner's conflict order.
     EntityState,
+    /// Preserves an immutable ordered mutation for replay and commits the owner's resolved plan atomically.
+    /// Conflict resolution belongs to the owner; this flag does not declare cross-dataset atomicity.
     Transaction,
 }
 
@@ -272,7 +275,18 @@ impl SyncOperationOrder {
     /// Builds the conflict order carried by one synchronization operation.
     pub fn fromOperation(operation: &SyncOperation) -> Self {
         Self {
-            createdAt: operation.createdAt,
+            createdAt: match (
+                operation.domain.as_str(),
+                operation
+                    .payload
+                    .get("contractVersion")
+                    .and_then(Value::as_u64),
+            ) {
+                ("preferences", Some(1)) => operation.payload["logicalTime"]
+                    .as_i64()
+                    .expect("validated preference logical time"),
+                _ => operation.createdAt,
+            },
             originDeviceId: operation.originDeviceId.clone(),
             sequence: operation.sequence,
         }
@@ -371,6 +385,7 @@ struct SyncOperationStoreSharedState {
     operationLogs: Mutex<HashMap<String, Arc<Mutex<SyncOperationLogIndex>>>>,
     receiveState: Mutex<SyncOperationCachedValue<SyncReceiveState>>,
     application: Mutex<()>,
+    preferenceOutboxes: Mutex<SyncOperationCachedValue<BTreeMap<String, bool>>>,
 }
 
 /// Keeps durable receipt membership after completed native history is compacted.
@@ -378,6 +393,8 @@ struct SyncOperationStoreSharedState {
 struct SyncReceiveState {
     receipt: SyncReceipt,
     pending: BTreeMap<String, SyncOperation>,
+    #[serde(default)]
+    fingerprints: BTreeMap<String, String>,
 }
 
 struct SyncOperationCachedValue<T> {
@@ -458,6 +475,65 @@ impl SyncOperationStore {
             defaultRuntimeStorageHost(),
             runtimeStoragePath(&paths.adjacent_sync_dir()),
         )
+    }
+
+    /// Registers a dataset before its first durable state-and-outbox commit.
+    pub(crate) fn registerPreferenceOutbox(
+        &self,
+        path: &str,
+        encrypted: bool,
+    ) -> Result<(), SyncOperationStoreError> {
+        let mut cached =
+            lockSyncState(&self.sharedState.preferenceOutboxes, "preference outboxes")?;
+        let registryPath = format!("{}/preference_outboxes.json", self.rootPath);
+        let mut registry = self.loadCachedJson(&mut cached, &registryPath)?.clone();
+        match registry.get(path) {
+            Some(previous) if *previous != encrypted => {
+                return Err(SyncOperationStoreError::Message(
+                    "Conflicting preference outbox encryption policy".into(),
+                ))
+            }
+            Some(_) => return Ok(()),
+            None => {}
+        }
+        registry.insert(path.into(), encrypted);
+        self.storageHost
+            .writeBytesAtomically(&registryPath, &serde_json::to_vec(&registry)?)?;
+        cached.value = registry;
+        Ok(())
+    }
+
+    /// Publishes only immutable operations whose owning business snapshot has already committed.
+    pub fn publishPreferenceOutboxes(&self) -> Result<Vec<String>, SyncOperationStoreError> {
+        let registry = {
+            let mut cached =
+                lockSyncState(&self.sharedState.preferenceOutboxes, "preference outboxes")?;
+            self.loadCachedJson(
+                &mut cached,
+                &format!("{}/preference_outboxes.json", self.rootPath),
+            )?
+            .clone()
+        };
+        let mut errors = Vec::new();
+        for (path, encrypted) in registry {
+            let store = if encrypted {
+                crate::PreferencesDataStore::PreferencesDataStore::newEncryptedWithStorage(
+                    self.storageHost.clone(),
+                    path.clone(),
+                )
+            } else {
+                crate::PreferencesDataStore::PreferencesDataStore::newWithStorage(
+                    self.storageHost.clone(),
+                    path.clone(),
+                )
+            };
+            if let Err(error) = store.publishOutbox(self) {
+                let error = format!("preference outbox path={path}: {error}");
+                operit_util::AppLogger::AppLogger::w("CoreSyncTrace", &error);
+                errors.push(error);
+            }
+        }
+        Ok(errors)
     }
 
     /// Appends a local operation and advances the local device sequence.
@@ -662,6 +738,18 @@ impl SyncOperationStore {
         if operations.is_empty() {
             return Ok(());
         }
+        let mut identities = BTreeMap::new();
+        for operation in operations {
+            if let Some(previous) = identities.insert(&operation.opId, operation) {
+                if previous != operation {
+                    return Err(SyncOperationStoreError::Message(format!(
+                        "Conflicting immutable operation {}",
+                        operation.opId
+                    )));
+                }
+            }
+            self.containsIdenticalOperation(operation)?;
+        }
         let encryption = if operations.iter().any(encryptedPreferenceSyncOperation) {
             Some(
                 PreferencesEncryption::load_or_create(self.storageHost.as_ref())
@@ -827,6 +915,48 @@ impl SyncOperationStore {
         maxBytes: usize,
         retain: impl Fn(&SyncOperation) -> bool,
     ) -> Result<Vec<SyncOperation>, SyncOperationStoreError> {
+        self.publishPreferenceOutboxes()?;
+        self.archivedOperationsSinceWithExportPolicy(
+            clock,
+            domains,
+            limit,
+            applyExportFloors,
+            maxBytes,
+            retain,
+        )
+    }
+
+    /// Reads archived originals without publishing outboxes or acquiring any preference dataset lock.
+    pub(crate) fn archivedPreferenceHistory(
+        &self,
+        path: &str,
+    ) -> Result<Vec<SyncOperation>, SyncOperationStoreError> {
+        self.archivedOperationsSinceWithExportPolicy(
+            &SyncClock::empty(),
+            &["preferences".to_owned()],
+            usize::MAX,
+            false,
+            usize::MAX,
+            |operation| {
+                operation
+                    .payload
+                    .get("storagePath")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(path)
+            },
+        )
+    }
+
+    /// Reads committed journal entries without invoking dataset publication during locked replay.
+    fn archivedOperationsSinceWithExportPolicy<K: SyncOperationKnowledge>(
+        &self,
+        clock: &K,
+        domains: &[String],
+        limit: usize,
+        applyExportFloors: bool,
+        maxBytes: usize,
+        retain: impl Fn(&SyncOperation) -> bool,
+    ) -> Result<Vec<SyncOperation>, SyncOperationStoreError> {
         let domainSet = domains.iter().cloned().collect::<BTreeSet<_>>();
         let exportFloors = if applyExportFloors {
             let mut state = lockSyncState(&self.sharedState.exportFloors, "export floors")?;
@@ -936,7 +1066,11 @@ impl SyncOperationStore {
                     self.readOperationLogRange(&deviceId, startOffset, byteLength)?
                 }
             };
-            out.extend(self.decodeOperationLog(&content)?.into_iter().filter(isMissing));
+            out.extend(
+                self.decodeOperationLog(&content)?
+                    .into_iter()
+                    .filter(isMissing),
+            );
         }
         out.retain(retain);
         out.sort_by(|left, right| {
@@ -974,6 +1108,21 @@ impl SyncOperationStore {
                 return Err(SyncOperationStoreError::Message(
                     "Invalid received operation identity".into(),
                 ));
+            }
+            use sha2::{Digest, Sha256};
+            let fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(operation)?));
+            if let Some(previous) = state.fingerprints.get(&operation.opId) {
+                if previous != &fingerprint {
+                    return Err(SyncOperationStoreError::Message(format!(
+                        "Conflicting immutable operation {}",
+                        operation.opId
+                    )));
+                }
+            } else {
+                state
+                    .fingerprints
+                    .insert(operation.opId.clone(), fingerprint);
+                changed = true;
             }
             if let Some(existing) = state.pending.get(&operation.opId) {
                 if self.decodeOperationPayload(existing.clone())? != *operation {
@@ -1106,6 +1255,7 @@ impl SyncOperationStore {
 
     /// Reads the local vector clock from storage.
     pub fn localClock(&self) -> Result<SyncClock, SyncOperationStoreError> {
+        self.publishPreferenceOutboxes()?;
         let mut clockState = lockSyncState(&self.sharedState.clock, "clock")?;
         Ok(self
             .loadCachedJson(&mut clockState, &self.clockPath())?
@@ -1131,8 +1281,13 @@ impl SyncOperationStore {
     #[allow(non_snake_case)]
     pub fn markLocalOperationsUnexportable(&self) -> Result<(), SyncOperationStoreError> {
         let deviceId = self.localDeviceId()?;
-        let sequence = self.localClock()?.sequenceFor(&deviceId);
-        self.setExportFloor(&deviceId, sequence)
+        let clock = self.localClock()?;
+        for (origin, sequence) in &clock.sequences {
+            if origin == &deviceId || origin.starts_with(&format!("{deviceId}:preferences:")) {
+                self.setExportFloor(origin, *sequence)?;
+            }
+        }
+        Ok(())
     }
 
     /// Sets the highest sequence excluded from future synchronization exports.
@@ -1741,7 +1896,7 @@ impl SyncOperationStore {
         T: serde::Serialize,
     {
         let content = serde_json::to_vec_pretty(value)?;
-        self.storageHost.writeBytes(path, &content)?;
+        self.storageHost.writeBytesAtomically(path, &content)?;
         Ok(())
     }
 
@@ -2004,134 +2159,14 @@ pub fn compactSyncOperations(operations: Vec<SyncOperation>) -> Vec<SyncOperatio
                 .or_insert(operation.sequence);
         }
     }
-    let migratedPreferenceKeys = preferenceKeysCoveredByNativeMigration(&operations);
     operations
         .into_iter()
         .filter(|operation| {
-            if operation.domain == "preferences"
-                && legacyPreferenceOperationSuperseded(operation, &migratedPreferenceKeys)
-            {
-                return false;
-            }
             operation.domain == "preferences"
                 || operation.semantics == SyncOperationSemantics::Transaction
                 || latestSequences.get(&syncEntityKey(operation)) == Some(&operation.sequence)
         })
         .collect()
-}
-
-/// Returns preference keys whose legacy history is replaced by a later schema
-/// migration snapshot. New snapshots carry an explicit marker. Older journals
-/// did not carry that marker, so the compatibility boundary is the earliest
-/// native operation that covers every key present in the legacy history for a
-/// storage path. This also handles ordinary native edits that preceded the
-/// old, unmarked migration snapshot.
-fn preferenceKeysCoveredByNativeMigration(
-    operations: &[SyncOperation],
-) -> BTreeMap<(String, String), SyncOperationOrder> {
-    let mut covered = BTreeMap::new();
-    let mut legacyKeysByPath = BTreeMap::<String, BTreeSet<String>>::new();
-    let mut nativeOperationsByPath = BTreeMap::<String, Vec<&SyncOperation>>::new();
-    for operation in operations.iter().filter(|operation| operation.domain == "preferences") {
-        let Some(path) = operation.payload.get("storagePath").and_then(Value::as_str) else {
-            continue;
-        };
-        if operation.payload.get("formatVersion").and_then(Value::as_u64) == Some(2) {
-            if operation
-                .payload
-                .get("migrationSnapshot")
-                .and_then(Value::as_bool)
-                == Some(true)
-            {
-                addCoveredPreferenceKeys(&mut covered, path, operation);
-            } else {
-                nativeOperationsByPath
-                    .entry(path.to_string())
-                    .or_default()
-                    .push(operation);
-            }
-        } else {
-            legacyKeysByPath
-                .entry(path.to_string())
-                .or_default()
-                .extend(preferenceOperationKeys(operation));
-        }
-    }
-    for (path, legacyKeys) in legacyKeysByPath {
-        let Some(nativeOperations) = nativeOperationsByPath.get(&path) else {
-            continue;
-        };
-        let migration = nativeOperations
-            .iter()
-            .filter(|operation| {
-                let nativeKeys = preferenceOperationKeys(operation);
-                legacyKeys
-                    .iter()
-                    .all(|key| nativeKeys.iter().any(|nativeKey| nativeKey == key))
-            })
-            .min_by_key(|operation| SyncOperationOrder::fromOperation(operation));
-        if let Some(operation) = migration {
-            addCoveredPreferenceKeys(&mut covered, &path, operation);
-        }
-    }
-    covered
-}
-
-/// Adds every root key carried by one migration snapshot to the compatibility map.
-fn addCoveredPreferenceKeys(
-    covered: &mut BTreeMap<(String, String), SyncOperationOrder>,
-    path: &str,
-    operation: &SyncOperation,
-) {
-    let order = SyncOperationOrder::fromOperation(operation);
-    for key in preferenceOperationKeys(operation) {
-        covered
-            .entry((path.to_string(), key))
-            .and_modify(|current| {
-                if *current < order {
-                    *current = order.clone();
-                }
-            })
-            .or_insert_with(|| order.clone());
-    }
-}
-
-/// Extracts root preference keys from either a single mutation or a transaction.
-fn preferenceOperationKeys(operation: &SyncOperation) -> Vec<String> {
-    if let Some(entries) = operation.payload.get("entries").and_then(Value::as_array) {
-        return entries
-            .iter()
-            .filter_map(|entry| entry.get("key").and_then(Value::as_str))
-            .map(str::to_owned)
-            .collect();
-    }
-    operation
-        .payload
-        .get("key")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .into_iter()
-        .collect()
-}
-
-/// Drops a legacy operation only when every key in it has a later native value.
-fn legacyPreferenceOperationSuperseded(
-    operation: &SyncOperation,
-    migratedKeys: &BTreeMap<(String, String), SyncOperationOrder>,
-) -> bool {
-    if operation.payload.get("formatVersion").is_some() {
-        return false;
-    }
-    let Some(path) = operation.payload.get("storagePath").and_then(Value::as_str) else {
-        return false;
-    };
-    let keys = preferenceOperationKeys(operation);
-    !keys.is_empty()
-        && keys.iter().all(|key| {
-            migratedKeys
-                .get(&(path.to_string(), key.clone()))
-                .is_some_and(|migration| *migration > SyncOperationOrder::fromOperation(operation))
-        })
 }
 
 /// Builds the origin-scoped identity used for operation-log compaction.

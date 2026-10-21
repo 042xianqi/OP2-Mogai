@@ -559,6 +559,11 @@ mod tests {
         fn runtimeRootDir(&self) -> Option<std::path::PathBuf> { None }
         fn workspaceRootDir(&self) -> Option<std::path::PathBuf> { None }
         fn readBytes(&self,p:&str) -> operit_host_api::HostResult<Vec<u8>> { self.0.lock().unwrap().get(p).cloned().ok_or_else(||operit_host_api::HostError::new("missing")) }
+        /// Atomically publishes one complete in-memory test entry.
+        fn writeBytesAtomically(&self, path: &str, content: &[u8]) -> operit_host_api::HostResult<()> {
+            self.writeBytes(path, content)
+        }
+
         fn writeBytes(&self,p:&str,b:&[u8]) -> operit_host_api::HostResult<()> { self.0.lock().unwrap().insert(p.into(),b.into());Ok(()) }
         fn appendBytes(&self,p:&str,b:&[u8]) -> operit_host_api::HostResult<()> { self.0.lock().unwrap().entry(p.into()).or_default().extend_from_slice(b);Ok(()) }
         fn delete(&self,p:&str,_:bool) -> operit_host_api::HostResult<()> { self.0.lock().unwrap().remove(p);Ok(()) }

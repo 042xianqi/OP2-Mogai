@@ -37,6 +37,15 @@ impl UserPreferencesManager {
             .withSchema(4, Self::migratePreferences)
     }
 
+    /// Converts historical user preference values without running store initialization.
+    pub(crate) fn decodeSyncedEntry(entry: &mut operit_store::PreferencesDataStore::PreferencesSyncedEntry) -> Result<(), PreferencesDataStoreError> {
+        entry.decodeHistoricalValues(|version, values| {
+            if version > 4 { return Err(PreferencesDataStoreError::SchemaVersionTooNew { actual: version, expected: 4 }); }
+            for version in version.max(1)..4 { Self::migratePreferences(version, values)?; }
+            Ok(())
+        })
+    }
+
     /// Applies each versioned migration owned by the user preferences file.
     pub(crate) fn migratePreferences(
         version: u32,

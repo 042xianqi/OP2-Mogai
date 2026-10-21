@@ -37,14 +37,19 @@ impl RuntimeStorageHost for RecordingStorageHost {
         self.inner.readBytesRange(path, offset, length)
     }
 
-    /// Records ordinary preference writes and delegates successful commits to the real host.
-    fn writeBytes(&self, path: &str, content: &[u8]) -> HostResult<()> {
+    /// Records and atomically publishes one complete preference commit through the real host.
+    fn writeBytesAtomically(&self, path: &str, content: &[u8]) -> HostResult<()> {
         if path == OperitPaths::USER_PREFERENCES_PATH {
             if self.failPreferenceWrite.load(Ordering::SeqCst) {
                 return Err(HostError::new("injected theme preference write failure"));
             }
             self.preferenceWrites.fetch_add(1, Ordering::SeqCst);
         }
+        self.inner.writeBytesAtomically(path, content)
+    }
+
+    /// Delegates ordinary nontransactional test writes to the real host.
+    fn writeBytes(&self, path: &str, content: &[u8]) -> HostResult<()> {
         self.inner.writeBytes(path, content)
     }
 
@@ -1132,7 +1137,6 @@ fn synchronized_themes_preserve_independent_identity_records() {
         &history,
         &operations,
         |_, _| true,
-        true,
     )
     .unwrap();
     let manager = target.manager();

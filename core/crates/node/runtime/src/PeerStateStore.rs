@@ -774,6 +774,11 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| HostError::new("missing"))
         }
+        /// Atomically publishes one complete in-memory test entry.
+        fn writeBytesAtomically(&self, path: &str, content: &[u8]) -> operit_host_api::HostResult<()> {
+            self.writeBytes(path, content)
+        }
+
         fn writeBytes(&self, path: &str, bytes: &[u8]) -> HostResult<()> {
             if self.1.load(std::sync::atomic::Ordering::Relaxed) {
                 return Err(HostError::new("injected write failure"));

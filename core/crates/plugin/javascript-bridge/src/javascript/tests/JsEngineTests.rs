@@ -1139,6 +1139,11 @@ impl RuntimeStorageHost for TestRuntimeStorageHost {
         Ok(std::fs::read(self.resolve(path)?)?)
     }
 
+    /// Atomically publishes one complete in-memory test entry.
+    fn writeBytesAtomically(&self, path: &str, content: &[u8]) -> operit_host_api::HostResult<()> {
+        self.writeBytes(path, content)
+    }
+
     /// Writes bytes into the test runtime root.
     fn writeBytes(&self, path: &str, content: &[u8]) -> HostResult<()> {
         let path = self.resolve(path)?;

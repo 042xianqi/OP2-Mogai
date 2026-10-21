@@ -2607,6 +2607,11 @@ mod tests {
             Ok(content[start..end].to_vec())
         }
 
+        /// Atomically publishes one complete in-memory test entry.
+        fn writeBytesAtomically(&self, path: &str, content: &[u8]) -> operit_host_api::HostResult<()> {
+            self.writeBytes(path, content)
+        }
+
         /// Writes one in-memory runtime storage file.
         #[allow(non_snake_case)]
         fn writeBytes(&self, path: &str, content: &[u8]) -> HostResult<()> {
@@ -3654,7 +3659,7 @@ mod tests {
             PeerSyncMethod::SyncApplyOperations, PeerSyncMethod::SyncBlobExists, PeerSyncMethod::SyncReadBlobChunk] {
             let mut call = request.clone();
             call.payload = method.request("storage-denied".into(),
-                operit_link::toCoreValue(serde_json::json!({"operations":[],"complete":true})).unwrap());
+                operit_link::toCoreValue(serde_json::json!({"operations":[]})).unwrap());
             assert_eq!(router.routedCall("storage-peer".into(), call).await.result.unwrap_err().code,
                 "SPACE_STORAGE_PERMISSION_DENIED");
         }

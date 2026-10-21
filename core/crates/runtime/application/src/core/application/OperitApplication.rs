@@ -846,6 +846,7 @@ impl OperitApplication {
             errors.push(format!("workspace scan: {error}"));
         }
         let store = self.runtimeSyncOperationStore()?;
+        errors.extend(store.publishPreferenceOutboxes().map_err(|error| error.to_string())?);
         let mut receipt = store.receipt().map_err(|error| error.to_string())?;
         match SqlChatSyncStore::default()
             .map_err(|error| error.to_string())
@@ -1006,7 +1007,6 @@ impl OperitApplication {
     pub fn syncApplyOperations(
         &self,
         operations: serde_json::Value,
-        complete: bool,
     ) -> Result<serde_json::Value, String> {
         let operations: Vec<SyncOperation> =
             serde_json::from_value(operations).map_err(|error| error.to_string())?;
@@ -1032,7 +1032,6 @@ impl OperitApplication {
             .cloned()
             .collect::<Vec<_>>();
         if !preferences.is_empty()
-            || complete
             || pending
                 .iter()
                 .any(|operation| operation.domain == PLUGIN_STORAGE_SYNC_DOMAIN)
@@ -1042,24 +1041,15 @@ impl OperitApplication {
                     errors.push(format!("preference history: {error}"));
                     preferenceContext.historyError = Some(error.to_string());
                 }
-                Ok(mut history) => {
-                    history.extend(preferences.clone());
+                Ok(history) => {
                     for outcome in applyIndependentOperations(
                         storage.clone(),
-                        &PreferenceSpaceMerge::schema(),
+                        &PreferenceSpaceMerge::schema(&history.iter().chain(&preferences).cloned().collect::<Vec<_>>()),
                         &history,
                         &preferences,
                         |path, key| !isRetiredCharacterPreferenceKey(path, key),
-                        complete,
                     ) {
-                        let result = outcome.result.and_then(|map| {
-                            store
-                                .recordAppliedOperations(&outcome.operations)
-                                .and_then(|_| store.appendOperations(&outcome.operations))
-                                .map_err(|error| error.to_string())?;
-                            Ok(map)
-                        });
-                        match result {
+                        match outcome.result {
                             Ok(map) => {
                                 preferenceContext.references.extend(map);
                                 applied.extend(outcome.operations);
@@ -1082,11 +1072,11 @@ impl OperitApplication {
             .filter(|operation| operation.domain != "preferences")
         {
             let ordered = operation.semantics == SyncOperationSemantics::Transaction;
-            if ordered
-                && blocked.contains(&(operation.originDeviceId.clone(), operation.domain.clone()))
-            {
-                continue;
-            }
+            let dataset = match synchronizationDataset(operation) {
+                Ok(dataset) => (operation.originDeviceId.clone(), operation.domain.clone(), dataset),
+                Err(error) => { errors.push(format!("dataset op={}: {error}", operation.opId)); continue; }
+            };
+            if ordered && blocked.contains(&dataset) { continue; }
             let result = (|| -> Result<(), String> {
                 if isRetiredCharacterOperation(operation) {
                     return Err("Retired Core data requires its owner's migration".into());
@@ -1134,7 +1124,7 @@ impl OperitApplication {
                 Ok(()) => applied.push(operation.clone()),
                 Err(error) => {
                     if ordered {
-                        blocked.insert((operation.originDeviceId.clone(), operation.domain.clone()));
+                        blocked.insert(dataset);
                     }
                     errors.push(format!(
                         "domain={} op={} origin={} sequence={}: {error}",
@@ -1479,6 +1469,17 @@ fn setHostManager(hostManager: HostManager) {
         .get_or_init(|| Mutex::new(None))
         .lock()
         .expect("HostManager context mutex poisoned") = Some(hostManager);
+}
+
+/// Resolves each owner's declared durable commit boundary for ordered failure isolation.
+fn synchronizationDataset(operation: &SyncOperation) -> Result<String, String> {
+    match operation.domain.as_str() {
+        CHAT_SYNC_DOMAIN => synchronizedChatId(operation).ok_or_else(|| "Chat transaction dataset is missing".into()),
+        PLUGIN_STORAGE_SYNC_DOMAIN => PluginStorage::syncDatasetPath(operation).map_err(|error| error.to_string()),
+        NETWORK_CONTROL_SYNC_DOMAIN => operation.payload.get("spaceId").and_then(serde_json::Value::as_str)
+            .map(str::to_owned).ok_or_else(|| "Network control Space identity is missing".into()),
+        _ => serde_json::to_string(&(&operation.entityType, &operation.entityId)).map_err(|error| error.to_string()),
+    }
 }
 
 /// Extracts the chat id addressed by one SQL synchronization operation.

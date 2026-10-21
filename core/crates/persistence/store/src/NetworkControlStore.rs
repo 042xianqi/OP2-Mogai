@@ -15,6 +15,15 @@ use crate::SyncOperationStore::{
     SyncOperationStore,
 };
 
+/// Identifies only preference datasets explicitly retired into endpoint-local authority projections.
+fn endpointProjectionPreferencePath(path: &str) -> bool {
+    ["runtime/space/members/", "runtime/space/device_profiles/",
+        operit_util::RuntimeStorageLayout::RUNTIME_SPACE_DEVICE_PRESENCE_DIR_PATH,
+        operit_util::RuntimeStorageLayout::RUNTIME_SPACE_TOPOLOGY_DIR_PATH]
+        .iter().any(|prefix| path.strip_prefix(prefix).is_some_and(|suffix| suffix.starts_with('/') || prefix.ends_with('/'))
+            && path.ends_with(".preferences.json"))
+}
+
 /// Names the synchronized domain that owns Space authorization and control commands.
 pub const NETWORK_CONTROL_SYNC_DOMAIN: &str = "network_control";
 const NETWORK_CONTROL_ENTITY_TYPE: &str = "command";
@@ -636,10 +645,17 @@ impl NetworkControlStore {
                         let record = crate::PreferencesDataStore::PreferencesSyncedEntry::fromOperation(&operation)
                             .map_err(|_| "Endpoint journal contains business operations; refusing automatic retirement")?;
                         let path = record.storagePath();
-                        if !["runtime/space/members/", "runtime/space/device_profiles/", operit_util::RuntimeStorageLayout::RUNTIME_SPACE_DEVICE_PRESENCE_DIR_PATH, operit_util::RuntimeStorageLayout::RUNTIME_SPACE_TOPOLOGY_DIR_PATH]
-                            .iter().any(|prefix| path.strip_prefix(prefix).is_some_and(|suffix| suffix.starts_with('/') || prefix.ends_with('/')) && path.ends_with(".preferences.json")) {
+                        if !endpointProjectionPreferencePath(path) {
                             return Err("Endpoint journal contains business operations; refusing automatic retirement".into());
                         }
+                    }
+                }
+            } else if entry.path == "runtime/sync/preference_outboxes.json" {
+                let registry: BTreeMap<String, bool> = serde_json::from_slice(&storage.readBytes(&entry.path).map_err(|error| error.to_string())?)
+                    .map_err(|error| error.to_string())?;
+                for (path, encrypted) in registry {
+                    if encrypted || !endpointProjectionPreferencePath(&path) {
+                        return Err("Endpoint outbox contains business operations; refusing automatic retirement".into());
                     }
                 }
             } else if !["runtime/sync/clocks.json", "runtime/sync/devices.json", "runtime/sync/entity_versions.jsonl",

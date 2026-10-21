@@ -1645,6 +1645,11 @@ mod tests {
             Ok(content[start..end].to_vec())
         }
 
+        /// Atomically publishes one complete in-memory test entry.
+        fn writeBytesAtomically(&self, path: &str, content: &[u8]) -> operit_host_api::HostResult<()> {
+            self.writeBytes(path, content)
+        }
+
         /// Writes one complete virtual file to the in-memory test host.
         fn writeBytes(&self, path: &str, content: &[u8]) -> operit_host_api::HostResult<()> {
             self.files

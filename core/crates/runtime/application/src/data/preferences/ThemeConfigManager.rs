@@ -53,6 +53,8 @@ impl ThemeConfigManager {
         PreferenceMergeStore {
             path: path.to_string(),
             encrypted: false,
+            storageVersion: Some(4),
+            decode: Some(super::UserPreferencesManager::UserPreferencesManager::decodeSyncedEntry),
             merge: StoragePreferencesMergeDescriptor {
                 version: 1,
                 catalog: Some(StoragePreferencesMergeCatalog {
