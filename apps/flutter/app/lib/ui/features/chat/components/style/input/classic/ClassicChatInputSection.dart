@@ -334,16 +334,16 @@ class _ClassicChatInputSectionState extends State<ClassicChatInputSection>
     required double maxWidth,
   }) {
     final mediaQuery = MediaQuery.of(context);
-    final screenSize = mediaQuery.size;
+    final overlaySize = overlaySizeOf(context);
     final horizontalPadding = 12.0 + mediaQuery.padding.left;
     final rightPadding = 12.0 + mediaQuery.padding.right;
-    final availableWidth = screenSize.width - horizontalPadding - rightPadding;
+    final availableWidth = overlaySize.width - horizontalPadding - rightPadding;
     final width = availableWidth < maxWidth ? availableWidth : maxWidth;
     final targetRect = _targetRect(targetKey);
     final desiredLeft = alignEnd ? targetRect.right - width : targetRect.left;
-    final maxLeft = screenSize.width - rightPadding - width;
+    final maxLeft = overlaySize.width - rightPadding - width;
     final left = desiredLeft.clamp(horizontalPadding, maxLeft).toDouble();
-    final bottom = screenSize.height - targetRect.top + 8;
+    final bottom = overlaySize.height - targetRect.top + 8;
     final maxHeight = (targetRect.top - mediaQuery.padding.top - 20).clamp(
       96.0,
       420.0,

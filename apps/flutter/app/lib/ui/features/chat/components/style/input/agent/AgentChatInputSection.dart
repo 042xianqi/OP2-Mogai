@@ -549,6 +549,7 @@ class _AgentChatInputSectionState extends State<AgentChatInputSection>
     widget.onAttachPackage?.call(packageName);
   }
 
+  /// Places popups using the anchor and dimensions of their owning Overlay.
   _PopupPlacement _popupPlacement(
     BuildContext context, {
     required GlobalKey targetKey,
@@ -556,19 +557,19 @@ class _AgentChatInputSectionState extends State<AgentChatInputSection>
     required double maxWidth,
   }) {
     final mediaQuery = MediaQuery.of(context);
-    final screenSize = mediaQuery.size;
+    final overlaySize = overlaySizeOf(context);
     final horizontalPadding = 12.0 + mediaQuery.padding.left;
     final rightPadding = 12.0 + mediaQuery.padding.right;
-    final availableWidth = screenSize.width - horizontalPadding - rightPadding;
+    final availableWidth = overlaySize.width - horizontalPadding - rightPadding;
     final width = availableWidth < maxWidth ? availableWidth : maxWidth;
     final targetRect = _targetRect(targetKey);
     final targetLeft = targetRect.left;
     final targetRight = targetRect.right;
     final desiredLeft = alignEnd ? targetRight - width : targetLeft;
-    final maxLeft = screenSize.width - rightPadding - width;
+    final maxLeft = overlaySize.width - rightPadding - width;
     final left = desiredLeft.clamp(horizontalPadding, maxLeft).toDouble();
     final targetTop = targetRect.top;
-    final bottom = screenSize.height - targetTop + 8;
+    final bottom = overlaySize.height - targetTop + 8;
     final maxHeight = (targetTop - mediaQuery.padding.top - 20).clamp(
       96.0,
       420.0,
