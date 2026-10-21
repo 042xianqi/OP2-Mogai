@@ -800,16 +800,10 @@ class WorkspaceVirtualTextEditorState extends State<WorkspaceVirtualTextEditor>
     ),
     ExpandSelectionToDocumentBoundaryIntent:
         _action<ExpandSelectionToDocumentBoundaryIntent>(_expandIntent),
-    ExtendSelectionByPageIntent: _action<ExtendSelectionByPageIntent>(
-      (intent) => _moveCaret(
-        intent.forward
-            ? LogicalKeyboardKey.pageDown
-            : LogicalKeyboardKey.pageUp,
-        true,
-        false,
-        false,
-      ),
-    ),
+    // NOTE(魔改版兼容): 上游基于 Flutter 3.41.10(operit ohos 分支)，
+    // 该版本存在 ExtendSelectionByPageIntent；本地工具链为 Flutter 3.47.1，
+    // 此 intent 已不存在于框架。PageUp/PageDown 的选区扩展已由上方
+    // ExtendSelectionVerticallyToAdjacentPageIntent 覆盖，故此处安全省略。
     ScrollToDocumentBoundaryIntent: _action<ScrollToDocumentBoundaryIntent>(
       (intent) => widget.scrollController.jumpTo(
         intent.forward ? widget.scrollController.position.maxScrollExtent : 0,

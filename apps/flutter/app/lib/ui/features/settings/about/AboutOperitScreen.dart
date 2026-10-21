@@ -36,7 +36,7 @@ class AboutOperitScreen extends StatelessWidget {
                   _AboutHeader(),
                   SizedBox(height: 24),
                   _AboutSection(
-                    title: 'Operit2',
+                    title: 'Operit2 魔改',
                     child: Text(
                       '面向终端与桌面的 AI 工作台，提供聊天会话、工作区、工具、插件、MCP、远程连接和 Web 访问。',
                     ),
@@ -104,7 +104,7 @@ class _AboutHeaderState extends State<_AboutHeader> {
         ),
         const SizedBox(height: 14),
         Text(
-          'Operit2',
+          'Operit2 魔改',
           style: Theme.of(
             context,
           ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
@@ -286,6 +286,7 @@ class _OpenSourceComponent {
 }
 
 const List<_OpenSourceComponent> _openSourceComponents = <_OpenSourceComponent>[
+  // 上游归属声明：AGPL-3.0 要求保留原作者与许可证信息，此处不得改写为「魔改」。
   _OpenSourceComponent(
     name: 'Operit2',
     license: 'AGPL-3.0',

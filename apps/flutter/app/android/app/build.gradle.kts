@@ -129,8 +129,10 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "app.operit"
+        // 魔改版：独立 applicationId，用于与上游正式版 app.operit 共存安装。
+        // 注意 namespace 仍保留 app.operit —— 它决定 Kotlin/Java 包与清单类解析路径，
+        // 与安装身份无关；只有 applicationId 决定设备上的包名、数据目录与共存能力。
+        applicationId = "app.operit.mogai"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
