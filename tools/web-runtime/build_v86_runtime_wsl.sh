@@ -262,6 +262,7 @@ stage_runtime_programs() {
     local python_root="$python_runtime_dir/usr/local/operit-python"
     local extension
     local library
+    local node_loader
 
     mkdir -p "$node_runtime/lib" "$initramfs_root/lib"
     install -Dm0755 "$node_alpine_root/usr/bin/node" "$initramfs_root/usr/local/bin/node"
@@ -269,7 +270,9 @@ stage_runtime_programs() {
         [[ -e "$library" || -L "$library" ]] || continue
         cp -a "$library" "$node_runtime/lib/"
     done
-    install -Dm0755 "$node_alpine_root/lib/ld-musl-x86.so.1" "$initramfs_root/lib/ld-musl-x86.so.1"
+    node_loader="$(patchelf --print-interpreter "$node_alpine_root/usr/bin/node")"
+    [[ "$node_loader" == /lib/ld-musl-*.so.1 ]] || { echo "Unexpected Node loader: $node_loader" >&2; return 1; }
+    install -Dm0755 "$node_alpine_root$node_loader" "$initramfs_root$node_loader"
     if [[ -d "$node_alpine_root/etc/ssl" ]]; then
         mkdir -p "$initramfs_root/etc/ssl"
         cp -a "$node_alpine_root/etc/ssl/." "$initramfs_root/etc/ssl/"
