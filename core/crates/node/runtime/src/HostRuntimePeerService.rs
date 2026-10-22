@@ -102,6 +102,73 @@ fn pairingAddressFor(address: &str, transport: PeerTransport) -> String {
     }
 }
 
+/// One operator-supplied dial address in its stored endpoint form.
+struct OperatorEndpoint {
+    rendered: String,
+    /// A scheme implies its carrier; a bare `host:port` keeps the record's.
+    transport: Option<PeerTransport>,
+}
+
+/// Parses the address an operator entered for one peer's dial endpoint.
+/// The same scheme set as `resolvePairingTransport` is accepted; hostnames
+/// are allowed because reverse proxies and FRP entries are normal entry
+/// points, and no routability filter is applied — this is explicit local
+/// operator intent, unlike the reflected self-heal that must reject a
+/// loopback observation. A scheme form without a path defaults to `/link`,
+/// matching every endpoint the dialer itself produces.
+fn parseOperatorEndpoint(input: &str) -> Result<OperatorEndpoint, CoreLinkError> {
+    let value = input.trim();
+    if value.is_empty() {
+        return Err(error("Endpoint address is empty"));
+    }
+    if let Some((scheme, rest)) = value.split_once("://") {
+        let transport = match scheme {
+            "http" | "https" => PeerTransport::Http,
+            "ws" | "wss" => PeerTransport::WebSocket,
+            "tcp" => PeerTransport::Tcp,
+            other => return Err(error(&format!("Unsupported endpoint scheme '{other}': use ws://, wss://, http://, https:// or tcp://"))),
+        };
+        if transport == PeerTransport::Tcp {
+            // Bare-carrier endpoints carry no path; the authority is the address.
+            let (host, port) = splitEndpointHostPort(rest)?;
+            return Ok(OperatorEndpoint { rendered: format!("tcp://{host}:{port}"), transport: Some(transport) });
+        }
+        let (authority, path) = match rest.split_once('/') {
+            Some((authority, path)) => (authority, format!("/{path}")),
+            None => (rest, "/link".to_string()),
+        };
+        let (host, port) = splitEndpointHostPort(authority)?;
+        return Ok(OperatorEndpoint {
+            rendered: format!("{scheme}://{host}:{port}{path}"),
+            transport: Some(transport),
+        });
+    }
+    let (host, port) = splitEndpointHostPort(value)?;
+    Ok(OperatorEndpoint { rendered: format!("{host}:{port}"), transport: None })
+}
+
+/// Splits one `host:port` authority, keeping bracketed IPv6 hosts verbatim.
+fn splitEndpointHostPort(authority: &str) -> Result<(String, u16), CoreLinkError> {
+    if let Some(rest) = authority.strip_prefix('[') {
+        let (host, rest) = rest.split_once(']')
+            .ok_or_else(|| error("Endpoint host is missing a closing bracket"))?;
+        let port = rest.strip_prefix(':').ok_or_else(|| error("Endpoint port is missing"))?;
+        return Ok((format!("[{host}]"), parseEndpointPort(port)?));
+    }
+    let (host, port) = authority.rsplit_once(':')
+        .ok_or_else(|| error("Endpoint port is missing: use host:port"))?;
+    if host.is_empty() {
+        return Err(error("Endpoint host is missing"));
+    }
+    Ok((host.to_string(), parseEndpointPort(port)?))
+}
+
+fn parseEndpointPort(port: &str) -> Result<u16, CoreLinkError> {
+    let port = port.parse::<u16>().map_err(|_| error("Endpoint port is not a valid port number"))?;
+    if port == 0 { return Err(error("Endpoint port must be positive")); }
+    Ok(port)
+}
+
 #[cfg(test)]
 mod pairing_transport_tests {
     use super::*;
@@ -557,6 +624,33 @@ impl HostRuntimePeerService {
             "Dial endpoint refreshed from the peer's own connection peer={node} endpoint={endpoint}"));
     }
 
+    /// Rewrites the dial endpoint of the outbound pairing record under the
+    /// caller's mutation guard. Returns false when this peer has no record.
+    /// An explicit carrier overrides the record's; a scheme-implied one wins.
+    fn updateOutboundEndpointLocked(
+        &self, node: &str, parsed: &OperatorEndpoint, transport: Option<PeerTransport>,
+    ) -> Result<bool, CoreLinkError> {
+        let records = self.state.store.records::<StoredOutbound>(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH).map_err(error)?;
+        let Some((id, record)) = records.iter().find(|(_, record)|
+            record.peerNodeId == node && record.pairingServiceVersion == PAIRING_SERVICE_VERSION) else { return Ok(false); };
+        let mut record = record.clone();
+        if let Some(transport) = transport.or(parsed.transport) { record.transport = transportName(transport).into(); }
+        record.endpoint = parsed.rendered.clone();
+        self.state.store.putRecord(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH, id, &record).map_err(error)?;
+        Ok(true)
+    }
+
+    /// Applies an operator-supplied endpoint to whichever record dials this
+    /// peer: the outbound pairing first, then the Space return grant. Must
+    /// run under the mutation lock, beside the pairing writers. Returns
+    /// false when neither record exists.
+    fn applyOperatorEndpoint(
+        &self, node: &str, parsed: &OperatorEndpoint, transport: Option<PeerTransport>,
+    ) -> Result<bool, CoreLinkError> {
+        if self.updateOutboundEndpointLocked(node, parsed, transport)? { return Ok(true); }
+        self.updateSpaceChannelEndpointLocked(node, &parsed.rendered, transport.or(parsed.transport))
+    }
+
     /// Returns the least loaded channel that carries calls to a peer which dialed
     /// us. Such a peer can be called without dialing an address of its own, which
     /// is the only route available when that address is not routable from here.
@@ -908,6 +1002,9 @@ impl HostRuntimePeerService {
         if raw.requiresSessionReuse() && hello.purpose == "session" {
             self.startDuplex(&channel, &hello.nodeId)?;
             self.state.sharedSessions.lock().unwrap().insert(hello.nodeId.clone(), channel.clone());
+            // The session return route proves the peer is reachable; announce
+            // the arrival the way the duplex teardown announces the loss.
+            self.refreshPeerAvailability(&hello.nodeId);
             let result = dispatch::serve(self.clone(), channel.clone(), hello.nodeId, id, false).await;
             if let Some(d) = channel.duplex() { if let Err(e) = &result { d.fail(e.clone()); } channel.close().await; }
             result
@@ -1267,6 +1364,27 @@ impl RuntimePeerService for HostRuntimePeerService {
         dispatch::openPush(self, node, request).await
     }
     fn pairedPeers(&self) -> Result<Vec<PairedPeer>, CoreLinkError> { self.state.store.pairedPeers(&self.state.nodeId).map_err(error) }
+    /// Manual counterpart of the reflected endpoint self-heal: the operator
+    /// supplies the address, so no live connection is needed to observe it,
+    /// and both host and port may move. Validation happens before any write;
+    /// the probe afterwards only feeds the availability flows and never
+    /// rolls the saved address back.
+    async fn updatePeerEndpoint(
+        &self, node: &str, endpoint: &str, transport: Option<PeerTransport>,
+    ) -> Result<(), CoreLinkError> {
+        let parsed = parseOperatorEndpoint(endpoint)?;
+        {
+            let _guard = self.state.mutation.lock().unwrap();
+            if !self.applyOperatorEndpoint(node, &parsed, transport)? {
+                return Err(CoreLinkError::new("PEER_OUTBOUND_NOT_AUTHORIZED",
+                    "No dialable pairing or Space return record to update; pair with the device first"));
+            }
+        }
+        operit_util::AppLogger::AppLogger::i("RuntimePeerService", &format!(
+            "Dial endpoint updated by operator peer={node} endpoint={}", parsed.rendered));
+        let _ = self.acquirePooledChannel(node).await;
+        Ok(())
+    }
     fn outboundPeerNodeIds(&self) -> Result<BTreeSet<String>, CoreLinkError> { Ok(self.pairedPeers()?.into_iter().filter(|p| p.outbound).map(|p| p.nodeId).collect()) }
     fn activePeerNodeIds(&self) -> Result<BTreeSet<String>, CoreLinkError> { Ok(self.state.active.lock().unwrap().clone()) }
     fn subscribePeerChanges(&self) -> broadcast::Receiver<()> { self.state.changes.subscribe() }
@@ -1676,6 +1794,76 @@ mod dial_route_tests {
         assert_eq!(service.dialFailureCount("p1"), 0);
     }
 
+    /// 操作者手动更新端点：校验先于写入，host 与端口都可移动，
+    /// scheme 隐含的载体写回记录。
+    #[test]
+    fn operator_endpoint_update_rewrites_the_dial_record() {
+        let service = service();
+        service.state.store.putRecord(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH, "s1",
+            &storedOutbound("p1", "ws://10.0.0.1:37195/link")).unwrap();
+        let parsed = parseOperatorEndpoint(" https://peer.example:8443/operit/link ").unwrap();
+        {
+            let _guard = service.state.mutation.lock().unwrap();
+            assert!(service.applyOperatorEndpoint("p1", &parsed, None).unwrap());
+        }
+        let records = service.state.store.records::<StoredOutbound>(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH).unwrap();
+        let record = records.into_values().next().unwrap();
+        assert_eq!(record.endpoint, "https://peer.example:8443/operit/link");
+        assert_eq!(record.transport, "http");
+    }
+
+    /// 出站配对记录不存在时回落到空间回连授权；两者都没有时返回 false
+    /// 交给调用方生成明确的"先重新配对"失败，而不是静默成功。
+    #[test]
+    fn operator_endpoint_update_falls_back_to_the_space_grant() {
+        let service = service();
+        service.state.store.putRecord(space_channel::OUTBOUND, "g1", &space_channel::Grant {
+            id: "g1".into(), spaceId: "space".into(), peer: "p1".into(), pairingId: "s1".into(),
+            secret: BASE64.encode([3u8; 32]), port: 37195, transport: PeerTransport::WebSocket,
+            endpoint: "ws://10.0.0.1:37195/link".into(),
+        }).unwrap();
+        let parsed = parseOperatorEndpoint("10.0.0.9:37195").unwrap();
+        {
+            let _guard = service.state.mutation.lock().unwrap();
+            assert!(service.applyOperatorEndpoint("p1", &parsed, Some(PeerTransport::Tcp)).unwrap());
+        }
+        let grants = service.state.store.records::<space_channel::Grant>(space_channel::OUTBOUND).unwrap();
+        let grant = grants.into_values().next().unwrap();
+        assert_eq!(grant.endpoint, "10.0.0.9:37195");
+        assert_eq!(grant.transport, PeerTransport::Tcp);
+        // 出站配对记录本就不存在：只有授权记录被更新。
+        assert!(recordedEndpoint(&service, "p1").is_none());
+        let _guard = service.state.mutation.lock().unwrap();
+        assert!(!service.applyOperatorEndpoint("stranger", &parsed, None).unwrap());
+    }
+
+    /// 地址校验在写入前完成：空地址、缺端口、零端口、坏 scheme 都被拒绝。
+    #[test]
+    fn operator_endpoint_parsing_rejects_malformed_addresses() {
+        for bad in ["", "   ", "ws://", "ws://host", "host:", "host:0", "host:notaport",
+            "ftp://host:37195/link", "[fd00::1:37195", "ws://[fd00::1]/link"] {
+            assert!(parseOperatorEndpoint(bad).is_err(), "{bad} must be rejected");
+        }
+    }
+
+    /// 接受的形态按既有拨号端点的样子归一：scheme 形式默认补 /link，
+    /// tcp 形式只保留 authority，IPv6 保留方括号。
+    #[test]
+    fn operator_endpoint_parsing_normalizes_accepted_forms() {
+        let parsed = parseOperatorEndpoint("ws://10.0.0.5:37195").unwrap();
+        assert_eq!(parsed.rendered, "ws://10.0.0.5:37195/link");
+        assert_eq!(parsed.transport, Some(PeerTransport::WebSocket));
+        let parsed = parseOperatorEndpoint("10.0.0.5:37195").unwrap();
+        assert_eq!(parsed.rendered, "10.0.0.5:37195");
+        assert_eq!(parsed.transport, None);
+        let parsed = parseOperatorEndpoint("wss://[fd00::1]:8443/operit").unwrap();
+        assert_eq!(parsed.rendered, "wss://[fd00::1]:8443/operit");
+        assert_eq!(parsed.transport, Some(PeerTransport::WebSocket));
+        let parsed = parseOperatorEndpoint("tcp://10.0.0.5:37195").unwrap();
+        assert_eq!(parsed.rendered, "tcp://10.0.0.5:37195");
+        assert_eq!(parsed.transport, Some(PeerTransport::Tcp));
+    }
+
     /// 只有在"能从回拨通道调用"时，连续失败才会暂停主动拨。
     #[test]
     fn three_failed_dials_beside_a_return_connection_pause_dialing() {
@@ -1691,6 +1879,23 @@ mod dial_route_tests {
         // 一次成功的拨号清空计数并解除暂停。
         service.recordDialSucceeded("p1");
         assert!(!service.dialSuppressed("p1"));
+    }
+
+    /// 到达与离开对称：应答侧登记会话复用连接（串口）后，
+    /// 可用性推导翻转为在线，观察者由此收到广播。
+    #[test]
+    fn an_inbound_shared_session_announces_reachability() {
+        let service = service();
+        let channel = Channel::new(
+            Arc::new(SilentPeer(PeerEndpoint { nodeId: "p1".into(), address: "unused".into() })),
+            &[7; 32], b"test", false).unwrap();
+        // isOpen 只认已装 duplex 的通道；装一个不经调度器泵的空 duplex。
+        let (duplex, _incoming) = duplex::Duplex::new();
+        channel.setDuplex(duplex);
+        service.state.sharedSessions.lock().unwrap().insert("p1".into(), channel);
+        assert!(!service.activePeerNodeIds().unwrap().contains("p1"));
+        service.refreshPeerAvailability("p1");
+        assert!(service.activePeerNodeIds().unwrap().contains("p1"));
     }
 
     /// A forwarding call waits for a later request on the same carrier to complete.

@@ -164,6 +164,19 @@ impl RuntimeRemoteLinkService {
     pub async fn discoverPeers(&self, timeoutMs: u64) -> Result<Vec<crate::NodeServices::DiscoveredPeer>, String> {
         self.nodeServices()?.peers().discoverPeers(timeoutMs).await.map_err(|error| error.to_string())
     }
+    /// 按操作者提供的新地址更新一个已配对设备的直连端点并立即试拨。
+    /// 只改本侧拨号记录（出站配对或空间回连授权），不改变配对方向或对端记录；
+    /// 这是设备面板“更新直连地址”操作的后端，直连不可达时也可用。
+    #[allow(non_snake_case)]
+    pub async fn updatePairedDeviceEndpoint(
+        &self,
+        deviceId: String,
+        endpoint: String,
+        transport: Option<operit_peer_link::PeerTransport>,
+    ) -> Result<(), String> {
+        self.nodeServices()?.peers().updatePeerEndpoint(&deviceId, &endpoint, transport)
+            .await.map_err(|error| error.to_string())
+    }
     /// Creates pending pairing for subsequent code confirmation.
     pub async fn startPairing(&self, nodeId: String, address: String,
         transport: Option<operit_peer_link::PeerTransport>,
