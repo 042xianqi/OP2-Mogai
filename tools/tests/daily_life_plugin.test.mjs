@@ -11,9 +11,6 @@ const ts = require('typescript');
 const packagePath = 'plugins/packages/buildin/daily_life/';
 const dataDirectory = '/app/data/plugin_data/space/com.operit.daily_life';
 const storePath = `${dataDirectory}/reminders.preferences.json`;
-const legacyConfigDirectory = '/app/data/extensions/device/plugins/configs/com.operit.daily_life';
-const legacyConfigPath = `${legacyConfigDirectory}/reminders.json`;
-const legacyImportedKey = 'legacy_reminders_imported';
 const reminderKeyPrefix = 'reminder_';
 const startTime = Date.parse('2030-01-01T00:00:00Z');
 
@@ -60,7 +57,7 @@ function reminderStatusHistory(fixtureInstance, id) {
 }
 
 /** Loads real plugin modules with strictly mocked Host capabilities behind the native storage channel. */
-function fixture({ files = new Map(), visitResults = [], notify, storeState = null, failReminderEdits = false, legacyToolFailure = false } = {}) {
+function fixture({ visitResults = [], notify, storeState = null, failReminderEdits = false } = {}) {
   const requests = [];
   const notifications = [];
   const storageEdits = [];
@@ -68,7 +65,6 @@ function fixture({ files = new Map(), visitResults = [], notify, storeState = nu
   const hooks = [];
   const lifecycleHooks = [];
   const handlers = new Map();
-  const errors = [];
   const state = storeState ?? { schema: 0, entries: new Map() };
   let now = startTime;
   let declaredSchema = null;
@@ -150,8 +146,7 @@ function fixture({ files = new Map(), visitResults = [], notify, storeState = nu
 
   const context = vm.createContext({
     Date: Clock, setTimeout, clearTimeout,
-    console: { log() {}, error: (...args) => errors.push(args) },
-    __operit_call_runtime_ref: { getPluginConfigDir: () => legacyConfigDirectory },
+    console: { log() {}, error() {} },
     __operitExpose() {},
     toolCall: async (name, params) => {
       assert.equal(name, 'capture_screenshot');
@@ -159,23 +154,6 @@ function fixture({ files = new Map(), visitResults = [], notify, storeState = nu
       return '/app/data/temp/screenshot.png';
     },
     Tools: {
-      Files: {
-        /** Reports legacy-file existence or simulates a runtime without working file tools. */
-        async exists(file) {
-          assert.equal(file, legacyConfigPath);
-          if (legacyToolFailure) throw new Error('Host file tools are unavailable here');
-          return { exists: files.has(file) };
-        },
-        /** Reads the exact legacy config body; writes must never be used again. */
-        async read(file) {
-          assert.equal(file, legacyConfigPath);
-          if (legacyToolFailure) throw new Error('Host file tools are unavailable here');
-          if (!files.has(file)) throw new Error(`Missing fixture file: ${file}`);
-          return { content: files.get(file) };
-        },
-        async mkdir() { throw new Error('PluginConfig file writes are retired'); },
-        async write() { throw new Error('PluginConfig file writes are retired'); },
-      },
       Storage: {
         dataStore: {
           /** Opens the one plugin-owned native preference store. */
@@ -250,7 +228,7 @@ function fixture({ files = new Map(), visitResults = [], notify, storeState = nu
   const tools = load('src/tools.ts');
   const reminders = load('src/reminders.ts');
   return {
-    main, tools, reminders, context, files, requests, notifications, storageEdits, ipcCalls, hooks, lifecycleHooks, errors,
+    main, tools, reminders, context, requests, notifications, storageEdits, ipcCalls, hooks, lifecycleHooks,
     storeState: state,
     /** Advances the fixture clock without waiting for wall-clock time. */
     setTime(value) { now = value; },
@@ -260,15 +238,6 @@ function fixture({ files = new Map(), visitResults = [], notify, storeState = nu
 /** Produces one explicitly future reminder request. */
 function reminderParams(dueDate = '2030-01-01T00:01:00Z') {
   return { title: '喝水', description: '记得喝一杯水', due_date: dueDate };
-}
-
-/** Produces one complete stored reminder record with fixture-stable identities. */
-function storedReminderParams() {
-  return {
-    id: 'legacy-1', title: '喝水', description: '记得喝一杯水',
-    due_date: '2030-01-01T00:01:00.000Z', due_timestamp: startTime + 60000,
-    created_at: '2030-01-01T00:00:00.000Z', status: 'pending', delivered_at: null, error: null,
-  };
 }
 
 /** Checks packaging preserves existing tool names while advertising only connected functions. */
@@ -294,7 +263,6 @@ test('reminder persistence uses the native preference store instead of PluginCon
   const text = source(packagePath + 'src/reminders.ts');
   assert.match(text, /Tools\.Storage\.dataStore\.open/);
   assert.match(text, /ToolPkg\.getSpaceDataDir\(\)/);
-  assert.match(text, /legacy_reminders_imported/);
   assert.doesNotMatch(text, /PluginConfig\.(use|flush)/);
 });
 
@@ -546,50 +514,4 @@ test('concurrent reminder requests retain separate persistent records and return
   assert.equal(stored.length, 2);
   assert.equal(stored[0].title, '喝水');
   assert.equal(storedReminders(f).length, 2);
-});
-
-/** Checks reminders from the retired PluginConfig file import exactly once. */
-test('legacy PluginConfig reminders import once and survive later runtime starts', async () => {
-  const legacyFile = new Map([[legacyConfigPath, JSON.stringify({ version: 1, reminders: [storedReminderParams()] })]]);
-  const f = fixture({ files: legacyFile });
-  const listed = plain(await f.tools.list_reminders());
-  assert.deepEqual(listed, [storedReminderParams()]);
-  assert.equal(f.storeState.entries.get(legacyImportedKey), true);
-  const next = fixture({ storeState: f.storeState, files: legacyFile });
-  assert.deepEqual(plain(await next.tools.list_reminders()), [storedReminderParams()]);
-  assert.equal(next.notifications.length, 0);
-});
-
-/** Checks a missing legacy file resolves the import without creating reminder records. */
-test('a missing legacy PluginConfig file marks the import complete with no records', async () => {
-  const f = fixture();
-  assert.deepEqual(plain(await f.tools.list_reminders()), []);
-  assert.equal(f.storeState.entries.get(legacyImportedKey), true);
-  assert.equal(storedReminders(f).length, 0);
-});
-
-/** Checks runtimes whose Host file tools fail still run while leaving the import for later. */
-test('unavailable legacy file tools keep the store usable and defer the import', async () => {
-  const f = fixture({ legacyToolFailure: true });
-  const reminder = plain(await f.tools.set_reminder(reminderParams()));
-  assert.equal(f.storeState.entries.has(legacyImportedKey), false);
-  assert.deepEqual(storedReminders(f), [reminder]);
-  const legacyRecord = storedReminderParams();
-  const next = fixture({
-    storeState: f.storeState,
-    files: new Map([[legacyConfigPath, JSON.stringify({ version: 1, reminders: [legacyRecord] })]]),
-  });
-  const listed = plain(await next.tools.list_reminders()).sort((left, right) => left.id.localeCompare(right.id));
-  const expected = [legacyRecord, reminder].sort((left, right) => left.id.localeCompare(right.id));
-  assert.deepEqual(listed, expected);
-  assert.equal(next.storeState.entries.get(legacyImportedKey), true);
-});
-
-/** Checks a corrupt legacy file is reported and never blocks the native store. */
-test('a corrupt legacy PluginConfig file is reported once without wedging the store', async () => {
-  const f = fixture({ files: new Map([[legacyConfigPath, JSON.stringify({ version: 1, reminders: [{ id: 'broken' }] })]]) });
-  assert.deepEqual(plain(await f.tools.list_reminders()), []);
-  assert.equal(f.storeState.entries.get(legacyImportedKey), true);
-  assert.equal(f.errors.length, 1);
-  assert.match(String(f.errors[0][0]), /legacy reminder import failed/);
 });

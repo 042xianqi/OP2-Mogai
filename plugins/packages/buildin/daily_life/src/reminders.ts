@@ -21,10 +21,9 @@ export type ReminderRequest =
   | { action: "cancel"; id: string };
 
 const reminderKeyPrefix = "reminder_";
-const legacyImportedKey = "legacy_reminders_imported";
 const interruptedDeliveryError = "Notification delivery was interrupted; its outcome is unknown. It has not been resent.";
 
-/** Resolves the native preference owner independently of the retired PluginConfig file channel. */
+/** Holds the native preference owner shared by reminder operations. */
 let store: Promise<Storage.DataStore> | null = null;
 let persistenceFailure: Error | null = null;
 let ownerQueue: Promise<void> = Promise.resolve();
@@ -81,64 +80,8 @@ function validateReminders(reminders: unknown[]): void {
   }
 }
 
-/** Resolves the config directory used by the retired PluginConfig file channel. */
-function legacyConfigDirectory(): string | null {
-  const root = typeof globalThis !== "undefined"
-    ? globalThis as { __operit_call_runtime_ref?: { getPluginConfigDir?: () => string } }
-    : undefined;
-  const runtime = root?.__operit_call_runtime_ref;
-  if (!runtime || typeof runtime.getPluginConfigDir !== "function") return null;
-  const directory = String(runtime.getPluginConfigDir() || "")
-    .replace(/\\/g, "/")
-    .replace(/\/+$/g, "");
-  return directory === "" ? null : directory;
-}
-
-/**
- * Imports reminders from the retired PluginConfig file once per store.
- * Runs where the Host file tools work; runtimes without them leave the flag
- * unset so a later open retries instead of losing created reminders.
- */
-async function importLegacyReminders(preferences: Storage.MutablePreferences): Promise<void> {
-  const directory = legacyConfigDirectory();
-  if (directory === null) {
-    preferences.set(legacyImportedKey, true);
-    return;
-  }
-  const path = `${directory}/reminders.json`;
-  let exists: boolean;
-  try {
-    exists = (await Tools.Files.exists(path)).exists === true;
-  } catch {
-    return;
-  }
-  if (!exists) {
-    preferences.set(legacyImportedKey, true);
-    return;
-  }
-  let reminders: unknown[];
-  try {
-    const legacy: unknown = JSON.parse(String((await Tools.Files.read(path))?.content ?? ""));
-    reminders = legacy !== null && typeof legacy === "object" && Array.isArray((legacy as { reminders?: unknown[] }).reminders)
-      ? (legacy as { reminders: unknown[] }).reminders
-      : [];
-    validateReminders(reminders);
-  } catch (error) {
-    console.error(`daily_life legacy reminder import failed: ${String(error)}`);
-    preferences.set(legacyImportedKey, true);
-    return;
-  }
-  for (const record of reminders) {
-    const reminder = record as unknown as Reminder;
-    const key = reminderKeyPrefix + reminder.id;
-    if (!preferences.contains(key)) preferences.set(key, reminder);
-  }
-  preferences.set(legacyImportedKey, true);
-}
-
-/** Applies one-time upgrades before the first read, including the legacy file import. */
+/** Validates stored reminders and records interrupted deliveries before the first read. */
 async function initialize(opened: Storage.DataStore): Promise<Storage.DataStore> {
-  await opened.edit(preferences => importLegacyReminders(preferences));
   const reminders = (await opened.data()).entries()
     .filter(([key]) => key.startsWith(reminderKeyPrefix))
     .map(([, value]) => value as unknown as Reminder);
