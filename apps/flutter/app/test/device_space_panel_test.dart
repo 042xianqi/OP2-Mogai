@@ -218,6 +218,32 @@ class DeviceSpacePanelBridge extends OperitRuntimeBridge {
       ),
     );
   }
+
+  /// Publishes the synchronized space-plus-topology snapshot the page
+  /// subscribes to.
+  void emitDeviceSpaceSnapshot() {
+    final devices = topology['devices']! as List<Map<String, Object?>>;
+    prompts.add(
+      CoreEvent.raw(
+        requestId: 'device-space-snapshot-watch',
+        target: 'core/server.runtimeRemoteLinkService',
+        propertyName: 'deviceSpaceSnapshotFlow',
+        kind: 'Snapshot',
+        valueBytes: encodeCoreLink(<String, Object?>{
+          'space': <String, Object?>{
+            'spaceId': 'space',
+            'spaceName': '测试空间',
+            'spaceRevision': 3,
+            'members': <String>[
+              for (final device in devices) device['deviceId'] as String,
+            ],
+          },
+          'topology': topology,
+        }),
+        decodeValue: decodeCoreLink<Object?>,
+      ),
+    );
+  }
 }
 
 void main() {
@@ -585,6 +611,87 @@ void main() {
       expect(find.text('直连地址已更新'), findsOneWidget);
       // Let the feedback SnackBar's auto-dismiss timer run out before unmount.
       await tester.pump(const Duration(seconds: 5));
+      expect(tester.takeException(), isNull);
+      await unmount(tester, bridge);
+    },
+  );
+
+  testWidgets(
+    'snapshot events refresh the open page without re-entering it',
+    (tester) async {
+      // 直连在中途建立：状态流翻转 + 同步快照推送，页面必须实时跟上，
+      // 而不是停留在旧投影上等待重新进入。
+      final bridge = DeviceSpacePanelBridge(
+        topology: <String, Object?>{
+          'currentDeviceId': 'self',
+          'devices': <Map<String, Object?>>[
+            _member(
+              deviceId: 'self',
+              deviceName: 'this-linux',
+              identityName: 'Administrator',
+              capabilities: _administratorCapabilities,
+            ),
+            _member(
+              deviceId: 'tablet',
+              deviceName: 'tablet-renamed',
+              online: false,
+              identityName: 'Relay',
+              capabilities: <String>[
+                'network.devices.view',
+                'network.relay',
+                'storage.provide',
+              ],
+            ),
+          ],
+          'connections': <Object?>[],
+        },
+        control: _control(),
+      )
+        ..paired = <Map<String, Object?>>[
+          <String, Object?>{
+            'deviceId': 'tablet',
+            'deviceInfo': <String, Object?>{
+              'platform': 'android',
+              'model': 'elish',
+            },
+            'inbound': true,
+            'outbound': true,
+          },
+        ]
+        ..statuses = <String, String>{'tablet': 'Offline'};
+      await mountPanel(tester, bridge);
+      expect(find.text('tablet-renamed'), findsOneWidget);
+      expect(find.textContaining('离线'), findsWidgets);
+      // 对端直连建立：可用性翻转，同步快照携带新拓扑。
+      bridge.statuses = <String, String>{'tablet': 'Online'};
+      bridge.topology = <String, Object?>{
+        'currentDeviceId': 'self',
+        'devices': <Map<String, Object?>>[
+          _member(
+            deviceId: 'self',
+            deviceName: 'this-linux',
+            identityName: 'Administrator',
+            capabilities: _administratorCapabilities,
+          ),
+          _member(
+            deviceId: 'tablet',
+            deviceName: 'tablet-renamed',
+            online: true,
+            identityName: 'Relay',
+            capabilities: <String>[
+              'network.devices.view',
+              'network.relay',
+              'storage.provide',
+            ],
+          ),
+        ],
+        'connections': <Object?>[],
+      };
+      bridge.emitPairedStatuses();
+      bridge.emitDeviceSpaceSnapshot();
+      await tester.pump();
+      await tester.pump();
+      expect(find.textContaining('在线 · 直连'), findsWidgets);
       expect(tester.takeException(), isNull);
       await unmount(tester, bridge);
     },

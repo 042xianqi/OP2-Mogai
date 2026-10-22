@@ -79,6 +79,9 @@ class _RuntimeSettingsPanelState extends State<RuntimeSettingsPanel>
   _pairedDevicesSubscription;
   StreamSubscription<Map<String, generated.RuntimePairedDeviceStatus>>?
   _pairedDeviceStatusesSubscription;
+  StreamSubscription<generated.RuntimeDeviceSpaceSnapshot>?
+  _snapshotSubscription;
+  Timer? _watchRetryTimer;
 
   late final GeneratedCoreProxyClients _clients =
       widget.clients ??
@@ -90,7 +93,10 @@ class _RuntimeSettingsPanelState extends State<RuntimeSettingsPanel>
   @override
   void onPageActivityChanged(bool active) {
     _pageGeneration += 1;
+    _watchRetryTimer?.cancel();
     if (!active) {
+      _snapshotSubscription?.cancel();
+      _snapshotSubscription = null;
       _pairedDevicesSubscription?.cancel();
       _pairedDevicesSubscription = null;
       _pairedDeviceStatusesSubscription?.cancel();
@@ -98,12 +104,16 @@ class _RuntimeSettingsPanelState extends State<RuntimeSettingsPanel>
       return;
     }
     unawaited(_refreshCurrentDeviceSpace());
-    _watchPairedDevices();
-    _watchPairedDeviceStatuses();
+    _startWatches();
   }
 
   @override
   void dispose() {
+    _watchRetryTimer?.cancel();
+    final snapshotSubscription = _snapshotSubscription;
+    if (snapshotSubscription != null) {
+      unawaited(snapshotSubscription.cancel());
+    }
     final pairedDevicesSubscription = _pairedDevicesSubscription;
     if (pairedDevicesSubscription != null) {
       unawaited(pairedDevicesSubscription.cancel());
@@ -115,40 +125,93 @@ class _RuntimeSettingsPanelState extends State<RuntimeSettingsPanel>
     super.dispose();
   }
 
-  /// Subscribes to pairing changes produced by both connection directions.
-  void _watchPairedDevices() {
-    _pairedDevicesSubscription = _clients.server.runtimeRemoteLinkService
-        .pairedDevicesFlow()
-        .listen(
-          _applyPairedDevices,
-          onError: (Object error, StackTrace stackTrace) {
-            if (!mounted) {
-              return;
+  /// Runs one watch subscription; a failed watch resubscribes itself after a
+  /// short delay instead of staying silent until the page is entered again.
+  void _subscribeWatch<T>(
+    Stream<T> Function() flow,
+    void Function(T value) onData,
+    void Function(StreamSubscription<T> subscription) install,
+  ) {
+    install(
+      flow().listen(
+        onData,
+        onError: (Object error) {
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            _connectionMessage = error.toString();
+            _connectionFailed = true;
+          });
+          if (!isPageActive) {
+            return;
+          }
+          _watchRetryTimer?.cancel();
+          _watchRetryTimer = Timer(const Duration(seconds: 2), () {
+            if (mounted && isPageActive) {
+              _subscribeWatch(flow, onData, install);
             }
-            setState(() {
-              _connectionMessage = error.toString();
-              _connectionFailed = true;
-            });
-          },
-        );
+          });
+        },
+      ),
+    );
   }
 
-  /// Subscribes to direct Peer Link status changes for paired devices.
-  void _watchPairedDeviceStatuses() {
-    _pairedDeviceStatusesSubscription = _clients.server.runtimeRemoteLinkService
-        .pairedDeviceStatusesFlow()
-        .listen(
-          _applyPairedDeviceStatuses,
-          onError: (Object error, StackTrace stackTrace) {
-            if (!mounted) {
-              return;
-            }
-            setState(() {
-              _connectionMessage = error.toString();
-              _connectionFailed = true;
-            });
-          },
-        );
+  /// Subscribes the synchronized overview, the pairing records and the
+  /// direct-link statuses while this page is active.
+  void _startWatches() {
+    _subscribeWatch(
+      _clients.server.runtimeRemoteLinkService.deviceSpaceSnapshotFlow,
+      _applyDeviceSpaceSnapshot,
+      (subscription) => _snapshotSubscription = subscription,
+    );
+    _subscribeWatch(
+      _clients.server.runtimeRemoteLinkService.pairedDevicesFlow,
+      _applyPairedDevices,
+      (subscription) => _pairedDevicesSubscription = subscription,
+    );
+    _subscribeWatch(
+      _clients.server.runtimeRemoteLinkService.pairedDeviceStatusesFlow,
+      _applyPairedDeviceStatuses,
+      (subscription) => _pairedDeviceStatusesSubscription = subscription,
+    );
+  }
+
+  /// Applies one synchronized space-plus-topology snapshot pushed by the
+  /// runtime. This covers every change the paired-status flow cannot see:
+  /// synchronized profiles, relay topology edges, identities, membership.
+  void _applyDeviceSpaceSnapshot(
+    generated.RuntimeDeviceSpaceSnapshot snapshot,
+  ) {
+    if (!mounted || !isPageActive) {
+      return;
+    }
+    setState(() {
+      _currentDeviceSpace = snapshot.space;
+      _topology = snapshot.topology;
+      _connectionMessage = null;
+      _connectionFailed = false;
+    });
+    unawaited(_pullDeviceSpaceControl());
+  }
+
+  /// Reads the identity-control projection, which is not part of the
+  /// snapshot flow. A failed read stays silent: the next snapshot re-pulls,
+  /// and the rest of the page remains readable.
+  Future<void> _pullDeviceSpaceControl() async {
+    if (!mounted || !isPageActive) {
+      return;
+    }
+    final generation = _pageGeneration;
+    try {
+      final control = await _clients.server.runtimeRemoteLinkService
+          .deviceSpaceControl();
+      if (mounted && isPageActive && generation == _pageGeneration) {
+        setState(() => _control = control);
+      }
+    } catch (_) {
+      // The next snapshot re-pulls.
+    }
   }
 
   /// Applies peer-driven online states without changing pairing validity prompts.
@@ -172,7 +235,6 @@ class _RuntimeSettingsPanelState extends State<RuntimeSettingsPanel>
       }
       _pairedRemoteStates = nextStates;
     });
-    unawaited(_refreshCurrentDeviceSpace());
   }
 
   /// Reads the synchronized device space projection from the current device.
