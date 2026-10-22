@@ -38,6 +38,7 @@ pub struct LocalCoreProxy {
     #[cfg(not(target_arch = "wasm32"))]
     _coreCommandRuntime: Option<Arc<OperitApplication>>,
     chatRuntimeHolder: Arc<tokio::sync::Mutex<ChatRuntimeHolder>>,
+    spaceRuntime: Arc<operit_node_runtime::SpaceRuntime::SpaceRuntime>,
     hostManager: HostManager,
     toolRuntimeSupport: Arc<dyn ToolRuntimeSupport>,
     deviceToolService: Arc<dyn operit_tools::tools::DeviceTools::DeviceToolService>,
@@ -127,6 +128,9 @@ impl LocalCoreProxy {
         let toolRuntimeSupport = application.toolHandler.runtimeSupport();
         let deviceToolService = Arc::new(application.toolHandler.clone());
         let chatRuntimeHolder = application.chatRuntimeHolder.clone();
+        let spaceRuntime = Arc::new(operit_node_runtime::SpaceRuntime::SpaceRuntime::new(
+            chatRuntimeHolder.clone(),
+        ));
         let toolPkgShutdown = Arc::new(application.toolHandler.getOrCreatePackageManager()
             .lock().expect("package manager mutex poisoned").executionEngineShutdown());
         Self {
@@ -139,6 +143,7 @@ impl LocalCoreProxy {
             #[cfg(not(target_arch = "wasm32"))]
             _coreCommandRuntime: coreCommandRuntime,
             chatRuntimeHolder,
+            spaceRuntime,
             coreStreamPool: Arc::new(CoreStreamPool::new()),
         }
     }
@@ -240,9 +245,6 @@ impl LocalCoreProxy {
         &self,
     ) -> operit_node_runtime::CoreNodeRouter::CoreNodeLocalRuntime {
         let proxy = Arc::new(self.clone());
-        let spaceRuntime = Arc::new(operit_node_runtime::SpaceRuntime::SpaceRuntime::new(
-            self.chatRuntimeHolder(),
-        ));
         let sharedClient: Arc<dyn CoreLinkSharedClient + Send + Sync> = proxy.clone();
         let applicationClient = self.localApplicationSharedClient();
         let bindCoreNodeToolRuntime = {
@@ -260,7 +262,7 @@ impl LocalCoreProxy {
             Arc::new(LocalCoreProxy::generatedTargetForSchema),
             bindCoreNodeToolRuntime,
             openPush,
-            spaceRuntime,
+            self.spaceRuntime.clone(),
         ).withPeerServices(self.peerServices.clone())
     }
 

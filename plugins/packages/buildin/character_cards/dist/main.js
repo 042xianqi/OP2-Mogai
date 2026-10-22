@@ -281,6 +281,7 @@ function assertCard(value) {
   for (const field of ["id", "name", "description", "characterSetting", "openingStatement", "otherContentChat", "otherContentVoice", "advancedCustomPrompt", "marks", "chatModelBindingMode", "memoryBindingMode"]) assertString(value[field], field);
   for (const field of ["avatarUri", "chatProviderId", "chatModelId", "ttsConfigId", "themeConfigId", "sharedMemoryId"]) assertNullableString(value[field], field);
   if (value.themeConfigId !== null) requireId(value.themeConfigId, "\u89D2\u8272\u4E3B\u9898\u914D\u7F6E");
+  if (value.memoryBindingMode !== "CHARACTER" && value.memoryBindingMode !== "SHARED") throw new Error("Invalid memory binding mode");
   assertStrings(value.attachedTagIds, "\u89D2\u8272\u6807\u7B7E");
   assertInteger(value.createdAt, "\u89D2\u8272\u521B\u5EFA\u65F6\u95F4", 0);
   assertInteger(value.updatedAt, "\u89D2\u8272\u4FEE\u6539\u65F6\u95F4", 0);
@@ -2001,7 +2002,6 @@ function assertCharacterState(value) {
     assertCard(card);
     requireId(card.id, "card id");
     for (const id2 of card.attachedTagIds) if (!tagIds.has(id2)) throw new Error("Missing attached tag: " + id2);
-    if (card.memoryBindingMode !== "CHARACTER" && card.memoryBindingMode !== "SHARED") throw new Error("Invalid memory binding mode");
     for (const mount2 of card.sharedMemoryMounts) if (!storeIds.has(mount2.sharedMemoryId)) throw new Error("Missing shared memory mount: " + mount2.sharedMemoryId);
   }
   for (const group of groups) {
@@ -6930,7 +6930,7 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
     this.publicationFailure = null;
     this.waiters = [];
   }
-  /** Initializes a new plugin database or opens the records written by the centralized Core migration. */
+  /** Opens storage and initializes first-install records without retaining a synchronized domain snapshot. */
   static open(directories = null) {
     return __async(this, null, function* () {
       const directory = ToolPkg.getSpaceDataDir();
@@ -6960,11 +6960,7 @@ var DatabaseCharacterRepository = class _DatabaseCharacterRepository {
           preferences.set("state", { version: state.version, active: storedValue(state.active), memoryPreferences: storedValue(state.memoryPreferences) });
         });
       }
-      const metadata = (yield storage.metadata.data()).get("state");
-      if (metadata === void 0) throw new Error("Character initialization did not publish metadata");
-      const configuration = yield storage.data();
-      const loaded = stateFromRecords(metadata, yield repository.readRecords(configuration));
-      assertCharacterState(loaded);
+      yield repository.readMetadata();
       return repository;
     });
   }

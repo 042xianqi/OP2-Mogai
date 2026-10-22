@@ -42,24 +42,38 @@ pub(crate) fn schema(
         paths
             .into_iter()
             .filter_map(|path| {
-                operit_store::ExtensionStore::ExtensionStore::preferenceSyncStore(path)
-                    .or_else(|| operit_store::CoreSpaceStore::CoreSpaceStore::preferenceSyncStore(path))
+                operit_store::CoreSpaceStore::CoreSpaceStore::preferenceSyncStore(path)
             }),
     );
     schema
 }
-
 /// Prepares existing datasets through the same migration, import and replay path as incoming data.
 pub(crate) fn prepare(storage: Arc<dyn RuntimeStorageHost>) -> Vec<String> {
-    use operit_store::{ExtensionStore::ExtensionStore, PreferenceMerge::applyIndependentOperations};
+    use operit_store::PreferenceMerge::applyIndependentOperations;
+    use operit_store::PreferencesDataStore::PreferencesDataStore;
     let mut schema = schema(&[]);
     let mut errors = Vec::new();
-    match storage.list("runtime/extensions/space/settings") {
-        Ok(entries) => schema.stores.extend(entries.iter().filter_map(|entry| {
-            ExtensionStore::preferenceSyncStore(&entry.path)
-        })),
-        Err(error) => errors.push(format!("extension preferences: {error}")),
-    }
+    schema.stores.retain(|owner| {
+        let required = (|| -> Result<bool, String> {
+            if !storage.exists(&owner.path).map_err(|error| error.to_string())? {
+                return Ok(false);
+            }
+            let store = if owner.encrypted {
+                PreferencesDataStore::newEncryptedWithStorage(storage.clone(), owner.path.clone())
+            } else {
+                PreferencesDataStore::newWithStorage(storage.clone(), owner.path.clone())
+            };
+            store.isSyncPrepared(owner.storageVersion.expect("native owner schema version"))
+                .map(|ready| !ready).map_err(|error| error.to_string())
+        })();
+        match required {
+            Ok(required) => required,
+            Err(error) => {
+                errors.push(format!("preference migration path={}: {error}", owner.path));
+                false
+            }
+        }
+    });
     for outcome in applyIndependentOperations(storage, &schema, &[], &[], |_, _| true) {
         if let Err(error) = outcome.result {
             errors.push(format!("preference migration paths={:?}: {error}", outcome.paths));
@@ -419,7 +433,7 @@ mod tests {
         assert!(secondJournal.pendingOperations().unwrap().is_empty());
     }
 
-    /// Background sync imports unopened owners and extension settings without creating absent stores.
+    /// Background sync imports unopened preference owners without reviving retired extension settings.
     #[test]
     fn preparation_imports_unopened_owners_once_through_the_shared_schema() {
         let fixture = Fixture::new();
@@ -432,11 +446,10 @@ mod tests {
             fixture.host.clone(), RuntimeStorageLayout::RUNTIME_SYNC_DIR_PATH,
         );
         let history = journal.preferenceHistory().unwrap();
-        assert_eq!(history.len(), 2);
+        assert_eq!(history.len(), 1);
         assert_eq!(PreferencesDataStore::newWithStorage(fixture.host.clone(), &sidebar)
             .data().unwrap().get(&stringPreferencesKey("layout")), Some(&json!({"wide":true})));
-        assert_eq!(PreferencesDataStore::newWithStorage(fixture.host.clone(), &extension)
-            .data().unwrap().get(&stringPreferencesKey("settings")), Some(&json!({"enabled":true})));
+        assert!(!history.iter().any(|operation| operation.payload["storagePath"] == extension));
         assert!(!fixture.host.exists(RuntimeStorageLayout::MODEL_CONFIGS_PREFERENCES_PATH).unwrap());
         assert!(prepare(fixture.host.clone()).is_empty());
         assert_eq!(journal.preferenceHistory().unwrap(), history);

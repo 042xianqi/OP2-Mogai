@@ -237,6 +237,43 @@ fn declarations_preserve_stable_ids_and_local_storage_version_boundaries() {
     first.dispose();second.dispose();receiver.dispose();
 }
 
+/// Retires an already materialized source identity when an explicit alias arrives later.
+#[test]
+fn aliases_retire_existing_catalog_sources_on_every_peer() {
+    let source = Fixture::new("space");
+    let receiver = Fixture::new("space");
+    let handle = source.call(json!({
+        "op":"open_preferences", "path":source.path, "merge":descriptor(&source.path)
+    })).unwrap()["handle"].as_str().unwrap().to_owned();
+    source.edit(&handle, json!([
+        set("card_old", json!({"id":"old", "name":"Role"})),
+        set("card_current", json!({"id":"current", "name":"Role"})),
+        set("selection", json!(["old"])),
+        set("unrelated", json!(true))
+    ]));
+    let history = source.history();
+    let schema = PreferenceMergeSchema::default();
+    PreferenceMerge::applyOperations(receiver.host.clone(), &schema, &[], &history, |_, _| true).unwrap();
+    let received = receiver.open();
+    assert!(receiver.data(&received)["values"].get("card_old").is_some());
+    let alias = aliasOperation(&source.path, "old", "current");
+    for _ in 0..2 {
+        PreferenceMerge::applyOperations(receiver.host.clone(), &schema, &history, &[alias.clone()], |_, _| true).unwrap();
+        let values = receiver.data(&received)["values"].clone();
+        assert!(values.get("card_old").is_none(), "Retired identity survived alias replay: {values}");
+        assert_eq!(values["card_current"]["id"], "current");
+        assert_eq!(values["selection"], json!(["current"]));
+        assert_eq!(values["unrelated"], true);
+    }
+    let mut expected = history;
+    expected.push(alias);
+    let archived = receiver.history();
+    assert_eq!(archived.len(), expected.len());
+    assert!(expected.iter().all(|operation| archived.contains(operation)));
+    source.dispose();
+    receiver.dispose();
+}
+
 /// Rejects old object operations, wrong file kinds and malicious metadata edits explicitly.
 #[test]
 fn datastore_contract_rejects_database_apis_and_engine_metadata_mutations() {

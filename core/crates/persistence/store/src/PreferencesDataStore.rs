@@ -2340,6 +2340,62 @@ impl PreferencesSyncedEntry {
             })
     }
 
+    /// Reconstructs independent root entries from their effective ordered mutations.
+    pub(crate) fn replay(
+        entries: &[Self],
+        preferences: &mut Preferences,
+    ) -> Result<(), PreferencesDataStoreError> {
+        type RootPlan<'a> = BTreeMap<
+            &'a str,
+            Vec<(&'a PreferencesSyncedEntry, &'a PreferencesSyncedMutation)>,
+        >;
+
+        /// Composes root assignments and deltas without executing overwritten intermediate state.
+        fn compose<'a>(
+            entry: &'a PreferencesSyncedEntry,
+            mutation: &'a PreferencesSyncedMutation,
+            plan: &mut RootPlan<'a>,
+        ) -> Result<(), PreferencesDataStoreError> {
+            match mutation {
+                PreferencesSyncedMutation::Transaction(mutations) => {
+                    for mutation in mutations {
+                        compose(entry, mutation, plan)?;
+                    }
+                }
+                PreferencesSyncedMutation::AliasEntry { .. } => {
+                    return Err(PreferencesDataStoreError::Message(
+                        "Identity aliases require a declared catalog materializer".into(),
+                    ));
+                }
+                PreferencesSyncedMutation::SetEntry { key, .. }
+                | PreferencesSyncedMutation::DeleteEntry { key } => {
+                    plan.insert(key, vec![(entry, mutation)]);
+                }
+                PreferencesSyncedMutation::IncrementEntry { key, .. }
+                | PreferencesSyncedMutation::PatchObject { key, .. }
+                | PreferencesSyncedMutation::SetJson { key, .. }
+                | PreferencesSyncedMutation::DeleteJson { key, .. } => {
+                    plan.entry(key).or_default().push((entry, mutation));
+                }
+            }
+            Ok(())
+        }
+
+        let mut plan = RootPlan::new();
+        for entry in entries {
+            compose(entry, &entry.mutation, &mut plan)?;
+        }
+        for (key, mutations) in plan {
+            preferences.remove(&stringPreferencesKey(key));
+            for (entry, mutation) in mutations {
+                entry.applyMutation(mutation, preferences).map_err(|error| {
+                    PreferencesDataStoreError::Message(format!("{}: {error}", entry.storagePath))
+                })?;
+            }
+        }
+        Ok(())
+    }
+
     /// Presents the complete local representation to its owner's historical value decoder.
     pub(crate) fn storedSnapshot(
         storagePath: &str,
@@ -2706,23 +2762,14 @@ impl PreferencesDataStore {
         Self::readSchemaVersion(&self.data()?)
     }
 
-    /// Applies validated synchronized entries for one file in one transaction and notification.
-    #[allow(non_snake_case)]
-    pub fn applySyncedEntriesWithStorage(
-        storageHost: Arc<dyn RuntimeStorageHost>,
-        entries: &[PreferencesSyncedEntry],
-    ) -> Result<(), PreferencesDataStoreError> {
-        if let Some(first) = entries.first() {
-            if entries.iter().any(|entry| {
-                entry.storagePath != first.storagePath || entry.encrypted != first.encrypted
-            }) {
-                return Err(PreferencesDataStoreError::Message(
-                    "batched preference sync entries must share one storage path and encryption mode"
-                        .to_string(),
-                ));
-            }
+    /// Reports whether schema migration and initial replication are already durably committed.
+    pub fn isSyncPrepared(&self, expected: u32) -> Result<bool, PreferencesDataStoreError> {
+        let preferences = self.data()?;
+        let actual = Self::readSchemaVersion(&preferences)?;
+        if actual > expected {
+            return Err(PreferencesDataStoreError::SchemaVersionTooNew { actual, expected });
         }
-        Self::applySyncedPreferencesWithStorage(storageHost, entries)
+        Ok(actual == expected && preferences.replication.initialized)
     }
 
     /// Decodes each immutable operation once and orders the prepared batch for shared consumers.
@@ -2791,35 +2838,6 @@ impl PreferencesDataStore {
         Ok(ordered)
     }
 
-    /// Applies one decoded dataset atomically; cross-dataset operations require separate commits.
-    #[allow(non_snake_case)]
-    pub fn applySyncedPreferencesWithStorage(
-        storage: Arc<dyn RuntimeStorageHost>,
-        entries: &[PreferencesSyncedEntry],
-    ) -> Result<(), PreferencesDataStoreError> {
-        let Some(first) = entries.first() else {
-            return Ok(());
-        };
-        if entries.iter().any(|entry| {
-            entry.storagePath != first.storagePath || entry.encrypted != first.encrypted
-        }) {
-            return Err(PreferencesDataStoreError::Message(
-                "Preference transactions require one dataset and encryption policy".into(),
-            ));
-        }
-        Self::materializeSyncedSnapshot(
-            storage,
-            &first.storagePath,
-            first.encrypted,
-            |preferences| {
-                for entry in entries {
-                    entry.apply(preferences)?;
-                }
-                Ok(())
-            },
-        )
-    }
-
     /// Migrates, imports and replays a dataset under the same durable commit and dataset lock.
     pub(crate) fn materializeSyncedDataset<R, P, F>(
         storage: Arc<dyn RuntimeStorageHost>,
@@ -2831,7 +2849,7 @@ impl PreferencesDataStore {
     ) -> Result<R, PreferencesDataStoreError>
     where
         P: FnOnce(&mut Preferences, &[SyncOperation]) -> Result<(), PreferencesDataStoreError>,
-        F: FnOnce(&mut Preferences, &[SyncOperation]) -> Result<R, PreferencesDataStoreError>,
+        F: FnOnce(&mut Preferences, &[SyncOperation], bool) -> Result<R, PreferencesDataStoreError>,
     {
         let store = if encrypted {
             Self::newEncryptedWithStorage(storage.clone(), path)
@@ -2842,24 +2860,34 @@ impl PreferencesDataStore {
         Self::materializeSyncedSnapshot(storage, path, encrypted, |preferences| {
             let mut originals = journal.archivedPreferenceHistory(path)?;
             originals.extend(preferences.replication.outbox.iter().cloned());
+            let previous = preferences.clone();
             prepare(preferences, &originals)?;
             let baseline = preferences.clone();
             store.initializeReplicationUnlocked(&baseline, preferences)?;
             originals.extend_from_slice(operations);
             originals.extend(preferences.replication.outbox.iter().cloned());
-            let originals = Self::prepareSyncedEntries(&[], &originals)?
-                .into_iter()
-                .map(|(operation, _)| operation.clone())
-                .collect::<Vec<_>>();
-            let result = materialize(preferences, &originals)?;
-            if !originals.is_empty() {
-                journal.registerPreferenceOutbox(path, encrypted)?;
+            let mut unique = BTreeMap::new();
+            for operation in originals {
+                if let Some(existing) = unique.insert(operation.opId.clone(), operation.clone()) {
+                    if existing != operation {
+                        return Err(PreferencesDataStoreError::Message(
+                            "Conflicting immutable preference operation".into(),
+                        ));
+                    }
+                }
             }
+            let originals = unique.into_values().collect::<Vec<_>>();
+            let replay = previous != *preferences || !previous.replication.initialized
+                || originals.iter().any(|operation| !previous.replication.applied.contains_key(&operation.opId));
             for operation in &originals {
                 preferences.replication.logicalTime = preferences.replication.logicalTime.max(
                     crate::SyncOperationStore::SyncOperationOrder::fromOperation(operation).createdAt,
                 );
                 Self::stageAppliedOperation(preferences, operation)?;
+            }
+            let result = materialize(preferences, &originals, replay)?;
+            if !originals.is_empty() {
+                journal.registerPreferenceOutbox(path, encrypted)?;
             }
             Ok(result)
         })

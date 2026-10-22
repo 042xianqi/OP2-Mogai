@@ -59,14 +59,15 @@ impl HostRuntimeTaskSchedulerHost for Clock {
     }
 }
 
-/// A sending turn merges complete frames and never changes an already detached batch.
+/// An idle burst coalesces once; frames queued during I/O drain without another clock tick.
 #[tokio::test]
-async fn ticks_merge_pending_frames_without_modifying_the_in_flight_batch() {
+async fn idle_burst_coalesces_and_in_flight_backlog_drains_without_another_tick() {
     let clock = Clock::default();
     let outbox = HttpOutbox::new(32, Inbox::new(28));
-    outbox.write(b"A").await.unwrap();
     let batch = outbox.nextBatch(&clock);
     tokio::pin!(batch);
+    assert!(poll!(&mut batch).is_pending());
+    outbox.write(b"A").await.unwrap();
     assert!(poll!(&mut batch).is_pending());
     outbox.write(b"BC").await.unwrap();
     assert!(poll!(&mut batch).is_pending());
@@ -75,8 +76,8 @@ async fn ticks_merge_pending_frames_without_modifying_the_in_flight_batch() {
     assert_eq!(in_flight, b"ABC");
     outbox.write(b"D").await.unwrap();
     outbox.write(b"EF").await.unwrap();
-    clock.0.add_permits(1);
     assert_eq!(outbox.nextBatch(&clock).await.unwrap().unwrap(), b"DEF");
+    assert_eq!(clock.0.available_permits(), 0);
     assert_eq!(in_flight, b"ABC");
 }
 
@@ -89,10 +90,8 @@ async fn pending_bytes_are_bounded_and_do_not_split_a_frame() {
     let write = outbox.write(b"GHI");
     tokio::pin!(write);
     assert!(poll!(&mut write).is_pending());
-    clock.0.add_permits(1);
     assert_eq!(outbox.nextBatch(&clock).await.unwrap().unwrap(), b"ABCDEF");
     write.await.unwrap();
-    clock.0.add_permits(1);
     assert_eq!(outbox.nextBatch(&clock).await.unwrap().unwrap(), b"GHI");
     assert_eq!(
         outbox.write(b"123456789").await.unwrap_err(),
@@ -124,12 +123,13 @@ async fn close_wakes_idle_and_clock_waits() {
     for queued in [false, true] {
         let clock = Clock::default();
         let outbox = HttpOutbox::new(8, Inbox::new(4));
-        if queued {
-            outbox.write(b"data").await.unwrap();
-        }
         let batch = outbox.nextBatch(&clock);
         tokio::pin!(batch);
         assert!(matches!(poll!(&mut batch), Poll::Pending));
+        if queued {
+            outbox.write(b"data").await.unwrap();
+            assert!(matches!(poll!(&mut batch), Poll::Pending));
+        }
         outbox.finish(Ok(()));
         assert!(batch.await.unwrap().is_none());
         assert!(outbox.write(b"late").await.is_err());

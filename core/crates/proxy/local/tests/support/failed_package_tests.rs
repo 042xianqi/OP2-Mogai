@@ -93,16 +93,7 @@ async fn failed_package_deletion_allows_bundled_reinstallation() {
         "stale errors must not delete reinstalled packages"
     );
 
-    let imports_issue = manager
-        .getToolPkgLoadIssues()
-        .into_iter()
-        .find(|issue| issue.packageKind == "package_manager")
-        .unwrap();
-    manager.deleteToolPkgLoadIssue(imports_issue).unwrap();
-    assert!(manager
-        .getToolPkgLoadIssues()
-        .iter()
-        .all(|issue| issue.packageKind != "package_manager"));
+    assert!(manager.getToolPkgLoadIssues().iter().all(|issue| issue.packageKind != "package_manager"));
     let imported = manager.importBundledExternalToolPkgContainer(name);
     assert!(imported.starts_with("Successfully"), "{imported}");
     manager.loadAvailablePackages();
@@ -120,7 +111,7 @@ async fn failed_package_deletion_allows_bundled_reinstallation() {
     let issue = manager
         .getToolPkgLoadIssues()
         .into_iter()
-        .find(|issue| issue.sourcePath == broken.to_string_lossy())
+        .find(|issue| std::path::Path::new(&issue.sourcePath) == broken)
         .unwrap();
     assert!(issue.packageName.is_none());
     manager.deleteToolPkgLoadIssue(issue).unwrap();
@@ -140,7 +131,7 @@ async fn failed_package_deletion_allows_bundled_reinstallation() {
     let issue = manager
         .getToolPkgLoadIssues()
         .into_iter()
-        .find(|issue| issue.sourcePath == original.to_string_lossy())
+        .find(|issue| std::path::Path::new(&issue.sourcePath) == original)
         .unwrap();
     assert!(issue.packageName.is_none());
     manager.deleteToolPkgLoadIssue(issue).unwrap();
@@ -154,7 +145,7 @@ async fn failed_package_deletion_allows_bundled_reinstallation() {
     let issue = manager
         .getToolPkgLoadIssues()
         .into_iter()
-        .find(|issue| issue.sourcePath == duplicate.to_string_lossy())
+        .find(|issue| std::path::Path::new(&issue.sourcePath) == duplicate)
         .unwrap();
     assert_eq!(issue.code, "duplicate_package");
     manager.deleteToolPkgLoadIssue(issue).unwrap();
@@ -224,4 +215,62 @@ async fn legacy_builtin_device_record_merges_into_space_owner() {
         .any(|value| value == "legacy_toggle"));
     assert!(!storage.exists(&device_record_path).unwrap());
     assert!(manager.getToolPkgContainerRuntime(name).is_some());
+}
+
+/// Shared installation ownership overrides obsolete device-local retirement preferences.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_builtin_modes_ignore_device_local_retirement() {
+    let _test_guard = SHARED_CONCURRENCY_TEST_LOCK.lock().await;
+    let storage = register_test_runtime_roots();
+    let mut hosts = HostManager::withFileSystemHost(Arc::new(PosixFileSystemHost::new()));
+    hosts.runtimeStorageHost = Some(storage.clone());
+    hosts.runtimeSqliteHost = Some(storage.clone());
+    hosts.hostSecretStore = Some(Arc::new(TestSecretStore::default()));
+    hosts.hostJavaScriptRuntimeHost = Some(Arc::new(NativeHostJavaScriptRuntimeHost::new()));
+    hosts.hostRuntimeTaskSchedulerHost = Some(Arc::new(NativeHostRuntimeTaskSchedulerHost::new()));
+    ui_resource_tests::configure_package_hosts(&mut hosts);
+    let app = OperitApplication::newWithContext(hosts);
+    let packages = app.packageManager();
+    let mut manager = packages.lock().unwrap();
+    manager.loadAvailablePackages();
+    let store = ExtensionStore::new(storage.clone());
+    let modes = [
+        ("com.operit.goal_mode_bundle", "goal_mode.toolpkg"),
+        ("com.operit.plan_mode_bundle", "plan_mode.toolpkg"),
+    ];
+    for (name, _) in modes {
+        let mut record = store.record("package", name).unwrap();
+        assert_eq!(record.settings["builtin"], true);
+        assert!(record.sourceName.is_empty());
+        record.settings["order"] = json!(9);
+        store.setSettings("package", name, record.settings).unwrap();
+    }
+    let preferences = CoreNodeStateStore::newWithStorage(
+        storage.clone(),
+        "runtime/extensions/device/manager.preferences.json",
+    );
+    preferences.edit(|prefs| {
+        prefs.set(
+            &stringPreferencesKey("removed_builtin_package_assets"),
+            json!(["goal_mode.toolpkg", "plan_mode.toolpkg"]),
+        );
+    }).unwrap();
+    manager.loadAvailablePackages();
+    for (name, _) in modes {
+        assert!(manager.getToolPkgContainerRuntime(name).is_some(),
+            "Shared package {name} was hidden by local retirement preferences");
+        assert!(!manager.getBundledExternalPackageCandidates().iter()
+            .any(|candidate| candidate.packageName == name));
+        let record = store.record("package", name).unwrap();
+        assert_eq!(record.scope, "space");
+        assert_eq!(record.sourceName, "");
+        assert_eq!(record.settings["builtin"], true);
+        assert_eq!(record.settings["order"], 9);
+    }
+    manager.loadAvailablePackages();
+    for (name, _) in modes {
+        assert!(manager.getToolPkgContainerRuntime(name).is_some());
+        assert!(manager.getToolPkgLoadIssues().iter()
+            .all(|issue| issue.packageName.as_deref() != Some(name)));
+    }
 }

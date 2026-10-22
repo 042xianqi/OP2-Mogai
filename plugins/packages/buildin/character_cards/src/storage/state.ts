@@ -59,7 +59,6 @@ export function assertCharacterState(value: unknown): asserts value is Character
     requireId(card.id, "card id");
     for (const id of card.attachedTagIds) if (!tagIds.has(id)) throw new Error("Missing attached tag: " + id);
     // Model binding validity belongs to explicit binding writes and chat execution, so damaged bindings remain editable.
-    if (card.memoryBindingMode !== "CHARACTER" && card.memoryBindingMode !== "SHARED") throw new Error("Invalid memory binding mode");
     // Primary memory selections remain editable when their old library is absent; writes and execution validate the target.
     for (const mount of card.sharedMemoryMounts) if (!storeIds.has(mount.sharedMemoryId)) throw new Error("Missing shared memory mount: " + mount.sharedMemoryId);
   }

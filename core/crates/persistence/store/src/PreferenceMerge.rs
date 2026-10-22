@@ -17,6 +17,15 @@ use crate::PreferencesDataStore::{
 };
 use crate::SyncOperationStore::SyncOperation;
 
+/// Selects immutable merge declarations and explicit identity decisions without decoding business values.
+pub(crate) fn isMergeMetadata(operation: &SyncOperation) -> bool {
+    operation.domain == "preferences" && (operation.operation == "alias"
+        || operation.payload["key"] == PLUGIN_MERGE_DECLARATION_KEY
+        || operation.payload["entries"].as_array().is_some_and(|entries| {
+            entries.iter().any(|entry| entry["key"] == PLUGIN_MERGE_DECLARATION_KEY)
+        }))
+}
+
 /// Binds the shared data declaration to its owning preference store.
 #[derive(Clone, Debug)]
 pub struct PreferenceMergeStore {
@@ -251,20 +260,41 @@ where
             }),
         }
     }
+    // History is committed context, not a request to rematerialize every dataset.
+    // Catalogs and reference owners participate in identity projection; ordinary
+    // datasets only participate when this batch actually changes them.
+    let preparing = history.is_empty() && incoming.is_empty();
+    let mut participating = pending.keys().cloned().collect::<BTreeSet<_>>();
+    participating.extend(schema.stores.iter().filter(|store| {
+        preparing || store.merge.catalog.is_some() || !store.merge.references.is_empty()
+    }).map(|store| store.path.clone()));
+    for operation in history.iter().chain(incoming) {
+        if operation.domain != "preferences" { continue; }
+        let declaresMerge = operation.payload["key"] == PLUGIN_MERGE_DECLARATION_KEY
+            || operation.payload["entries"].as_array().is_some_and(|entries| {
+                entries.iter().any(|entry| entry["key"] == PLUGIN_MERGE_DECLARATION_KEY)
+            });
+        if declaresMerge {
+            if let Some(path) = operation.payload["storagePath"].as_str() {
+                participating.insert(path.to_owned());
+            }
+        }
+    }
     for operation in history
         .iter()
         .chain(incoming)
         .filter(|operation| operation.domain == "preferences")
     {
-        if let Some(path) = operation.payload.get("storagePath").and_then(Value::as_str) {
+        if let Some(path) = operation.payload.get("storagePath").and_then(Value::as_str)
+            .filter(|path| participating.contains(*path)) {
             owners
                 .entry(path.into())
                 .or_default()
                 .push(operation.clone());
         }
     }
-    for store in &schema.stores {
-        owners.entry(store.path.clone()).or_default();
+    for path in participating {
+        owners.entry(path).or_default();
     }
     let mut aliases = BTreeMap::new();
     let mut committed = Vec::new();
@@ -456,8 +486,14 @@ where
             }
             Ok(())
         },
-        |preferences, originals| {
-        let (owner, entries) = prepareOwner(schema, path, originals).map_err(PreferencesDataStoreError::Message)?;
+        |preferences, originals, replay| {
+        // A committed dataset only needs declarations and alias decisions for reference projection.
+        let metadata;
+        let source = if replay { originals } else {
+            metadata = originals.iter().filter(|operation| isMergeMetadata(operation)).cloned().collect::<Vec<_>>();
+            &metadata
+        };
+        let (owner, entries) = prepareOwner(schema, path, source).map_err(PreferencesDataStoreError::Message)?;
         let schema = &owner;
         if entries.iter().any(|entry| entry.storagePath() != path || entry.encrypted() != encrypted)
             || schema.stores.iter().any(|store| store.path != path || store.encrypted != encrypted) {
@@ -465,12 +501,8 @@ where
         }
         let mut aliases = externalAliases.clone();
         aliases.extend(declaredAliases(schema, &entries).map_err(PreferencesDataStoreError::Message)?);
-        for entry in &entries {
-            if entry.identityAlias().is_some() { continue; }
-            for key in entry.keys() { preferences.remove(&stringPreferencesKey(key)); }
-        }
-        for mut entry in entries {
-            if entry.identityAlias().is_some() { continue; }
+        let mut entries = entries.into_iter().filter(|entry| entry.identityAlias().is_none()).collect::<Vec<_>>();
+        for entry in &mut entries {
             if let Some((store, catalog)) = schema.catalogs().next() {
                 entry.rewriteRootEntries(|key, value| {
                     if !keyMatches(key, catalog) { return Ok(()); }
@@ -487,7 +519,17 @@ where
                     Ok(())
                 })?;
             }
-            entry.apply(preferences)?;
+        }
+        if replay {
+            PreferencesSyncedEntry::replay(&entries, preferences)?;
+        }
+        for (store, catalog) in schema.catalogs() {
+            let namespace = format!("{}\u{001f}", store.path);
+            for source in aliases.keys().filter_map(|key| key.strip_prefix(&namespace)) {
+                preferences.remove(&stringPreferencesKey(&format!(
+                    "{}{}{}", catalog.key_prefix, source, catalog.key_suffix
+                )));
+            }
         }
         let retired = preferences.iterEntries().filter_map(|(key, _)| {
             (!retain(&path, key) || schema.catalogs().any(|(_, catalog)| catalog.retired_keys.iter().any(|retired| retired == key)))

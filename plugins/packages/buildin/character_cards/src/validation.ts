@@ -113,6 +113,7 @@ export function assertCard(value: unknown): asserts value is Card {
   for (const field of ["id", "name", "description", "characterSetting", "openingStatement", "otherContentChat", "otherContentVoice", "advancedCustomPrompt", "marks", "chatModelBindingMode", "memoryBindingMode"] as const) assertString(value[field], field);
   for (const field of ["avatarUri", "chatProviderId", "chatModelId", "ttsConfigId", "themeConfigId", "sharedMemoryId"] as const) assertNullableString(value[field], field);
   if (value.themeConfigId !== null) requireId(value.themeConfigId, "角色主题配置");
+  if (value.memoryBindingMode !== "CHARACTER" && value.memoryBindingMode !== "SHARED") throw new Error("Invalid memory binding mode");
   assertStrings(value.attachedTagIds, "角色标签");
   assertInteger(value.createdAt, "角色创建时间", 0);
   assertInteger(value.updatedAt, "角色修改时间", 0);

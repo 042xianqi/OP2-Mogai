@@ -727,15 +727,18 @@ impl SpacePersistenceSyncService {
             if !self.storageReplicationAllowed(targetNodeId)? {
                 return Ok(false);
             }
-            let localClock: Value = self.callLocal("syncClock", Value::Null).await?;
+            let (localClock, remoteClock) = tokio::join!(
+                self.callLocal::<Value>("syncClock", Value::Null),
+                callRemote::<Value>(
+                    &self.state.nodeRouter,
+                    targetNodeId,
+                    PeerSyncMethod::SyncClock,
+                    Value::Null,
+                ),
+            );
+            let localClock = localClock?;
             validateDomainClock(&localClock, domains, "local")?;
-            let remoteClock: Value = callRemote(
-                &self.state.nodeRouter,
-                targetNodeId,
-                PeerSyncMethod::SyncClock,
-                Value::Null,
-            )
-            .await?;
+            let remoteClock = remoteClock?;
             validateDomainClock(&remoteClock, domains, "remote")?;
             self.recordPendingWork(targetNodeId, "local receipt", &localClock);
             self.recordPendingWork(targetNodeId, "remote receipt", &remoteClock);
@@ -763,27 +766,28 @@ impl SpacePersistenceSyncService {
                     summarizeSyncClock(&remoteClock)
                 ),
             );
-            let localOperations: Value = self
-                .callLocal(
+            let (localOperations, remoteOperations) = tokio::join!(
+                self.callLocal::<Value>(
                     "syncOperationsSince",
                     json!({
                         "clock": remoteClock,
                         "domains": domains,
                         "limit": limit,
                     }),
-                )
-                .await?;
-            let remoteOperations: Value = callRemote(
-                &self.state.nodeRouter,
-                targetNodeId,
-                PeerSyncMethod::SyncOperationsSince,
-                json!({
-                    "clock": localClock,
-                    "domains": domains,
-                    "limit": limit,
-                }),
-            )
-            .await?;
+                ),
+                callRemote::<Value>(
+                    &self.state.nodeRouter,
+                    targetNodeId,
+                    PeerSyncMethod::SyncOperationsSince,
+                    json!({
+                        "clock": localClock,
+                        "domains": domains,
+                        "limit": limit,
+                    }),
+                ),
+            );
+            let localOperations = localOperations?;
+            let remoteOperations = remoteOperations?;
             if !self.storageReplicationAllowed(targetNodeId)? {
                 return Ok(false);
             }
@@ -895,22 +899,21 @@ impl SpacePersistenceSyncService {
             )?
         };
         for chunk in chunks.iter().copied() {
-            let remote: Result<Value, String> = callRemote(
-                &self.state.nodeRouter,
-                targetNodeId,
-                PeerSyncMethod::SyncApplyOperations,
-                json!({ "operations": chunk }),
-            )
-            .await;
+            let (remote, local) = tokio::join!(
+                callRemote::<Value>(
+                    &self.state.nodeRouter,
+                    targetNodeId,
+                    PeerSyncMethod::SyncApplyOperations,
+                    json!({ "operations": chunk }),
+                ),
+                self.callLocal::<Value>(
+                    "syncApplyOperations",
+                    json!({ "operations": chunk }),
+                ),
+            );
             if !self.storageReplicationAllowed(targetNodeId)? {
                 return Ok(false);
             }
-            let local: Result<Value, String> = self
-                .callLocal(
-                    "syncApplyOperations",
-                    json!({ "operations": chunk }),
-                )
-                .await;
             for (side, result) in [("remote apply", &remote), ("local apply", &local)] {
                 if let Ok(report) = result {
                     self.recordPendingWork(targetNodeId, side, report);
@@ -1179,7 +1182,8 @@ impl SpacePersistenceSyncService {
             return Ok(());
         }
         let service = self.clone();
-        let scheduleResult = defaultHostRuntimeTaskSchedulerHost().scheduleHostRuntimeAsyncTask(
+        // The sync pass performs synchronous storage work between its remote awaits.
+        let scheduleResult = defaultHostRuntimeTaskSchedulerHost().scheduleHostRuntimeBlockingAsyncTask(
             "core-node-space-persistence-sync",
             Box::new(move || {
                 Box::pin(async move {
@@ -1271,16 +1275,13 @@ impl SpacePersistenceSyncService {
     where
         T: DeserializeOwned,
     {
-        let response = self
-            .state
-            .localRuntime
-            .callApplication(applicationCallRequest(
-                &self.state.nodeRouter,
-                methodName,
-                args,
-            )?)
-            .await;
-        decodeCoreResponse(response.result.map_err(|error| error.to_string())?)
+        let request = applicationCallRequest(&self.state.nodeRouter, methodName, args)?;
+        let startedAt = currentTimeMillis();
+        let response = self.state.localRuntime.callApplication(request).await;
+        recordSlowSyncCall("local", methodName, startedAt);
+        decodeCoreResponse(response.result.map_err(|error| {
+            format!("local {methodName}: {error}")
+        })?)
     }
 }
 
@@ -1414,13 +1415,17 @@ async fn callRemote<T>(
 where
     T: DeserializeOwned,
 {
-    let response = nodeRouter
-        .callNode(
-            targetNodeId.to_string(),
-            method.request(operit_link::nextCoreRouteRequestId("space-persistence"), toCoreValue(args).map_err(|error| error.to_string())?),
-        )
-        .await;
-    decodeCoreResponse(response.result.map_err(|error| error.to_string())?)
+    let request = method.request(
+        operit_link::nextCoreRouteRequestId("space-persistence"),
+        toCoreValue(args).map_err(|error| error.to_string())?,
+    );
+    let methodName = request.methodName.clone();
+    let startedAt = currentTimeMillis();
+    let response = nodeRouter.callNode(targetNodeId.to_string(), request).await;
+    recordSlowSyncCall(targetNodeId, &methodName, startedAt);
+    decodeCoreResponse(response.result.map_err(|error| {
+        format!("remote {targetNodeId} {methodName}: {error}")
+    })?)
 }
 
 /// Invokes one generated service method through the Router.
@@ -1435,13 +1440,23 @@ async fn callRemoteService<T>(
 where
     T: DeserializeOwned,
 {
-    let response = nodeRouter
-        .callNode(
-            targetNodeId.to_string(),
-            serviceCallRequest(nodeRouter, targetPath, methodName, args)?,
-        )
-        .await;
-    decodeCoreResponse(response.result.map_err(|error| error.to_string())?)
+    let request = serviceCallRequest(nodeRouter, targetPath, methodName, args)?;
+    let startedAt = currentTimeMillis();
+    let response = nodeRouter.callNode(targetNodeId.to_string(), request).await;
+    recordSlowSyncCall(targetNodeId, methodName, startedAt);
+    decodeCoreResponse(response.result.map_err(|error| {
+        format!("remote {targetNodeId} {targetPath}.{methodName}: {error}")
+    })?)
+}
+
+/// Reports slow synchronization steps without logging business payloads or adding another dispatch path.
+fn recordSlowSyncCall(target: &str, method: &str, startedAt: i64) {
+    let elapsedMs = currentTimeMillis() - startedAt;
+    if elapsedMs >= 250 {
+        operit_util::AppLogger::AppLogger::trace("CoreSyncTrace", &format!(
+            "sync_call.slow target={target} method={method} elapsedMs={elapsedMs}"
+        ));
+    }
 }
 
 /// Builds one Link request for an application-level runtime operation.

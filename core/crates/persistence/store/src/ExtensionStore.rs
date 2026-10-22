@@ -31,9 +31,11 @@ pub fn notifyCatalogChanged() {
 
 pub const SPACE_EXTENSION_RECORDS: &str = "runtime/extensions/space/records";
 
-/// Installation identity and initial settings. File bytes are only retained for legacy migration.
+/// Atomic installation ownership and configuration. Embedded bytes only support legacy migration.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ExtensionRecord {
+    #[serde(default)]
+    pub schemaVersion: u32,
     pub kind: String,
     pub id: String,
     pub scope: String,
@@ -277,18 +279,27 @@ impl ExtensionStore {
                     return Err("Extension identity does not match its record path".to_string());
                 }
                 if record.kind == kind {
-                    // Old snapshots are upgraded in the owning repository, never in sync dispatch.
-                    // Check actual files, not the received record, so interrupted upgrades can retry.
+                    let legacy = record.schemaVersion == 0;
+                    if legacy {
+                        if let Some(settings) = self.legacySettingsStore(&record)?.data().map_err(|e| e.to_string())?
+                            .get(&stringPreferencesKey("settings")) {
+                            if record.kind == "package" {
+                                // Source ownership belongs to the descriptor, never to the old settings copy.
+                                for key in ["enabledNames", "disabledNames", "subpackageStates", "order"] {
+                                    if let Some(value) = settings.get(key) {
+                                        record.settings[key] = value.clone();
+                                    }
+                                }
+                            } else {
+                                record.settings = settings.clone();
+                            }
+                        }
+                        record.schemaVersion = 1;
+                    }
                     if !record.files.is_empty() {
                         self.upgradeLegacyBundle(&mut record)?;
-                    }
-                    let settings = self.settingsStore(&record)?;
-                    if let Some(value) = settings
-                        .data()
-                        .map_err(|e| e.to_string())?
-                        .get(&stringPreferencesKey("settings"))
-                    {
-                        record.settings = serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
+                    } else if legacy {
+                        self.write(&record)?;
                     }
                     self.validate(&record)?;
                     records.push(record);
@@ -360,6 +371,7 @@ impl ExtensionStore {
             return Ok(());
         }
         let record = ExtensionRecord {
+            schemaVersion: 1,
             kind: kind.to_string(),
             id: id.to_string(),
             scope: scope.to_string(),
@@ -367,7 +379,52 @@ impl ExtensionStore {
             settings: self.initialSettings(kind, id, settings)?,
             files: BTreeMap::new(),
         };
-        self.write(&record)
+        self.validate(&record)?;
+        if kind == "package" && scope == "space" && record.settings["builtin"] == true {
+            let path = recordPath(kind, id, scope)?;
+            let bytes = serde_json::to_vec(&record).map_err(|e| e.to_string())?;
+            RuntimeFileSyncStore::new(self.storage.clone(), RUNTIME_SYNC_DIR_PATH).initializeBytes(&path, &bytes)
+        } else {
+            self.write(&record)
+        }
+    }
+
+    /// Selects shared built-in code only for its canonical installation or an unseen initial state.
+    pub fn acceptsSharedBuiltinPackage(&self, id: &str) -> Result<bool, String> {
+        if let Some(record) = self.records("package")?.into_iter()
+            .find(|record| record.id == id && record.scope == "space") {
+            return Ok(record.sourceName.is_empty() && record.settings["builtin"] == true);
+        }
+        let path = recordPath("package", id, "space")?;
+        Ok(!RuntimeFileSyncStore::new(self.storage.clone(), RUNTIME_SYNC_DIR_PATH).hasSnapshot(&path)?)
+    }
+
+    /// Publishes an explicitly reinstalled bundled source while retaining its scope and settings.
+    pub fn installBundledPackageSource(
+        &self,
+        id: &str,
+        sourceName: &str,
+        members: Vec<String>,
+        scope: &str,
+    ) -> Result<(), String> {
+        validateSegment(sourceName)?;
+        let mut record = self.record("package", id)?;
+        if record.scope != scope {
+            return Err(format!("Extension scope conflicts with installation: package:{id}"));
+        }
+        if record.settings["builtin"] == true {
+            if !record.sourceName.is_empty() {
+                return Err(format!("Built-in package has an unexpected source: {id}"));
+            }
+        } else if record.sourceName != sourceName {
+            return Err(format!("Package source conflicts with installation: {id}"));
+        }
+        let previousSource = record.sourceName.clone();
+        record.sourceName = sourceName.to_string();
+        record.settings["builtin"] = Value::Bool(false);
+        record.settings["members"] =
+            serde_json::to_value(members).map_err(|error| error.to_string())?;
+        self.publishPackageSource(&record, &previousSource)
     }
 
     /// Installs a custom implementation under the built-in identity while retaining its settings.
@@ -443,23 +500,6 @@ impl ExtensionStore {
         Ok(())
     }
 
-    /// Retires an archived package source in its exact scope without deleting its data.
-    pub fn retirePackageSource(&self, id: &str, sourceName: &str, scope: &str) -> Result<(), String> {
-        validateScope(scope)?;
-        let record = self.record("package", id)?;
-        if record.scope != scope || record.sourceName != sourceName {
-            return Err(format!("Package retirement ownership mismatch: {id}/{sourceName}"));
-        }
-        let source = format!("{}/{}", Self::root("package", scope)?, sourceName);
-        if self.storage.exists(&source).map_err(|error| error.to_string())? {
-            return Err(format!("Package source must be archived before retirement: {sourceName}"));
-        }
-        self.storage.delete(&recordPath("package", id, scope)?, false)
-            .map_err(|error| error.to_string())?;
-        notifyCatalogChanged();
-        Ok(())
-    }
-
     /// Writes configuration in its owner scope and keeps portable file bytes unchanged.
     pub fn setSettings(&self, kind: &str, id: &str, settings: Value) -> Result<(), String> {
         let mut record = self.record(kind, id)?;
@@ -468,7 +508,7 @@ impl ExtensionStore {
         }
         record.settings = settings;
         self.validate(&record)?;
-        self.writeSettings(&record)?;
+        self.write(&record)?;
         notifyCatalogChanged();
         Ok(())
     }
@@ -649,7 +689,7 @@ impl ExtensionStore {
             let mut updated = canonical.clone();
             updated.settings = merged;
             self.validate(&updated)?;
-            self.writeSettings(&updated)?;
+            self.write(&updated)?;
         }
         for duplicate in records.iter().filter(|record| record.scope != requiredScope) {
             self.removeRecordMetadata(duplicate)?;
@@ -687,31 +727,8 @@ impl ExtensionStore {
         self.configRoot(&self.record("package", id)?)
     }
 
-    /// Resolves the exact hashed settings namespace owned by shared extension installations.
-    pub fn preferenceSyncStore(path: &str) -> Option<crate::PreferenceMerge::PreferenceMergeStore> {
-        let filename = path.strip_prefix("runtime/extensions/space/settings/")?.strip_suffix(".preferences.json")?;
-        let (kind, digest) = filename.split_once('-')?;
-        if !matches!(kind, "package" | "skill" | "mcp") || digest.len() != 64
-            || !digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) { return None; }
-        Some(crate::PreferenceMerge::PreferenceMergeStore::values(path, false, 2, Self::decodeSyncedSettings))
-    }
-
-    /// Converts historical settings values using the extension owner's explicit value codec.
-    fn decodeSyncedSettings(entry: &mut crate::PreferencesDataStore::PreferencesSyncedEntry) -> Result<(), crate::PreferencesDataStore::PreferencesDataStoreError> {
-        entry.decodeHistoricalValues(|version, values| {
-            if version > 2 { return Err(crate::PreferencesDataStore::PreferencesDataStoreError::SchemaVersionTooNew { actual: version, expected: 2 }); }
-            if version < 2 {
-                let key = stringPreferencesKey("settings");
-                if let Some(encoded) = values.getTyped::<String>(&key)? {
-                    values.set(&key, serde_json::from_str::<Value>(&encoded)?);
-                }
-            }
-            Ok(())
-        })
-    }
-
-    /// Synchronizes one complete settings value independently from installation bytes.
-    fn settingsStore(&self, record: &ExtensionRecord) -> Result<PreferencesDataStore, String> {
+    /// Reads the retired settings layout only while migrating a version-zero descriptor.
+    fn legacySettingsStore(&self, record: &ExtensionRecord) -> Result<PreferencesDataStore, String> {
         let path = recordPath(&record.kind, &record.id, &record.scope)?
             .replace("/records/", "/settings/")
             .replace(".json", ".preferences.json");
@@ -734,16 +751,6 @@ impl ExtensionStore {
         }))
     }
 
-    /// Writes complete plugin or MCP settings as one synchronization entity.
-    fn writeSettings(&self, record: &ExtensionRecord) -> Result<(), String> {
-        let value = serde_json::to_value(&record.settings).map_err(|e| e.to_string())?;
-        self.settingsStore(record)?
-            .edit(|preferences| {
-                preferences.set(&stringPreferencesKey("settings"), value);
-            })
-            .map_err(|e| e.to_string())
-    }
-
     /// Compatibility with already installed bundles. Existing config is never overwritten;
     /// new peers receive ordinary file operations, not another embedded bundle.
     fn upgradeLegacyBundle(&self, record: &mut ExtensionRecord) -> Result<(), String> {
@@ -763,6 +770,9 @@ impl ExtensionStore {
 
     /// Validates content paths and rejects space-local executable MCP definitions before any mutation.
     fn validate(&self, record: &ExtensionRecord) -> Result<(), String> {
+        if record.schemaVersion > 1 {
+            return Err(format!("Unsupported extension record schema: {}", record.schemaVersion));
+        }
         Self::root(&record.kind, &record.scope)?;
         if record.id.trim().is_empty() || !record.settings.is_object() {
             return Err("Extension requires a nonempty identity and object settings".to_string());
@@ -849,7 +859,6 @@ impl ExtensionStore {
         if !record.files.is_empty() {
             return Err("Installation records must not embed file content".into());
         }
-        self.writeSettings(record)?;
         let content = serde_json::to_vec(record).map_err(|e| e.to_string())?;
         match record.scope.as_str() {
             "device" => self
@@ -870,11 +879,6 @@ impl ExtensionStore {
 
     /// Removes one record and its settings while leaving plugin content for the canonical owner.
     fn removeRecordMetadata(&self, record: &ExtensionRecord) -> Result<(), String> {
-        self.settingsStore(record)?
-            .edit(|preferences| {
-                preferences.remove(&stringPreferencesKey("settings"));
-            })
-            .map_err(|e| e.to_string())?;
         let path = recordPath(&record.kind, &record.id, &record.scope)?;
         match record.scope.as_str() {
             "device" => self.storage.delete(&path, false).map_err(|e| e.to_string()),

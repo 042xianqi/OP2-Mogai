@@ -802,12 +802,8 @@ fn synchronized_preference_keys_merge_independently() {
             .operationsSince(&SyncClock::empty(), &["preferences".to_string()], 10)
             .expect("second host operations"),
     );
-    let entries = operations
-        .iter()
-        .map(PreferencesSyncedEntry::fromOperation)
-        .collect::<Result<Vec<_>, _>>()
-        .expect("decoded preference operations");
-    PreferencesDataStore::applySyncedEntriesWithStorage(targetHost.clone(), &entries)
+
+    crate::PreferenceMerge::applyOperations(targetHost.clone(), &crate::PreferenceMerge::PreferenceMergeSchema::default(), &[], &operations, |_, _| true)
         .expect("preference operation application");
 
     let targetStore = PreferencesDataStore::newWithStorage(targetHost, storagePath);
@@ -858,12 +854,8 @@ fn whole_json_preferences_sync_independent_records() {
         assert!(operation.payload.get("jsonMutation").is_none());
         assert!(operation.payload.get("jsonPath").is_none());
     }
-    let entries = operations
-        .iter()
-        .map(PreferencesSyncedEntry::fromOperation)
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    PreferencesDataStore::applySyncedEntriesWithStorage(targetHost, &entries).unwrap();
+
+    crate::PreferenceMerge::applyOperations(targetHost, &crate::PreferenceMerge::PreferenceMergeSchema::default(), &[], &operations, |_, _| true).unwrap();
     let preferences = targetStore.data().unwrap();
     assert_eq!(
         preferences.get(&stringPreferencesKey("provider_A")),
@@ -1113,20 +1105,17 @@ fn structured_model_sync_after_editing_and_deleting_unused_model() {
     let operations = SyncOperationStore::new(sourceHost, RUNTIME_SYNC_DIR_PATH)
         .operationsSince(&SyncClock::empty(), &["preferences".to_string()], 512)
         .expect("export initial model synchronization");
-    let entries = operations
-        .iter()
-        .map(PreferencesSyncedEntry::fromOperation)
-        .collect::<Result<Vec<_>, _>>()
-        .expect("decode source operations");
-    PreferencesDataStore::applySyncedEntriesWithStorage(targetHost, &entries)
+
+    crate::PreferenceMerge::applyOperations(targetHost, &crate::PreferenceMerge::PreferenceMergeSchema::default(), &[], &operations, |_, _| true)
         .expect("new device must receive the configured model");
     let preferences = targetStore.data().expect("synced provider");
     let actual = preferences.get(&providerKey).unwrap().clone();
     assert_eq!(actual, provider);
 }
 
+/// Commits independent bindings through the production path despite a malformed model dataset.
 #[test]
-fn preference_sync_batch_validation_keeps_chat_binding_when_model_file_fails() {
+fn preference_sync_keeps_independent_binding_progress_when_model_file_fails() {
     use operit_util::RuntimeStorageLayout::FUNCTIONAL_CONFIGS_PREFERENCES_PATH;
     let sourceHost = Arc::new(MemoryStorageHost::default());
     let targetHost = Arc::new(MemoryStorageHost::default());
@@ -1178,40 +1167,19 @@ fn preference_sync_batch_validation_keeps_chat_binding_when_model_file_fails() {
     let operations = SyncOperationStore::new(sourceHost, RUNTIME_SYNC_DIR_PATH)
         .operationsSince(&SyncClock::empty(), &["preferences".to_string()], 512)
         .unwrap();
-    let entries = operations
-        .iter()
-        .map(PreferencesSyncedEntry::fromOperation)
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
+
     targetHost
         .writeBytes(MODEL_CONFIGS_PREFERENCES_PATH, b"{")
         .unwrap();
-    let writesBefore = targetHost.writeCount();
-    let error =
-        PreferencesDataStore::applySyncedPreferencesWithStorage(targetHost.clone(), &entries)
-            .expect_err("a malformed model preference file cannot be applied");
-    assert!(matches!(error, PreferencesDataStoreError::Message(_)));
-    assert_eq!(targetHost.writeCount(), writesBefore);
+    crate::PreferenceMerge::applyOperations(
+        targetHost.clone(), &crate::PreferenceMerge::PreferenceMergeSchema::default(),
+        &[], &operations, |_, _| true,
+    ).expect_err("a malformed dataset must report its own failure");
+    assert_eq!(targetHost.readBytes(MODEL_CONFIGS_PREFERENCES_PATH).unwrap(), b"{");
     assert_eq!(
         targetBindings.data().unwrap().get(&bindingKey),
-        Some(&originalBinding)
+        Some(&newBinding)
     );
-}
-
-/// Decoded-entry APIs reject a transaction that spans multiple durable datasets.
-#[test]
-fn preference_transaction_rejects_multiple_storage_files_before_writing() {
-    let host = Arc::new(MemoryStorageHost::default());
-    let entries = vec![
-        synchronizedPreferenceSet("runtime/a.preferences.json", false),
-        synchronizedPreferenceSet("runtime/b.preferences.json", false),
-    ];
-    assert!(
-        PreferencesDataStore::applySyncedPreferencesWithStorage(host.clone(), &entries)
-            .is_err()
-    );
-    assert_eq!(host.writeCount(), 0);
-    assert_eq!(host.readCount(), 0);
 }
 
 /// Executes preference observation immediately so a test can verify that no
@@ -1276,47 +1244,35 @@ impl operit_host_api::HostRuntimeTaskSchedulerHost for ImmediatePreferenceObserv
     }
 }
 
-fn synchronizedPreferenceSet(path: &str, encrypted: bool) -> PreferencesSyncedEntry {
-    PreferencesSyncedEntry {
-        storagePath: path.to_string(),
-        encrypted,
-        schemaVersion: None,
-        contractVersion: Some(1),
-        mutation: super::PreferencesSyncedMutation::SetEntry {
-            key: "setting".to_string(),
-            value: json!("synced-value"),
-        },
-    }
-}
-
+/// Repeated delivery uses the same materializer and does not write unchanged datasets.
 #[test]
 fn preference_sync_replay_skips_unchanged_files_and_notifications() {
     let host = Arc::new(MemoryStorageHost::default());
     let store = PreferencesDataStore::newWithStorage(host.clone(), MODEL_CONFIGS_PREFERENCES_PATH);
-    let entries = [synchronizedPreferenceSet(
-        MODEL_CONFIGS_PREFERENCES_PATH,
-        false,
-    )];
-    PreferencesDataStore::applySyncedPreferencesWithStorage(host.clone(), &entries).unwrap();
+    let operations = [nativePreferenceOperation(MODEL_CONFIGS_PREFERENCES_PATH,
+        vec![("setting", json!("synced-value"))], 1)];
+    let schema = crate::PreferenceMerge::PreferenceMergeSchema::default();
+    crate::PreferenceMerge::applyOperations(host.clone(), &schema, &[], &operations, |_, _| true).unwrap();
     let writes = host.writeCount();
     let version = *store.changeSignal.version.lock().unwrap();
-    PreferencesDataStore::applySyncedPreferencesWithStorage(host.clone(), &entries).unwrap();
-    PreferencesDataStore::applySyncedPreferencesWithStorage(host.clone(), &[]).unwrap();
+    crate::PreferenceMerge::applyOperations(host.clone(), &schema, &[], &operations, |_, _| true).unwrap();
+    crate::PreferenceMerge::applyOperations(host.clone(), &schema, &[], &[], |_, _| true).unwrap();
     assert_eq!(host.writeCount(), writes);
     assert_eq!(*store.changeSignal.version.lock().unwrap(), version);
 }
 
+/// Conflicting encryption policies fail one dataset without committing business state.
 #[test]
-fn preference_sync_rejects_mixed_encryption_before_loading_or_writing_files() {
+fn preference_sync_rejects_mixed_encryption_before_writing_files() {
     let host = Arc::new(MemoryStorageHost::default());
-    let entries = [
-        synchronizedPreferenceSet(MODEL_CONFIGS_PREFERENCES_PATH, false),
-        synchronizedPreferenceSet(MODEL_CONFIGS_PREFERENCES_PATH, true),
-    ];
-    PreferencesDataStore::applySyncedPreferencesWithStorage(host.clone(), &entries)
-        .expect_err("a preferences file must have one encryption mode");
+    let plain = nativePreferenceOperation(MODEL_CONFIGS_PREFERENCES_PATH,
+        vec![("setting", json!("synced-value"))], 1);
+    let mut encrypted = nativePreferenceOperation(MODEL_CONFIGS_PREFERENCES_PATH,
+        vec![("setting", json!("synced-value"))], 2);
+    encrypted.payload["encrypted"] = json!(true);
+    crate::PreferenceMerge::applyOperations(host.clone(), &crate::PreferenceMerge::PreferenceMergeSchema::default(),
+        &[], &[plain, encrypted], |_, _| true).expect_err("a preferences file must have one encryption policy");
     assert_eq!(host.writeCount(), 0);
-    assert_eq!(host.readCount(), 0);
 }
 
 /// Node-local cleanup must invalidate every handle sharing the deleted path.

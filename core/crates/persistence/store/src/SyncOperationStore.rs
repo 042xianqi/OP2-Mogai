@@ -285,6 +285,7 @@ impl SyncOperationOrder {
                 ("preferences", Some(1)) => operation.payload["logicalTime"]
                     .as_i64()
                     .expect("validated preference logical time"),
+                ("runtime_file", _) if operation.payload["initial"] == true => 1,
                 _ => operation.createdAt,
             },
             originDeviceId: operation.originDeviceId.clone(),
@@ -832,6 +833,18 @@ impl SyncOperationStore {
         )
     }
 
+    /// Reads only cross-dataset merge context; each owner reads its own business history under its lock.
+    pub fn preferenceMergeHistory(&self) -> Result<Vec<SyncOperation>, SyncOperationStoreError> {
+        self.operationsSinceWithExportPolicy(
+            &SyncClock::empty(),
+            &["preferences".to_owned()],
+            usize::MAX,
+            false,
+            usize::MAX,
+            crate::PreferenceMerge::isMergeMetadata,
+        )
+    }
+
     /// Uses the shared journal cache for exports and internal deterministic state replay.
     fn operationsSinceWithExportPolicy<K: SyncOperationKnowledge>(
         &self,
@@ -964,6 +977,7 @@ impl SyncOperationStore {
                         .iter()
                         .flat_map(|domain| index.domainOperations[domain].iter())
                         .filter(|operation| isMissing(operation))
+                        .filter(|operation| storedEncryptedSyncPayload(&operation.payload) || retain(operation))
                         .cloned()
                         .collect::<Vec<_>>()
                 };
@@ -1295,6 +1309,13 @@ impl SyncOperationStore {
             entityVersionsState.value.insert(entityKey, order);
         }
         Ok(())
+    }
+
+    /// Reports known entity state, including synchronized deletion tombstones.
+    pub(crate) fn hasEntityVersion(&self, domain: &str, entityType: &str, entityId: &str) -> Result<bool, SyncOperationStoreError> {
+        let mut state = lockSyncState(&self.sharedState.entityVersions, "entity versions")?;
+        let key = serde_json::to_string(&(domain, entityType, entityId))?;
+        Ok(self.loadCachedEntityVersions(&mut state)?.contains_key(&key))
     }
 
     /// Returns whether an entity operation is newer than the last operation applied locally.

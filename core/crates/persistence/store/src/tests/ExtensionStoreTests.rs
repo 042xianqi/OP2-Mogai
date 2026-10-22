@@ -137,13 +137,6 @@ fn transfer(
                 &op.operation,
                 op.payload.clone(),
             )?;
-        } else if op.domain == "preferences" {
-            let path = op.payload["storagePath"].as_str().unwrap();
-            let schema = crate::PreferenceMerge::PreferenceMergeSchema {
-                stores: ExtensionStore::preferenceSyncStore(path).into_iter().collect(),
-            };
-            let history = store.preferenceHistory().map_err(|error| error.to_string())?;
-            crate::PreferenceMerge::applyOperations(target.clone(), &schema, &history, &[op.clone()], |_, _| true)?;
         } else {
             return Err(format!("Unexpected domain {}", op.domain));
         }
@@ -188,7 +181,7 @@ fn scope_move_syncs_real_files_and_settings_without_embedded_bundles() {
     assert!(ops
         .iter()
         .any(|op| op.entityId == "runtime/extensions/space/skills/demo/SKILL.md"));
-    assert!(ops.iter().any(|op| op.domain == "preferences"));
+    assert!(ops.iter().all(|op| op.domain == "runtime_file"));
     transfer(&source, &target, &ops).unwrap();
     assert_eq!(
         target
@@ -215,7 +208,7 @@ fn scope_move_syncs_real_files_and_settings_without_embedded_bundles() {
 
 /// Resolves concurrent writes by choosing one complete settings entity.
 #[test]
-fn concurrent_settings_choose_one_complete_record_without_republishing_installation() {
+fn concurrent_settings_choose_one_atomic_installation_record() {
     let a = host();
     let b = host();
     let store_a = skill(&a);
@@ -236,7 +229,7 @@ fn concurrent_settings_choose_one_complete_record_without_republishing_installat
     assert!(ops_a
         .iter()
         .chain(&ops_b)
-        .all(|op| op.domain == "preferences"));
+        .all(|op| op.domain == "runtime_file"));
     transfer(&a, &b, &ops_a).unwrap();
     transfer(&b, &a, &ops_b).unwrap();
     let settings_a = store_a.record("skill", "demo").unwrap().settings;
@@ -358,6 +351,7 @@ fn generic_file_tracking_only_publishes_changed_files_and_recursive_tombstones()
 fn legacy_bundle_upgrade_retries_actual_files_without_overwriting_local_edits() {
     let source = host();
     let record = ExtensionRecord {
+        schemaVersion: 0,
         kind: "skill".into(),
         id: "legacy".into(),
         scope: "space".into(),
@@ -519,7 +513,7 @@ fn observer_panic_cannot_undo_a_committed_sync_or_prevent_other_observers() {
 }
 
 #[test]
-fn shared_mcp_definition_and_flags_roundtrip_via_preferences() {
+fn shared_mcp_definition_and_flags_roundtrip_via_installation_record() {
     let source = host();
     let target = host();
     let store = ExtensionStore::new(source.clone());
@@ -531,7 +525,7 @@ fn shared_mcp_definition_and_flags_roundtrip_via_preferences() {
     settings["server"]["disabled"] = json!(true);
     store.setSettings("mcp", "remote", settings).unwrap();
     let ops = operations(&source, &before);
-    assert!(ops.iter().all(|op| op.domain == "preferences"));
+    assert!(ops.iter().all(|op| op.domain == "runtime_file"));
     transfer(&source, &target, &ops).unwrap();
     assert_eq!(
         ExtensionStore::new(target)
@@ -668,42 +662,6 @@ fn configuration_path_does_not_change_after_registration() {
     let path = ExtensionStore::configPathForScope("first_import", "device").unwrap();
     register_package_owner(&store, "first_import", &["first_import"]);
     assert_eq!(store.configPath("first_import").unwrap(), path);
-}
-
-/// Verifies retiring managed code preserves configuration and business data and requires archival first.
-#[test]
-fn retired_device_package_keeps_data_and_requires_archived_source() {
-    let host = Arc::new(MemoryStorage::default());
-    let store = ExtensionStore::new(host.clone());
-    let source = "runtime/extensions/device/packages/daily_life.js";
-    host.writeBytes(source, b"legacy-bundled-code").unwrap();
-    store.registerDevice("package", "daily_life", "daily_life.js", json!({
-        "builtin": false, "installationId": "00000000000000000000000000000001", "members": ["daily_life"], "enabledNames": ["daily_life"],
-        "disabledNames": [], "order": 0, "subpackageStates": {}
-    })).unwrap();
-    let config = format!(
-        "{}/reminders.json",
-        ExtensionStore::configPathForScope("daily_life", "device").unwrap()
-    );
-    let data = format!(
-        "{}/memory.db",
-        ExtensionStore::dataPathForScope("daily_life", "device").unwrap()
-    );
-    host.writeBytes(&config, b"configuration").unwrap();
-    host.writeBytes(&data, b"business-data").unwrap();
-    assert!(store
-        .retirePackageSource("daily_life", "daily_life.js", "device")
-        .is_err());
-    assert!(store
-        .retirePackageSource("daily_life", "other.js", "device")
-        .is_err());
-    host.delete(source, false).unwrap();
-    store
-        .retirePackageSource("daily_life", "daily_life.js", "device")
-        .unwrap();
-    assert!(store.record("package", "daily_life").is_err());
-    assert_eq!(host.readBytes(&config).unwrap(), b"configuration");
-    assert_eq!(host.readBytes(&data).unwrap(), b"business-data");
 }
 
 /// Migrates the legacy package-manager strings before importing extension settings.
@@ -1029,4 +987,109 @@ fn builtin_scope_reconciliation_refuses_non_builtin_duplicates() {
         .record("package", "bundle")
         .unwrap_err()
         .contains("ownership conflict"));
+}
+
+/// Keeps installation source and configuration in the same synchronized entity.
+#[test]
+fn installation_settings_use_only_the_installation_record() {
+    let storage = host();
+    let store = ExtensionStore::new(storage.clone());
+    store.registerInScope("skill", "demo", "demo", json!({"visible": true}), "space").unwrap();
+    let before = clock(&storage);
+    store.setSettings("skill", "demo", json!({"visible": false})).unwrap();
+    let changes = operations(&storage, &before);
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].domain, "runtime_file");
+    assert_eq!(changes[0].entityId, recordPath("skill", "demo", "space").unwrap());
+    assert!(storage.list("runtime/extensions/space/settings").unwrap().is_empty());
+}
+
+/// A later peer's built-in initialization cannot replace an explicit shared installation.
+#[test]
+fn late_builtin_initialization_preserves_explicit_shared_installation() {
+    let installed = host();
+    let fresh = host();
+    let owner = ExtensionStore::new(installed.clone());
+    let peer = ExtensionStore::new(fresh.clone());
+    let settings = json!({
+        "members": ["demo"], "enabledNames": ["demo"], "disabledNames": [],
+        "subpackageStates": {}, "order": 9, "builtin": false,
+        "installationId": "00000000000000000000000000000000"
+    });
+    installed.writeBytes("runtime/extensions/space/packages/demo.toolpkg", b"archive").unwrap();
+    owner.registerInScope("package", "demo", "demo.toolpkg", settings.clone(), "space").unwrap();
+    let mut initial = settings;
+    initial["builtin"] = json!(true);
+    initial["order"] = json!(0);
+    initial["enabledNames"] = json!([]);
+    initial["installationId"] = json!("11111111111111111111111111111111");
+    peer.registerInScope("package", "demo", "", initial, "space").unwrap();
+    let explicit = operations(&installed, &SyncClock::empty());
+    let mut bootstrap = operations(&fresh, &SyncClock::empty());
+    for op in &mut bootstrap { op.createdAt += 60000; }
+    transfer(&fresh, &installed, &bootstrap).unwrap();
+    transfer(&installed, &fresh, &explicit).unwrap();
+    let expected = owner.record("package", "demo").unwrap();
+    assert_eq!(expected.sourceName, "demo.toolpkg");
+    assert_eq!(expected.settings["builtin"], false);
+    assert_eq!(expected.settings["order"], 9);
+    assert_eq!(expected.settings["installationId"], "00000000000000000000000000000000");
+    assert_eq!(peer.record("package", "demo").unwrap(), expected);
+}
+
+/// A synchronized uninstall prevents automatic registration on every later startup.
+#[test]
+fn builtin_initialization_cannot_resurrect_a_deleted_shared_installation() {
+    let source = host();
+    let target = host();
+    let store = ExtensionStore::new(source.clone());
+    let settings = json!({
+        "members": ["demo"], "enabledNames": [], "disabledNames": [],
+        "subpackageStates": {}, "order": 0, "builtin": true,
+        "installationId": "00000000000000000000000000000000"
+    });
+    store.registerInScope("package", "demo", "", settings.clone(), "space").unwrap();
+    let bootstrap = operations(&source, &SyncClock::empty());
+    transfer(&source, &target, &bootstrap).unwrap();
+    let before_delete = clock(&source);
+    store.delete("package", "demo").unwrap();
+    transfer(&source, &target, &operations(&source, &before_delete)).unwrap();
+    let peer = ExtensionStore::new(target.clone());
+    let before_boot = clock(&target);
+    assert!(!peer.acceptsSharedBuiltinPackage("demo").unwrap());
+    peer.registerInScope("package", "demo", "", settings, "space").unwrap();
+    transfer(&source, &target, &bootstrap).unwrap();
+    assert!(peer.record("package", "demo").is_err());
+    assert_eq!(clock(&target), before_boot);
+}
+
+/// Retires the duplicate settings copy without letting it replace descriptor ownership.
+#[test]
+fn legacy_settings_migrate_once_without_changing_the_installation_source() {
+    let storage = host();
+    let store = ExtensionStore::new(storage.clone());
+    let mut record = ExtensionRecord {
+        schemaVersion: 0, kind: "package".into(), id: "demo".into(), scope: "space".into(),
+        sourceName: "demo.toolpkg".into(), files: BTreeMap::new(),
+        settings: json!({
+            "members": ["demo"], "enabledNames": [], "disabledNames": [],
+            "subpackageStates": {}, "order": 0, "builtin": false,
+            "installationId": "00000000000000000000000000000000"
+        }),
+    };
+    let mut old_settings = record.settings.clone();
+    old_settings["builtin"] = json!(true);
+    old_settings["installationId"] = json!("11111111111111111111111111111111");
+    old_settings["order"] = json!(7);
+    let preferences = store.legacySettingsStore(&record).unwrap();
+    preferences.edit(|prefs| prefs.set(&stringPreferencesKey("settings"), old_settings)).unwrap();
+    storage.writeBytes(&recordPath("package", "demo", "space").unwrap(), &serde_json::to_vec(&record).unwrap()).unwrap();
+    record.schemaVersion = 1;
+    record.settings["order"] = json!(7);
+    assert_eq!(store.record("package", "demo").unwrap(), record);
+    let migrated = clock(&storage);
+    preferences.edit(|prefs| prefs.set(&stringPreferencesKey("settings"), json!({"order": 99}))).unwrap();
+    assert_eq!(store.record("package", "demo").unwrap(), record);
+    let changes = operations(&storage, &migrated);
+    assert!(changes.iter().all(|op| op.domain == "preferences"));
 }

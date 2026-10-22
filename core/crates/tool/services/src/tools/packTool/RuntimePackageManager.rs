@@ -80,7 +80,6 @@ use operit_util::AppLogger::AppLogger;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const BUNDLED_EXTERNAL_IMPORTS_KEY: &str = "bundled_external_imports";
 const REMOVED_BUILTIN_PACKAGE_ASSETS_KEY: &str = "removed_builtin_package_assets";
 const MARKET_TOOLPKG_INSTALLATION_ID_KEY: &str = "toolpkg_market_installation_id";
 const TOOLPKG_CACHE_SIGNATURE_FILE: &str = ".toolpkg-cache-signature";
@@ -265,16 +264,6 @@ struct ExternalPackageScanCacheEntry {
     result: PackageScanCandidateResult,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[allow(non_snake_case)]
-struct BundledExternalImportRecord {
-    packageName: String,
-    sourceFileName: String,
-    destinationFileName: String,
-    sourceSignature: String,
-    scope: ToolPkgConfigScope,
-}
-
 #[derive(Clone)]
 /// Manages JavaScript packages, ToolPkg containers, MCP packages, and package UI resources.
 pub struct RuntimePackageManager {
@@ -341,15 +330,10 @@ impl RuntimePackageManager {
                 defaultRuntimeStorageHost(),
                 "runtime/extensions/device/manager.preferences.json",
             )
-            .withSchema(2, |version, preferences| match version {
-                0 => Ok(()),
-                1 => {
-                    let key = stringPreferencesKey(BUNDLED_EXTERNAL_IMPORTS_KEY);
-                    if let Some(encoded) = preferences.getTyped::<String>(&key)? {
-                        let records: BTreeMap<String, serde_json::Value> =
-                            serde_json::from_str(&encoded)?;
-                        preferences.set(&key, serde_json::to_value(records)?);
-                    }
+            .withSchema(3, |version, preferences| match version {
+                0 | 1 => Ok(()),
+                2 => {
+                    preferences.remove(&stringPreferencesKey("bundled_external_imports"));
                     Ok(())
                 }
                 from => Err(PreferencesDataStoreError::MissingMigration { from, to: from + 1 }),
@@ -1356,16 +1340,6 @@ impl RuntimePackageManager {
             );
             return false;
         }
-        if let Err(error) = self.removeBundledExternalImportRecord(&name) {
-            self.recordManualToolPkgLoadIssue(
-                &name,
-                Some(&name),
-                "delete_failed",
-                &error,
-                "package",
-            );
-            return false;
-        }
         self.loadAvailablePackages();
         true
     }
@@ -1384,97 +1358,89 @@ impl RuntimePackageManager {
             })
             .ok_or("Package load issue is no longer present; refresh the package list")?;
 
-        if issue.packageKind == "package_manager"
-            && issue.code == "scan_failed"
-            && issue.sourcePath == self.getExternalPackagesPath()
-        {
-            // Broken legacy import records cannot be decoded by the normal uninstall path.
-            self.dataStore
-                .edit(|preferences| {
-                    preferences.remove(&stringPreferencesKey(BUNDLED_EXTERNAL_IMPORTS_KEY));
+        let source = Path::new(&issue.sourcePath);
+        let installedScope = ["device", "space"].into_iter().find(|scope| {
+            let root = ExtensionStore::root("package", scope).expect("valid package scope");
+            source.parent() == Some(self.storePaths.runtime_storage_path(&root).as_path())
+        });
+        // Even an unreadable archive can still have a registered installation owner.
+        let owner = if issue.packageName.is_none() {
+            ExtensionStore::default()
+                .records("package")?
+                .into_iter()
+                .find(|record| {
+                    Some(record.scope.as_str()) == installedScope
+                        && source.file_name().and_then(|name| name.to_str())
+                            == Some(record.sourceName.as_str())
                 })
-                .map_err(|error| error.to_string())?;
+                .map(|record| record.id)
         } else {
-            let source = Path::new(&issue.sourcePath);
-            let installedScope = ["device", "space"].into_iter().find(|scope| {
-                let root = ExtensionStore::root("package", scope).expect("valid package scope");
-                source.parent() == Some(self.storePaths.runtime_storage_path(&root).as_path())
-            });
-            // Even an unreadable archive can still have a registered installation owner.
-            let owner = if issue.packageName.is_none() {
-                ExtensionStore::default()
-                    .records("package")?
-                    .into_iter()
-                    .find(|record| {
-                        Some(record.scope.as_str()) == installedScope
-                            && source.file_name().and_then(|name| name.to_str())
-                                == Some(record.sourceName.as_str())
-                    })
-                    .map(|record| record.id)
-            } else {
-                issue.packageName.clone()
-            };
-            let sourceOnly = issue.code == "duplicate_package"
-                && owner
-                    .as_ref()
-                    .is_some_and(|name| self.availablePackages().contains_key(name));
-            // An embedded package cannot be erased from the application binary. Retire its
-            // automatic registration and offer the same bytes through the extra-package flow.
-            let builtinAsset = if sourceOnly {
-                None
-            } else {
-                self.toolHandler
-                    .runtimeSupport()
-                    .builtinPluginAssets()
-                    .iter()
-                    .find(|asset| {
-                        asset.name == issue.sourcePath
-                            || owner.as_ref().is_some_and(|name| {
-                                Self::packageNameFromScanResult(
-                                    &self.parseBuiltInPackageAsset(asset),
-                                )
-                                .as_ref()
-                                    == Some(name)
-                            })
-                    })
-                    .map(|asset| asset.name.to_string())
-            };
-            let mut removed = false;
-            if let Some(name) = owner.as_deref().filter(|_| !sourceOnly) {
-                self.disablePackage(name);
-                removed = ExtensionStore::default().deleteFailedPackageInstallations(name)?;
-                self.removeBundledExternalImportRecord(name)?;
-            }
-            // Parse failures may have no identity or installation record. Only remove a file
-            // directly inside an installation directory, never an asset or a scan directory.
-            if installedScope.is_some() {
-                let info = self
-                    .fileSystemHost
-                    .fileExists(&issue.sourcePath)
-                    .map_err(|error| error.to_string())?;
-                if info.exists && !info.isDirectory {
-                    self.fileSystemHost
-                        .deleteFile(&issue.sourcePath, false)
-                        .map_err(|error| error.to_string())?;
-                    removed = true;
-                }
-            }
-            if let Some(assetName) = builtinAsset {
-                let mut retired = self.removedBuiltinPackageAssets();
-                retired.insert(assetName);
-                self.dataStore
-                    .edit(|preferences| {
-                        preferences.set(
-                            &stringPreferencesKey(REMOVED_BUILTIN_PACKAGE_ASSETS_KEY),
-                            serde_json::to_value(&retired).expect("asset names are serializable"),
-                        );
-                    })
+            issue.packageName.clone()
+        };
+        let sourceOnly = issue.code == "duplicate_package"
+            && owner
+                .as_ref()
+                .is_some_and(|name| self.availablePackages().contains_key(name));
+        // Shared removals are represented by their synchronized installation tombstone.
+        // Only device-local or unreadable assets need a local retirement preference.
+        let builtinAsset = if sourceOnly {
+            None
+        } else {
+            self.toolHandler
+                .runtimeSupport()
+                .builtinPluginAssets()
+                .iter()
+                .find(|asset| {
+                    asset.name == issue.sourcePath
+                        || owner.as_ref().is_some_and(|name| {
+                            Self::packageNameFromScanResult(
+                                &self.parseBuiltInPackageAsset(asset),
+                            )
+                            .as_ref()
+                                == Some(name)
+                        })
+                })
+                .filter(|asset| {
+                    self.parseBuiltInPackageAsset(asset).toolPkgLoadResult.as_ref()
+                        .and_then(|load| load.containerRuntime.manifestExtensions.get("installation_scope"))
+                        .and_then(serde_json::Value::as_str) != Some("space")
+                })
+                .map(|asset| asset.name.to_string())
+        };
+        let mut removed = false;
+        if let Some(name) = owner.as_deref().filter(|_| !sourceOnly) {
+            self.disablePackage(name);
+            removed = ExtensionStore::default().deleteFailedPackageInstallations(name)?;
+        }
+        // Parse failures may have no identity or installation record. Only remove a file
+        // directly inside an installation directory, never an asset or a scan directory.
+        if installedScope.is_some() {
+            let info = self
+                .fileSystemHost
+                .fileExists(&issue.sourcePath)
+                .map_err(|error| error.to_string())?;
+            if info.exists && !info.isDirectory {
+                self.fileSystemHost
+                    .deleteFile(&issue.sourcePath, false)
                     .map_err(|error| error.to_string())?;
                 removed = true;
             }
-            if !removed {
-                return Err("No installed package source was found for this load issue".into());
-            }
+        }
+        if let Some(assetName) = builtinAsset {
+            let mut retired = self.removedBuiltinPackageAssets();
+            retired.insert(assetName);
+            self.dataStore
+                .edit(|preferences| {
+                    preferences.set(
+                        &stringPreferencesKey(REMOVED_BUILTIN_PACKAGE_ASSETS_KEY),
+                        serde_json::to_value(&retired).expect("asset names are serializable"),
+                    );
+                })
+                .map_err(|error| error.to_string())?;
+            removed = true;
+        }
+        if !removed {
+            return Err("No installed package source was found for this load issue".into());
         }
         self.clearManualToolPkgLoadIssues(&issue.sourcePath, issue.packageName.as_deref());
         self.loadAvailablePackages();
@@ -2214,7 +2180,6 @@ impl RuntimePackageManager {
                 )
             }
         };
-        let sourceSignature = sha256Hex(sourceAsset.bytes);
         let sourceFileName = packageSourceFileName(&sourcePath);
         let packagesDir = self.storePaths.runtime_storage_path(
             &ExtensionStore::root("package", scope.as_str()).expect("Validated package scope"),
@@ -2242,65 +2207,48 @@ impl RuntimePackageManager {
                 packageKind,
             );
         }
-        // Space scans intentionally ignore files without an installation descriptor.
-        // Publish ownership first so a newly added Space package is visible to the scan.
-        if scope == ToolPkgConfigScope::Space {
-            let registration = (|| -> Result<(), String> {
-                let mut members = vec![packageName.to_string()];
-                let requiredScope = if let Some(loaded) = &result.toolPkgLoadResult {
-                    members.extend(
-                        loaded
-                            .containerRuntime
-                            .subpackages
-                            .iter()
-                            .map(|child| child.packageName.clone()),
-                    );
-                    Self::requiredInstallationScope(&loaded.containerRuntime)?
-                } else {
-                    None
-                };
-                self.registerScope(
-                    packageName,
-                    &sourceFileName,
-                    false,
-                    members,
-                    scope,
-                    requiredScope,
-                )
-            })();
-            if let Err(error) = registration {
-                return self.recordAndReturnPackageError(
-                    &sourcePath,
-                    "bundled_import_failed",
-                    &error,
-                    packageKind,
+        // Publish the concrete source owner before scanning scope-owned package files.
+        let registration = (|| -> Result<(), String> {
+            let mut members = vec![packageName.to_string()];
+            let requiredScope = if let Some(loaded) = &result.toolPkgLoadResult {
+                members.extend(
+                    loaded
+                        .containerRuntime
+                        .subpackages
+                        .iter()
+                        .map(|child| child.packageName.clone()),
                 );
-            }
+                Self::requiredInstallationScope(&loaded.containerRuntime)?
+            } else {
+                None
+            };
+            self.registerScope(
+                packageName,
+                &sourceFileName,
+                false,
+                members.clone(),
+                scope,
+                requiredScope,
+            )?;
+            ExtensionStore::default().installBundledPackageSource(
+                packageName,
+                &sourceFileName,
+                members,
+                scope.as_str(),
+            )
+        })();
+        if let Err(error) = registration {
+            return self.recordAndReturnPackageError(
+                &sourcePath,
+                "bundled_import_failed",
+                &error,
+                packageKind,
+            );
         }
         self.externalPackageScanCache
             .remove(&destinationFile.to_string_lossy().to_string());
         self.loadAvailablePackages();
-        let record = BundledExternalImportRecord {
-            packageName: packageName.to_string(),
-            sourceFileName: sourceFileName.clone(),
-            destinationFileName: sourceFileName,
-            sourceSignature,
-            scope,
-        };
-        let message = format!(
-            "Successfully imported package: {}\nStored at: {}",
-            packageName,
-            destinationFile.to_string_lossy()
-        );
-        match self.upsertBundledExternalImportRecord(record) {
-            Ok(()) => message,
-            Err(error) => self.recordAndReturnPackageError(
-                &sourcePath,
-                "bundled_import_failed",
-                &format!("{message}\nFailed to record bundled external import: {error}"),
-                packageKind,
-            ),
-        }
+        format!("Successfully imported package: {}\nStored at: {}", packageName, destinationFile.to_string_lossy())
     }
 
     #[allow(non_snake_case)]
@@ -2553,18 +2501,7 @@ impl RuntimePackageManager {
     pub fn loadAvailablePackages(&mut self) {
         self.packageRegistryReadiness.begin_scan();
         let assetSnapshot = self.scanBuiltInPackageAssets();
-        let syncError = self.syncBundledExternalImportRecords().err();
-        let mut mergedSnapshot = self.scanExternalPackages(&assetSnapshot);
-        if let Some(error) = syncError {
-            mergedSnapshot.toolPkgLoadIssues.push(newToolPkgLoadIssue(
-                self.storePaths.packages_dir().to_string_lossy().to_string(),
-                None,
-                "插件导入记录".to_string(),
-                "scan_failed",
-                format!("Bundled external package sync failed: {error}"),
-                "package_manager",
-            ));
-        }
+        let mergedSnapshot = self.scanExternalPackages(&assetSnapshot);
         self.applyPackageScanSnapshot(mergedSnapshot);
         self.notifyToolPkgRuntimeChangeListeners();
         self.packageRegistryReadiness.complete_scan();
@@ -2715,17 +2652,35 @@ impl RuntimePackageManager {
     }
 
     #[allow(non_snake_case)]
+    /// Selects shared assets from installation ownership rather than local retirement preferences.
     fn scanBuiltInPackageAssets(&self) -> PackageScanSnapshot {
         let mut results = Vec::new();
         let retired = self.removedBuiltinPackageAssets();
         for asset in self.toolHandler.runtimeSupport().builtinPluginAssets() {
-            if retired.contains(asset.name) {
-                continue;
-            }
             if isProgressTrackedPackageSource(asset.name) {
                 beginPackageLoadProgress(asset.name);
             }
-            let result = self.parseBuiltInPackageAsset(asset);
+            let mut result = self.parseBuiltInPackageAsset(asset);
+            let selected = (|| -> Result<bool, String> {
+                if let Some(load) = &result.toolPkgLoadResult {
+                    if Self::requiredInstallationScope(&load.containerRuntime)? == Some(ToolPkgConfigScope::Space) {
+                        return ExtensionStore::default().acceptsSharedBuiltinPackage(&load.containerRuntime.packageName);
+                    }
+                }
+                Ok(!retired.contains(asset.name))
+            })();
+            match selected {
+                Ok(false) => continue,
+                Ok(true) => {}
+                Err(error) => {
+                    result.toolPackage = None;
+                    result.toolPkgLoadResult = None;
+                    result.issues.push(newToolPkgLoadIssue(
+                        asset.name.to_string(), None, packageProgressDisplayName(asset.name),
+                        "scope_failed", error, "package",
+                    ));
+                }
+            }
             if isProgressTrackedPackageSource(asset.name) {
                 reportPackageScanProgress(&result);
             }
@@ -2854,18 +2809,13 @@ impl RuntimePackageManager {
     }
 
     #[allow(non_snake_case)]
+    /// Lists bundled sources for explicit installation, including uninstalled built-in packages.
     fn scanBundledExternalPackageCandidates(&mut self) -> Vec<PackageScanCandidateResult> {
         let previousCache = self.bundledExternalPackageScanCache.clone();
         let mut nextCache = BTreeMap::new();
         let mut results = Vec::new();
-        let retired = self.removedBuiltinPackageAssets();
         let support = self.toolHandler.runtimeSupport();
-        for asset in support.bundledExternalPluginAssets().iter().chain(
-            support
-                .builtinPluginAssets()
-                .iter()
-                .filter(|asset| retired.contains(asset.name)),
-        ) {
+        for asset in support.bundledExternalPluginAssets().iter().chain(support.builtinPluginAssets()) {
             if !isPackageCandidateAssetName(asset.name) {
                 continue;
             }
@@ -3289,21 +3239,6 @@ impl RuntimePackageManager {
             toolPkgSubpackages: stagedToolPkgSubpackages,
             toolPkgLoadIssues: stagedToolPkgLoadIssues,
         }
-    }
-
-    /// Refreshes synchronized flags without destroying running JavaScript engines.
-    pub fn refreshExtensionSettings(&mut self) -> Result<(), String> {
-        let records = ExtensionStore::default().records("package")?;
-        let mut next = BTreeMap::new();
-        for record in records {
-            let id = record.id.clone();
-            if next.insert(id.clone(), record).is_some() {
-                return Err(format!("Extension ownership conflict: {id}"));
-            }
-        }
-        *self.scopeState.lock().map_err(|e| e.to_string())? = next;
-        self.notifyToolPkgRuntimeChangeListeners();
-        Ok(())
     }
 
     /// Returns validated in-memory ownership state for the currently loaded catalog.
@@ -3757,190 +3692,6 @@ impl RuntimePackageManager {
         )
     }
 
-    #[allow(non_snake_case)]
-    fn syncBundledExternalImportRecords(&mut self) -> Result<(), String> {
-        self.storePaths
-            .ensure_packages_dir()
-            .map_err(|error| error.to_string())?;
-        let mut records = self.decodeBundledExternalImportRecordsFromPrefs()?;
-        let bundledResults = self.scanBundledExternalPackageCandidates();
-        let mut recordsChanged =
-            self.adoptMatchingBundledExternalImportRecords(&mut records, &bundledResults)?;
-        let mut bundledResultsByFileName = BTreeMap::new();
-        for result in bundledResults {
-            bundledResultsByFileName.insert(packageSourceFileName(&result.sourcePath), result);
-        }
-
-        let mut packageNamesToRemove = Vec::new();
-        let packageNames = records.keys().cloned().collect::<Vec<_>>();
-        for packageName in packageNames {
-            let Some(record) = records.get(&packageName).cloned() else {
-                continue;
-            };
-            let destinationFile = self
-                .storePaths
-                .runtime_storage_path(&ExtensionStore::root("package", record.scope.as_str())?)
-                .join(&record.destinationFileName);
-            if !self
-                .fileSystemHost
-                .fileExists(&hostPath(&destinationFile))
-                .map(|info| info.exists && !info.isDirectory)
-                .unwrap_or(false)
-            {
-                packageNamesToRemove.push(packageName);
-                recordsChanged = true;
-                continue;
-            }
-            let Some(result) = bundledResultsByFileName.get(&record.sourceFileName) else {
-                self.retireBundledExternalImport(&record, &destinationFile)?;
-                packageNamesToRemove.push(packageName);
-                recordsChanged = true;
-                continue;
-            };
-            if Self::packageNameFromScanResult(result).as_deref()
-                != Some(record.packageName.as_str())
-            {
-                packageNamesToRemove.push(packageName);
-                recordsChanged = true;
-                continue;
-            }
-
-            if Self::bundledCandidateScope(&result.toolPkgLoadResult)? != record.scope {
-                return Err(format!(
-                    "Bundled package {packageName} changed its required installation scope"
-                ));
-            }
-            let Some(sourceAsset) = bundledExternalPluginAssetByName(
-                self.toolHandler.runtimeSupport().as_ref(),
-                &result.sourcePath,
-            ) else {
-                packageNamesToRemove.push(packageName);
-                recordsChanged = true;
-                continue;
-            };
-            let sourceSignature = sha256Hex(sourceAsset.bytes);
-            if sourceSignature != record.sourceSignature {
-                self.fileSystemHost
-                    .writeFileBytes(&hostPath(&destinationFile), sourceAsset.bytes)
-                    .map_err(|error| error.to_string())?;
-                if let Some(recordToUpdate) = records.get_mut(&record.packageName) {
-                    recordToUpdate.sourceSignature = sourceSignature;
-                }
-                self.externalPackageScanCache
-                    .remove(&destinationFile.to_string_lossy().to_string());
-                recordsChanged = true;
-            }
-        }
-
-        for packageName in packageNamesToRemove {
-            records.remove(&packageName);
-        }
-        if recordsChanged {
-            self.saveBundledExternalImportRecordsLocally(&records)?;
-        }
-        Ok(())
-    }
-
-    /// Archives an unchanged managed source that is no longer shipped before retiring its ownership.
-    #[allow(non_snake_case)]
-    fn retireBundledExternalImport(
-        &mut self,
-        record: &BundledExternalImportRecord,
-        destinationFile: &Path,
-    ) -> Result<(), String> {
-        let signature = self.buildFileContentSignature(destinationFile)?;
-        validateRetiredBundledSource(record, &signature)?;
-        let archiveDirectory = destinationFile
-            .parent()
-            .ok_or("Package source must have a parent directory")?
-            .parent()
-            .ok_or("Package storage must have a parent directory")?
-            .join("retired-packages");
-        self.fileSystemHost
-            .makeDirectory(&hostPath(&archiveDirectory), true)
-            .map_err(|error| error.to_string())?;
-        let archive = archiveDirectory.join(format!(
-            "{}-{}",
-            record.sourceSignature, record.destinationFileName
-        ));
-        self.fileSystemHost
-            .moveFile(&hostPath(destinationFile), &hostPath(&archive))
-            .map_err(|error| error.to_string())?;
-        ExtensionStore::default().retirePackageSource(
-            &record.packageName,
-            &record.destinationFileName,
-            record.scope.as_str(),
-        )?;
-        self.externalPackageScanCache
-            .remove(&hostPath(destinationFile));
-        AppLogger::i(
-            PACKAGE_MANAGER_LOG_TAG,
-            &format!(
-                "Retired bundled package source: {} -> {}",
-                hostPath(destinationFile),
-                hostPath(&archive)
-            ),
-        );
-        Ok(())
-    }
-
-    #[allow(non_snake_case)]
-    fn adoptMatchingBundledExternalImportRecords(
-        &self,
-        records: &mut BTreeMap<String, BundledExternalImportRecord>,
-        bundledResults: &[PackageScanCandidateResult],
-    ) -> Result<bool, String> {
-        let mut changed = false;
-        for result in bundledResults {
-            let Some(packageName) = Self::packageNameFromScanResult(result) else {
-                continue;
-            };
-            if records.contains_key(&packageName) {
-                continue;
-            }
-            let sourceFileName = packageSourceFileName(&result.sourcePath);
-            let scope = Self::bundledCandidateScope(&result.toolPkgLoadResult)?;
-            let destinationFile = self
-                .storePaths
-                .runtime_storage_path(&ExtensionStore::root("package", scope.as_str())?)
-                .join(&sourceFileName);
-            if !self
-                .fileSystemHost
-                .fileExists(&hostPath(&destinationFile))
-                .map(|info| info.exists && !info.isDirectory)
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            let Some(sourceAsset) = bundledExternalPluginAssetByName(
-                self.toolHandler.runtimeSupport().as_ref(),
-                &result.sourcePath,
-            ) else {
-                continue;
-            };
-            let destinationBytes = self
-                .fileSystemHost
-                .readFileBytes(&hostPath(&destinationFile))
-                .map_err(|error| error.to_string())?;
-            if destinationBytes != sourceAsset.bytes {
-                continue;
-            }
-            let sourceSignature = sha256Hex(sourceAsset.bytes);
-            records.insert(
-                packageName.clone(),
-                BundledExternalImportRecord {
-                    packageName,
-                    sourceFileName: sourceFileName.clone(),
-                    destinationFileName: sourceFileName,
-                    sourceSignature,
-                    scope,
-                },
-            );
-            changed = true;
-        }
-        Ok(changed)
-    }
-
     /// Resolves the manifest restriction for a bundled asset before installation.
     fn bundledCandidateScope(
         loadResult: &Option<ToolPkgLoadResult>,
@@ -3965,15 +3716,6 @@ impl RuntimePackageManager {
             return Some(loadResult.containerPackage.name.clone());
         }
         None
-    }
-
-    #[allow(non_snake_case)]
-    fn buildFileContentSignature(&self, file: &Path) -> Result<String, String> {
-        let bytes = self
-            .fileSystemHost
-            .readFileBytes(&hostPath(file))
-            .map_err(|error| error.to_string())?;
-        Ok(format!("{:x}", Sha256::digest(&bytes)))
     }
 
     #[allow(non_snake_case)]
@@ -5266,80 +5008,6 @@ impl RuntimePackageManager {
     }
 
     #[allow(non_snake_case)]
-    fn decodeBundledExternalImportRecordsFromPrefs(
-        &self,
-    ) -> Result<BTreeMap<String, BundledExternalImportRecord>, String> {
-        let key = stringPreferencesKey(BUNDLED_EXTERNAL_IMPORTS_KEY);
-        let preferences = self.dataStore.data().map_err(|error| error.to_string())?;
-        let Some(recordsJson) = preferences.get(&key) else {
-            return Ok(BTreeMap::new());
-        };
-        serde_json::from_value::<BTreeMap<String, BundledExternalImportRecord>>(recordsJson.clone())
-            .map_err(|error| error.to_string())
-    }
-
-    #[allow(non_snake_case)]
-    fn saveBundledExternalImportRecords(
-        &self,
-        records: &BTreeMap<String, BundledExternalImportRecord>,
-    ) -> Result<(), String> {
-        let updatedJson = serde_json::to_value(records).map_err(|error| error.to_string())?;
-        self.dataStore
-            .edit(|preferences| {
-                preferences.set(
-                    &stringPreferencesKey(BUNDLED_EXTERNAL_IMPORTS_KEY),
-                    updatedJson,
-                );
-            })
-            .map_err(|error| error.to_string())
-    }
-
-    /// Persists startup package-record reconciliation without publishing a Space mutation.
-    #[allow(non_snake_case)]
-    fn saveBundledExternalImportRecordsLocally(
-        &self,
-        records: &BTreeMap<String, BundledExternalImportRecord>,
-    ) -> Result<(), String> {
-        let updatedJson = serde_json::to_value(records).map_err(|error| error.to_string())?;
-        self.dataStore
-            .migrate(|preferences| {
-                preferences.set(
-                    &stringPreferencesKey(BUNDLED_EXTERNAL_IMPORTS_KEY),
-                    updatedJson,
-                );
-                Ok::<(), operit_store::PreferencesDataStore::PreferencesDataStoreError>(())
-            })
-            .map_err(|error| error.to_string())
-    }
-
-    #[allow(non_snake_case)]
-    fn upsertBundledExternalImportRecord(
-        &self,
-        record: BundledExternalImportRecord,
-    ) -> Result<(), String> {
-        let mut records = self.decodeBundledExternalImportRecordsFromPrefs()?;
-        records.insert(record.packageName.clone(), record);
-        self.saveBundledExternalImportRecords(&records)
-    }
-
-    #[allow(non_snake_case)]
-    fn removeBundledExternalImportRecord(&self, packageName: &str) -> Result<(), String> {
-        let normalizedPackageName = self.normalizePackageName(packageName);
-        // Remove by identity even when the entry uses an obsolete record schema.
-        self.dataStore
-            .edit(|preferences| {
-                let key = stringPreferencesKey(BUNDLED_EXTERNAL_IMPORTS_KEY);
-                if let Some(mut records) = preferences.get(&key).cloned() {
-                    if let Some(recordsByName) = records.as_object_mut() {
-                        recordsByName.remove(&normalizedPackageName);
-                    }
-                    preferences.set(&key, records);
-                }
-            })
-            .map_err(|error| error.to_string())
-    }
-
-    #[allow(non_snake_case)]
     pub(crate) fn removeFromDisabledPackages(
         &self,
         packageName: &str,
@@ -6296,23 +5964,8 @@ mod public_api_selection_tests {
     }
 }
 
-/// Requires the installed bytes to match the recorded bundled source before automatic retirement.
-#[allow(non_snake_case)]
-fn validateRetiredBundledSource(
-    record: &BundledExternalImportRecord,
-    signature: &str,
-) -> Result<(), String> {
-    if signature != record.sourceSignature {
-        return Err(format!(
-            "Removed bundled source '{}' was modified locally; resolve its installation explicitly",
-            record.destinationFileName
-        ));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
-mod bundled_source_retirement_tests {
+mod package_registration_tests {
     use super::*;
 
     /// Verifies duplicate diagnostics identify the actual conflicting member and preserve the original registry.
@@ -6352,21 +6005,6 @@ mod bundled_source_retirement_tests {
         assert!(packages.contains_key("daily_life"));
         assert!(containers.is_empty());
         assert!(subpackages.is_empty());
-    }
-
-    /// Verifies package migration only retires the exact managed bytes, preserving customized sources.
-    #[test]
-    fn retirement_requires_recorded_content_signature() {
-        let record = BundledExternalImportRecord {
-            packageName: "daily_life".into(),
-            sourceFileName: "daily_life.js".into(),
-            destinationFileName: "daily_life.js".into(),
-            sourceSignature: "managed-content".into(),
-            scope: ToolPkgConfigScope::Device,
-        };
-        assert!(validateRetiredBundledSource(&record, "managed-content").is_ok());
-        assert_eq!(validateRetiredBundledSource(&record, "user-edit").unwrap_err(),
-            "Removed bundled source 'daily_life.js' was modified locally; resolve its installation explicitly");
     }
 }
 

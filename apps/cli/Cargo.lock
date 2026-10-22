@@ -2226,7 +2226,7 @@ checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
 
 [[package]]
 name = "operit-cli"
-version = "2.0.0-preview.17"
+version = "2.0.0-preview.18"
 dependencies = [
  "arboard",
  "async-trait",
@@ -2839,7 +2839,7 @@ dependencies = [
 
 [[package]]
 name = "operit-runtime"
-version = "2.0.0-preview.17"
+version = "2.0.0-preview.18"
 dependencies = [
  "aes",
  "async-trait",

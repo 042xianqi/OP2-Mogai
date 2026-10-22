@@ -1,5 +1,8 @@
 use crate::process::background_command;
 
+#[path = "../../../../common/terminal_command.rs"]
+mod terminal_command;
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -319,7 +322,7 @@ impl TerminalHost for WindowsTerminalHost {
     ) -> HostResult<TerminalCommandOutput> {
         let normalizedSessionId = nonBlank(sessionId, "session_id")?;
         let normalizedCommand = nonBlank(command, "command")?;
-        let (terminalType, kind, commandOutput, renderer) = {
+        let (terminalType, kind, commandOutput, renderer, commandEcho) = {
             let mut state = self.lockState()?;
             let session = state
                 .ptySessions
@@ -330,7 +333,8 @@ impl TerminalHost for WindowsTerminalHost {
             let renderer = ptyScreenRenderer(session)?;
             if session.commandRunning { return Err(HostError::new("Terminal session already has a command in progress")); }
             clearPtyCommandOutput(&session.commandOutput)?;
-            let commandInput = format!("{normalizedCommand}\r");
+            let commandEcho = ptyCommandLine(&normalizedCommand, session.kind);
+            let commandInput = format!("{commandEcho}\r");
             let mut writer = session
                 .writer
                 .lock()
@@ -343,13 +347,14 @@ impl TerminalHost for WindowsTerminalHost {
                 session.kind,
                 session.commandOutput.clone(),
                 renderer,
+                commandEcho,
             )
         };
 
         let result = executePtyCommandInSession(
             commandOutput,
             kind,
-            &normalizedCommand,
+            &commandEcho,
             timeoutMs,
             renderer,
             onOutput,
@@ -605,6 +610,21 @@ fn createPtySession(
         commandRunning: false,
         exitCode: None,
     })
+}
+
+/// Encodes a multiline script as one input line for its selected interactive interpreter.
+#[allow(non_snake_case)]
+fn ptyCommandLine(command: &str, kind: TerminalKind) -> String {
+    match kind {
+        TerminalKind::Bash => terminal_command::posixCommandLine(command),
+        TerminalKind::PowerShell => {
+            if !command.chars().any(char::is_control) {
+                return command.to_string();
+            }
+            let encoded = BASE64_STANDARD.encode(command.as_bytes());
+            format!("Invoke-Expression ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}')))")
+        }
+    }
 }
 
 #[allow(non_snake_case)]
@@ -1383,18 +1403,27 @@ fn csiValue(values: &[Option<usize>], index: usize, defaultValue: usize) -> usiz
         .unwrap_or(defaultValue)
 }
 
+/// Removes the submitted command echo across physical terminal line wraps.
 #[allow(non_snake_case)]
 fn dropCommandEcho(value: String, command: &str) -> String {
     let mut lines = value.lines().map(str::to_string).collect::<Vec<_>>();
     while lines.first().is_some_and(|line| line.trim().is_empty()) {
         lines.remove(0);
     }
-    if lines.first().is_some_and(|line| {
-        let line = line.trim_end();
-        let command = command.trim();
-        line == command || line.ends_with(command)
-    }) {
-        lines.remove(0);
+    let command = command.trim();
+    let flattened = lines.join("");
+    if let Some(start) = flattened.find(command) {
+        if lines.first().is_some_and(|line| start < line.len()) {
+            let commandEnd = start + command.len();
+            let mut offset = 0;
+            let echoEnd = lines.iter().position(|line| {
+                offset += line.len();
+                offset == commandEnd
+            });
+            if let Some(index) = echoEnd {
+                lines.drain(..=index);
+            }
+        }
     }
     lines.join("\n").trim().to_string()
 }
@@ -1802,6 +1831,159 @@ mod tests {
                 .unwrap()
                 .commandRunning
         );
+    }
+
+    /// Submits a multiline script as one command and waits for its final statement.
+    #[test]
+    fn git_bash_multiline_command_waits_for_all_statements() {
+        let host = WindowsTerminalHost::new();
+        let session = host
+            .createOrGetTypedSession("terminal_multiline", "bash")
+            .unwrap();
+        let result = host
+            .executeInSession(
+                &session.sessionId,
+                "OPERIT_V=preserved\nprintf 'first\\n'\nsleep 1\nprintf '%s' \"$OPERIT_V\"",
+                5000,
+            )
+            .unwrap();
+        assert!(!result.timedOut);
+        assert_eq!(result.exitCode, 0);
+        assert_eq!(result.output, "first\npreserved");
+        let next = host
+            .executeInSession(&session.sessionId, "printf '%s' \"$OPERIT_V\"", 3000)
+            .unwrap();
+        assert_eq!(next.output, "preserved");
+    }
+
+    /// Preserves heredocs, Unicode, quotes, and backslashes in one shell submission.
+    #[test]
+    fn git_bash_multiline_heredoc_preserves_script_bytes() {
+        let host = WindowsTerminalHost::new();
+        let session = host
+            .createOrGetTypedSession("terminal_heredoc", "bash")
+            .unwrap();
+        let result = host.executeInSession(
+            &session.sessionId,
+            "OPERIT_V=$(cat <<'EOF'\n中文 'quoted' \\012 $literal\nEOF\n)\nprintf '%s\\n' \"$OPERIT_V\"",
+            5000,
+        ).unwrap();
+        assert!(!result.timedOut);
+        assert_eq!(result.exitCode, 0);
+        assert_eq!(result.output, "中文 'quoted' \\012 $literal");
+    }
+
+    /// Prevents literal script controls from triggering interactive completion or key bindings.
+    #[test]
+    fn git_bash_script_control_characters_reach_the_shell_unchanged() {
+        let host = WindowsTerminalHost::new();
+        let session = host
+            .createOrGetTypedSession("terminal_control_characters", "bash")
+            .unwrap();
+        let result = host
+            .executeInSession(
+                &session.sessionId,
+                "OPERIT_V='a\tb\x1b\u{85}'\nprintf '%s' \"$OPERIT_V\" | base64",
+                5000,
+            )
+            .unwrap();
+        assert!(!result.timedOut);
+        assert_eq!(result.exitCode, 0);
+        assert_eq!(result.output, BASE64_STANDARD.encode("a\tb\x1b\u{85}"));
+    }
+
+    /// Cancels the complete script at its deadline and leaves its session usable.
+    #[test]
+    fn git_bash_multiline_timeout_cancels_remaining_statements() {
+        let host = WindowsTerminalHost::new();
+        let session = host
+            .createOrGetTypedSession("terminal_multiline_timeout", "bash")
+            .unwrap();
+        let started = Instant::now();
+        let result = host
+            .executeInSession(
+                &session.sessionId,
+                "printf 'started\\n'\nsleep 8\nprintf forbidden",
+                800,
+            )
+            .unwrap();
+        assert!(result.timedOut);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let next = host
+            .executeInSession(&session.sessionId, "printf ready", 3000)
+            .unwrap();
+        assert!(!next.timedOut);
+        assert_eq!(next.output, "ready");
+    }
+
+    /// Keeps a quiet child process under the command deadline after multiline submission.
+    #[test]
+    fn git_bash_nested_powershell_timeout_keeps_both_terminal_types_usable() {
+        let host = WindowsTerminalHost::new();
+        let bash = host
+            .createOrGetTypedSession("terminal_nested_powershell", "bash")
+            .unwrap();
+        host.executeInSession(
+            &bash.sessionId,
+            "OPERIT_V=$(cat <<'EOF'\nprepared\nEOF\n)\nprintf '%s\\n' \"$OPERIT_V\"",
+            5000,
+        )
+        .unwrap();
+        let result = host
+            .executeInSession(
+                &bash.sessionId,
+                "powershell -NoProfile -Command 'Start-Sleep -Seconds 8' > /dev/null 2>&1",
+                1800,
+            )
+            .unwrap();
+        assert!(result.timedOut);
+        let next = host
+            .executeInSession(&bash.sessionId, "printf ready", 3000)
+            .unwrap();
+        assert_eq!(next.output, "ready");
+        let powershell = host
+            .createOrGetSession("terminal_after_nested_timeout")
+            .unwrap();
+        let next = host
+            .executeInSession(&powershell.sessionId, "Write-Output ready", 3000)
+            .unwrap();
+        assert_eq!(next.output, "ready");
+    }
+
+    /// Reports the exit status of the last statement in a multiline script.
+    #[test]
+    fn git_bash_multiline_returns_last_exit_status() {
+        let host = WindowsTerminalHost::new();
+        let session = host
+            .createOrGetTypedSession("terminal_multiline_status", "bash")
+            .unwrap();
+        let result = host
+            .executeInSession(&session.sessionId, "printf problem\n(exit 7)", 5000)
+            .unwrap();
+        assert!(!result.timedOut);
+        assert_eq!(result.output, "problem");
+        assert_eq!(result.exitCode, 7);
+    }
+
+    /// Executes every PowerShell statement and retains variables in the session scope.
+    #[test]
+    fn powershell_multiline_command_preserves_session_scope() {
+        let host = WindowsTerminalHost::new();
+        let session = host
+            .createOrGetSession("terminal_powershell_multiline")
+            .unwrap();
+        let result = host.executeInSession(
+            &session.sessionId,
+            "$operit_v = '中文';\nWrite-Output first\nStart-Sleep -Milliseconds 400\nWrite-Output $operit_v",
+            5000,
+        ).unwrap();
+        assert!(!result.timedOut);
+        assert_eq!(result.exitCode, 0);
+        assert_eq!(result.output, "first\n中文");
+        let next = host
+            .executeInSession(&session.sessionId, "Write-Output $operit_v", 3000)
+            .unwrap();
+        assert_eq!(next.output, "中文");
     }
 
     #[test]

@@ -1,3 +1,6 @@
+#[path = "../../terminal_command.rs"]
+mod terminal_command;
+
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -779,6 +782,7 @@ fn createPtySession(
 
 /// Produces the shell input that emits the command-completion marker for one protocol.
 fn ptyCommandInput(command: &str, commandProtocol: PtyCommandProtocol) -> String {
+    let command = terminal_command::posixCommandLine(command);
     match commandProtocol {
         PtyCommandProtocol::BashPromptCommand => format!("{command}\r"),
         PtyCommandProtocol::ExplicitMarker => format!(
@@ -1712,6 +1716,47 @@ fn nextSessionId() -> String {
 mod tests {
     use super::*;
     use operit_host_api::TerminalHost;
+
+    /// Runs every statement before completing and keeps changes in the existing shell.
+    #[test]
+    fn posix_multiline_command_preserves_shell_state() {
+        let host = NativePtyTerminalHost::new();
+        let session = host.createOrGetSession("terminal_multiline").unwrap();
+        let result = host.executeInSession(
+            &session.sessionId,
+            "OPERIT_V=$(cat <<'EOF'\n中文 'quoted' \\012 $literal\nEOF\n)\nsleep 1\nprintf '%s\\n' \"$OPERIT_V\"",
+            5000,
+        ).unwrap();
+        assert!(!result.timedOut);
+        assert_eq!(result.exitCode, 0);
+        assert_eq!(result.output, "中文 'quoted' \\012 $literal");
+        let next = host
+            .executeInSession(&session.sessionId, "printf '%s\\n' \"$OPERIT_V\"", 3000)
+            .unwrap();
+        assert_eq!(next.output, "中文 'quoted' \\012 $literal");
+    }
+
+    /// Applies the timeout to the complete multiline script and keeps the shell responsive.
+    #[test]
+    fn posix_multiline_timeout_keeps_session_usable() {
+        let host = NativePtyTerminalHost::new();
+        let session = host
+            .createOrGetSession("terminal_multiline_timeout")
+            .unwrap();
+        let result = host
+            .executeInSession(
+                &session.sessionId,
+                "printf 'started\\n'\nsleep 8\nprintf forbidden",
+                800,
+            )
+            .unwrap();
+        assert!(result.timedOut);
+        let next = host
+            .executeInSession(&session.sessionId, "printf 'ready\\n'", 3000)
+            .unwrap();
+        assert!(!next.timedOut);
+        assert_eq!(next.output, "ready");
+    }
 
     #[test]
     fn linux_command_block_completes_in_pty() {

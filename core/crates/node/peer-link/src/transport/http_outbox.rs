@@ -49,11 +49,12 @@ impl HttpOutbox {
         }
     }
 
-    /// Takes a fixed batch at the next sending turn; arrivals during I/O belong to the following turn.
+    /// Coalesces idle bursts once and drains frames queued during I/O without another delay.
     pub async fn nextBatch(
         &self,
         scheduler: &dyn HostRuntimeTaskSchedulerHost,
     ) -> Result<Option<Vec<u8>>, String> {
+        let mut wasIdle = false;
         loop {
             let available = self.available.notified();
             {
@@ -64,13 +65,16 @@ impl HttpOutbox {
                     Some(_) => {}
                 }
             }
+            wasIdle = true;
             available.await;
         }
-        tokio::select! {
-            result = scheduler.waitForHostRuntimeDelay(FLUSH_INTERVAL_MS) => {
-                result.map_err(|error| error.to_string())?;
+        if wasIdle {
+            tokio::select! {
+                result = scheduler.waitForHostRuntimeDelay(FLUSH_INTERVAL_MS) => {
+                    result.map_err(|error| error.to_string())?;
+                }
+                _ = self.closed.notified() => return Ok(None),
             }
-            _ = self.closed.notified() => return Ok(None),
         }
         let batch = self.pending.lock().unwrap().as_mut().map(std::mem::take);
         self.space.notify_one();

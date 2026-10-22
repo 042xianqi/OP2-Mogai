@@ -530,6 +530,11 @@ impl CoreEventStream {
         match &mut self.receiver { EventReceiver::Unbounded(r) => r.poll_recv(cx), EventReceiver::Bounded(r) => r.poll_recv(cx) }
     }
 
+    /// Snapshots the queued prefix so a producer cannot indefinitely extend a batch.
+    pub(crate) fn pendingCount(&self) -> usize {
+        match &self.receiver { EventReceiver::Unbounded(r) => r.len(), EventReceiver::Bounded(r) => r.len() }
+    }
+
     /// Polls the stream for an already available event.
     pub fn try_recv(&mut self) -> Result<CoreEvent, mpsc::error::TryRecvError> {
         match &mut self.receiver { EventReceiver::Unbounded(r) => r.try_recv(), EventReceiver::Bounded(r) => r.try_recv() }

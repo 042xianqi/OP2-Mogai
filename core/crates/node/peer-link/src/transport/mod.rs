@@ -70,13 +70,6 @@ impl HostPeerLink {
 
 #[async_trait]
 impl PeerLink for HostPeerLink {
-    fn exclusiveEndpointKey(&self, target: &PeerEndpoint, transport: PeerTransport) -> Option<String> {
-        match transport {
-            PeerTransport::Serial => Some(format!("serial:{}", serial::endpointKey(&target.address))),
-            _ => None,
-        }
-    }
-
     async fn connect(
         &self,
         host: Arc<HostManager>,

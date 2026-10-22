@@ -1036,7 +1036,7 @@ impl OperitApplication {
                 .iter()
                 .any(|operation| operation.domain == PLUGIN_STORAGE_SYNC_DOMAIN)
         {
-            match store.preferenceHistory() {
+            match store.preferenceMergeHistory() {
                 Err(error) => {
                     errors.push(format!("preference history: {error}"));
                 }

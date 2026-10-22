@@ -327,7 +327,10 @@ impl ToolPkgManager {
     #[allow(non_snake_case)]
     fn runtimeRevision(&self, runtime: &ToolPkgContainerRuntime) -> Option<u64> {
         let mut hash = std::collections::hash_map::DefaultHasher::new();
-        serde_json::to_vec(runtime).ok()?.hash(&mut hash);
+        let mut metadata = serde_json::to_value(runtime).ok()?;
+        // Localized text uses HashMap; fresh scans must hash identical content identically.
+        metadata.sort_all_objects();
+        serde_json::to_vec(&metadata).ok()?.hash(&mut hash);
         if runtime.sourceType != ToolPkgSourceType::ASSET {
             self.hashSource(&runtime.sourcePath, 0, &mut hash)?;
         }
@@ -1623,6 +1626,43 @@ mod tests {
         manager.revokeContainerExecutionContexts("package_a");
         manager.revokeContainerExecutionContexts("package_b");
         assert!(factory.engines.lock().unwrap().iter().all(|engine| engine.destroyed.load(Ordering::Acquire)));
+    }
+
+    /// Preserves a live sidebar when fresh scans deserialize identical multilingual metadata.
+    #[test]
+    fn multilingualCatalogRescanPreservesSidebarRealm() {
+        let (mut manager, factory) = recordingManager();
+        let mut containers = manager.containers.read().unwrap().clone();
+        let runtime = containers.get_mut("package_a").unwrap();
+        runtime.displayName = serde_json::from_value(serde_json::json!({
+            "zh": "角色卡", "en": "Characters", "default": "Characters",
+            "ja": "キャラクター", "fr": "Personnages", "de": "Charaktere"
+        })).unwrap();
+        runtime.description = runtime.displayName.clone();
+        let snapshot = serde_json::to_value(&containers).unwrap();
+        let subpackages = manager.subpackageByPackageName.read().unwrap().clone();
+        manager.replaceRuntimeMaps(containers, subpackages.clone());
+        manager.acquireToolPkgExecutionEngine("character-sidebar", "package_a").unwrap();
+        let sidebar = manager.findToolPkgExecutionEngine("character-sidebar", "package_a").unwrap();
+        let (_, mainLease) = manager.leaseToolPkgMainExecutionEngine("package_a").unwrap();
+        drop(mainLease);
+        for _ in 0..32 {
+            let rescanned = serde_json::from_value(snapshot.clone()).unwrap();
+            manager.replaceRuntimeMaps(rescanned, subpackages.clone());
+            let current = manager.findToolPkgExecutionEngine("character-sidebar", "package_a")
+                .expect("unchanged multilingual metadata must preserve the sidebar");
+            assert!(Arc::ptr_eq(&sidebar, &current));
+            assert!(factory.engines.lock().unwrap().iter()
+                .all(|engine| !engine.destroyed.load(Ordering::Acquire)));
+        }
+        let mut changed: BTreeMap<String, ToolPkgContainerRuntime> =
+            serde_json::from_value(snapshot).unwrap();
+        changed.get_mut("package_a").unwrap().displayName.values
+            .insert("en".into(), "Updated characters".into());
+        manager.replaceRuntimeMaps(changed, subpackages);
+        assert!(manager.findToolPkgExecutionEngine("character-sidebar", "package_a").is_none());
+        assert!(factory.engines.lock().unwrap().iter()
+            .all(|engine| engine.destroyed.load(Ordering::Acquire)));
     }
 
     /// Preserves engine identity and every counted lease across repeated catalog replacement.
