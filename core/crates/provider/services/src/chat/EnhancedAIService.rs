@@ -1848,12 +1848,22 @@ impl EnhancedAIService {
                             responseRevisions.savepoint(&event.id);
                         }
                         operit_util::stream::RevisableTextStream::TextStreamEventType::Rollback => {
-                            let content = responseRevisions
-                                .rollback(&event.id)
-                                .expect("response rollback must reference an active savepoint")
-                                .to_owned();
-                            execContext.streamBuffer = content.clone();
-                            execContext.roundManager.updateContent(content);
+                            match responseRevisions.rollback(&event.id) {
+                                Some(content) => {
+                                    let content = content.to_owned();
+                                    execContext.streamBuffer = content.clone();
+                                    execContext.roundManager.updateContent(content);
+                                }
+                                None => {
+                                    AppLogger::w(
+                                        TAG,
+                                        &format!(
+                                            "response rollback savepoint missing; keeping current content id={}",
+                                            event.id
+                                        ),
+                                    );
+                                }
+                            }
                         }
                     }
                     responseStream.emit_revision(event);
@@ -2382,12 +2392,22 @@ impl EnhancedAIService {
                             responseRevisions.savepoint(&event.id);
                         }
                         operit_util::stream::RevisableTextStream::TextStreamEventType::Rollback => {
-                            let content = responseRevisions
-                                .rollback(&event.id)
-                                .expect("response rollback must reference an active savepoint")
-                                .to_owned();
-                            context.streamBuffer = content.clone();
-                            context.roundManager.updateContent(content);
+                            match responseRevisions.rollback(&event.id) {
+                                Some(content) => {
+                                    let content = content.to_owned();
+                                    context.streamBuffer = content.clone();
+                                    context.roundManager.updateContent(content);
+                                }
+                                None => {
+                                    AppLogger::w(
+                                        TAG,
+                                        &format!(
+                                            "response rollback savepoint missing; keeping current content id={}",
+                                            event.id
+                                        ),
+                                    );
+                                }
+                            }
                         }
                     }
                     collector.emit_revision(event);
