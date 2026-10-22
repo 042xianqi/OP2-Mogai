@@ -156,7 +156,7 @@ fn validateCreationDraft(draft: &ToolPkgChatCreationDraft) -> Result<(), String>
 /// Selects only actual enabled runtime registrations and rejects owner or handler ambiguity before execution.
 #[allow(non_snake_case)]
 fn collectLifecycleHooks(containers: &[ToolPkgContainerRuntime]) -> Result<Vec<ToolPkgChatLifecycleHookRegistration>, String> {
-    let mut hooks = BTreeMap::new();
+    let mut hooks: Vec<ToolPkgChatLifecycleHookRegistration> = Vec::new();
     for container in containers {
         if container.chatLifecycleHooks.is_empty() { continue; }
         if container.packageName.trim().is_empty() { return Err("Chat lifecycle registered owner is required".to_string()); }
@@ -171,11 +171,12 @@ fn collectLifecycleHooks(containers: &[ToolPkgContainerRuntime]) -> Result<Vec<T
             containerPackageName: container.packageName.clone(), hookId: hook.id.clone(),
             functionName: hook.function.clone(), functionSource: hook.functionSource.clone(),
         };
-        if hooks.insert(container.packageName.clone(), registered).is_some() {
+        if hooks.iter().any(|hook| hook.containerPackageName == container.packageName) {
             return Err(format!("Duplicate chat lifecycle hook owner: {}", container.packageName));
         }
+        hooks.push(registered);
     }
-    Ok(hooks.into_values().collect())
+    Ok(hooks)
 }
 
 /// Copies only the selected real owner's source extension into the exact locked creation payload.
@@ -367,7 +368,7 @@ mod tests {
     #[test]
     fn independent_owners_and_no_participants_are_valid_registration_snapshots() {
         let hooks = collectLifecycleHooks(&[registered("org.example.beta"), registered("com.example.alpha")]).unwrap();
-        assert_eq!(hooks.iter().map(|hook| hook.containerPackageName.as_str()).collect::<Vec<_>>(), vec!["com.example.alpha", "org.example.beta"]);
+        assert_eq!(hooks.iter().map(|hook| hook.containerPackageName.as_str()).collect::<Vec<_>>(), vec!["org.example.beta", "com.example.alpha"]);
         assert!(collectLifecycleHooks(&[]).unwrap().is_empty());
     }
 }

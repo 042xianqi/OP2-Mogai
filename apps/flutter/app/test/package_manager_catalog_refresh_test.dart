@@ -20,6 +20,44 @@ import 'package:operit2/ui/common/contributions/ChatSidebarTabHost.dart';
 
 /// Verifies installation notifications update an already mounted package list.
 void main() {
+  for (final width in <double>[400, 1400]) {
+    testWidgets('plugin drag keeps its laid-out card width at $width', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(Size(width, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final bridge = _CatalogBridge()..installed = true;
+      for (var index = 1; index < 3; index++) {
+        final name = 'demo_$index';
+        bridge.installedContainers.add(
+          _pluginRuntime().toJson()..['packageName'] = name,
+        );
+        bridge.scopes[name] = 'device';
+      }
+      await tester.pumpWidget(_manager(bridge));
+      await tester.pumpAndSettle();
+      final card = find.byKey(const ValueKey<String>('plugin:demo_toolpkg'));
+      final cardWidth = tester.getSize(card).width;
+      final drag = tester.widget<LongPressDraggable<String>>(
+        find.ancestor(
+          of: card,
+          matching: find.byType(LongPressDraggable<String>),
+        ),
+      );
+      final gesture = await tester.startGesture(tester.getCenter(card));
+      await tester.pump(const Duration(milliseconds: 200));
+      await gesture.moveBy(const Offset(20, 20));
+      await tester.pump();
+      expect(
+        tester.getSize(find.byWidget(drag.feedback)).width,
+        closeTo(cardWidth, 0.01),
+      );
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets(
     'customized built-in displays its status and uninstalls through plugin details',
     (tester) async {
@@ -49,6 +87,38 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  for (final scope in <String>['device', 'space']) {
+    testWidgets('bundled plugin uses its actual movable scope: $scope', (
+      tester,
+    ) async {
+      final bridge = _CatalogBridge()
+        ..installed = true
+        ..enabled = true
+        ..restoredBuiltin = true
+        ..scopes['demo_toolpkg'] = scope;
+      await tester.pumpWidget(_manager(bridge));
+      await tester.pumpAndSettle();
+      expect(find.text(scope == 'space' ? '设备空间' : '仅本设备'), findsOneWidget);
+      await tester.tap(find.byTooltip('展开'));
+      await tester.pumpAndSettle();
+      final target = scope == 'space' ? '仅本设备' : '设备空间';
+      await tester.tap(find.byTooltip('移至$target'));
+      await tester.pumpAndSettle();
+      expect(find.text('移至$target？'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, '移动'));
+      await tester.pumpAndSettle();
+      expect(bridge.scopeChanges.single['id'], 'demo_toolpkg');
+      expect(
+        bridge.scopeChanges.single['scope'],
+        scope == 'space' ? 'device' : 'space',
+      );
+      await tester.tap(find.text('Demo ToolPkg'));
+      await tester.pumpAndSettle();
+      expect(find.text('删除'), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets('customized script retains its built-in row after uninstall', (
     tester,
@@ -175,6 +245,7 @@ void main() {
   for (final name in <String>[
     'com.operit.plan_mode_bundle',
     'com.operit.goal_mode_bundle',
+    'com.operit.character_cards',
   ]) {
     for (final runtimeFallback in <bool>[false, true]) {
       testWidgets(
@@ -941,7 +1012,11 @@ class _CatalogBridge extends OperitRuntimeBridge {
         scopeChanges.add((request.args as Map).cast<String, Object?>());
         return null;
       case 'getToolPkgContainerOrder':
-        return [];
+        return [
+          if (installed) 'demo_toolpkg',
+          for (final container in installedContainers)
+            container['packageName'] as String,
+        ];
     }
     throw StateError('Unexpected catalog call: ${request.methodName}');
   }

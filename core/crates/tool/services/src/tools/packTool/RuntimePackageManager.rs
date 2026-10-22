@@ -80,7 +80,6 @@ use operit_util::AppLogger::AppLogger;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const REMOVED_BUILTIN_PACKAGE_ASSETS_KEY: &str = "removed_builtin_package_assets";
 const MARKET_TOOLPKG_INSTALLATION_ID_KEY: &str = "toolpkg_market_installation_id";
 const TOOLPKG_CACHE_SIGNATURE_FILE: &str = ".toolpkg-cache-signature";
 const MARKET_TOOLPKG_FILE_PREFIX: &str = "market-";
@@ -990,22 +989,26 @@ impl RuntimePackageManager {
     }
 
     #[allow(non_snake_case)]
-    /// Returns package names enabled in preferences after applying disabled package records.
+    /// Projects enabled packages from container activation and each child's declared state.
     #[operit_route_macros::operit_plugin_sdk_expose]
     pub fn getEnabledPackageNames(&self) -> Vec<String> {
         let availablePackages = self.availablePackages();
+        let subpackages = self.toolPkgSubpackageByPackageNameInternal();
         let mut enabledPackageNames = self
             .decodeEnabledPackageNamesFromPrefs()
             .into_iter()
-            .filter(|packageName| availablePackages.contains_key(packageName))
+            .filter(|name| availablePackages.contains_key(name) && !subpackages.contains_key(name))
             .collect::<BTreeSet<_>>();
         let disabledPackageNames = BTreeSet::from_iter(self.decodeDisabledPackageNamesFromPrefs());
-        for toolPackage in self.availablePackages().values() {
-            if toolPackage.is_built_in
-                && toolPackage.enabled_by_default
-                && !disabledPackageNames.contains(&toolPackage.name)
-            {
-                enabledPackageNames.insert(toolPackage.name.clone());
+        for package in availablePackages.values().filter(|package| !subpackages.contains_key(&package.name)) {
+            if package.is_built_in && package.enabled_by_default && !disabledPackageNames.contains(&package.name) {
+                enabledPackageNames.insert(package.name.clone());
+            }
+        }
+        let states = self.getToolPkgSubpackageStatesInternal();
+        for child in subpackages.values() {
+            if enabledPackageNames.contains(&child.containerPackageName) && states[&child.packageName] {
+                enabledPackageNames.insert(child.packageName.clone());
             }
         }
         enabledPackageNames.into_iter().collect()
@@ -1016,27 +1019,20 @@ impl RuntimePackageManager {
         BTreeSet::from_iter(self.getEnabledPackageNames())
     }
 
+    /// Applies persisted child preferences to their manifest-declared initial states.
     #[allow(non_snake_case)]
     pub(crate) fn getToolPkgSubpackageStatesInternal(&self) -> BTreeMap<String, bool> {
-        self.normalizeToolPkgSubpackageStates(&self.decodeToolPkgSubpackageStatesFromPrefs())
+        let mut states: BTreeMap<_, _> = self.toolPkgSubpackageByPackageNameInternal()
+            .into_iter().map(|(name, child)| (name, child.enabledByDefault)).collect();
+        states.extend(self.normalizeToolPkgSubpackageStates(&self.decodeToolPkgSubpackageStatesFromPrefs()));
+        states
     }
 
     #[allow(non_snake_case)]
-    /// Returns whether a package is enabled and not disabled by ToolPkg subpackage state.
+    /// Returns the package's effective state from the shared enabled-package projection.
     #[operit_route_macros::operit_plugin_sdk_expose]
     pub fn isPackageEnabled(&self, packageName: &str) -> bool {
-        let normalizedPackageName = self.normalizePackageName(packageName);
-        let enabledPackageSet = self.getEnabledPackageNameSetInternal();
-        if !enabledPackageSet.contains(&normalizedPackageName) {
-            return false;
-        }
-        if let Some(subpackageRuntime) = self
-            .toolPkgManager()
-            .resolveToolPkgSubpackageRuntimeInternal(&normalizedPackageName)
-        {
-            return enabledPackageSet.contains(&subpackageRuntime.containerPackageName);
-        }
-        true
+        self.getEnabledPackageNameSetInternal().contains(&self.normalizePackageName(packageName))
     }
 
     #[allow(non_snake_case)]
@@ -1074,30 +1070,10 @@ impl RuntimePackageManager {
         {
             let containerAlreadyEnabled = enabledPackageNames.contains(&normalizedPackageName);
             enabledPackageNames.insert(normalizedPackageName.clone());
-            for subpackage in &containerRuntime.subpackages {
-                let shouldEnable = subpackageStates
-                    .get(&subpackage.packageName)
-                    .copied()
-                    .unwrap_or(subpackage.enabledByDefault);
-                subpackageStates
-                    .entry(subpackage.packageName.clone())
-                    .or_insert(shouldEnable);
-                if shouldEnable {
-                    enabledPackageNames.insert(subpackage.packageName.clone());
-                } else {
-                    enabledPackageNames.remove(&subpackage.packageName);
-                }
-            }
             let names = enabledPackageNames.into_iter().collect::<Vec<_>>();
             if let Err(error) = self.saveEnabledPackageNames(&names) {
                 return format!(
                     "Failed to enable ToolPkg container '{}': {}",
-                    normalizedPackageName, error
-                );
-            }
-            if let Err(error) = self.saveToolPkgSubpackageStates(&subpackageStates) {
-                return format!(
-                    "Failed to save ToolPkg subpackage states '{}': {}",
                     normalizedPackageName, error
                 );
             }
@@ -1126,7 +1102,6 @@ impl RuntimePackageManager {
             .resolveToolPkgSubpackageRuntimeInternal(&normalizedPackageName)
         {
             enabledPackageNames.insert(subpackageRuntime.containerPackageName.clone());
-            enabledPackageNames.insert(normalizedPackageName.clone());
             subpackageStates.insert(normalizedPackageName.clone(), true);
             let names = enabledPackageNames.into_iter().collect::<Vec<_>>();
             if let Err(error) = self.saveEnabledPackageNames(&names) {
@@ -1211,12 +1186,6 @@ impl RuntimePackageManager {
                     normalizedPackageName, error
                 );
             }
-            if let Err(error) = self.saveToolPkgSubpackageStates(&subpackageStates) {
-                return format!(
-                    "Failed to save ToolPkg subpackage states '{}': {}",
-                    normalizedPackageName, error
-                );
-            }
             if let Err(error) = self.addToDisabledIfDefaultEnabled(&normalizedPackageName) {
                 return format!(
                     "Failed to disable ToolPkg container '{}': {}",
@@ -1247,13 +1216,6 @@ impl RuntimePackageManager {
             let packageWasRemoved = enabledPackageNames.remove(&normalizedPackageName);
             subpackageStates.insert(normalizedPackageName.clone(), false);
             self.unregisterPackageTools(&normalizedPackageName);
-            let names = enabledPackageNames.into_iter().collect::<Vec<_>>();
-            if let Err(error) = self.saveEnabledPackageNames(&names) {
-                return format!(
-                    "Failed to disable ToolPkg subpackage '{}': {}",
-                    normalizedPackageName, error
-                );
-            }
             if let Err(error) = self.saveToolPkgSubpackageStates(&subpackageStates) {
                 return format!(
                     "Failed to save ToolPkg subpackage states '{}': {}",
@@ -1358,6 +1320,10 @@ impl RuntimePackageManager {
             })
             .ok_or("Package load issue is no longer present; refresh the package list")?;
 
+        if self.toolHandler.runtimeSupport().builtinPluginAssets().iter()
+            .any(|asset| asset.name == issue.sourcePath) {
+            return Err("Built-in packages cannot be deleted".into());
+        }
         let source = Path::new(&issue.sourcePath);
         let installedScope = ["device", "space"].into_iter().find(|scope| {
             let root = ExtensionStore::root("package", scope).expect("valid package scope");
@@ -1381,32 +1347,6 @@ impl RuntimePackageManager {
             && owner
                 .as_ref()
                 .is_some_and(|name| self.availablePackages().contains_key(name));
-        // Shared removals are represented by their synchronized installation tombstone.
-        // Only device-local or unreadable assets need a local retirement preference.
-        let builtinAsset = if sourceOnly {
-            None
-        } else {
-            self.toolHandler
-                .runtimeSupport()
-                .builtinPluginAssets()
-                .iter()
-                .find(|asset| {
-                    asset.name == issue.sourcePath
-                        || owner.as_ref().is_some_and(|name| {
-                            Self::packageNameFromScanResult(
-                                &self.parseBuiltInPackageAsset(asset),
-                            )
-                            .as_ref()
-                                == Some(name)
-                        })
-                })
-                .filter(|asset| {
-                    self.parseBuiltInPackageAsset(asset).toolPkgLoadResult.as_ref()
-                        .and_then(|load| load.containerRuntime.manifestExtensions.get("installation_scope"))
-                        .and_then(serde_json::Value::as_str) != Some("space")
-                })
-                .map(|asset| asset.name.to_string())
-        };
         let mut removed = false;
         if let Some(name) = owner.as_deref().filter(|_| !sourceOnly) {
             self.disablePackage(name);
@@ -1425,19 +1365,6 @@ impl RuntimePackageManager {
                     .map_err(|error| error.to_string())?;
                 removed = true;
             }
-        }
-        if let Some(assetName) = builtinAsset {
-            let mut retired = self.removedBuiltinPackageAssets();
-            retired.insert(assetName);
-            self.dataStore
-                .edit(|preferences| {
-                    preferences.set(
-                        &stringPreferencesKey(REMOVED_BUILTIN_PACKAGE_ASSETS_KEY),
-                        serde_json::to_value(&retired).expect("asset names are serializable"),
-                    );
-                })
-                .map_err(|error| error.to_string())?;
-            removed = true;
         }
         if !removed {
             return Err("No installed package source was found for this load issue".into());
@@ -1541,24 +1468,16 @@ impl RuntimePackageManager {
     }
 
     #[allow(non_snake_case)]
-    /// Orders active ToolPkg runtimes exactly as persisted by the user.
+    /// Orders Space containers before device containers, preserving user order within each scope.
     fn orderToolPkgRuntimes(
         &self,
         mut runtimes: Vec<ToolPkgContainerRuntime>,
     ) -> Vec<ToolPkgContainerRuntime> {
-        let storedOrder = self.decodeToolPkgContainerOrderFromPrefs();
-        let mut byName = runtimes
-            .drain(..)
-            .map(|runtime| (runtime.packageName.clone(), runtime))
-            .collect::<BTreeMap<_, _>>();
-        let mut ordered = Vec::new();
-        for packageName in storedOrder {
-            if let Some(runtime) = byName.remove(&packageName) {
-                ordered.push(runtime);
-            }
-        }
-        ordered.extend(byName.into_values());
-        ordered
+        let ranks = self.decodeToolPkgContainerOrderFromPrefs().into_iter()
+            .enumerate().map(|(rank, name)| (name, rank)).collect::<BTreeMap<_, _>>();
+        runtimes.sort_by_key(|runtime| *ranks.get(&runtime.packageName)
+            .expect("Registered ToolPkg container must have an owner rank"));
+        runtimes
     }
 
     #[allow(non_snake_case)]
@@ -1572,7 +1491,7 @@ impl RuntimePackageManager {
             .enumerate()
             .map(|(index, packageName)| (packageName, index))
             .collect::<BTreeMap<_, _>>();
-        let runtimes = self.toolPkgManager().getToolPkgContainerRuntimes();
+        let runtimes = self.orderToolPkgRuntimes(self.toolPkgManager().getToolPkgContainerRuntimes());
         runtimes
             .into_iter()
             .map(|runtime| self.withToolPkgDependencyIssues(runtime, &enabledPackageNames, &order))
@@ -1580,27 +1499,15 @@ impl RuntimePackageManager {
     }
 
     #[allow(non_snake_case)]
-    /// Returns the persisted visual order of ToolPkg containers followed by newly discovered containers.
+    /// Returns the same scope and user order used for plugin execution.
     #[operit_route_macros::operit_plugin_sdk_expose]
     pub fn getToolPkgContainerOrder(&self) -> Vec<String> {
-        let stored = self.decodeToolPkgContainerOrderFromPrefs();
-        let mut installed = self.toolPkgManager().getToolPkgContainerRuntimes();
-        let mut byName = installed
-            .drain(..)
-            .map(|runtime| (runtime.packageName.clone(), runtime))
-            .collect::<BTreeMap<_, _>>();
-        let mut ordered = Vec::new();
-        for packageName in stored {
-            if let Some(runtime) = byName.remove(&packageName) {
-                ordered.push(runtime.packageName);
-            }
-        }
-        ordered.extend(byName.into_values().map(|runtime| runtime.packageName));
-        ordered
+        self.orderToolPkgRuntimes(self.toolPkgManager().getToolPkgContainerRuntimes())
+            .into_iter().map(|runtime| runtime.packageName).collect()
     }
 
     #[allow(non_snake_case)]
-    /// Persists the complete visual order of ToolPkg containers.
+    /// Persists independent user ranks for Space and device containers.
     #[operit_route_macros::operit_plugin_sdk_expose]
     pub fn setToolPkgContainerOrder(
         &self,
@@ -1626,11 +1533,15 @@ impl RuntimePackageManager {
             }
         }
         let result = (|| -> Result<(), PreferencesDataStoreError> {
-            for (rank, name) in ordered.iter().enumerate() {
+            let mut ranks = BTreeMap::from([("space", 0usize), ("device", 0usize)]);
+            for name in &ordered {
                 let mut record = ExtensionStore::default()
                     .record("package", name)
                     .map_err(PreferencesDataStoreError::Message)?;
-                record.settings["order"] = serde_json::json!(rank);
+                let rank = ranks.get_mut(record.scope.as_str())
+                    .expect("Registered package must have a valid scope");
+                record.settings["order"] = serde_json::json!(*rank);
+                *rank += 1;
                 self.writeScopeSettings(name, record.settings)
                     .map_err(PreferencesDataStoreError::Message)?;
             }
@@ -2652,23 +2563,19 @@ impl RuntimePackageManager {
     }
 
     #[allow(non_snake_case)]
-    /// Selects shared assets from installation ownership rather than local retirement preferences.
+    /// Selects bundled assets from their current installation owner.
     fn scanBuiltInPackageAssets(&self) -> PackageScanSnapshot {
         let mut results = Vec::new();
-        let retired = self.removedBuiltinPackageAssets();
         for asset in self.toolHandler.runtimeSupport().builtinPluginAssets() {
             if isProgressTrackedPackageSource(asset.name) {
                 beginPackageLoadProgress(asset.name);
             }
             let mut result = self.parseBuiltInPackageAsset(asset);
-            let selected = (|| -> Result<bool, String> {
-                if let Some(load) = &result.toolPkgLoadResult {
-                    if Self::requiredInstallationScope(&load.containerRuntime)? == Some(ToolPkgConfigScope::Space) {
-                        return ExtensionStore::default().acceptsSharedBuiltinPackage(&load.containerRuntime.packageName);
-                    }
-                }
-                Ok(!retired.contains(asset.name))
-            })();
+            let packageName = Self::packageNameFromScanResult(&result);
+            let selected = match packageName.as_deref() {
+                Some(name) => ExtensionStore::default().acceptsBuiltinPackage(name),
+                None => Ok(true),
+            };
             match selected {
                 Ok(false) => continue,
                 Ok(true) => {}
@@ -2676,7 +2583,7 @@ impl RuntimePackageManager {
                     result.toolPackage = None;
                     result.toolPkgLoadResult = None;
                     result.issues.push(newToolPkgLoadIssue(
-                        asset.name.to_string(), None, packageProgressDisplayName(asset.name),
+                        asset.name.to_string(), packageName, packageProgressDisplayName(asset.name),
                         "scope_failed", error, "package",
                     ));
                 }
@@ -2839,21 +2746,7 @@ impl RuntimePackageManager {
         results
     }
 
-    /// Lists embedded sources explicitly retired through the failed-package dialog.
-    #[allow(non_snake_case)]
-    fn removedBuiltinPackageAssets(&self) -> BTreeSet<String> {
-        self.dataStore
-            .data()
-            .ok()
-            .and_then(|preferences| {
-                preferences
-                    .get(&stringPreferencesKey(REMOVED_BUILTIN_PACKAGE_ASSETS_KEY))
-                    .cloned()
-            })
-            .and_then(|value| serde_json::from_value(value).ok())
-            .unwrap_or_default()
-    }
-
+    /// Scans optional bundled archives for explicit installation.
     #[allow(non_snake_case)]
     fn scanBundledExternalToolPkgCandidates(&mut self) -> Vec<PackageScanCandidateResult> {
         self.scanBundledExternalPackageCandidates()
@@ -3400,9 +3293,6 @@ impl RuntimePackageManager {
                     .map(Self::requiredInstallationScope)
                     .transpose()?
                     .flatten();
-                if let Some(required) = requiredScope {
-                    store.reconcileBuiltinScopeDuplicates("package", name, required.as_str())?;
-                }
                 let existing = store
                     .records("package")?
                     .into_iter()
@@ -4792,6 +4682,7 @@ impl RuntimePackageManager {
         let mut records = self.scopeRecords();
         records.sort_by_key(|record| {
             (
+                record.scope != "space",
                 record.settings["order"]
                     .as_u64()
                     .expect("Registered package rank must be an integer"),
@@ -4972,7 +4863,9 @@ impl RuntimePackageManager {
         &self,
         names: &[String],
     ) -> Result<(), PreferencesDataStoreError> {
-        let names = self.normalizeEnabledPackageNames(names);
+        let subpackages = self.toolPkgSubpackageByPackageNameInternal();
+        let names: Vec<_> = self.normalizeEnabledPackageNames(names).into_iter()
+            .filter(|name| !subpackages.contains_key(name)).collect();
         for mut record in self.scopeRecords() {
             let members: Vec<String> = serde_json::from_value(record.settings["members"].clone())?;
             record.settings["enabledNames"] = serde_json::to_value(
@@ -5384,12 +5277,6 @@ impl ToolPkgPackageHost for RuntimePackageManager {
         RuntimePackageManager::getEnabledPackageNameSetInternal(self)
     }
 
-    /// Returns enabled package names in stable order.
-    #[allow(non_snake_case)]
-    fn getEnabledPackageNames(&self) -> Vec<String> {
-        RuntimePackageManager::getEnabledPackageNames(self)
-    }
-
     /// Returns persisted ToolPkg subpackage states.
     #[allow(non_snake_case)]
     fn getToolPkgSubpackageStatesInternal(&self) -> BTreeMap<String, bool> {
@@ -5403,13 +5290,6 @@ impl ToolPkgPackageHost for RuntimePackageManager {
             .fileSystemHost
             .clone()
             .expect("RuntimePackageManager requires a FileSystemHost")
-    }
-
-    /// Persists enabled package names for SDK state changes.
-    #[allow(non_snake_case)]
-    fn saveEnabledPackageNames(&self, packageNames: &[String]) -> Result<(), String> {
-        RuntimePackageManager::saveEnabledPackageNames(self, packageNames)
-            .map_err(|error| error.to_string())
     }
 
     /// Persists ToolPkg subpackage states for SDK state changes.

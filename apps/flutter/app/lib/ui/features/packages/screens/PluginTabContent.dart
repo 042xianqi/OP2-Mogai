@@ -137,6 +137,7 @@ class PluginTabContent extends StatelessWidget {
                   }
                   return _PluginReorderTarget(
                     plugin: plugin,
+                    scopes: scopes,
                     onReordered: onReordered,
                     child: item,
                   );
@@ -271,11 +272,13 @@ class _PluginReorderTarget extends StatelessWidget {
   /// Creates a draggable plugin card and its reorder drop target.
   const _PluginReorderTarget({
     required this.plugin,
+    required this.scopes,
     required this.onReordered,
     required this.child,
   });
 
   final core_proxy.ToolPkgContainerRuntime plugin;
+  final Map<String, String> scopes;
   final void Function(String sourcePackageName, String targetPackageName)
   onReordered;
   final Widget child;
@@ -284,43 +287,48 @@ class _PluginReorderTarget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final feedbackWidth = MediaQuery.sizeOf(context).width - 32;
-    return DragTarget<String>(
-      onWillAcceptWithDetails: (details) => details.data != plugin.packageName,
-      onAcceptWithDetails: (details) =>
-          onReordered(details.data, plugin.packageName),
-      builder: (context, candidateData, rejectedData) {
-        final isDropTarget = candidateData.isNotEmpty;
-        return LongPressDraggable<String>(
-          data: plugin.packageName,
-          delay: const Duration(milliseconds: 160),
-          hapticFeedbackOnStart: true,
-          maxSimultaneousDrags: 1,
-          feedback: Material(
-            color: Colors.transparent,
-            elevation: 8,
-            shadowColor: colorScheme.shadow,
-            child: SizedBox(
-              width: feedbackWidth,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return DragTarget<String>(
+          onWillAcceptWithDetails: (details) =>
+              details.data != plugin.packageName &&
+              scopes[details.data] == scopes[plugin.packageName],
+          onAcceptWithDetails: (details) =>
+              onReordered(details.data, plugin.packageName),
+          builder: (context, candidateData, rejectedData) {
+            final isDropTarget = candidateData.isNotEmpty;
+            return LongPressDraggable<String>(
+              data: plugin.packageName,
+              delay: const Duration(milliseconds: 160),
+              hapticFeedbackOnStart: true,
+              maxSimultaneousDrags: 1,
+              feedback: Material(
+                color: Colors.transparent,
+                elevation: 8,
+                shadowColor: colorScheme.shadow,
+                child: SizedBox(
+                  width: constraints.maxWidth,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: child,
+                  ),
+                ),
+              ),
+              childWhenDragging: child,
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: colorScheme.surfaceContainerHighest,
                   borderRadius: BorderRadius.circular(12),
+                  border: isDropTarget
+                      ? Border.all(color: colorScheme.primary, width: 2)
+                      : null,
                 ),
                 child: child,
               ),
-            ),
-          ),
-          childWhenDragging: child,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              border: isDropTarget
-                  ? Border.all(color: colorScheme.primary, width: 2)
-                  : null,
-            ),
-            child: child,
-          ),
+            );
+          },
         );
       },
     );

@@ -313,6 +313,7 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
     );
     try {
       await _dispatchAction(
+        _actionOwnerGeneration,
         '__operit_theme_changed',
         pluginThemeSnapshot(scheme),
       );
@@ -855,9 +856,12 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
     super.dispose();
   }
 
-  /// Waits for text synchronization without serializing ordinary UI actions.
-  Future<Object?> _dispatchAction(String actionId, [Object? payload]) {
-    final routeGeneration = _actionOwnerGeneration;
+  /// Dispatches only actions owned by the renderer that created the callback.
+  Future<Object?> _dispatchAction(
+    int routeGeneration,
+    String actionId, [
+    Object? payload,
+  ]) {
     return _actionScheduler.dispatchAction(() {
       if (!_isCurrentActionOwner(routeGeneration)) return Future.value(null);
       return _dispatchActionCore(
@@ -869,9 +873,12 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
     });
   }
 
-  /// Preserves keystroke order across all text fields in this page.
-  Future<Object?> _dispatchTextInput(String actionId, String text) {
-    final routeGeneration = _actionOwnerGeneration;
+  /// Preserves keystroke order for text fields belonging to the current renderer.
+  Future<Object?> _dispatchTextInput(
+    int routeGeneration,
+    String actionId,
+    String text,
+  ) {
     return _actionScheduler.dispatchTextInput(() {
       if (!_isCurrentActionOwner(routeGeneration)) return Future.value(null);
       return _dispatchActionCore(
@@ -883,9 +890,12 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
     });
   }
 
-  /// Gives WebView actions the same text barrier while preserving error delivery.
-  Future<Object?> _dispatchWebViewAction(String actionId, [Object? payload]) {
-    final routeGeneration = _actionOwnerGeneration;
+  /// Keeps WebView requests bound to their renderer across the text barrier.
+  Future<Object?> _dispatchWebViewAction(
+    int routeGeneration,
+    String actionId, [
+    Object? payload,
+  ]) {
     return _actionScheduler.dispatchAction(() {
       if (!_isCurrentActionOwner(routeGeneration)) return Future.value(null);
       return _dispatchActionCore(
@@ -958,7 +968,7 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
 
   /// Host input refreshes do not change the owner of actions already running.
   bool _isCurrentActionOwner(int generation) =>
-      mounted && generation == _actionOwnerGeneration;
+      mounted && !_reloading && generation == _actionOwnerGeneration;
 
   /// Delivers results only to the presentation that still owns this route load.
   void _notifyActionResult(Object? result, {required int routeGeneration}) {
@@ -1152,7 +1162,8 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
       packageName: widget.plugin.packageName,
       routeInstanceId: routeInstanceId,
       executionContextKey: executionContextKey,
-      dispatchAction: _dispatchWebViewAction,
+      dispatchAction: (actionId, [payload]) =>
+          _dispatchWebViewAction(routeGeneration, actionId, payload),
       readFileBytes: (path) => readComposeDslVfsBytes(widget.clients, path),
       onActionResultDelivered: (result) =>
           _notifyActionResult(result, routeGeneration: routeGeneration),
@@ -1164,15 +1175,17 @@ class _ToolPkgUiLauncherScreenState extends State<ToolPkgUiLauncherScreen> {
     );
     final content = hasSelectedUi
         ? _ComposeHost(
-            key: ValueKey(_selectedRouteId),
+            key: ValueKey((_selectedRouteId, _reloadGeneration)),
             loading: _loading,
             error: _error,
             renderResult: _renderResult,
             showLoadingIndicator: widget.showLoadingIndicator,
             contentBuilder: widget.contentBuilder,
             dialogTitle: widget.dialogTitle,
-            onAction: _dispatchAction,
-            onTextInput: _dispatchTextInput,
+            onAction: (actionId, [payload]) =>
+                _dispatchAction(routeGeneration, actionId, payload),
+            onTextInput: (actionId, text) =>
+                _dispatchTextInput(routeGeneration, actionId, text),
             webViewHostContext: webViewHostContext,
             splitMarkdownContent: (content) => widget
                 .clients

@@ -128,18 +128,15 @@ impl ToolPkgPromptHookBridge {
     }
 }
 
+/// Stores prompt hooks in the committed scope and user order.
 fn replace_hooks(
     target: &Mutex<Vec<ToolPkgPromptHookRegistration>>,
-    mut updated: Vec<ToolPkgPromptHookRegistration>,
+    updated: Vec<ToolPkgPromptHookRegistration>,
 ) {
-    updated.sort_by(|left, right| {
-        left.containerPackageName
-            .cmp(&right.containerPackageName)
-            .then(left.hookId.cmp(&right.hookId))
-    });
     *target.lock().expect("toolpkg prompt hook mutex poisoned") = updated;
 }
 
+/// Expands one owner's prompt hooks in manifest order.
 fn registrations(
     container: &ToolPkgContainerRuntime,
     hooks: &[operit_plugin_sdk::toolpkg::ToolPkgParser::ToolPkgFunctionHookRuntime],
@@ -746,6 +743,21 @@ fn apply_prompt_mutation(current: &mut PromptHookContext, mutation: PromptHookMu
 #[cfg(test)]
 mod tool_policy_result_tests {
     use super::decode_tool_prompt_policy_result;
+
+    /// Keeps shared owners ahead of local owners even when their names sort in the opposite order.
+    #[test]
+    fn prompt_registration_preserves_committed_owner_order() {
+        let owners = ["z.shared", "b.shared", "a.device"];
+        let target = std::sync::Mutex::new(Vec::new());
+        super::replace_hooks(&target, owners.iter().map(|owner| {
+            operit_plugin_sdk::toolpkg::ToolPkgHooks::ToolPkgPromptHookRegistration {
+                containerPackageName: (*owner).into(), hookId: "compose".into(),
+                functionName: "compose".into(), functionSource: None,
+            }
+        }).collect());
+        let hooks = target.lock().unwrap();
+        assert_eq!(hooks.iter().map(|hook| hook.containerPackageName.as_str()).collect::<Vec<_>>(), owners);
+    }
 
     /// Rejects malformed invoked policies instead of treating invalid output as permission to continue.
     #[test]

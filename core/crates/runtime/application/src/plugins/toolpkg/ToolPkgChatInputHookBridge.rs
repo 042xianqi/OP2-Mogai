@@ -1,4 +1,4 @@
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -10,9 +10,7 @@ use crate::plugins::toolpkg::ToolPkgHookBridgeSupport::ToolPkgBridgeRuntime;
 use crate::plugins::toolpkg::ToolPkgPreHookTimeout::ToolPkgPreHookTimeout;
 use operit_plugin_sdk::toolpkg::ToolPkgCommonPluginConstants::TOOLPKG_EVENT_CHAT_INPUT;
 use operit_plugin_sdk::toolpkg::ToolPkgHooks::ToolPkgChatInputHookRegistration;
-use operit_plugin_sdk::toolpkg::ToolPkgParser::ToolPkgContainerRuntime;
 
-static CHAT_INPUT_HOOKS: OnceLock<Mutex<Vec<ToolPkgChatInputHookRegistration>>> = OnceLock::new();
 static CHAT_INPUT_RUNTIME: OnceLock<ToolPkgBridgeRuntime> = OnceLock::new();
 
 pub const CHAT_INPUT_EVENT_INPUT_CHANGED: &str = "input_changed";
@@ -72,34 +70,6 @@ impl ToolPkgChatInputHookBridge {
         CHAT_INPUT_RUNTIME.get_or_init(|| runtime.clone());
     }
 
-    /// Synchronizes actual input hooks whenever the enabled package catalog changes.
-    #[allow(non_snake_case)]
-    pub fn syncToolPkgRegistrations(activeContainers: &[ToolPkgContainerRuntime]) {
-        let mut hooks = activeContainers
-            .iter()
-            .flat_map(|runtime| {
-                runtime
-                    .chatInputHooks
-                    .iter()
-                    .map(|hook| ToolPkgChatInputHookRegistration {
-                        containerPackageName: runtime.packageName.clone(),
-                        hookId: hook.id.clone(),
-                        functionName: hook.function.clone(),
-                        functionSource: hook.functionSource.clone(),
-                    })
-            })
-            .collect::<Vec<_>>();
-        hooks.sort_by(|left, right| {
-            left.containerPackageName
-                .cmp(&right.containerPackageName)
-                .then(left.hookId.cmp(&right.hookId))
-        });
-        *CHAT_INPUT_HOOKS
-            .get_or_init(|| Mutex::new(Vec::new()))
-            .lock()
-            .expect("toolpkg chat input hook mutex poisoned") = hooks;
-    }
-
     /// Executes submit handlers strictly; invocation, timeout and invalid-result errors never authorize sending.
     #[allow(non_snake_case)]
     pub async fn dispatchChatInputHooks(
@@ -108,13 +78,12 @@ impl ToolPkgChatInputHookBridge {
     ) -> Result<Option<ChatInputHookResult>, String> {
         validateChatInputContext(&context)?;
         let manager = RuntimePackageManager::readySnapshot(runtime.tool_handler().getOrCreatePackageManager()).await?;
-        let mut activeHooks = manager.getEnabledToolPkgContainerRuntimes().into_iter()
+        let activeHooks = manager.getEnabledToolPkgContainerRuntimes().into_iter()
             .flat_map(|container| container.chatInputHooks.into_iter().map(move |hook| ToolPkgChatInputHookRegistration {
                 containerPackageName: container.packageName.clone(), hookId: hook.id,
                 functionName: hook.function, functionSource: hook.functionSource,
             }))
             .collect::<Vec<_>>();
-        activeHooks.sort_by(|left, right| left.containerPackageName.cmp(&right.containerPackageName).then(left.hookId.cmp(&right.hookId)));
         if activeHooks.is_empty() {
             return Ok(None);
         }
