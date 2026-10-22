@@ -123,10 +123,18 @@ fn openCoreResponseStream(
                                     MarkdownStreamEvent::savepoint(streamKey.clone(), event.id)
                                 }
                                 operit_util::stream::RevisableTextStream::TextStreamEventType::Rollback => {
-                                    let content = textRevisions.rollback(&event.id).expect(
-                                        "markdown rollback must reference an active savepoint",
-                                    );
-                                    markdownStream.restoreContent(content);
+                                    match textRevisions.rollback(&event.id) {
+                                        Some(content) => markdownStream.restoreContent(content),
+                                        None => {
+                                            AppLogger::w(
+                                                "CoreStreamTrace",
+                                                &format!(
+                                                    "markdown rollback savepoint missing; keeping current content streamKey={} id={}",
+                                                    streamKey, event.id
+                                                ),
+                                            );
+                                        }
+                                    }
                                     AppLogger::trace_detail(
                                         "CoreStreamTrace",
                                         &format!(
@@ -2091,9 +2099,15 @@ impl MessageProcessingDelegate {
                                                 tracker.savepoint(&event.id);
                                             }
                                             operit_util::stream::RevisableTextStream::TextStreamEventType::Rollback => {
-                                                tracker
-                                                    .rollback(&event.id)
-                                                    .expect("response rollback must reference an active savepoint");
+                                                if tracker.rollback(&event.id).is_none() {
+                                                    AppLogger::w(
+                                                        "CoreStreamTrace",
+                                                        &format!(
+                                                            "response rollback savepoint missing; keeping current content id={}",
+                                                            event.id
+                                                        ),
+                                                    );
+                                                }
                                             }
                                         }
                                         if event.event_type
