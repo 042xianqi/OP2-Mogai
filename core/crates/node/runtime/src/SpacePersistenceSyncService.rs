@@ -794,9 +794,8 @@ impl SpacePersistenceSyncService {
                 remoteOperations["operations"].clone(),
             )?;
             if operations.is_empty() {
-                let complete = preferenceHistoryComplete([&localOperations, &remoteOperations])?;
                 if !self
-                    .applySynchronizedOperationBatch(targetNodeId, &operations, &[], complete)
+                    .applySynchronizedOperationBatch(targetNodeId, &operations, &[])
                     .await?
                 {
                     return Ok(false);
@@ -850,7 +849,7 @@ impl SpacePersistenceSyncService {
                 ),
             );
             if !self
-                .applySynchronizedOperationBatch(targetNodeId, &operations, &sizes, false)
+                .applySynchronizedOperationBatch(targetNodeId, &operations, &sizes)
                 .await?
             {
                 return Ok(false);
@@ -868,14 +867,13 @@ impl SpacePersistenceSyncService {
     }
 
     /// Applies one transport page on both peers, split into messages that fit
-    /// the connection ceiling, with an explicit current-history completion boundary.
+    /// the connection ceiling, preserving every original operation boundary.
     #[allow(non_snake_case)]
     async fn applySynchronizedOperationBatch(
         &self,
         targetNodeId: &str,
         operations: &[Value],
         sizes: &[usize],
-        complete: bool,
     ) -> Result<bool, String> {
         if let Err(error) = self
             .synchronizeRequiredBlobs(targetNodeId, operations)
@@ -886,8 +884,7 @@ impl SpacePersistenceSyncService {
         if !self.storageReplicationAllowed(targetNodeId)? {
             return Ok(false);
         }
-        // The empty page still travels: it is the explicit "clocks are equal"
-        // boundary that finalizes preference history on both peers.
+        // Empty pages retry durable pending operations on both peers.
         let chunks = if operations.is_empty() {
             vec![operations]
         } else {
@@ -897,15 +894,12 @@ impl SpacePersistenceSyncService {
                 self.state.nodeRouter.maxPeerMessageBytes(),
             )?
         };
-        for (index, chunk) in chunks.iter().copied().enumerate() {
-            // A split page only closes the history boundary on its final
-            // message; an earlier one must not finalize the same history.
-            let chunkComplete = chunkCompletesPage(complete, index, chunks.len());
+        for chunk in chunks.iter().copied() {
             let remote: Result<Value, String> = callRemote(
                 &self.state.nodeRouter,
                 targetNodeId,
                 PeerSyncMethod::SyncApplyOperations,
-                json!({ "operations": chunk, "complete": chunkComplete }),
+                json!({ "operations": chunk }),
             )
             .await;
             if !self.storageReplicationAllowed(targetNodeId)? {
@@ -914,7 +908,7 @@ impl SpacePersistenceSyncService {
             let local: Result<Value, String> = self
                 .callLocal(
                     "syncApplyOperations",
-                    json!({ "operations": chunk, "complete": chunkComplete }),
+                    json!({ "operations": chunk }),
                 )
                 .await;
             for (side, result) in [("remote apply", &remote), ("local apply", &local)] {
@@ -1592,10 +1586,7 @@ fn syncPageBudget(maxMessageBytes: usize) -> usize {
     (maxMessageBytes.saturating_mul(3) / 4).saturating_sub(SYNC_PAGE_HEADROOM_BYTES)
 }
 
-/// Only the final message of a page may close the history boundary.
-fn chunkCompletesPage(complete: bool, index: usize, chunks: usize) -> bool {
-    complete && index + 1 == chunks
-}
+
 
 /// Splits one ordered, deduplicated page into contiguous slices that each fit
 /// the Link ceiling. Operations stay whole, so a transaction is never divided.
@@ -1645,16 +1636,7 @@ fn summarizeSyncClock(value: &Value) -> String {
     )
 }
 
-/// Closes preference history only when both journals exported successfully.
-fn preferenceHistoryComplete(exports: [&Value; 2]) -> Result<bool, String> {
-    let mut complete = true;
-    for report in exports {
-        let failedDomains: Vec<String> = serde_json::from_value(report["failedDomains"].clone())
-            .map_err(|error| format!("invalid export failure domains: {error}"))?;
-        complete &= !failedDomains.iter().any(|domain| domain == "preferences");
-    }
-    Ok(complete)
-}
+
 
 /// Records one page's operation ids and reports whether it added a new identity.
 ///
@@ -1752,16 +1734,7 @@ mod page_budget_tests {
         assert!(validateDomainClock(&clock, &SYNC_DOMAINS, "local").is_ok());
     }
 
-    /// Requires complete preference export while leaving unrelated plugin failures independent.
-    #[test]
-    fn preference_completion_uses_structured_domain_failures() {
-        let healthy = json!({"failedDomains": []});
-        let pluginFailure = json!({"failedDomains": ["plugin_storage"]});
-        let preferenceFailure = json!({"failedDomains": ["preferences"]});
-        assert!(preferenceHistoryComplete([&healthy, &pluginFailure]).unwrap());
-        assert!(!preferenceHistoryComplete([&preferenceFailure, &healthy]).unwrap());
-        assert!(preferenceHistoryComplete([&healthy, &json!({})]).is_err());
-    }
+
 
     /// Constructs one transport-sized plugin operation for page budget tests.
     fn operation(opId: &str, payloadBytes: usize) -> Value {
@@ -1837,14 +1810,7 @@ mod page_budget_tests {
         assert!(error.contains("domain=plugin_storage"), "{error}");
     }
 
-    #[test]
-    fn only_the_last_message_closes_the_history_boundary() {
-        assert!(chunkCompletesPage(true, 0, 1));
-        assert!(!chunkCompletesPage(false, 0, 1));
-        assert!(!chunkCompletesPage(true, 0, 3));
-        assert!(!chunkCompletesPage(true, 1, 3));
-        assert!(chunkCompletesPage(true, 2, 3));
-    }
+
 
     #[test]
     fn an_empty_page_has_no_chunks() {

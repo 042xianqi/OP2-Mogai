@@ -2673,12 +2673,20 @@ fn reconcileDurableMappings(
     Ok(())
 }
 
+/// Identifies the explicit plugin database commit boundary without interpreting its record mutations.
+pub fn syncDatasetPath(operation: &SyncOperation) -> Result<String, SqliteStoreError> {
+    if operation.domain != PLUGIN_STORAGE_SYNC_DOMAIN { return Err(failure("Not a plugin storage operation")); }
+    let path = operation.payload.get("manifest").and_then(|manifest| manifest.get("path")).and_then(Value::as_str)
+        .ok_or_else(|| failure("Plugin transaction dataset path is missing"))?;
+    resolveStoragePath(path).map_err(failure)
+}
+
 /// Applies one remote transaction with Core-validated entity and reference declarations.
 pub fn applyOperation(
     host: Arc<dyn RuntimeSqliteHost>,
     storage: Arc<dyn RuntimeStorageHost>,
     operation: &SyncOperation,
-    preferences: &crate::PreferenceMerge::PreferenceMergeContext,
+    preferences: &BTreeMap<String, String>,
 ) -> Result<(), SqliteStoreError> {
     if operation.domain != PLUGIN_STORAGE_SYNC_DOMAIN
         || operation.entityType != "transaction"
@@ -2718,16 +2726,6 @@ pub fn applyOperation(
         ));
     }
     let database = openDatabase(host.clone(), &payload.manifest, String::new())?;
-    if let Some(descriptor) = &database.merge {
-        for target in descriptor.entities.iter().flat_map(|entity| {
-            entity.key_references.iter().map(|reference| &reference.target)
-                .chain(entity.references.iter().map(|reference| &reference.target))
-        }) {
-            if let StorageMergeTarget::Preference { path } = target {
-                preferences.require(path).map_err(failure)?;
-            }
-        }
-    }
     registerDatabase(host, &payload.manifest)?;
     registerFile(storage, &payload.manifest)?;
     database.store.transaction(|tx| {
@@ -2751,7 +2749,7 @@ pub fn applyOperation(
                 tx,
                 &mut payload,
                 operation,
-                &preferences.references,
+                preferences,
             )?;
             validatePayload(&payload)?;
         }
@@ -2777,7 +2775,7 @@ pub fn applyOperation(
         }
         if !payload.changes.is_empty() {
             if let Some(descriptor) = &database.merge {
-                reconcileLocalReferences(tx, database.kind, descriptor, &preferences.references)?;
+                reconcileLocalReferences(tx, database.kind, descriptor, preferences)?;
                 reconcileMergeNames(tx, database.kind, descriptor)?;
             }
         }

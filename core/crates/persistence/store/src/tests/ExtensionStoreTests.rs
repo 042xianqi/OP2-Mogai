@@ -30,6 +30,11 @@ impl RuntimeStorageHost for MemoryStorage {
         let start = (offset as usize).min(bytes.len());
         Ok(bytes[start..start.saturating_add(length).min(bytes.len())].to_vec())
     }
+    /// Atomically replaces one in-memory file.
+    fn writeBytesAtomically(&self, path: &str, content: &[u8]) -> operit_host_api::HostResult<()> {
+        self.writeBytes(path, content)
+    }
+
     fn writeBytes(&self, path: &str, bytes: &[u8]) -> HostResult<()> {
         let mut failure = self.fail_write.lock().unwrap();
         if failure.as_deref() == Some(path) {
@@ -125,11 +130,12 @@ fn transfer(
                 op.payload.clone(),
             )?;
         } else if op.domain == "preferences" {
-            PreferencesDataStore::applySyncedEntriesWithStorage(
-                target.clone(),
-                &[PreferencesSyncedEntry::fromOperation(op).map_err(|e| e.to_string())?],
-            )
-            .map_err(|e| e.to_string())?;
+            let path = op.payload["storagePath"].as_str().unwrap();
+            let schema = crate::PreferenceMerge::PreferenceMergeSchema {
+                stores: ExtensionStore::preferenceSyncStore(path).into_iter().collect(),
+            };
+            let history = store.preferenceHistory().map_err(|error| error.to_string())?;
+            crate::PreferenceMerge::applyOperations(target.clone(), &schema, &history, &[op.clone()], |_, _| true)?;
         } else {
             return Err(format!("Unexpected domain {}", op.domain));
         }

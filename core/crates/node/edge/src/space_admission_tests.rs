@@ -47,6 +47,11 @@ impl RuntimeStorageHost for Storage {    fn runtimeRootDir(&self) -> Option<std:
 
     fn workspaceRootDir(&self) -> Option<std::path::PathBuf> { None }
     fn readBytes(&self, path: &str) -> HostResult<Vec<u8>> { self.0.lock().unwrap().get(path).cloned().ok_or_else(|| HostError::new("missing")) }
+    /// Atomically publishes one complete in-memory test entry.
+    fn writeBytesAtomically(&self, path: &str, content: &[u8]) -> operit_host_api::HostResult<()> {
+        self.writeBytes(path, content)
+    }
+
     fn writeBytes(&self, path: &str, bytes: &[u8]) -> HostResult<()> { self.write(path, bytes) }
     fn appendBytes(&self, path: &str, bytes: &[u8]) -> HostResult<()> { self.update(|files| { files.entry(path.into()).or_default().extend_from_slice(bytes); }) }
     fn delete(&self, path: &str, recursive: bool) -> HostResult<()> { self.update(|files| { let prefix = format!("{path}/"); files.retain(|key,_| key != path && (!recursive || !key.starts_with(&prefix))); }) }

@@ -212,6 +212,7 @@ struct TestPluginConfigExecutionHost {
     storage: Option<StorageTestFixture>,
     routedPluginCalls: Arc<Mutex<Vec<Value>>>,
     gatedToolCalls: Arc<Mutex<Vec<tokio::sync::oneshot::Sender<JsToolCallResult>>>>,
+    blockingToolCalls: Arc<Mutex<Vec<std::sync::mpsc::Sender<JsToolCallResult>>>>,
     edgePortCalls: Arc<Mutex<Vec<Value>>>,
     gatedToolStarted: Arc<tokio::sync::Notify>,
     toolPkgTextResourceReads: Arc<AtomicUsize>,
@@ -333,6 +334,7 @@ impl JsExecutionHost for TestPluginConfigExecutionHost {
             } });
         }
         let gatedToolCalls = self.gatedToolCalls.clone();
+        let blockingToolCalls = self.blockingToolCalls.clone();
         let gatedToolStarted = self.gatedToolStarted.clone();
         let edgePortCalls = self.edgePortCalls.clone();
         Box::pin(async move {
@@ -371,6 +373,13 @@ impl JsExecutionHost for TestPluginConfigExecutionHost {
                     data: JsToolCallResultData::Binary(vec![1, 2, 3]),
                     error: None,
                 };
+            }
+            if request.tool_name == "blocking_gate" {
+                let (sender, receiver) = std::sync::mpsc::channel();
+                blockingToolCalls.lock().unwrap().push(sender);
+                gatedToolStarted.notify_one();
+                return receiver.recv_timeout(Duration::from_secs(5))
+                    .expect("test must finish the blocking Host call");
             }
             if request.tool_name == "gate" {
                 let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -1139,6 +1148,11 @@ impl RuntimeStorageHost for TestRuntimeStorageHost {
         Ok(std::fs::read(self.resolve(path)?)?)
     }
 
+    /// Atomically publishes one complete in-memory test entry.
+    fn writeBytesAtomically(&self, path: &str, content: &[u8]) -> operit_host_api::HostResult<()> {
+        self.writeBytes(path, content)
+    }
+
     /// Writes bytes into the test runtime root.
     fn writeBytes(&self, path: &str, content: &[u8]) -> HostResult<()> {
         let path = self.resolve(path)?;
@@ -1796,6 +1810,34 @@ async fn pending_call_releases_state_and_preserves_call_context() {
     );
     assert_eq!(received.recv().await.unwrap(), "first");
     engine.destroy();
+}
+
+/// A package awaiting a synchronous host tool must leave another package's tools and timers usable.
+#[cfg(not(target_arch = "wasm32"))]
+#[tokio::test(flavor = "current_thread")]
+async fn blocking_host_call_leaves_other_package_runtime_responsive() {
+    let host = Arc::new(TestPluginConfigExecutionHost::default());
+    let firstEngine = newTestJsEngine(host.clone());
+    let secondEngine = newTestJsEngine(host.clone());
+    let first = tokio::spawn(firstEngine.execute_script_function(
+        "exports.first = async function() { return await toolCall('blocking_gate', {}); };",
+        "first", &testParams(), &BTreeMap::new(), None, true, 5, None,
+    ));
+    host.gatedToolStarted.notified().await;
+    let output = tokio::time::timeout(Duration::from_secs(1), secondEngine.execute_script_function(
+        "exports.second = async function() { await Tools.System.sleep(5); return await toolCall('echo', {value: 'other-package'}); };",
+        "second", &testParams(), &BTreeMap::new(), None, true, 2, None,
+    )).await;
+    host.blockingToolCalls.lock().unwrap().pop().unwrap().send(JsToolCallResult {
+        success: true,
+        data: JsToolCallResultData::Value(Value::String("terminal-done".into())),
+        error: None,
+    }).unwrap();
+    let firstOutput = first.await.unwrap();
+    firstEngine.destroy();
+    secondEngine.destroy();
+    assert_eq!(expect_js_output(firstOutput, "blocking terminal result"), "\"terminal-done\"");
+    assert_eq!(expect_js_output(output.expect("Other packages must progress before the terminal finishes"), "other package"), r#"{"value":"other-package"}"#);
 }
 
 /// Per-call overrides must keep writes made before an await, rather than restoring an old snapshot.
@@ -4162,7 +4204,7 @@ fn storageTestRequest(host: &TestPluginConfigExecutionHost, request: operit_plug
     })
 }
 
-/// Exercises the production JS callback and actual SQLite engine with JSON text codecs disabled.
+/// Exercises structured callbacks against real SQLite and native JSON preferences with text codecs disabled.
 #[tokio::test(flavor = "current_thread")]
 async fn storage_structured_promise_roundtrips_real_sqlite_and_record_proxies() {
     let root = std::env::temp_dir().join(format!("operit-js-storage-{}",uuid::Uuid::new_v4()));
@@ -4200,21 +4242,29 @@ async fn storage_structured_promise_roundtrips_real_sqlite_and_record_proxies() 
             await sql.defineTable({name:'records',primaryKey:'id',columns:[{name:'id',affinity:'text',nullable:false},{name:'count',affinity:'integer',nullable:false},{name:'bytes',affinity:'blob',nullable:false}]});
             await sql.execute('INSERT INTO records VALUES(?,?,?)',['one',9223372036854775807n,new Uint8Array([0,255])]);
             const rows=await sql.query('SELECT count,bytes FROM records');
-            const keys=await Tools.Storage.dataStore.open({path:params.config+'/keys.sqlite'});
-            await keys.commit({set:{nullable:null,a:1},expectedVersions:{a:null}});
+            const preferencesPath=params.config+'/keys.preferences.json';
+            const keys=await Tools.Storage.dataStore.open({path:preferencesPath});
+            await keys.edit(p=>{p.set('nullable',null);p.set('a',1);});
+            const competingKeys=await Tools.Storage.dataStore.open({path:preferencesPath});
             let conflict=false;
-            try { await keys.commit({set:{a:2,b:3},expectedVersions:{b:'wrong'}}); }
-            catch(error) {conflict=error.message.startsWith('Storage version conflict:');}
-            const a=await keys.get('a');const b=await keys.get('b');const nullable=await keys.get('nullable');
-            await objects.close();await sql.close();await keys.close();
-            return {count:stored.value.nested.count,int64:String(rows[0].count),bytes:Array.from(rows[0].bytes),conflict,a:a.value,b,nullable:nullable.value};
+            try {
+                await keys.edit(async p=>{
+                    p.set('a',2);p.set('b',3);
+                    await competingKeys.edit(other=>other.set('concurrent',true));
+                });
+            } catch(error) {conflict=error.message.startsWith('DataStore edit conflict:');}
+            const data=await keys.data();
+            await objects.close();await sql.close();await keys.close();await competingKeys.close();
+            return {count:stored.value.nested.count,int64:String(rows[0].count),bytes:Array.from(rows[0].bytes),
+                conflict,a:data.get('a'),hasB:data.contains('b'),nullable:data.get('nullable'),
+                hasNullable:data.contains('nullable'),concurrent:data.get('concurrent')};
         };
     "#;
     let mut params=testParams();params.insert("config".into(),Value::String(config));
     let output=engine.execute_script_function(script,"storage_roundtrip",&params,&BTreeMap::new(),None,true,10,None).await;
     let output=expect_js_output(output,"real structured storage bridge");
     let value:Value=serde_json::from_str(&output).unwrap();
-    assert_eq!(value,serde_json::json!({"count":2,"int64":"9223372036854775807","bytes":[0,255],"conflict":true,"a":1,"b":null,"nullable":null}));
+    assert_eq!(value,serde_json::json!({"count":2,"int64":"9223372036854775807","bytes":[0,255],"conflict":true,"a":1,"hasB":false,"nullable":null,"hasNullable":true,"concurrent":true}));
     engine.destroy(); drop(engine);
     assert_eq!(root.parent().unwrap(),std::env::temp_dir());std::fs::remove_dir_all(root).unwrap();
 }

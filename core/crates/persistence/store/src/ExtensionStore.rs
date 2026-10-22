@@ -687,6 +687,29 @@ impl ExtensionStore {
         self.configRoot(&self.record("package", id)?)
     }
 
+    /// Resolves the exact hashed settings namespace owned by shared extension installations.
+    pub fn preferenceSyncStore(path: &str) -> Option<crate::PreferenceMerge::PreferenceMergeStore> {
+        let filename = path.strip_prefix("runtime/extensions/space/settings/")?.strip_suffix(".preferences.json")?;
+        let (kind, digest) = filename.split_once('-')?;
+        if !matches!(kind, "package" | "skill" | "mcp") || digest.len() != 64
+            || !digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) { return None; }
+        Some(crate::PreferenceMerge::PreferenceMergeStore::values(path, false, 2, Self::decodeSyncedSettings))
+    }
+
+    /// Converts historical settings values using the extension owner's explicit value codec.
+    fn decodeSyncedSettings(entry: &mut crate::PreferencesDataStore::PreferencesSyncedEntry) -> Result<(), crate::PreferencesDataStore::PreferencesDataStoreError> {
+        entry.decodeHistoricalValues(|version, values| {
+            if version > 2 { return Err(crate::PreferencesDataStore::PreferencesDataStoreError::SchemaVersionTooNew { actual: version, expected: 2 }); }
+            if version < 2 {
+                let key = stringPreferencesKey("settings");
+                if let Some(encoded) = values.getTyped::<String>(&key)? {
+                    values.set(&key, serde_json::from_str::<Value>(&encoded)?);
+                }
+            }
+            Ok(())
+        })
+    }
+
     /// Synchronizes one complete settings value independently from installation bytes.
     fn settingsStore(&self, record: &ExtensionRecord) -> Result<PreferencesDataStore, String> {
         let path = recordPath(&record.kind, &record.id, &record.scope)?

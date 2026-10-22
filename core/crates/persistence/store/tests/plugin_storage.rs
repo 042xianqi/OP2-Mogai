@@ -1456,40 +1456,25 @@ fn unavailable_database_does_not_block_healthy_database_export() {
     source.dispose();
 }
 
-/// Waits for an actual declared preference dependency and reuses the same transaction after repair.
+/// Ordinary references survive delivery before their preference target exists.
 #[test]
-fn failed_preference_dependency_preserves_plugin_transaction_for_retry() {
-    let source = Fixture::new("dependency-source");
-    let target = Fixture::new("dependency-target");
+fn preference_references_do_not_block_independent_plugin_transactions() {
+    let source = Fixture::new("reference-source");
+    let target = Fixture::new("reference-target");
     let handle = open_owner_merge_fixture(&source, true);
     source.call(json!({"op":"commit","handle":handle,"mutations":[put_in("owners", "character:a", json!({"ownerKey":"character:a", "document":"owners/character%3Aa/USER.md"}))]})).unwrap();
     let originals = source.export();
-    let mut preferences = operit_store::PreferenceMerge::PreferenceMergeContext::default();
-    let path = "runtime/config/preferences/cards.preferences.json";
-    preferences.failedPaths.insert(path.to_owned());
-    for operation in &originals {
-        assert!(
+    for _ in 0..2 {
+        for operation in &originals {
             PluginStorage::applyOperation(
-                target.host.clone(),
-                target.host.clone(),
-                operation,
-                &preferences
-            )
-            .is_err()
-        );
-    }
-    assert!(target.export().is_empty());
-    preferences.failedPaths.clear();
-    for operation in &originals {
-        PluginStorage::applyOperation(
-            target.host.clone(),
-            target.host.clone(),
-            operation,
-            &preferences,
-        )
-        .unwrap();
+                target.host.clone(), target.host.clone(), operation, &Default::default(),
+            ).unwrap();
+        }
     }
     assert_eq!(target.export(), originals);
+    let handle = open_owner_merge_fixture(&target, true);
+    let record = target.call(json!({"op":"get","handle":handle,"collection":"owners","key":"character:a"})).unwrap();
+    assert_eq!(record["value"]["ownerKey"], "character:a");
     source.dispose();
     target.dispose();
 }

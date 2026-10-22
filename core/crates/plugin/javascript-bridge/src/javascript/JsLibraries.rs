@@ -201,6 +201,7 @@ fn assembleRuntimeBootstrapScript() -> String {
         {}
         var globalThis = this;
         var window = globalThis;
+        var global = globalThis;
         var OPERIT_CLEAN_ON_EXIT_DIR = {};
         var __operitRuntimePrelude = {};
         var __operitComposeRuntimeSource = {};

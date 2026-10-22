@@ -470,6 +470,20 @@ impl TerminalHost for OhosTerminalHost {
     }
 
     /// Executes one hidden command in the primary QEMU-vroot Alpine environment.
+    fn executeInSessionStreaming(
+        &self,
+        sessionId: &str,
+        command: &str,
+        timeoutMs: u64,
+        onOutput: &mut dyn FnMut(&[u8]) -> HostResult<()>,
+    ) -> HostResult<TerminalCommandOutput> {
+        let backend = self.backendForSession(sessionId)?;
+        self.ptyHost(backend)
+            .executeInSessionStreaming(sessionId, command, timeoutMs, onOutput)
+            .map(|output| mapCommandOutput(output, backend))
+    }
+
+    /// Executes one hidden command in the primary QEMU-vroot Alpine environment.
     fn executeHiddenCommand(
         &self,
         command: &str,

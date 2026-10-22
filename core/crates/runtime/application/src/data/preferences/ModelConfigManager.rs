@@ -91,12 +91,38 @@ impl ModelConfigManager {
             .withSchema(Self::PREFERENCES_VERSION, Self::migratePreferences)
     }
 
+    /// Imports each historical provider value with its declared encoding and preserves its stable identity.
+    fn decodeSyncedEntry(entry: &mut operit_store::PreferencesDataStore::PreferencesSyncedEntry) -> Result<(), PreferencesDataStoreError> {
+        entry.decodeHistoricalValues(|version, values| {
+            if version > Self::PREFERENCES_VERSION {
+                return Err(PreferencesDataStoreError::SchemaVersionTooNew { actual: version, expected: Self::PREFERENCES_VERSION });
+            }
+            if version < 4 {
+                let records = values.iterEntries().filter(|(key, _)| key.starts_with("provider_") && *key != "provider_list")
+                    .map(|(key, value)| (key.to_owned(), value.clone())).collect::<Vec<_>>();
+                for (key, value) in records {
+                    let encoded: String = serde_json::from_value(value)?;
+                    let mut provider: ProviderProfile = serde_json::from_str(&encoded)?;
+                    if version < 3 {
+                        provider = Self::providerWithProviderOwnedThinkingRules(provider)
+                            .map_err(|error| PreferencesDataStoreError::Message(error.to_string()))?;
+                    }
+                    values.set(&stringPreferencesKey(&key), serde_json::to_value(provider)?);
+                }
+            }
+            values.remove(&Self::PROVIDER_LIST_KEY());
+            Ok(())
+        })
+    }
+
     /// Declares this owner's catalog and references using the shared merge contract.
     pub(crate) fn spaceMergeStore() -> PreferenceMergeStore {
         let path = operit_util::RuntimeStorageLayout::MODEL_CONFIGS_PREFERENCES_PATH;
         PreferenceMergeStore {
             path: path.to_string(),
             encrypted: true,
+            storageVersion: Some(Self::PREFERENCES_VERSION),
+            decode: Some(Self::decodeSyncedEntry),
             merge: StoragePreferencesMergeDescriptor {
                 version: 1,
                 catalog: Some(StoragePreferencesMergeCatalog {
@@ -1623,6 +1649,11 @@ mod tests {
 
         fn readBytes(&self, path: &str) -> HostResult<Vec<u8>> {
             Ok(fs::read(self.resolve(path)?)?)
+        }
+
+        /// Atomically publishes one complete in-memory test entry.
+        fn writeBytesAtomically(&self, path: &str, content: &[u8]) -> operit_host_api::HostResult<()> {
+            self.writeBytes(path, content)
         }
 
         fn writeBytes(&self, path: &str, content: &[u8]) -> HostResult<()> {

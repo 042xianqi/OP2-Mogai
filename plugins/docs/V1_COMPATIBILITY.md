@@ -73,9 +73,17 @@ emitting the canonical v2 bindings. Both inline and modular engine bootstrap pat
 therefore install the same code. Adapters capture the canonical functions before
 installing versioned entry points, so v1 cannot recursively invoke itself.
 
+### Global object alias
+
+The shared engine bootstrap exposes `global` as the same object as `globalThis`
+and `window` for both v1 and v2 plugins. Modules and timer callbacks can share
+state through any of these names. The v1 declaration records this explicit
+Operit2 runtime extension. It does not install Node.js modules or APIs.
+
 ### SoftwareSettings environment variables and V2 domain resources
 
-The copied V1 declarations remain unchanged. `readEnvironmentVariable` and
+The historical V1 SoftwareSettings declarations remain unchanged.
+`readEnvironmentVariable` and
 `writeEnvironmentVariable` retain their original signatures through an explicitly
 versioned adapter for 1.0.0 and 1.0.1. JSDoc checks both the historical signatures
 and the canonical V2 host calls. The adapter preserves complete host results and
@@ -233,6 +241,41 @@ session. Missing or malformed IDs still fail. The undocumented synchronous
 `Tools.System.file` object used by some plugins is not emulated by these async
 Files adapters. Installed Node, SQLite support, background execution, and iOS
 WebView integration still require validation in the real host environment.
+
+The declared v1 `terminal.execStreaming(sessionId, command, options)` now uses
+live output from that same compatibility session. The SDK keeps
+`onIntermediateResult` in JavaScript and sends only the command and timeout
+through the structured JSON bridge. It retains the existing cache-path
+translation, selected interpreter, 15-second default, start/chunk event metadata,
+and complete result. A callback exception closes the stream and interrupts the
+current command; the session remains available. No temporary output file is used.
+
+API 2.0.0 also exposes the same execution stream as an async iterable:
+
+```ts
+for await (const event of Tools.System.terminal.execStream({
+  sessionId,
+  command: "printf 'starting\\n'; sleep 1; printf 'done\\n'",
+  timeoutMs: 5000,
+})) {
+  if (event.type === "chunk") console.log(event.chunk);
+  if (event.type === "completed") console.log(event.result.exitCode);
+}
+```
+
+A stream opens on its first pull and permits one pending `next()` at a time.
+Breaking out of the loop or calling `return()` interrupts the command and keeps
+the terminal session. The `completed` event contains the normal full command
+result, including exit code and timeout status. Chunks contain raw terminal text,
+including echoed input and control sequences, with private completion markers
+removed and split UTF-8 buffered. Their concatenation can differ from the
+normalized final output. `receivedChars` counts JavaScript UTF-16 code units.
+The callback-style `execStreaming` remains available in v2 as well.
+
+Native observations have bounded queues and worker counts. Output over the
+queue limit or 16 MiB total fails explicitly and interrupts the command. The
+native PTY hosts and iOS iSH bridge implement live delivery. Browser V86 is not
+yet connected to this streaming host interface and reports unsupported execution.
 
 API 2.0.0 retains canonical host calls and tool identities. Native host errors,
 nonzero exit codes and timeouts are retained. Program helpers reject unsuccessful

@@ -294,6 +294,11 @@ pub trait JsExecutionHost: Send + Sync {
         completion: JsToolPkgIpcCompletion,
     ) -> Result<(), String>;
 
+    /// Registers image, audio, or video bytes and returns the canonical link JSON.
+    fn register_media(&self, _request_json: &str) -> Result<String, String> {
+        Err("media registration is not available on this host".to_string())
+    }
+
     /// Calls one Core route through the Rust route runtime and generated route rules.
     fn should_route_toolpkg(&self, _binding: String, _streaming: bool) -> Result<bool, String> {
         Err("Plugin route resolution is unavailable on this host".to_string())

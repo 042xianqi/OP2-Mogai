@@ -73,7 +73,7 @@ function adapter(version = '1.0.0', respond) {
     /** Restores the owning execution before the host continuation. */
     __operitActivateCall() {},
     /** Snapshots the plain public request through the host-owned transport contract. */
-    __operitHostSnapshotJsonObject(value) { return JSON.parse(JSON.stringify(value)); },
+    __operitHostSnapshotJsonObject(value) { return context.__operitSnapshotJsonObject(value); },
     canonicalCalls,
   });
   vm.runInContext(readSdkScript('ToolPkgApiRuntimeScript.rs'), context);
@@ -82,7 +82,9 @@ function adapter(version = '1.0.0', respond) {
       /** Preserves the canonical session API for current plugins. */
       async create(...args) { canonicalCalls.push(['create', ...args]); return { sessionId: 'canonical-session' }; },
       /** Preserves the canonical execution API for current plugins. */
-      async exec(...args) { canonicalCalls.push(['exec', ...args]); return { output: 'canonical-output' }; }
+      async exec(...args) { canonicalCalls.push(['exec', ...args]); return { output: 'canonical-output' }; },
+      /** Uses the shared canonical callback facade, including for v2 dispatch. */
+      execStreaming(...args) { canonicalCalls.push(['execStreaming', ...args]); return __operitExecTerminalStreaming(...args); }
     } }, Files: {} };
     for (var name of ['list','read','readPart','readBinary','write','writeBinary','exists','mkdir','deleteFile','move','copy','find','grep','grepContext','info','apply','create','edit','zip','unzip','open','share','download']) {
       /** Installs observable canonical Files methods. */
@@ -98,6 +100,8 @@ function adapter(version = '1.0.0', respond) {
   `, context);
   vm.runInContext(source(sdk + 'compat/v1/files.js'), context);
   vm.runInContext(source(sdk + 'JsExecutionRuntimeBridge.script.js'), context);
+  vm.runInContext(source(sdk + 'chat_runtime.js'), context);
+  vm.runInContext(source(sdk + 'terminal_runtime.js'), context);
   vm.runInContext(source(sdk + 'compat/v1/runtime.js'), context);
   vm.runInContext('__operitInstallV1Runtime(globalThis)', context);
   return { context, calls, canonicalCalls };
@@ -148,6 +152,65 @@ test('1.0.0 and 1.0.1 route exact historical package identities and 2.0.0 preser
   const result = await vm.runInContext("toolCall('super_admin:terminal', {command:'original'})", runtime.context);
   assert.equal(typeof result, 'string');
   assert.equal(runtime.calls.at(-1).name, 'super_admin:terminal');
+});
+
+/** Verifies both API families share the native stream while retaining v1 callback shapes. */
+test('terminal streaming delivers live callbacks and final receipts without serializing functions', async () => {
+  for (const version of ['1.0.0', '1.0.1', '2.0.0']) {
+    const events = [
+      { type: 'start', sessionId: 'managed', command: 'printf sample' },
+      { type: 'chunk', sessionId: 'managed', command: 'printf sample', chunk: '雪', chunkIndex: 0, receivedChars: 1 },
+      { type: 'chunk', sessionId: 'managed', command: 'printf sample', chunk: '🌍', chunkIndex: 1, receivedChars: 3 },
+      { type: 'completed', result: { sessionId: 'managed', command: 'printf sample', output: '雪🌍', exitCode: 7, timedOut: false } },
+    ];
+    const runtime = adapter(version, async (name, params) => {
+      assert.equal(name, 'terminal_observe');
+      const op = params.observation;
+      if (op.op === 'open') { assert.deepEqual(JSON.parse(JSON.stringify(op.request)), { sessionId: 'managed', command: 'printf sample', timeoutMs: 5000 }); return { handle: 'stream' }; }
+      if (op.op === 'next') return { event: events.shift() ?? null };
+      assert.equal(op.op, 'close'); return {};
+    });
+    vm.runInContext(`var streamEvents = []; var controls = {timeoutMs:'5000', onIntermediateResult(event) { streamEvents.push(event); }};`, runtime.context);
+    const result = await vm.runInContext("Tools.System.terminal.execStreaming('managed', 'printf sample', controls)", runtime.context);
+    assert.equal(result.output, '雪🌍'); assert.equal(result.exitCode, 7);
+    assert.deepEqual(JSON.parse(JSON.stringify(runtime.context.streamEvents)).map(event => event.type), ['start', 'chunk', 'chunk']);
+    assert.equal(typeof runtime.context.controls.onIntermediateResult, 'function');
+    assert.equal(runtime.context.controls.timeoutMs, '5000');
+    assert.equal(runtime.calls.filter(call => call.params.observation?.op === 'close').length, 1);
+    assert.equal(runtime.calls.some(call => JSON.stringify(call.params).includes('onIntermediateResult')), false);
+  }
+});
+
+test('v1 terminal streams retain the legacy default when timeout is absent or undefined', async () => {
+  for (const version of ['1.0.0', '1.0.1']) {
+    for (const options of ['undefined', '{}', '{timeoutMs:undefined}']) {
+      const runtime = adapter(version, async (_name, params) => {
+        const op = params.observation;
+        if (op.op === 'open') { assert.equal(op.request.timeoutMs, 15000); return {handle:'default-stream'}; }
+        if (op.op === 'next') return {event:{type:'completed',result:{exitCode:0,output:''}}};
+        return {};
+      });
+      await vm.runInContext("Tools.System.terminal.execStreaming('managed','cmd'," + options + ")", runtime.context);
+    }
+  }
+});
+
+/** A callback exception must cancel observation, and validation must precede native admission. */
+test('terminal callback failures close the actual stream and malformed options never reach the host', async () => {
+  const runtime = adapter('1.0.0', async (_name, params) => {
+    switch (params.observation.op) {
+      case 'open': return { handle: 'callback-error' };
+      case 'next': return { event: { type: 'chunk', chunk: 'progress' } };
+      case 'close': return {};
+    }
+  });
+  await assert.rejects(vm.runInContext("Tools.System.terminal.execStreaming('s','cmd',{onIntermediateResult(){throw Error('callback failed');}})", runtime.context), /callback failed/);
+  assert.equal(runtime.calls.at(-1).params.observation.op, 'close');
+  runtime.calls.length = 0;
+  for (const options of ['null', '[]', '{onIntermediateResult:42}', '{timeoutMs:-1}', '{timeoutMs:1.5}']) {
+    await assert.rejects(vm.runInContext("Tools.System.terminal.execStreaming('s','cmd'," + options + ')', runtime.context));
+  }
+  assert.deepEqual(runtime.calls, []);
 });
 
 /** Ensures invalid public overloads retain the production argument validation. */

@@ -371,9 +371,19 @@ impl TerminalHost for AndroidTerminalHost {
         command: &str,
         timeoutMs: u64,
     ) -> HostResult<TerminalCommandOutput> {
+        self.executeInSessionStreaming(sessionId, command, timeoutMs, &mut |_| Ok(()))
+    }
+
+    fn executeInSessionStreaming(
+        &self,
+        sessionId: &str,
+        command: &str,
+        timeoutMs: u64,
+        onOutput: &mut dyn FnMut(&[u8]) -> HostResult<()>,
+    ) -> HostResult<TerminalCommandOutput> {
         let normalizedSessionId = nonBlank(sessionId, "session_id")?;
         let normalizedCommand = nonBlank(command, "command")?;
-        let (terminalType, commandOutput, writer) = {
+        let (terminalType, commandOutput) = {
             let mut state = self.lockState()?;
             let session = state
                 .ptySessions
@@ -381,31 +391,31 @@ impl TerminalHost for AndroidTerminalHost {
                 .ok_or_else(|| {
                     HostError::new(format!("Terminal session does not exist: {sessionId}"))
                 })?;
-            session.commandRunning = true;
+            if session.commandRunning { return Err(HostError::new("Terminal session already has a command in progress")); }
             clearAndroidPtyCommandOutput(&session.commandOutput)?;
-            (
-                session.terminalType.clone(),
-                session.commandOutput.clone(),
-                session.writer.clone(),
-            )
+            let commandInput = format!("{normalizedCommand}\r");
+            writeAndroidPtyBytes(&session.writer, commandInput.as_bytes())?;
+            session.commandRunning = true;
+            (session.terminalType.clone(), session.commandOutput.clone())
         };
-        let commandInput = format!("{normalizedCommand}\r");
-        writeAndroidPtyBytes(&writer, commandInput.as_bytes())?;
         let result =
-            executeAndroidPtyCommandInSession(commandOutput, &normalizedCommand, timeoutMs)?;
+            executeAndroidPtyCommandInSession(commandOutput, &normalizedCommand, timeoutMs, onOutput);
         {
             let mut state = self.lockState()?;
             if let Some(session) = state.ptySessions.get_mut(&normalizedSessionId) {
-                if result.timedOut {
+                // Release the busy flag even if interrupting a broken PTY fails.
+                // The state lock still excludes new commands during cancellation.
+                session.commandRunning = false;
+                if result.as_ref().map_or(true, |receipt| receipt.timedOut) {
                     if let Some(workingDir) = cancelTimedOutAndroidPtyCommand(session)? {
                         session.workingDir = workingDir;
                     }
-                } else if let Some(workingDir) = result.workingDir.clone() {
+                } else if let Some(workingDir) = result.as_ref().ok().and_then(|receipt| receipt.workingDir.clone()) {
                     session.workingDir = workingDir;
                 }
-                session.commandRunning = false;
             }
         }
+        let result = result?;
         Ok(TerminalCommandOutput {
             command: normalizedCommand,
             output: result.output,
@@ -820,13 +830,16 @@ fn executeAndroidPtyCommandInSession(
     output: AndroidPtyCommandOutput,
     command: &str,
     timeoutMs: u64,
+    onOutput: &mut dyn FnMut(&[u8]) -> HostResult<()>,
 ) -> HostResult<AndroidSessionCommandResult> {
     let deadline = Instant::now() + Duration::from_millis(timeoutMs);
     let mut collected = Vec::new();
     let mut promptSeenAt = None;
     let quietPeriod = Duration::from_millis(150);
     loop {
+        let previousLength = collected.len();
         let drained = drainAndroidPtyCommandOutput(&output, &mut collected, deadline)?;
+        onOutput(&collected[previousLength..])?;
         if drained > 0 {
             promptSeenAt = None;
         }
