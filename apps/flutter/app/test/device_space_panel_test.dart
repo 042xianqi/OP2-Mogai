@@ -162,6 +162,8 @@ class DeviceSpacePanelBridge extends OperitRuntimeBridge {
         return encodeCoreLink([0, <Object?>[]]);
       case 'discoverPeers':
         return encodeCoreLink([0, <Object?>[]]);
+      case 'updatePairedDeviceEndpoint':
+        return encodeCoreLink([0, null]);
       default:
         throw StateError('Unexpected ${request.methodName}');
     }
@@ -452,6 +454,8 @@ void main() {
     expect(find.widgetWithText(MenuItemButton, '解除配对'), findsOneWidget);
     // A paired member already has its edge; the pairing entry would be noise.
     expect(find.widgetWithText(MenuItemButton, '建立直连'), findsNothing);
+    // A working direct link never offers rewriting its endpoint by hand.
+    expect(find.widgetWithText(MenuItemButton, '更新直连地址'), findsNothing);
     expect(tester.takeException(), isNull);
     await unmount(tester, bridge);
   });
@@ -511,6 +515,76 @@ void main() {
       // The route-based state wins over the offline direct-link probe.
       expect(find.textContaining('在线 · 经中继 2 跳'), findsWidgets);
       expect(find.byIcon(Icons.cloud_off_outlined), findsNothing);
+      expect(tester.takeException(), isNull);
+      await unmount(tester, bridge);
+    },
+  );
+
+  testWidgets(
+    'a failed direct link offers updating the stored address',
+    (tester) async {
+      // The direct link died with the peer's old address. The entry is
+      // offered regardless of relay reachability, feeds the operator address
+      // to the runtime, and reports the save without waiting for the dial.
+      final bridge = DeviceSpacePanelBridge(
+        topology: <String, Object?>{
+          'currentDeviceId': 'self',
+          'devices': <Map<String, Object?>>[
+            _member(
+              deviceId: 'self',
+              deviceName: 'this-linux',
+              identityName: 'Administrator',
+              capabilities: _administratorCapabilities,
+            ),
+            _member(
+              deviceId: 'tablet',
+              deviceName: 'tablet-renamed',
+              online: false,
+              identityName: 'Relay',
+              capabilities: <String>[
+                'network.devices.view',
+                'network.relay',
+                'storage.provide',
+              ],
+            ),
+          ],
+          'connections': <Object?>[],
+        },
+        control: _control(),
+      )
+        ..paired = <Map<String, Object?>>[
+          <String, Object?>{
+            'deviceId': 'tablet',
+            'deviceInfo': <String, Object?>{
+              'platform': 'android',
+              'model': 'elish',
+            },
+            'inbound': false,
+            'outbound': true,
+          },
+        ]
+        ..statuses = <String, String>{'tablet': 'Offline'};
+      await mountPanel(tester, bridge);
+      final menus = find.byIcon(Icons.more_vert_outlined);
+      expect(menus, findsWidgets);
+      await tester.tap(menus.first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.widgetWithText(MenuItemButton, '更新直连地址'), findsOneWidget);
+      await tester.tap(find.widgetWithText(MenuItemButton, '更新直连地址'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.enterText(
+        find.byType(TextField).last,
+        'ws://10.0.0.9:37195/link',
+      );
+      await tester.tap(find.byType(TextButton).last);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(bridge.calls.contains('updatePairedDeviceEndpoint'), isTrue);
+      expect(find.text('直连地址已更新'), findsOneWidget);
+      // Let the feedback SnackBar's auto-dismiss timer run out before unmount.
+      await tester.pump(const Duration(seconds: 5));
       expect(tester.takeException(), isNull);
       await unmount(tester, bridge);
     },

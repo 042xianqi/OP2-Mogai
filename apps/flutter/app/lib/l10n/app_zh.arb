@@ -2114,6 +2114,10 @@
   "deviceSpaceManageDevice": "管理设备",
   "deviceSpaceConnectDirect": "建立直连",
   "deviceSpaceConnectDirectHint": "该设备已是本空间成员。与它配对成功即建立直连，无需重新加入空间；配对需要对方显示、由你输入六位确认码。",
+  "deviceSpaceUpdateEndpoint": "更新直连地址",
+  "deviceSpaceUpdateEndpointLabel": "直连地址",
+  "deviceSpaceUpdateEndpointHint": "例如 ws://192.168.1.20:37195/link",
+  "deviceSpaceUpdateEndpointSaved": "直连地址已更新",
   "deviceSpaceDirectLinkEstablished": "已建立直连：{device}",
   "@deviceSpaceDirectLinkEstablished": {
     "placeholders": {

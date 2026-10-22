@@ -7184,6 +7184,30 @@ abstract class AppLocalizations {
   /// **'This device is already a Space member. Pairing it adds a direct link without joining again; pairing shows a six-digit code on the other device for you to enter.'**
   String get deviceSpaceConnectDirectHint;
 
+  /// No description provided for @deviceSpaceUpdateEndpoint.
+  ///
+  /// In en, this message translates to:
+  /// **'Update direct address'**
+  String get deviceSpaceUpdateEndpoint;
+
+  /// No description provided for @deviceSpaceUpdateEndpointLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Direct address'**
+  String get deviceSpaceUpdateEndpointLabel;
+
+  /// No description provided for @deviceSpaceUpdateEndpointHint.
+  ///
+  /// In en, this message translates to:
+  /// **'For example ws://192.168.1.20:37195/link'**
+  String get deviceSpaceUpdateEndpointHint;
+
+  /// No description provided for @deviceSpaceUpdateEndpointSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Direct address updated'**
+  String get deviceSpaceUpdateEndpointSaved;
+
   /// No description provided for @deviceSpaceDirectLinkEstablished.
   ///
   /// In en, this message translates to:

@@ -4043,6 +4043,19 @@ class AppLocalizationsEn extends AppLocalizations {
       'This device is already a Space member. Pairing it adds a direct link without joining again; pairing shows a six-digit code on the other device for you to enter.';
 
   @override
+  String get deviceSpaceUpdateEndpoint => 'Update direct address';
+
+  @override
+  String get deviceSpaceUpdateEndpointLabel => 'Direct address';
+
+  @override
+  String get deviceSpaceUpdateEndpointHint =>
+      'For example ws://192.168.1.20:37195/link';
+
+  @override
+  String get deviceSpaceUpdateEndpointSaved => 'Direct address updated';
+
+  @override
   String deviceSpaceDirectLinkEstablished(String device) {
     return 'Direct link established: $device';
   }

@@ -130,6 +130,24 @@ pub trait RuntimePeerService: Send + Sync {
     /// 关闭该节点所有渠道的当前连接，保留配对授权；由统一连接所有者执行。
     async fn disconnectPeer(&self, peerNodeId: &str) -> Result<(), CoreLinkError>;
 
+    /// 按操作者提供的新地址更新本侧拨号记录（出站配对记录或空间回连授权）
+    /// 并立即试拨；这是反射端点自愈的手动对应物，不依赖任何现存连接。
+    /// 不创建授权、不修改对端记录、不改变配对方向；端点验证通过即保存，
+    /// 试拨失败只反映在可用性状态里，不回滚已保存的地址。
+    /// 本侧没有任何可拨凭证时失败，此时重建直连只能重新配对。
+    async fn updatePeerEndpoint(
+        &self,
+        peerNodeId: &str,
+        endpoint: &str,
+        transport: Option<PeerTransport>,
+    ) -> Result<(), CoreLinkError> {
+        let _ = (peerNodeId, endpoint, transport);
+        Err(CoreLinkError::new(
+            "PEER_OUTBOUND_NOT_AUTHORIZED",
+            "No dialable pairing or Space return record for node; pair with the device first",
+        ))
+    }
+
     /// 按设备撤销全部入站/出站授权、所有传输渠道及关联凭证；不让用户选择方向。
     /// 这是需要本地管理权限的单向本地操作，不通知对端，不属于匿名配对入口。
     async fn removePairedPeer(&self, peerNodeId: &str) -> Result<(), CoreLinkError>;

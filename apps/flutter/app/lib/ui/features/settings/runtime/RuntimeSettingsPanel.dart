@@ -376,6 +376,15 @@ class _RuntimeSettingsPanelState extends State<RuntimeSettingsPanel>
           onPressed: _busy ? null : _handleRemovedFromSpace,
           child: Text(l10n.settingsRuntimeRemovedFromSpaceConfirm),
         ),
+      // A failing direct link is what this fixes; relay reachability does not
+      // matter because the operator address replaces the stored one outright.
+      if (probeState == _PairedRemoteProbeState.offline)
+        MenuItemButton(
+          onPressed: _busy
+              ? null
+              : () => unawaited(_updateDeviceEndpoint(device, l10n)),
+          child: Text(l10n.deviceSpaceUpdateEndpoint),
+        ),
       MenuItemButton(
         onPressed: _busy ? null : () => _deletePairedDevice(device.deviceId),
         child: Text(l10n.deviceSpaceUnpair),
@@ -1030,6 +1039,73 @@ class _RuntimeSettingsPanelState extends State<RuntimeSettingsPanel>
           _connectionMessage = error.toString();
           _connectionFailed = true;
         });
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  /// Collects an operator-supplied address and repoints the paired device's
+  /// dial record at it: the runtime validates, saves, and probes the new
+  /// address immediately. Offered only while the direct link is failing —
+  /// a live link never needs its endpoint rewritten by hand. Works the same
+  /// for either pairing direction because the runtime updates whichever
+  /// dialable record this side holds.
+  Future<void> _updateDeviceEndpoint(
+    generated.RuntimePairedDevice device,
+    AppLocalizations l10n,
+  ) async {
+    final controller = TextEditingController();
+    final endpoint = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(l10n.deviceSpaceUpdateEndpoint),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: l10n.deviceSpaceUpdateEndpointLabel,
+            hintText: l10n.deviceSpaceUpdateEndpointHint,
+          ),
+          onSubmitted: (value) => Navigator.of(dialogContext).pop(value),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child:
+                Text(MaterialLocalizations.of(dialogContext).cancelButtonLabel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(controller.text),
+            child: Text(MaterialLocalizations.of(dialogContext).okButtonLabel),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || endpoint == null) {
+      return;
+    }
+    final address = endpoint.trim();
+    if (address.isEmpty) {
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      await _clients.server.runtimeRemoteLinkService
+          .updatePairedDeviceEndpoint(
+        deviceId: device.deviceId,
+        endpoint: address,
+        transport: null,
+      );
+      await _refreshCurrentDeviceSpace();
+      if (mounted) {
+        _showDeviceFeedback(l10n.deviceSpaceUpdateEndpointSaved);
+      }
+    } catch (error) {
+      if (mounted) {
+        _showDeviceFeedback(error.toString());
       }
     } finally {
       if (mounted) {

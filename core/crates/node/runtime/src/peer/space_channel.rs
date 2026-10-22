@@ -4,7 +4,7 @@
 use super::*;
 
 const INBOUND: &str = "runtime/link_access/space_channel_inbound.preferences.json";
-const OUTBOUND: &str = "runtime/link_access/space_channel_outbound.preferences.json";
+pub(super) const OUTBOUND: &str = "runtime/link_access/space_channel_outbound.preferences.json";
 pub(super) const TARGET: &str = "$peer.space-channel";
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
@@ -145,5 +145,22 @@ impl HostRuntimePeerService {
             }
         }
         Ok(())
+    }
+
+    /// Rewrites the dial endpoint of one Space return grant under the
+    /// caller's mutation guard. Returns false when this peer holds no
+    /// outbound grant. Unlike acceptSpaceChannel, which re-derives the
+    /// endpoint on every offer over a live connection, this is the manual
+    /// path for when no connection exists to observe.
+    pub(super) fn updateSpaceChannelEndpointLocked(
+        &self, peer: &str, endpoint: &str, transport: Option<PeerTransport>,
+    ) -> Result<bool, CoreLinkError> {
+        let records = self.state.store.records::<Grant>(OUTBOUND).map_err(error)?;
+        let Some((id, grant)) = records.iter().find(|(_, grant)| grant.peer == peer) else { return Ok(false); };
+        let mut grant = grant.clone();
+        if let Some(transport) = transport { grant.transport = transport; }
+        grant.endpoint = endpoint.to_string();
+        self.state.store.putRecord(OUTBOUND, &id, &grant).map_err(error)?;
+        Ok(true)
     }
 }
