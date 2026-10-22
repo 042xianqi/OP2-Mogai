@@ -13,6 +13,7 @@ from common import (
     flutter_command,
     flutter_pub_get,
     generate_dart_proxy_artifacts,
+    prepare_python_command,
     read_properties,
     require_command,
     run,
@@ -100,6 +101,12 @@ def verify_android_runtime_assets(apk_path: Path, abi: str) -> None:
 # Builds and verifies the ABI-specific Android release before publishing it.
 def main() -> int:
     args = parse_args()
+    # Dart build hooks (apps/flutter/app/hook/build.dart) 硬编码调用
+    # <repo>/.venv/(Scripts|bin)/python 来跑 plugins/tools/sync_plugin_packages.py。
+    # 该 venv 由 prepare_python_command() 创建；iOS/macOS 构建脚本一直在调它，
+    # Android 此前漏调 → 干净环境（如 CI runner）上 .venv 不存在，
+    # hook 报 ProcessException: The system cannot find the file specified。
+    prepare_python_command()
     if not args.skip_signing:
         ensure_android_signing()
     flutter = flutter_command()
