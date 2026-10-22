@@ -30,6 +30,19 @@ String _deviceInfoName(generated.LinkDeviceInfo info) {
   return parts.isEmpty ? 'Unknown device' : parts.join('-');
 }
 
+/// Names one paired device for display.
+///
+/// The pairing record keeps the name captured at pairing time and never
+/// follows the peer's later renames; only the synchronized Space profile
+/// does. The record stays the fallback for paired devices outside the Space.
+String _pairedDeviceName(
+  generated.RuntimePairedDevice device,
+  generated.RuntimeDeviceSpaceDevice? projected,
+) {
+  final name = projected?.deviceName.trim() ?? '';
+  return name.isEmpty ? _deviceInfoName(device.deviceInfo) : name;
+}
+
 class RuntimeSettingsPanel extends StatefulWidget {
   const RuntimeSettingsPanel({
     super.key,
@@ -288,13 +301,15 @@ class _RuntimeSettingsPanelState extends State<RuntimeSettingsPanel>
     final pendingJoin = request != null && spaceJoinIsActive(request.status);
     final member = _currentDeviceSpace?.members.contains(deviceId) ?? false;
     final projected = _projectedDevice(deviceId);
+    final displayState = _pairedDisplayState(probeState, projected);
+    final name = _pairedDeviceName(device, projected);
     final status =
-        '${_remoteProbeLabel(probeState, l10n)}'
+        '${_remoteProbeLabel(displayState, l10n)}'
         '${_reachabilitySuffix(l10n, projected)}';
     final path = _relayPathText(l10n, names, projected);
     return _DeviceSpaceRow(
-      leading: _pairedLeading(probeState),
-      title: _deviceInfoName(device.deviceInfo),
+      leading: _pairedLeading(displayState),
+      title: name,
       identity: _identityLabel(l10n, projected),
       status: status,
       tag: pendingJoin
@@ -313,8 +328,8 @@ class _RuntimeSettingsPanelState extends State<RuntimeSettingsPanel>
         projected,
       ),
       onTap: () => _showDeviceDetails(
-        icon: _remoteProbeIconData(probeState),
-        name: _deviceInfoName(device.deviceInfo),
+        icon: _remoteProbeIconData(displayState),
+        name: name,
         deviceId: deviceId,
         statusText: status,
         pathText: path,
@@ -1224,6 +1239,29 @@ _PairedRemoteProbeState _pairedRemoteStateFromStatus(
     generated.RuntimePairedDeviceStatus.removedFromSpace =>
       _PairedRemoteProbeState.removedFromSpace,
   };
+}
+
+/// Resolves the connectivity a paired-device row displays.
+///
+/// The status flow only knows whether this device's own direct Peer Link is
+/// up; a member that moved networks stays reachable through a relay, and
+/// showing it offline contradicts the member rows and the routed node list.
+/// Once the synchronized topology projects the member, its route-based state
+/// wins for plain connectivity states; pairing lifecycle states (invalid,
+/// removed from space) keep precedence, and without a projection the direct
+/// probe stays the only source.
+_PairedRemoteProbeState _pairedDisplayState(
+  _PairedRemoteProbeState probeState,
+  generated.RuntimeDeviceSpaceDevice? projected,
+) {
+  if (projected == null ||
+      probeState == _PairedRemoteProbeState.invalid ||
+      probeState == _PairedRemoteProbeState.removedFromSpace) {
+    return probeState;
+  }
+  return projected.online
+      ? _PairedRemoteProbeState.online
+      : _PairedRemoteProbeState.offline;
 }
 
 class _DeviceSpaceOverviewCard extends StatelessWidget {

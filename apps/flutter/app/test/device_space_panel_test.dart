@@ -437,7 +437,9 @@ void main() {
           ]
           ..statuses = <String, String>{'tablet': 'Online'};
     await mountPanel(tester, bridge);
-    expect(find.text('android-elish'), findsOneWidget);
+    // The synchronized Space profile name wins over the pairing-time record.
+    expect(find.text('android-tablet'), findsOneWidget);
+    expect(find.text('android-elish'), findsNothing);
     expect(find.textContaining('空间成员 · 已直连'), findsOneWidget);
     final menus = find.byIcon(Icons.more_vert_outlined);
     expect(menus, findsWidgets);
@@ -453,6 +455,66 @@ void main() {
     expect(tester.takeException(), isNull);
     await unmount(tester, bridge);
   });
+
+  testWidgets(
+    'a relayed paired member reads online despite a dead direct link',
+    (tester) async {
+      // The direct Peer Link died with the peer's old LAN address while the
+      // routed topology still reaches the member through a relay. The row
+      // must follow the route (as list_core_nodes does) and the renamed
+      // synchronized profile, not the direct probe or the pairing record.
+      final bridge = DeviceSpacePanelBridge(
+        topology: <String, Object?>{
+          'currentDeviceId': 'self',
+          'devices': <Map<String, Object?>>[
+            _member(
+              deviceId: 'self',
+              deviceName: 'this-linux',
+              identityName: 'Administrator',
+              capabilities: _administratorCapabilities,
+            ),
+            _member(
+              deviceId: 'tablet',
+              deviceName: 'tablet-renamed',
+              online: true,
+              relayHops: 2,
+              relayPath: <String>['relay', 'bridge'],
+              identityName: 'Relay',
+              capabilities: <String>[
+                'network.devices.view',
+                'network.relay',
+                'storage.provide',
+              ],
+            ),
+            _member(deviceId: 'relay', deviceName: 'relay-linux'),
+          ],
+          'connections': <Object?>[],
+        },
+        control: _control(),
+      )
+        ..paired = <Map<String, Object?>>[
+          <String, Object?>{
+            'deviceId': 'tablet',
+            'deviceInfo': <String, Object?>{
+              'platform': 'android',
+              'model': 'elish',
+            },
+            'inbound': true,
+            'outbound': true,
+          },
+        ]
+        ..statuses = <String, String>{'tablet': 'Offline'};
+      await mountPanel(tester, bridge);
+      // The synchronized profile name wins over the pairing-time record.
+      expect(find.text('tablet-renamed'), findsOneWidget);
+      expect(find.text('android-elish'), findsNothing);
+      // The route-based state wins over the offline direct-link probe.
+      expect(find.textContaining('在线 · 经中继 2 跳'), findsWidgets);
+      expect(find.byIcon(Icons.cloud_off_outlined), findsNothing);
+      expect(tester.takeException(), isNull);
+      await unmount(tester, bridge);
+    },
+  );
 
   testWidgets(
     'paired devices outside the Space keep local pairing actions only',
