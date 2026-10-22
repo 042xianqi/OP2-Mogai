@@ -1561,6 +1561,8 @@ pub struct Preferences {
 #[serde(deny_unknown_fields)]
 struct PreferencesReplicationState {
     #[serde(default)]
+    initialized: bool,
+    #[serde(default)]
     epoch: Option<String>,
     #[serde(default)]
     logicalTime: i64,
@@ -2338,6 +2340,23 @@ impl PreferencesSyncedEntry {
             })
     }
 
+    /// Presents the complete local representation to its owner's historical value decoder.
+    pub(crate) fn storedSnapshot(
+        storagePath: &str,
+        encrypted: bool,
+        preferences: &Preferences,
+    ) -> Result<Self, PreferencesDataStoreError> {
+        Ok(Self {
+            storagePath: storagePath.into(), encrypted,
+            schemaVersion: Some(PreferencesDataStore::readSchemaVersion(preferences)?),
+            contractVersion: None,
+            mutation: PreferencesSyncedMutation::Transaction(preferences.iterEntries()
+                .filter(|(key, _)| *key != PREFERENCES_SCHEMA_VERSION_KEY_NAME)
+                .map(|(key, value)| PreferencesSyncedMutation::SetEntry { key: key.into(), value: value.clone() })
+                .collect()),
+        })
+    }
+
     /// Converts complete historical values through an explicitly supplied owner codec.
     pub fn decodeHistoricalValues<F>(&mut self, decode: F) -> Result<(), PreferencesDataStoreError>
     where
@@ -2801,22 +2820,33 @@ impl PreferencesDataStore {
         )
     }
 
-    /// Commits one dataset and its exact original operation identities at one durable publication point.
-    pub(crate) fn materializeSyncedDataset<R, F>(
+    /// Migrates, imports and replays a dataset under the same durable commit and dataset lock.
+    pub(crate) fn materializeSyncedDataset<R, P, F>(
         storage: Arc<dyn RuntimeStorageHost>,
         path: &str,
         encrypted: bool,
         operations: &[SyncOperation],
+        prepare: P,
         materialize: F,
     ) -> Result<R, PreferencesDataStoreError>
     where
+        P: FnOnce(&mut Preferences, &[SyncOperation]) -> Result<(), PreferencesDataStoreError>,
         F: FnOnce(&mut Preferences, &[SyncOperation]) -> Result<R, PreferencesDataStoreError>,
     {
-        let journal = SyncOperationStore::new(storage.clone(), RUNTIME_SYNC_DIR_PATH);
+        let store = if encrypted {
+            Self::newEncryptedWithStorage(storage.clone(), path)
+        } else {
+            Self::newWithStorage(storage.clone(), path)
+        };
+        let journal = store.syncOperationStore.as_ref().expect("replicated dataset journal");
         Self::materializeSyncedSnapshot(storage, path, encrypted, |preferences| {
             let mut originals = journal.archivedPreferenceHistory(path)?;
             originals.extend(preferences.replication.outbox.iter().cloned());
+            prepare(preferences, &originals)?;
+            let baseline = preferences.clone();
+            store.initializeReplicationUnlocked(&baseline, preferences)?;
             originals.extend_from_slice(operations);
+            originals.extend(preferences.replication.outbox.iter().cloned());
             let originals = Self::prepareSyncedEntries(&[], &originals)?
                 .into_iter()
                 .map(|(operation, _)| operation.clone())
@@ -2827,29 +2857,33 @@ impl PreferencesDataStore {
             }
             for operation in &originals {
                 preferences.replication.logicalTime = preferences.replication.logicalTime.max(
-                    crate::SyncOperationStore::SyncOperationOrder::fromOperation(operation)
-                        .createdAt,
+                    crate::SyncOperationStore::SyncOperationOrder::fromOperation(operation).createdAt,
                 );
-                use sha2::{Digest, Sha256};
-                let fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(operation)?));
-                match preferences.replication.applied.get(&operation.opId) {
-                    Some(previous) if previous != &fingerprint => {
-                        return Err(PreferencesDataStoreError::Message(format!(
-                            "Conflicting immutable preference operation {}",
-                            operation.opId
-                        )))
-                    }
-                    Some(_) => continue,
-                    None => {}
-                }
-                preferences
-                    .replication
-                    .applied
-                    .insert(operation.opId.clone(), fingerprint);
-                preferences.replication.outbox.push(operation.clone());
+                Self::stageAppliedOperation(preferences, operation)?;
             }
             Ok(result)
         })
+    }
+
+    /// Stores original identities beside their exact business commit, including archival retry intent.
+    fn stageAppliedOperation(
+        preferences: &mut Preferences,
+        operation: &SyncOperation,
+    ) -> Result<(), PreferencesDataStoreError> {
+        use sha2::{Digest, Sha256};
+        let fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(operation)?));
+        match preferences.replication.applied.get(&operation.opId) {
+            Some(previous) if previous != &fingerprint => {
+                return Err(PreferencesDataStoreError::Message(format!(
+                    "Conflicting immutable preference operation {}", operation.opId
+                )));
+            }
+            Some(_) => return Ok(()),
+            None => {}
+        }
+        preferences.replication.applied.insert(operation.opId.clone(), fingerprint);
+        preferences.replication.outbox.push(operation.clone());
+        Ok(())
     }
 
     /// Stages and atomically publishes exactly one preference dataset before notifying its observers.
@@ -3245,7 +3279,101 @@ impl PreferencesDataStore {
         Ok(())
     }
 
-    /// Persists one user-owned snapshot while the caller owns the shared transaction lock.
+    /// Imports values not anchored by a recorded root assignment exactly once.
+    /// Imports precede edits in conflict order and never replace existing business history.
+    fn initializeReplicationUnlocked(
+        &self,
+        baseline: &Preferences,
+        preferences: &mut Preferences,
+    ) -> Result<(), PreferencesDataStoreError> {
+        if preferences.replication.initialized || self.syncDescriptor.is_none() {
+            return Ok(());
+        }
+        let journal = self.syncOperationStore.as_ref().expect("replicated dataset journal");
+        let mut history = journal.archivedPreferenceHistory(&self.storagePath)?;
+        history.extend(baseline.replication.outbox.iter().cloned());
+        let history = Self::prepareSyncedEntries(&[], &history)?;
+        let mut assigned = BTreeSet::new();
+        let mut increments = BTreeMap::<String, i128>::new();
+        fn effects(
+            mutation: &PreferencesSyncedMutation,
+            assigned: &mut BTreeSet<String>,
+            increments: &mut BTreeMap<String, i128>,
+        ) {
+            match mutation {
+                PreferencesSyncedMutation::Transaction(entries) => {
+                    for entry in entries { effects(entry, assigned, increments); }
+                }
+                PreferencesSyncedMutation::SetEntry { key, .. }
+                | PreferencesSyncedMutation::DeleteEntry { key } => { assigned.insert(key.clone()); }
+                PreferencesSyncedMutation::AliasEntry { key, target } => {
+                    assigned.insert(key.clone());
+                    assigned.insert(target.clone());
+                }
+                PreferencesSyncedMutation::IncrementEntry { key, delta } => {
+                    *increments.entry(key.clone()).or_default() += i128::from(*delta);
+                }
+                _ => {}
+            }
+        }
+        for (_, entry) in &history { effects(&entry.mutation, &mut assigned, &mut increments); }
+        let mut initial = emptyPreferences();
+        for (key, value) in baseline.iterEntries() {
+            if key == PREFERENCES_SCHEMA_VERSION_KEY_NAME || assigned.contains(key) { continue; }
+            let mut value = value.clone();
+            if let Some(delta) = increments.get(key) {
+                let current = value.as_i64().ok_or_else(|| PreferencesDataStoreError::Message(
+                    "Recorded integer deltas require an integer initial value".into()
+                ))?;
+                let base = i64::try_from(i128::from(current) - delta).map_err(|_| {
+                    PreferencesDataStoreError::Message("Preference initial integer overflow".into())
+                })?;
+                if base == 0 { continue; }
+                value = Value::from(base);
+            }
+            initial.set(&stringPreferencesKey(key), value);
+        }
+        if let Some(mutation) = self.localMutation(&emptyPreferences(), &initial)? {
+            self.stageLocalMutation(preferences, mutation, true)?;
+        }
+        preferences.replication.initialized = true;
+        Ok(())
+    }
+
+    /// Allocates a durable local identity without publishing uncommitted business state.
+    fn stageLocalMutation(
+        &self,
+        preferences: &mut Preferences,
+        mutation: NewSyncOperation,
+        initial: bool,
+    ) -> Result<(), PreferencesDataStoreError> {
+        use sha2::{Digest, Sha256};
+        let journal = self.syncOperationStore.as_ref().expect("replicated dataset journal");
+        journal.registerPreferenceOutbox(&self.storagePath, self.encryption.is_some())?;
+        let device = journal.localDeviceId()?;
+        let epoch = preferences.replication.epoch.get_or_insert_with(|| uuid::Uuid::new_v4().to_string());
+        let origin = format!("{device}:preferences:{:x}:{epoch}{}",
+            Sha256::digest(self.storagePath.as_bytes()), if initial { ":initial" } else { "" });
+        let sequence = preferences.replication.sequences.get(&origin).copied().unwrap_or(0)
+            .checked_add(1).ok_or_else(|| PreferencesDataStoreError::Message("Preference sequence overflow".into()))?;
+        let createdAt = operit_host_api::TimeUtils::tryCurrentTimeMillis().map_err(PreferencesDataStoreError::Message)?;
+        let logicalTime = if initial { 1 } else {
+            preferences.replication.logicalTime.max(createdAt).checked_add(1)
+                .ok_or_else(|| PreferencesDataStoreError::Message("Preference logical clock overflow".into()))?
+        };
+        let mut payload = mutation.payload;
+        payload["logicalTime"] = Value::from(logicalTime);
+        let operation = SyncOperation {
+            opId: format!("{origin}:{sequence}"), originDeviceId: origin.clone(), sequence,
+            domain: mutation.domain, entityType: mutation.entityType, entityId: mutation.entityId,
+            operation: mutation.operation, semantics: mutation.semantics, payload, createdAt, schemaVersion: 1,
+        };
+        preferences.replication.logicalTime = preferences.replication.logicalTime.max(logicalTime);
+        preferences.replication.sequences.insert(origin, sequence);
+        Self::stageAppliedOperation(preferences, &operation)
+    }
+
+    /// Persists imported initial values and the new business edit at one publication point.
     fn persistUnlocked(
         &self,
         previous: &Preferences,
@@ -3253,63 +3381,8 @@ impl PreferencesDataStore {
     ) -> Result<(), PreferencesDataStoreError> {
         preferences.replication = previous.replication.clone();
         if let Some(mutation) = self.localMutation(previous, preferences)? {
-            let journal = self
-                .syncOperationStore
-                .as_ref()
-                .expect("replicated store has a journal");
-            journal.registerPreferenceOutbox(&self.storagePath, self.encryption.is_some())?;
-            let device = journal.localDeviceId()?;
-            use sha2::{Digest, Sha256};
-            let epoch = preferences
-                .replication
-                .epoch
-                .get_or_insert_with(|| uuid::Uuid::new_v4().to_string());
-            let origin = format!(
-                "{device}:preferences:{:x}:{epoch}",
-                Sha256::digest(self.storagePath.as_bytes())
-            );
-            let sequence = preferences
-                .replication
-                .sequences
-                .get(&origin)
-                .copied()
-                .unwrap_or(0)
-                .checked_add(1)
-                .ok_or_else(|| {
-                    PreferencesDataStoreError::Message("Preference sequence overflow".into())
-                })?;
-            let createdAt = operit_host_api::TimeUtils::tryCurrentTimeMillis()
-                .map_err(PreferencesDataStoreError::Message)?;
-            preferences.replication.logicalTime = preferences
-                .replication
-                .logicalTime
-                .max(createdAt)
-                .checked_add(1)
-                .ok_or_else(|| {
-                    PreferencesDataStoreError::Message("Preference logical clock overflow".into())
-                })?;
-            let mut payload = mutation.payload;
-            payload["logicalTime"] = Value::from(preferences.replication.logicalTime);
-            let operation = SyncOperation {
-                opId: format!("{origin}:{sequence}"),
-                originDeviceId: origin.clone(),
-                sequence,
-                domain: mutation.domain,
-                entityType: mutation.entityType,
-                entityId: mutation.entityId,
-                operation: mutation.operation,
-                semantics: mutation.semantics,
-                payload,
-                createdAt,
-                schemaVersion: 1,
-            };
-            preferences.replication.sequences.insert(origin, sequence);
-            let fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(&operation)?));
-            preferences
-                .replication
-                .applied
-                .insert(operation.opId.clone(), fingerprint);
-            preferences.replication.outbox.push(operation);
+            self.initializeReplicationUnlocked(previous, preferences)?;
+            self.stageLocalMutation(preferences, mutation, false)?;
         }
         self.writeStoredPreferencesUnlocked(preferences)
     }
@@ -3413,6 +3486,7 @@ impl PreferencesDataStore {
             return Ok(());
         }
         journal.appendOperations(&preferences.replication.outbox)?;
+        journal.flushOperations(&preferences.replication.outbox)?;
         journal.recordAppliedOperations(&preferences.replication.outbox)?;
         preferences.replication.outbox.clear();
         self.writeStoredPreferencesUnlocked(&preferences)?;

@@ -2643,26 +2643,25 @@ fn retains_deleted_active_roles_through_both_legacy_imports() {
 /// Rejects malformed active metadata before any record or cleanup marker is published.
 #[test]
 fn invalid_active_shapes_do_not_publish_a_legacy_import() {
-    for active in [
-        None,
-        Some(Value::Null),
-        Some(json!({})),
-        Some(json!({"CharacterCard":{"id":""}})),
-        Some(json!({"CharacterGroup":{"id":null}})),
-        Some(json!({"Unknown":{"id":"legacy"}})),
-        Some(json!({"CharacterCard":{"id":"legacy"},"CharacterGroup":{"id":"group"}})),
-    ] {
-        let fixture = Fixture::new();
-        let mut source = data();
-        source.active = active;
-        assert!(fixture.writer().import("operit2-v27", source).is_err());
-        assert!(fixture.writer().get("meta", "state").unwrap().is_none());
-        assert!(fixture
-            .writer()
-            .get("imports", "operit2-v27")
-            .unwrap()
-            .is_none());
-        assert!(fixture.writer().list("cards").unwrap().is_empty());
+    for source_id in ["operit1", "operit2-v27"] {
+        for active in [
+            None,
+            Some(Value::Null),
+            Some(json!({})),
+            Some(json!({"CharacterCard":{"id":""}})),
+            Some(json!({"CharacterGroup":{"id":""}})),
+            Some(json!({"CharacterGroup":{"id":null}})),
+            Some(json!({"Unknown":{"id":"legacy"}})),
+            Some(json!({"CharacterCard":{"id":"legacy"},"CharacterGroup":{"id":"group"}})),
+        ] {
+            let fixture = Fixture::new();
+            let mut source = data();
+            source.active = active.clone();
+            assert!(fixture.writer().import(source_id, source).is_err(), "source={source_id}, active={active:?}");
+            assert!(fixture.writer().get("meta", "state").unwrap().is_none());
+            assert!(fixture.writer().get("imports", source_id).unwrap().is_none());
+            assert!(fixture.writer().list("cards").unwrap().is_empty());
+        }
     }
 }
 

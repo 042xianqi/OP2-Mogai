@@ -17,6 +17,7 @@ use operit_plugin_sdk::js_sdk::tool_types::BuiltinToolName;
 use operit_plugin_sdk::package::ToolPackage;
 use operit_store::RuntimeStorePaths::RuntimeStorePaths;
 use operit_tools::files::PathMapper::PathMapper;
+use operit_tools::tools::defaultTool::standard::StandardMediaTools::register_native_media;
 use operit_tools::tools::mcp::MCPManager::MCPManager;
 use operit_tools::tools::mcp::MCPToolExecutor::MCPToolExecutor;
 use operit_tools::tools::packTool::RuntimePackageManager::RuntimePackageManager;
@@ -1360,6 +1361,11 @@ impl JsExecutionHost for AIToolHandler {
         self.runtimeDependencies()
             .runtime_support()
             .writeEnvironmentVariable(key, value)
+    }
+
+    /// Registers media for the synchronous v1 image globals and returns the link JSON.
+    fn register_media(&self, request_json: &str) -> Result<String, String> {
+        register_native_media(&self.getContext(), request_json)
     }
 
     /// Resolves unscoped native configuration access explicitly within this device.

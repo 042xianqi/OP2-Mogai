@@ -32,7 +32,7 @@ use operit_store::CoreNodeBindingStore::{CoreNodeBindingStore, BINDING_SYNC_DOMA
 use operit_store::NetworkControlStore::{NetworkControlStore, NETWORK_CONTROL_SYNC_DOMAIN};
 use operit_store::PluginStorage::{self, PLUGIN_STORAGE_SYNC_DOMAIN};
 use operit_store::PreferencesDataStore::{Flow, StateFlow};
-use operit_store::PreferenceMerge::{applyIndependentOperations, PreferenceMergeContext};
+use operit_store::PreferenceMerge::applyIndependentOperations;
 use operit_store::RuntimeFileSyncStore::{
     RuntimeFileSyncReference, RuntimeFileSyncStore, RUNTIME_FILE_SYNC_DOMAIN,
 };
@@ -1025,7 +1025,7 @@ impl OperitApplication {
             .ok_or("RuntimeStorageHost is not registered for persistent sync")?;
         let mut errors = Vec::new();
         let mut applied = Vec::new();
-        let mut preferenceContext = PreferenceMergeContext::default();
+        let mut preferenceReferences = std::collections::BTreeMap::new();
         let preferences = pending
             .iter()
             .filter(|operation| operation.domain == "preferences")
@@ -1039,7 +1039,6 @@ impl OperitApplication {
             match store.preferenceHistory() {
                 Err(error) => {
                     errors.push(format!("preference history: {error}"));
-                    preferenceContext.historyError = Some(error.to_string());
                 }
                 Ok(history) => {
                     for outcome in applyIndependentOperations(
@@ -1051,7 +1050,7 @@ impl OperitApplication {
                     ) {
                         match outcome.result {
                             Ok(map) => {
-                                preferenceContext.references.extend(map);
+                                preferenceReferences.extend(map);
                                 applied.extend(outcome.operations);
                             }
                             Err(error) => {
@@ -1059,7 +1058,6 @@ impl OperitApplication {
                                     "preferences paths={}: {error}",
                                     outcome.paths.iter().cloned().collect::<Vec<_>>().join(",")
                                 ));
-                                preferenceContext.failedPaths.extend(outcome.paths);
                             }
                         }
                     }
@@ -1094,7 +1092,7 @@ impl OperitApplication {
                         self.pluginSqliteHost()?,
                         storage.clone(),
                         operation,
-                        &preferenceContext,
+                        &preferenceReferences,
                     )
                     .map_err(|error| error.to_string()),
                     _ => {
@@ -1140,9 +1138,9 @@ impl OperitApplication {
             .pendingOperations()
             .map_err(|error| error.to_string())?
             .len();
-        if !preferenceContext.references.is_empty() {
+        if !preferenceReferences.is_empty() {
             if let Err(error) = self.pluginSqliteHost().and_then(|host| {
-                PluginStorage::reconcilePreferenceReferences(host, &preferenceContext.references)
+                PluginStorage::reconcilePreferenceReferences(host, &preferenceReferences)
                     .map_err(|error| error.to_string())
             }) {
                 errors.push(format!("plugin_storage reconcile: {error}"));

@@ -41,6 +41,9 @@ impl NativeRuntimeStorageWriteSession {
         }
         drop(file);
         atomicReplace(&self.temporaryPath, &self.targetPath)?;
+        if sync {
+            syncParentDirectory(&self.targetPath)?;
+        }
         Ok(())
     }
 }
@@ -640,6 +643,12 @@ impl RuntimeStorageHost for NativeRuntimeStorageHost {
         Ok(())
     }
 
+    fn flushFile(&self, path: &str) -> HostResult<()> {
+        let path = self.resolveFile(path)?;
+        fs::OpenOptions::new().write(true).open(&path)?.sync_all()?;
+        syncParentDirectory(&path)
+    }
+
     fn delete(&self, path: &str, recursive: bool) -> HostResult<()> {
         let path = self.resolveFile(path)?;
         if !path.exists() {
@@ -747,6 +756,18 @@ fn isStorageLink(metadata: &fs::Metadata) -> bool {
     }
     #[cfg(not(windows))]
     false
+}
+
+/// Persists the directory entry published by a durable write or journal append.
+#[allow(non_snake_case)]
+fn syncParentDirectory(path: &Path) -> HostResult<()> {
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 /// Atomically publishes one sibling staging file over its target path.

@@ -179,6 +179,21 @@ function __operitInstallV1Runtime(runtime) {
             })
         .since('2.0.0', terminal.exec).build('Tools.System.terminal.exec');
 
+    currentTerminal.execStreaming = api.method()
+        .between('1.0.0', '2.0.0',
+            /** Streams the selected compatibility session through the canonical terminal transport.
+             * @param {string} sessionId
+             * @param {string} command
+             * @param {{timeoutMs?: number | string, onIntermediateResult?: (event: any) => void}} [options]
+             */
+            async function(sessionId, command, options) {
+                if (options !== undefined && (options === null || typeof options !== 'object' || Array.isArray(options))) throw new TypeError('Terminal streaming options must be an object');
+                var controls = Object.assign({}, options);
+                if (controls.timeoutMs === undefined) controls.timeoutMs = 15000;
+                return terminal.execStreaming(sessionId, await cachePath(command), controls);
+            })
+        .since('2.0.0', terminal.execStreaming).build('Tools.System.terminal.execStreaming');
+
     /** Identifies the explicit legacy Linux VFS namespace by complete path segments.
      * @param {unknown} path
      * @returns {path is string}

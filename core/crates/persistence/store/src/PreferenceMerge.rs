@@ -217,29 +217,6 @@ fn pluginDeclarations(entries: &[PreferencesSyncedEntry]) -> Result<BTreeMap<Str
     Ok(declarations)
 }
 
-/// Carries resolved aliases and availability of their owning preference stores.
-#[derive(Default)]
-pub struct PreferenceMergeContext {
-    pub references: BTreeMap<String, String>,
-    pub failedPaths: BTreeSet<String>,
-    pub historyError: Option<String>,
-}
-
-impl PreferenceMergeContext {
-    /// Rejects a declared dependency whose preference state could not be materialized.
-    pub fn require(&self, path: &str) -> Result<(), String> {
-        if let Some(error) = &self.historyError {
-            return Err(format!(
-                "Preference history is unavailable for {path}: {error}"
-            ));
-        }
-        if self.failedPaths.contains(path) {
-            return Err(format!("Preference dependency is not materialized: {path}"));
-        }
-        Ok(())
-    }
-}
-
 /// Records one dataset commit result without sharing its failure boundary with referenced datasets.
 pub struct PreferenceMergeOutcome {
     pub paths: BTreeSet<String>,
@@ -443,14 +420,43 @@ fn applyDeclaredOperations<F>(
 where
     F: Fn(&str, &str) -> bool,
 {
-    let Some(first) = incoming.first() else {
-        prepareOwner(schema, path, incoming)?;
-        return Ok(BTreeMap::new());
+    validateSchema(&PreferenceMergeSchema {
+        stores: schema.stores.iter().filter(|store| store.path == path).cloned().collect(),
+    })?;
+    let encrypted = match incoming.first() {
+        Some(operation) => PreferencesSyncedEntry::fromOperation(operation)
+            .map_err(|error| error.to_string())?.encrypted(),
+        None => match schema.stores.iter().find(|store| store.path == path) {
+            Some(store) if storage.exists(path).map_err(|error| error.to_string())? => store.encrypted,
+            _ => return Ok(BTreeMap::new()),
+        },
     };
-    let encrypted = PreferencesSyncedEntry::fromOperation(first)
-        .map_err(|error| error.to_string())?
-        .encrypted();
-    PreferencesDataStore::materializeSyncedDataset(storage, path, encrypted, incoming, |preferences, originals| {
+    PreferencesDataStore::materializeSyncedDataset(storage, path, encrypted, incoming,
+        |preferences, originals| {
+            let Some(store) = schema.stores.iter().find(|store| store.path == path) else { return Ok(()); };
+            let Some(version) = store.storageVersion else { return Ok(()); };
+            let actual = PreferencesDataStore::readSchemaVersion(preferences)?;
+            if actual > version {
+                return Err(PreferencesDataStoreError::SchemaVersionTooNew { actual, expected: version });
+            }
+            if actual < version {
+                if let Some(decode) = store.decode {
+                    let mut legacy = preferences.clone();
+                    // Locally committed current-contract operations already carry typed values.
+                    for operation in originals.iter().filter(|operation| operation.payload["contractVersion"] == 1) {
+                        for key in PreferencesSyncedEntry::fromOperation(operation)?.keys() {
+                            legacy.remove(&stringPreferencesKey(key));
+                        }
+                    }
+                    let mut entry = PreferencesSyncedEntry::storedSnapshot(path, encrypted, &legacy)?;
+                    decode(&mut entry)?;
+                    entry.apply(preferences)?;
+                }
+                preferences.set(&PreferencesDataStore::schemaVersionKey(), version);
+            }
+            Ok(())
+        },
+        |preferences, originals| {
         let (owner, entries) = prepareOwner(schema, path, originals).map_err(PreferencesDataStoreError::Message)?;
         let schema = &owner;
         if entries.iter().any(|entry| entry.storagePath() != path || entry.encrypted() != encrypted)

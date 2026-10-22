@@ -78,8 +78,9 @@ async fn resolvePairingTransport(
 ) -> Result<PeerTransport, String> {
     if let Some((scheme, _)) = address.split_once("://") {
         return match scheme {
-            "http" => Ok(PeerTransport::Http),
-            "ws" => Ok(PeerTransport::WebSocket),
+            // TLS is selected by the URL passed to the Host, not a separate carrier.
+            "http" | "https" => Ok(PeerTransport::Http),
+            "ws" | "wss" => Ok(PeerTransport::WebSocket),
             "tcp" => Ok(PeerTransport::Tcp),
             other => Err(format!("unsupported link address scheme: {other}")),
         };
@@ -98,6 +99,42 @@ fn pairingAddressFor(address: &str, transport: PeerTransport) -> String {
         PeerTransport::Http => format!("http://{address}/link"),
         PeerTransport::WebSocket => format!("ws://{address}/link"),
         _ => address.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod pairing_transport_tests {
+    use super::*;
+
+    /// Explicit URLs must work on client-only hosts and keep their TLS scheme,
+    /// default/custom port, proxy path and query for pairing and later redials.
+    #[tokio::test]
+    async fn explicit_urls_select_carrier_without_probing_or_rewriting() {
+        let host = Arc::new(HostManager::default());
+        for (address, expected) in [
+            ("http://peer.local:37195/link", PeerTransport::Http),
+            ("https://peer.example/link", PeerTransport::Http),
+            ("https://peer.example:8443/operit/link?device=remote", PeerTransport::Http),
+            ("https://[fd00::1]:8443/link", PeerTransport::Http),
+            ("ws://peer.local:37195/link", PeerTransport::WebSocket),
+            ("wss://peer.example/link", PeerTransport::WebSocket),
+            ("wss://peer.example:8443/operit/link?device=remote", PeerTransport::WebSocket),
+            ("wss://[fd00::1]:8443/link", PeerTransport::WebSocket),
+            ("tcp://peer.local:37195", PeerTransport::Tcp),
+        ] {
+            let transport = resolvePairingTransport(&host, address).await.unwrap();
+            assert_eq!(transport, expected, "{address}");
+            assert_eq!(pairingAddressFor(address, transport), address);
+        }
+    }
+
+    #[tokio::test]
+    async fn unsupported_url_scheme_is_rejected_without_probing() {
+        let host = Arc::new(HostManager::default());
+        assert_eq!(
+            resolvePairingTransport(&host, "ftp://peer.example/link").await.unwrap_err(),
+            "unsupported link address scheme: ftp",
+        );
     }
 }
 

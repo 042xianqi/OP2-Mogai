@@ -2,7 +2,8 @@ use operit_host_api::{
     HostError, HostResult, HostRuntimeAsyncTask, HostRuntimeTask, HostRuntimeTaskSchedulerHost,
     HostRuntimeTurnFuture,
 };
-use std::sync::{Arc, OnceLock};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, OnceLock};
 
 const RUNTIME_WORKER_COUNT: usize = 16;
 const BLOCKING_WORKER_COUNT: usize = 16;
@@ -15,19 +16,39 @@ const BLOCKING_WORKER_PREFIX: &str = "operit-runtime-blocking-worker";
 /// in a blocking call therefore stops taking new tasks instead of accumulating
 /// a private backlog that later stalls unrelated callers.
 struct RuntimeTaskPool {
-    coordination: tokio::sync::mpsc::UnboundedSender<HostRuntimeAsyncTask>,
-    blocking: tokio::sync::mpsc::UnboundedSender<HostRuntimeAsyncTask>,
+    coordination: RuntimeTaskQueue,
+    blocking: RuntimeTaskQueue,
+}
+
+/// Shares ready tasks without assigning the receive wait to any single worker.
+struct RuntimeTaskQueue {
+    pending: Arc<Mutex<VecDeque<HostRuntimeAsyncTask>>>,
+    changed: tokio::sync::watch::Sender<()>,
+}
+
+impl RuntimeTaskQueue {
+    /// Wakes every dispatcher so a blocked worker cannot retain the only notification.
+    fn send(&self, task: HostRuntimeAsyncTask) -> Result<(), ()> {
+        let mut pending = self
+            .pending
+            .lock()
+            .expect("runtime task queue mutex poisoned");
+        if self.changed.is_closed() {
+            return Err(());
+        }
+        pending.push_back(task);
+        drop(pending);
+        self.changed.send(()).map_err(|_| ())
+    }
 }
 
 /// Creates one shared task queue consumed by the requested number of affine workers.
-fn spawnTaskPool(
-    prefix: &'static str,
-    count: usize,
-) -> Result<tokio::sync::mpsc::UnboundedSender<HostRuntimeAsyncTask>, String> {
-    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<HostRuntimeAsyncTask>();
-    let receiver = Arc::new(tokio::sync::Mutex::new(receiver));
+fn spawnTaskPool(prefix: &'static str, count: usize) -> Result<RuntimeTaskQueue, String> {
+    let pending = Arc::new(Mutex::new(VecDeque::<HostRuntimeAsyncTask>::new()));
+    let (changed, updates) = tokio::sync::watch::channel(());
     for index in 0..count {
-        let receiver = receiver.clone();
+        let pending = pending.clone();
+        let mut updates = updates.clone();
         let (ready, started) = std::sync::mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name(format!("{prefix}-{index}"))
@@ -48,11 +69,19 @@ fn spawnTaskPool(
                 let local = tokio::task::LocalSet::new();
                 local.block_on(&runtime, async {
                     loop {
-                        // Only a free worker takes the next task. Holding the
-                        // receive lock across the wait keeps one worker parked
-                        // while every other worker remains available.
-                        let task = receiver.lock().await.recv().await;
-                        let Some(task) = task else { break };
+                        // Never hold the queue lock across an await: a local
+                        // future may resume and block this thread while the
+                        // dispatcher waits, stranding the entire shared queue.
+                        let task = pending
+                            .lock()
+                            .expect("runtime task queue mutex poisoned")
+                            .pop_front();
+                        let Some(task) = task else {
+                            if updates.changed().await.is_err() {
+                                break;
+                            }
+                            continue;
+                        };
                         // A factory panic is confined to its task, not the worker.
                         local.spawn_local(async move {
                             task().await;
@@ -66,7 +95,7 @@ fn spawnTaskPool(
             .map_err(|e| e.to_string())?;
         started.recv().map_err(|e| e.to_string())??;
     }
-    Ok(sender)
+    Ok(RuntimeTaskQueue { pending, changed })
 }
 
 /// Initializes the process-wide coordination and blocking pools exactly once.
@@ -105,6 +134,64 @@ mod tests {
     use super::*;
     use std::{rc::Rc, sync::mpsc, time::Duration};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A resumed blocking call must not retain the queue needed by an idle worker.
+    #[test]
+    fn resumed_blocking_task_does_not_stall_idle_workers() {
+        let tasks = spawnTaskPool("test-resumed-blocking", 2).unwrap();
+        let (firstEntered, firstStarted) = mpsc::channel();
+        let (resumeFirst, resume) = tokio::sync::oneshot::channel();
+        let (releaseFirst, firstRelease) = mpsc::channel();
+        let (firstBlocked, firstBlocking) = mpsc::channel();
+        tasks
+            .send(Box::new(move || {
+                Box::pin(async move {
+                    firstEntered.send(()).unwrap();
+                    resume.await.unwrap();
+                    // Model an async package call entering a synchronous terminal wait.
+                    firstBlocked.send(()).unwrap();
+                    firstRelease.recv_timeout(Duration::from_secs(5)).unwrap();
+                })
+            }))
+            .unwrap();
+        firstStarted.recv_timeout(Duration::from_secs(2)).unwrap();
+
+        let (secondEntered, secondStarted) = mpsc::channel();
+        let (releaseSecond, secondRelease) = mpsc::channel();
+        let (secondExited, secondFinished) = mpsc::channel();
+        tasks
+            .send(Box::new(move || {
+                Box::pin(async move {
+                    secondEntered.send(()).unwrap();
+                    secondRelease.recv_timeout(Duration::from_secs(5)).unwrap();
+                    secondExited.send(()).unwrap();
+                })
+            }))
+            .unwrap();
+        secondStarted.recv_timeout(Duration::from_secs(2)).unwrap();
+        // Give the first worker's dispatcher a turn to wait for more tasks.
+        std::thread::sleep(Duration::from_millis(50));
+        resumeFirst.send(()).unwrap();
+        firstBlocking.recv_timeout(Duration::from_secs(2)).unwrap();
+        releaseSecond.send(()).unwrap();
+        secondFinished.recv_timeout(Duration::from_secs(2)).unwrap();
+
+        let (probeSent, probeReceived) = mpsc::channel();
+        tasks
+            .send(Box::new(move || {
+                Box::pin(async move {
+                    probeSent.send(()).unwrap();
+                })
+            }))
+            .unwrap();
+        let result = probeReceived.recv_timeout(Duration::from_millis(500));
+        // Always release the terminal wait, including on the unfixed implementation.
+        releaseFirst.send(()).unwrap();
+        assert!(
+            result.is_ok(),
+            "An idle worker could not dequeue an unrelated task: {result:?}"
+        );
+    }
 
     /// Waits for one pooled request to finish before accessing shared resources.
     fn runRequest(task: HostRuntimeAsyncTask) {

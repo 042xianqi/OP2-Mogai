@@ -1666,3 +1666,27 @@ fn completed_receipt_rejects_changed_original_payload_after_restart() {
     assert!(restarted.receiveOperations(&[changed]).is_err());
     assert!(restarted.pendingOperations().unwrap().is_empty());
 }
+
+/// A retry after an interrupted append must remain a separate readable journal record.
+#[test]
+fn intact_operations_survive_retry_after_partial_journal_tail() {
+    for batch in [false, true] {
+        let host = Arc::new(MemoryStorageHost::default());
+        let store = SyncOperationStore::new(host.clone(), "runtime/sync");
+        let first = operation(1, "message", "one", "set", SyncOperationSemantics::Transaction, json!({"text":"one"}));
+        let second = operation(2, "message", "two", "set", SyncOperationSemantics::Transaction, json!({"text":"two"}));
+        let mut interrupted = serde_json::to_vec(&first).unwrap();
+        interrupted.extend_from_slice(b"\n{\"opId\":");
+        host.writeBytes(&store.operationsPath("device-a"), &interrupted).unwrap();
+        // First record spans an invalid tail in the offset index, but its identity remains readable.
+        store.appendOperations(std::slice::from_ref(&first)).unwrap();
+        if batch {
+            store.appendOperations(std::slice::from_ref(&second)).unwrap();
+        } else {
+            store.appendUnobservedOperation(&second).unwrap();
+        }
+        // A new Host instance rebuilds all caches from the persisted bytes.
+        let restarted = SyncOperationStore::new(Arc::new((*host).clone()), "runtime/sync");
+        assert_eq!(restarted.operationsSince(&SyncClock::empty(), &[], 100).unwrap(), vec![first, second]);
+    }
+}

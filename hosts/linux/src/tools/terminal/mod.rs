@@ -284,6 +284,16 @@ impl TerminalHost for LinuxTerminalHost {
         command: &str,
         timeoutMs: u64,
     ) -> HostResult<TerminalCommandOutput> {
+        self.executeInSessionStreaming(sessionId, command, timeoutMs, &mut |_| Ok(()))
+    }
+
+    fn executeInSessionStreaming(
+        &self,
+        sessionId: &str,
+        command: &str,
+        timeoutMs: u64,
+        onOutput: &mut dyn FnMut(&[u8]) -> HostResult<()>,
+    ) -> HostResult<TerminalCommandOutput> {
         let normalizedSessionId = nonBlank(sessionId, "session_id")?;
         let normalizedCommand = nonBlank(command, "command")?;
         let (terminalType, commandOutput) = {
@@ -294,7 +304,7 @@ impl TerminalHost for LinuxTerminalHost {
                 .ok_or_else(|| {
                     HostError::new(format!("Terminal session does not exist: {sessionId}"))
                 })?;
-            session.commandRunning = true;
+            if session.commandRunning { return Err(HostError::new("Terminal session already has a command in progress")); }
             clearPtyCommandOutput(&session.commandOutput)?;
             let commandInput = format!("{normalizedCommand}\r");
             let mut writer = session
@@ -303,23 +313,27 @@ impl TerminalHost for LinuxTerminalHost {
                 .map_err(|_| HostError::new("pty writer mutex poisoned"))?;
             writer.write_all(commandInput.as_bytes())?;
             writer.flush()?;
+            session.commandRunning = true;
             (session.terminalType.clone(), session.commandOutput.clone())
         };
 
-        let result = executePtyCommandInSession(commandOutput, &normalizedCommand, timeoutMs)?;
+        let result = executePtyCommandInSession(commandOutput, &normalizedCommand, timeoutMs, onOutput);
         {
             let mut state = self.lockState()?;
             if let Some(session) = state.ptySessions.get_mut(&normalizedSessionId) {
-                if result.timedOut {
+                // Release the busy flag even if interrupting a broken PTY fails.
+                // The state lock still excludes new commands during cancellation.
+                session.commandRunning = false;
+                if result.as_ref().map_or(true, |receipt| receipt.timedOut) {
                     if let Some(workingDir) = cancelTimedOutPtyCommand(session)? {
                         session.workingDir = workingDir;
                     }
-                } else if let Some(workingDir) = result.workingDir.clone() {
+                } else if let Some(workingDir) = result.as_ref().ok().and_then(|receipt| receipt.workingDir.clone()) {
                     session.workingDir = workingDir;
                 }
-                session.commandRunning = false;
             }
         }
+        let result = result?;
         Ok(TerminalCommandOutput {
             command: normalizedCommand,
             output: result.output,
@@ -716,13 +730,16 @@ fn executePtyCommandInSession(
     output: PtyCommandOutput,
     command: &str,
     timeoutMs: u64,
+    onOutput: &mut dyn FnMut(&[u8]) -> HostResult<()>,
 ) -> HostResult<SessionCommandResult> {
     let deadline = Instant::now() + Duration::from_millis(timeoutMs);
     let mut collected = Vec::new();
     let mut promptSeenAt = None;
     let quietPeriod = Duration::from_millis(150);
     loop {
+        let previousLength = collected.len();
         let drained = drainPtyCommandOutput(&output, &mut collected, deadline)?;
+        onOutput(&collected[previousLength..])?;
         if drained > 0 {
             promptSeenAt = None;
         }

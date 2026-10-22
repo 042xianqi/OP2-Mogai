@@ -629,12 +629,12 @@ fn validateMigrationData(data: &CharacterMigrationData) -> Result<(), String> {
         return Err("Invalid imported active selection".to_string());
     }
     // Preserve deleted role selections exactly; explicit activation and execution validate their targets.
-    if let Some(card) = active.get("CharacterCard") {
-        requiredString(card, "id")?;
-    } else if let Some(group) = active.get("CharacterGroup") {
-        requiredString(group, "id")?;
-    } else {
-        return Err("Invalid imported active selection".to_string());
+    let selection = active
+        .get("CharacterCard")
+        .or_else(|| active.get("CharacterGroup"))
+        .ok_or("Invalid imported active selection")?;
+    if requiredString(selection, "id")?.is_empty() {
+        return Err("Imported active selection identity is empty".to_string());
     }
     Ok(())
 }

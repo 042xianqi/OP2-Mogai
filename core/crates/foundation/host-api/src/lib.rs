@@ -1741,6 +1741,18 @@ pub trait TerminalHost: Send + Sync {
         command: &str,
         timeoutMs: u64,
     ) -> HostResult<TerminalCommandOutput>;
+    /// Executes in the same session while forwarding raw PTY bytes before completion.
+    /// Empty frames allow cancellation checks during quiet commands. A callback error
+    /// interrupts the command and leaves the session available for subsequent work.
+    fn executeInSessionStreaming(
+        &self,
+        _sessionId: &str,
+        _command: &str,
+        _timeoutMs: u64,
+        _onOutput: &mut dyn FnMut(&[u8]) -> HostResult<()>,
+    ) -> HostResult<TerminalCommandOutput> {
+        Err(HostError::new("Terminal output streaming is not supported by this host"))
+    }
     fn executeHiddenCommand(
         &self,
         command: &str,
@@ -1788,6 +1800,11 @@ pub trait RuntimeStorageHost: Send + Sync {
     }
     /// Appends bytes to a virtual runtime storage path.
     fn appendBytes(&self, path: &str, content: &[u8]) -> HostResult<()>;
+    /// Makes preceding file writes durable before their recovery intent is removed.
+    /// Hosts with an explicit flush should override this atomic rewrite fallback.
+    fn flushFile(&self, path: &str) -> HostResult<()> {
+        self.writeBytesAtomically(path, &self.readBytes(path)?)
+    }
     /// Deletes a virtual runtime storage entry.
     fn delete(&self, path: &str, recursive: bool) -> HostResult<()>;
     /// Checks whether a virtual runtime storage entry exists.

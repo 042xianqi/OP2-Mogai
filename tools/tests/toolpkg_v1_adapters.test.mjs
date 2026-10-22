@@ -112,7 +112,7 @@ function engine(version = '1.0.0') {
   const rust = source('core/crates/plugin/sdk/src/toolpkg/ToolPkgApiRuntimeScript.rs');
   const start = rust.indexOf('r#"') + 3;
   vm.runInContext(rust.slice(start, rust.indexOf('"#', start)), context);
-  for (const file of ['files.js', 'chat.js', 'workflow.js', 'characters.js', 'memory.js', 'install.js']) vm.runInContext(source(adapterRoot + file), context);
+  for (const file of ['files.js', 'media.js', 'chat.js', 'workflow.js', 'characters.js', 'memory.js', 'install.js']) vm.runInContext(source(adapterRoot + file), context);
   return { context, tools, calls };
 }
 
@@ -270,6 +270,27 @@ test('legacy caller IDs are provider-scoped and absent from the current contract
   assert.throws(() => context.getCallerCardId(), /another provider participant/);
   context.params = {};
   assert.equal(context.getCallerCardId(), undefined);
+});
+
+/** Checks the historical image globals stay synchronous and disappear on API 2. */
+test('v1 image registration returns a link and maps Android paths', () => {
+  const { context } = engine();
+  const requests = [];
+  context.__operitNativeRegisterMedia = request => {
+    requests.push(JSON.parse(request));
+    return JSON.stringify({ id: 'img', mimeType: 'image/png', link: '<link type="image" id="img"></link>', width: 2, height: 3 });
+  };
+  assert.equal(context.registerImageFromBase64('abc', 'image/png'), '<link type="image" id="img"></link>');
+  assert.equal(context.registerImageFromPath('/storage/emulated/0/photo.png'), '<link type="image" id="img"></link>');
+  assert.deepEqual(requests, [
+    { type: 'image', source: 'base64', base64: 'abc', mimeType: 'image/png' },
+    { type: 'image', source: 'path', path: '/sdcard/photo.png' },
+  ]);
+  assert.throws(() => context.registerImageFromBase64('  '), /requires image data/);
+  assert.throws(() => context.registerImageFromPath('/unsupported/photo.png'), /no VFS mapping/);
+  context.version = '2.0.0';
+  assert.equal(context.registerImageFromBase64, undefined);
+  assert.equal(context.registerImageFromPath, undefined);
 });
 
 /** Ensures this task never registers the legacy settings-management methods. */

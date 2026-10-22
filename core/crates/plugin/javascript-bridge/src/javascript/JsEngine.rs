@@ -1997,6 +1997,7 @@ impl JsEngineState {
             "__operitNativeComposeWebViewControllerCommand",
             "__operitNativeLog",
             "__operitNativeLogVerbose",
+            "__operitNativeRegisterMedia",
             "__operitNativeDecompress",
             "__operitNativeCrypto",
             "__operitNativeJavaClassExists",
@@ -3228,6 +3229,14 @@ fn executeHostOperation(name: &str, arguments: Vec<Value>) -> HostResult<Value> 
             };
             currentExecutionHost()
                 .and_then(|host| host.resolve_tool_name(request))
+                .map(Value::String)
+                .map_err(HostError::new)
+        }
+        "__operitNativeRegisterMedia" => {
+            let [payload] = exactHostJavaScriptJsonArguments(name, arguments)?;
+            let payload = hostJavaScriptStringArgument(payload)?;
+            currentExecutionHost()
+                .and_then(|host| host.register_media(&payload))
                 .map(Value::String)
                 .map_err(HostError::new)
         }

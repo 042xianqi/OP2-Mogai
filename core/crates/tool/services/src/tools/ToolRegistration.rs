@@ -20,6 +20,9 @@ use operit_tools::tools::defaultTool::standard::StandardFileSystemTools::{
 use operit_tools::tools::defaultTool::standard::StandardHttpTools::{
     HttpToolExecutor, HttpToolOperation, StandardHttpTools,
 };
+use operit_tools::tools::defaultTool::standard::StandardMediaTools::{
+    RegisterMediaExecutor, RegisterMediaFromPathExecutor,
+};
 use operit_tools::tools::defaultTool::standard::StandardMusicTools::{
     MusicToolExecutor, MusicToolOperation, StandardMusicTools,
 };
@@ -617,6 +620,13 @@ fn registerSystemOperationTool(
 
 #[allow(non_snake_case)]
 fn registerTerminalTools(handler: &mut AIToolHandler, terminalTools: StandardTerminalTools) {
+    handler.registerBuiltinTool(
+        BuiltinToolName::TerminalObserve,
+        operit_tools::ToolExecutionManager::RegisteredToolExecutor::Shared(Arc::new(
+            operit_tools::tools::defaultTool::standard::StandardTerminalStreaming::TerminalStreamExecutor::new(terminalTools.terminalHost.clone()),
+        )),
+        ToolRegistrationVisibility::PUBLIC,
+    );
     registerTerminalTool(
         handler,
         &terminalTools,
@@ -1093,6 +1103,7 @@ fn registerInternalTools(handler: &mut AIToolHandler, context: &HostManager) {
         ToolRegistrationVisibility::INTERNAL,
     );
     registerModelTools(handler);
+    registerMediaTools(handler);
     registerTtsTools(handler);
     registerThemeTools(handler);
     registerCatalogTools(handler);
@@ -1103,6 +1114,20 @@ fn registerModelTools(handler: &mut AIToolHandler) {
     handler.registerBuiltinTool(
         BuiltinToolName::ModelsListSummaries,
         RegisteredToolExecutor::Shared(Arc::new(ModelToolExecutor)),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+}
+
+#[allow(non_snake_case)]
+fn registerMediaTools(handler: &mut AIToolHandler) {
+    handler.registerBuiltinTool(
+        BuiltinToolName::MediaRegister,
+        RegisteredToolExecutor::Shared(Arc::new(RegisterMediaExecutor)),
+        ToolRegistrationVisibility::INTERNAL,
+    );
+    handler.registerBuiltinTool(
+        BuiltinToolName::MediaRegisterFromPath,
+        RegisteredToolExecutor::Shared(Arc::new(RegisterMediaFromPathExecutor)),
         ToolRegistrationVisibility::INTERNAL,
     );
 }

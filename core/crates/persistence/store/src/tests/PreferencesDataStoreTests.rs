@@ -148,6 +148,7 @@ struct MemoryStorageHost {
     writeCount: Arc<AtomicUsize>,
     blockedWrite: Arc<Mutex<Option<BlockedWrite>>>,
     failedWrites: Arc<Mutex<BTreeSet<String>>>,
+    failedFlushes: Arc<Mutex<BTreeSet<String>>>,
 }
 
 struct BlockedWrite {
@@ -276,6 +277,13 @@ impl RuntimeStorageHost for MemoryStorageHost {
             .entry(path.to_string())
             .or_default()
             .extend_from_slice(content);
+        Ok(())
+    }
+
+    fn flushFile(&self, path: &str) -> operit_host_api::HostResult<()> {
+        if self.failedFlushes.lock().unwrap().contains(path) {
+            return Err(HostError::new("injected journal flush failure"));
+        }
         Ok(())
     }
 
@@ -2458,4 +2466,59 @@ fn stale_history_preserves_local_transactions_in_the_journal_and_outbox() {
         assert!(originals.contains(&local));
         assert!(originals.contains(&remote));
     }
+}
+
+/// Archival is acknowledged only after original bytes are durable; retry keeps the same identity.
+#[test]
+fn outbox_survives_flush_failure_without_duplicate_append() {
+    let host = Arc::new(MemoryStorageHost::default());
+    let path = "runtime/config/preferences/outbox-flush.preferences.json";
+    let store = PreferencesDataStore::newWithStorage(host.clone(), path);
+    store.edit(|p| p.set(&stringPreferencesKey("ready"), true)).unwrap();
+    let original = store.data().unwrap().replication.outbox[0].clone();
+    let journal = SyncOperationStore::new(host.clone(), RUNTIME_SYNC_DIR_PATH);
+    let logPath = journal.operationsPath(&original.originDeviceId);
+    host.failedFlushes.lock().unwrap().insert(logPath.clone());
+    assert_eq!(journal.publishPreferenceOutboxes().unwrap().len(), 1);
+    assert_eq!(store.data().unwrap().replication.outbox, vec![original.clone()]);
+    let bytes = host.readBytes(&logPath).unwrap();
+    host.failedFlushes.lock().unwrap().clear();
+    assert!(journal.publishPreferenceOutboxes().unwrap().is_empty());
+    assert!(store.data().unwrap().replication.outbox.is_empty());
+    assert_eq!(host.readBytes(&logPath).unwrap(), bytes);
+    assert_eq!(journal.preferenceHistory().unwrap(), vec![original]);
+}
+
+/// A missing key in one owner must not prevent other owners from committing or replaying.
+#[test]
+fn dataset_history_filters_encrypted_owners_before_decryption() {
+    let host = Arc::new(MemoryStorageHost::default());
+    let healthyPath = MODEL_CONFIGS_PREFERENCES_PATH;
+    let brokenPath = operit_util::RuntimeStorageLayout::TTS_CONFIGS_PREFERENCES_PATH;
+    for path in [healthyPath, brokenPath] {
+        PreferencesDataStore::newEncryptedWithStorage(host.clone(), path)
+            .edit(|p| p.set(&stringPreferencesKey("ready"), true)).unwrap();
+    }
+    let journal = SyncOperationStore::new(host.clone(), RUNTIME_SYNC_DIR_PATH);
+    let originals = journal.preferenceHistory().unwrap();
+    let healthy = originals.iter().find(|op| op.payload["storagePath"] == healthyPath).unwrap();
+    let broken = originals.iter().find(|op| op.payload["storagePath"] == brokenPath).unwrap();
+    let logPath = journal.operationsPath(&broken.originDeviceId);
+    let mut encoded: Value = serde_json::from_slice(&host.readBytes(&logPath).unwrap()).unwrap();
+    encoded["payload"]["envelope"]["keyId"] = json!("old-unavailable-key");
+    let damaged = serde_json::to_vec(&encoded).unwrap();
+    host.writeBytes(&logPath, &damaged).unwrap();
+
+    let restarted = Arc::new((*host).clone());
+    let journal = SyncOperationStore::new(restarted.clone(), RUNTIME_SYNC_DIR_PATH);
+    assert_eq!(journal.archivedPreferenceHistory(healthyPath).unwrap(), vec![healthy.clone()]);
+    let plain = PreferencesDataStore::newWithStorage(restarted.clone(), "runtime/config/preferences/startup.preferences.json");
+    plain.edit(|p| p.set(&stringPreferencesKey("booted"), true)).unwrap();
+    assert_eq!(plain.data().unwrap().get(&stringPreferencesKey("booted")), Some(&json!(true)));
+    let healthyStore = PreferencesDataStore::newEncryptedWithStorage(restarted, healthyPath);
+    healthyStore.edit(|p| p.set(&stringPreferencesKey("updated"), true)).unwrap();
+    let error = journal.archivedPreferenceHistory(brokenPath).unwrap_err().to_string();
+    assert!(error.contains("key id mismatch"), "{error}");
+    assert!(error.contains(brokenPath), "{error}");
+    assert_eq!(host.readBytes(&logPath).unwrap(), damaged);
 }

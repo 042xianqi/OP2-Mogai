@@ -2686,7 +2686,7 @@ pub fn applyOperation(
     host: Arc<dyn RuntimeSqliteHost>,
     storage: Arc<dyn RuntimeStorageHost>,
     operation: &SyncOperation,
-    preferences: &crate::PreferenceMerge::PreferenceMergeContext,
+    preferences: &BTreeMap<String, String>,
 ) -> Result<(), SqliteStoreError> {
     if operation.domain != PLUGIN_STORAGE_SYNC_DOMAIN
         || operation.entityType != "transaction"
@@ -2734,16 +2734,6 @@ pub fn applyOperation(
             if recorded != recordedPayload || row.get::<_,i64>(1)? != operation.createdAt { return Err(failure("Remote operation identity has conflicting content")); }
             return Ok(());
         }
-        if let Some(descriptor) = &database.merge {
-            for target in descriptor.entities.iter().flat_map(|entity| {
-                entity.key_references.iter().map(|reference| &reference.target)
-                    .chain(entity.references.iter().map(|reference| &reference.target))
-            }) {
-                if let StorageMergeTarget::Preference { path } = target {
-                    preferences.require(path).map_err(failure)?;
-                }
-            }
-        }
         if payload.tables.len() > 1000 {return Err(failure("Remote transaction exceeds table declaration limit"));}
         let mut tableNames=BTreeSet::new();
         for table in &payload.tables {
@@ -2759,7 +2749,7 @@ pub fn applyOperation(
                 tx,
                 &mut payload,
                 operation,
-                &preferences.references,
+                preferences,
             )?;
             validatePayload(&payload)?;
         }
@@ -2785,7 +2775,7 @@ pub fn applyOperation(
         }
         if !payload.changes.is_empty() {
             if let Some(descriptor) = &database.merge {
-                reconcileLocalReferences(tx, database.kind, descriptor, &preferences.references)?;
+                reconcileLocalReferences(tx, database.kind, descriptor, preferences)?;
                 reconcileMergeNames(tx, database.kind, descriptor)?;
             }
         }
