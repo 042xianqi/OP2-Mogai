@@ -3882,6 +3882,18 @@ class AppLocalizationsZh extends AppLocalizations {
       '该设备已是本空间成员。与它配对成功即建立直连，无需重新加入空间；配对需要对方显示、由你输入六位确认码。';
 
   @override
+  String get deviceSpaceUpdateEndpoint => '更新直连地址';
+
+  @override
+  String get deviceSpaceUpdateEndpointLabel => '直连地址';
+
+  @override
+  String get deviceSpaceUpdateEndpointHint => '例如 ws://192.168.1.20:37195/link';
+
+  @override
+  String get deviceSpaceUpdateEndpointSaved => '直连地址已更新';
+
+  @override
   String deviceSpaceDirectLinkEstablished(String device) {
     return '已建立直连：$device';
   }

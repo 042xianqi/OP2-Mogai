@@ -76,6 +76,68 @@ fn pairingAddressFor(address: &str, transport: PeerTransport) -> String {
     }
 }
 
+/// One operator-supplied dial address in its stored endpoint form.
+struct OperatorEndpoint {
+    rendered: String,
+    /// A scheme implies its carrier; a bare `host:port` keeps the record's.
+    transport: Option<PeerTransport>,
+}
+
+/// Parses an operator-supplied network endpoint, preserving its scheme, host, port, and path.
+fn parseOperatorEndpoint(input: &str) -> Result<OperatorEndpoint, CoreLinkError> {
+    let value = input.trim();
+    if value.is_empty() {
+        return Err(error("Endpoint address is empty"));
+    }
+    if let Some((scheme, rest)) = value.split_once("://") {
+        let transport = match scheme {
+            "http" | "https" => PeerTransport::Http,
+            "ws" | "wss" => PeerTransport::WebSocket,
+            "tcp" => PeerTransport::Tcp,
+            other => return Err(error(&format!("Unsupported endpoint scheme '{other}': use ws://, wss://, http://, https:// or tcp://"))),
+        };
+        if transport == PeerTransport::Tcp {
+            // Bare-carrier endpoints carry no path; the authority is the address.
+            let (host, port) = splitEndpointHostPort(rest)?;
+            return Ok(OperatorEndpoint { rendered: format!("tcp://{host}:{port}"), transport: Some(transport) });
+        }
+        let (authority, path) = match rest.split_once('/') {
+            Some((authority, path)) => (authority, format!("/{path}")),
+            None => (rest, "/link".to_string()),
+        };
+        let (host, port) = splitEndpointHostPort(authority)?;
+        return Ok(OperatorEndpoint {
+            rendered: format!("{scheme}://{host}:{port}{path}"),
+            transport: Some(transport),
+        });
+    }
+    let (host, port) = splitEndpointHostPort(value)?;
+    Ok(OperatorEndpoint { rendered: format!("{host}:{port}"), transport: None })
+}
+
+/// Splits one `host:port` authority, keeping bracketed IPv6 hosts verbatim.
+fn splitEndpointHostPort(authority: &str) -> Result<(String, u16), CoreLinkError> {
+    if let Some(rest) = authority.strip_prefix('[') {
+        let (host, rest) = rest.split_once(']')
+            .ok_or_else(|| error("Endpoint host is missing a closing bracket"))?;
+        let port = rest.strip_prefix(':').ok_or_else(|| error("Endpoint port is missing"))?;
+        return Ok((format!("[{host}]"), parseEndpointPort(port)?));
+    }
+    let (host, port) = authority.rsplit_once(':')
+        .ok_or_else(|| error("Endpoint port is missing: use host:port"))?;
+    if host.is_empty() {
+        return Err(error("Endpoint host is missing"));
+    }
+    Ok((host.to_string(), parseEndpointPort(port)?))
+}
+
+/// Parses a positive port number for an operator-supplied endpoint.
+fn parseEndpointPort(port: &str) -> Result<u16, CoreLinkError> {
+    let port = port.parse::<u16>().map_err(|_| error("Endpoint port is not a valid port number"))?;
+    if port == 0 { return Err(error("Endpoint port must be positive")); }
+    Ok(port)
+}
+
 #[cfg(test)]
 mod pairing_transport_tests {
     use super::*;
@@ -400,6 +462,20 @@ impl HostRuntimePeerService {
 
     /// Reports whether the peer's sole carrier can still carry traffic in either direction.
     fn hasLiveChannel(&self, node: &str) -> bool { self.peerChannel(node).is_some() }
+
+    /// Updates the sole outbound pairing record under the caller's mutation lock.
+    fn updateOutboundEndpointLocked(
+        &self, node: &str, parsed: &OperatorEndpoint, transport: Option<PeerTransport>,
+    ) -> Result<(), CoreLinkError> {
+        let records = self.state.store.records::<StoredOutbound>(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH).map_err(error)?;
+        let (id, record) = records.iter().find(|(_, record)|
+            record.peerNodeId == node && record.pairingServiceVersion == PAIRING_SERVICE_VERSION)
+            .ok_or_else(|| CoreLinkError::new("PEER_OUTBOUND_NOT_AUTHORIZED", "No current outbound authorization for node"))?;
+        let mut record = record.clone();
+        if let Some(transport) = parsed.transport.or(transport) { record.transport = transportName(transport).into(); }
+        record.endpoint = parsed.rendered.clone();
+        self.state.store.putRecord(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH, id, &record).map_err(error)
+    }
 
     /// Starts the same authenticated reader and dispatcher for every Host transport.
     async fn startPeerChannel(&self, node: &str, channel: Arc<Channel>, pairingId: String,
@@ -960,6 +1036,20 @@ impl RuntimePeerService for HostRuntimePeerService {
         dispatch::openPush(self, node, request).await
     }
     fn pairedPeers(&self) -> Result<Vec<PairedPeer>, CoreLinkError> { self.state.store.pairedPeers(&self.state.nodeId).map_err(error) }
+    /// Saves an operator-supplied pairing endpoint and probes the peer's sole channel.
+    async fn updatePeerEndpoint(
+        &self, node: &str, endpoint: &str, transport: Option<PeerTransport>,
+    ) -> Result<(), CoreLinkError> {
+        let parsed = parseOperatorEndpoint(endpoint)?;
+        {
+            let _guard = self.state.mutation.lock().unwrap();
+            self.updateOutboundEndpointLocked(node, &parsed, transport)?;
+        }
+        operit_util::AppLogger::AppLogger::i("RuntimePeerService", &format!(
+            "Dial endpoint updated by operator peer={node} endpoint={}", parsed.rendered));
+        let _ = self.acquireChannel(node).await;
+        Ok(())
+    }
     fn outboundPeerNodeIds(&self) -> Result<BTreeSet<String>, CoreLinkError> { Ok(self.pairedPeers()?.into_iter().filter(|p| p.outbound).map(|p| p.nodeId).collect()) }
     fn activePeerNodeIds(&self) -> Result<BTreeSet<String>, CoreLinkError> { Ok(self.state.active.lock().unwrap().clone()) }
     fn subscribePeerChanges(&self) -> broadcast::Receiver<()> { self.state.changes.subscribe() }
@@ -1358,6 +1448,77 @@ mod single_channel_tests {
         service.registerChannel("p1", &replacement).unwrap();
         let result = client.call(CoreCallRequest::new("old", "test", "read", CoreValue::Null)).await;
         assert_eq!(result.result.unwrap_err().code, "SPACE_ENTRY_CHANGED");
+    }
+
+    /// Updates only the existing pairing record and reuses the same authenticated channel.
+    #[tokio::test]
+    async fn operator_endpoint_update_preserves_the_only_channel() {
+        let service = service();
+        let record = StoredOutbound {
+            endpoint: "ws://10.0.0.1:37195/link".into(), sessionId: "s1".into(),
+            deviceId: "self".into(), peerNodeId: "p1".into(), peerDeviceInfo: service.state.info.clone(),
+            pairingServiceVersion: PAIRING_SERVICE_VERSION, sessionSecret: BASE64.encode([9u8; 32]),
+            transport: "ws".into(),
+        };
+        service.state.store.putRecord(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH, "s1", &record).unwrap();
+        let channel = callableChannel();
+        service.registerChannel("p1", &channel).unwrap();
+        service.updatePeerEndpoint("p1", " https://peer.example:8443/operit/link ", Some(PeerTransport::Tcp)).await.unwrap();
+        let updated = service.outbound("p1").unwrap();
+        assert_eq!(updated.endpoint, "https://peer.example:8443/operit/link");
+        assert_eq!(updated.transport, "http");
+        assert_eq!(updated.sessionId, record.sessionId);
+        assert_eq!(updated.sessionSecret, record.sessionSecret);
+        assert!(Arc::ptr_eq(&service.peerChannel("p1").unwrap(), &channel));
+        assert_eq!(service.channelCount("p1").await, 1);
+        service.updatePeerEndpoint("p1", "peer.example:8444", None).await.unwrap();
+        assert_eq!(service.outbound("p1").unwrap().transport, "http");
+        assert!(service.updatePeerEndpoint("p1", "host:0", None).await.is_err());
+        assert_eq!(service.outbound("p1").unwrap().endpoint, "peer.example:8444");
+        assert_eq!(service.updatePeerEndpoint("stranger", "host:37195", None).await.unwrap_err().code,
+            "PEER_OUTBOUND_NOT_AUTHORIZED");
+        assert_eq!(service.state.store.records::<StoredOutbound>(RUNTIME_LINK_ACCESS_OUTBOUND_SESSIONS_PATH).unwrap().len(), 1);
+    }
+
+    /// Publishes inbound channel arrival and loss through the unified availability projection.
+    #[tokio::test]
+    async fn inbound_channel_announces_reachability() {
+        let service = service();
+        let mut changes = service.subscribePeerChanges();
+        let channel = callableChannel();
+        assert!(!service.activePeerNodeIds().unwrap().contains("p1"));
+        service.registerChannel("p1", &channel).unwrap();
+        assert!(service.activePeerNodeIds().unwrap().contains("p1"));
+        changes.try_recv().unwrap();
+        service.disconnectPeer("p1").await.unwrap();
+        assert!(!service.activePeerNodeIds().unwrap().contains("p1"));
+        changes.try_recv().unwrap();
+    }
+
+    /// Rejects invalid operator endpoints before any record is written.
+    #[test]
+    fn operator_endpoint_parsing_rejects_malformed_addresses() {
+        for bad in ["", "   ", "ws://", "ws://host", "host:", "host:0", "host:notaport",
+            "ftp://host:37195/link", "[fd00::1:37195", "ws://[fd00::1]/link"] {
+            assert!(parseOperatorEndpoint(bad).is_err(), "{bad} must be rejected");
+        }
+    }
+
+    /// Normalizes supported endpoint schemes and bracketed IPv6 authorities.
+    #[test]
+    fn operator_endpoint_parsing_normalizes_accepted_forms() {
+        let parsed = parseOperatorEndpoint("ws://10.0.0.5:37195").unwrap();
+        assert_eq!(parsed.rendered, "ws://10.0.0.5:37195/link");
+        assert_eq!(parsed.transport, Some(PeerTransport::WebSocket));
+        let parsed = parseOperatorEndpoint("10.0.0.5:37195").unwrap();
+        assert_eq!(parsed.rendered, "10.0.0.5:37195");
+        assert_eq!(parsed.transport, None);
+        let parsed = parseOperatorEndpoint("wss://[fd00::1]:8443/operit").unwrap();
+        assert_eq!(parsed.rendered, "wss://[fd00::1]:8443/operit");
+        assert_eq!(parsed.transport, Some(PeerTransport::WebSocket));
+        let parsed = parseOperatorEndpoint("tcp://10.0.0.5:37195").unwrap();
+        assert_eq!(parsed.rendered, "tcp://10.0.0.5:37195");
+        assert_eq!(parsed.transport, Some(PeerTransport::Tcp));
     }
 
     /// A forwarding call waits for a later request on the same carrier to complete.
