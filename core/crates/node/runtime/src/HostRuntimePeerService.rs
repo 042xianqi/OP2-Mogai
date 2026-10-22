@@ -1002,6 +1002,9 @@ impl HostRuntimePeerService {
         if raw.requiresSessionReuse() && hello.purpose == "session" {
             self.startDuplex(&channel, &hello.nodeId)?;
             self.state.sharedSessions.lock().unwrap().insert(hello.nodeId.clone(), channel.clone());
+            // The session return route proves the peer is reachable; announce
+            // the arrival the way the duplex teardown announces the loss.
+            self.refreshPeerAvailability(&hello.nodeId);
             let result = dispatch::serve(self.clone(), channel.clone(), hello.nodeId, id, false).await;
             if let Some(d) = channel.duplex() { if let Err(e) = &result { d.fail(e.clone()); } channel.close().await; }
             result
@@ -1876,6 +1879,23 @@ mod dial_route_tests {
         // 一次成功的拨号清空计数并解除暂停。
         service.recordDialSucceeded("p1");
         assert!(!service.dialSuppressed("p1"));
+    }
+
+    /// 到达与离开对称：应答侧登记会话复用连接（串口）后，
+    /// 可用性推导翻转为在线，观察者由此收到广播。
+    #[test]
+    fn an_inbound_shared_session_announces_reachability() {
+        let service = service();
+        let channel = Channel::new(
+            Arc::new(SilentPeer(PeerEndpoint { nodeId: "p1".into(), address: "unused".into() })),
+            &[7; 32], b"test", false).unwrap();
+        // isOpen 只认已装 duplex 的通道；装一个不经调度器泵的空 duplex。
+        let (duplex, _incoming) = duplex::Duplex::new();
+        channel.setDuplex(duplex);
+        service.state.sharedSessions.lock().unwrap().insert("p1".into(), channel);
+        assert!(!service.activePeerNodeIds().unwrap().contains("p1"));
+        service.refreshPeerAvailability("p1");
+        assert!(service.activePeerNodeIds().unwrap().contains("p1"));
     }
 
     /// A forwarding call waits for a later request on the same carrier to complete.
