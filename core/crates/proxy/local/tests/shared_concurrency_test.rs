@@ -51,6 +51,11 @@ impl TestRuntimeStorageHost {
 }
 
 impl RuntimeStorageHost for TestRuntimeStorageHost {
+    /// Delegates durability to the real storage host without rewriting the file.
+    fn flushFile(&self, path: &str) -> operit_host_api::HostResult<()> {
+        self.inner.flushFile(path)
+    }
+
     /// Returns the physical test runtime root.
     fn runtimeRootDir(&self) -> Option<std::path::PathBuf> {
         self.inner.runtimeRootDir()

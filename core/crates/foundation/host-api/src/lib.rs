@@ -1801,10 +1801,8 @@ pub trait RuntimeStorageHost: Send + Sync {
     /// Appends bytes to a virtual runtime storage path.
     fn appendBytes(&self, path: &str, content: &[u8]) -> HostResult<()>;
     /// Makes preceding file writes durable before their recovery intent is removed.
-    /// Hosts with an explicit flush should override this atomic rewrite fallback.
-    fn flushFile(&self, path: &str) -> HostResult<()> {
-        self.writeBytesAtomically(path, &self.readBytes(path)?)
-    }
+    /// Each host must flush its backing storage without reading or rewriting the file.
+    fn flushFile(&self, path: &str) -> HostResult<()>;
     /// Deletes a virtual runtime storage entry.
     fn delete(&self, path: &str, recursive: bool) -> HostResult<()>;
     /// Checks whether a virtual runtime storage entry exists.

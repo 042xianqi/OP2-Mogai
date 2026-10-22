@@ -7,7 +7,7 @@ use crate::tools::ToolInvocation::prepareInvocation;
 use crate::ToolExecutionManager::{
     PreparedToolInvocation, SharedToolExecutor, ToolCall, ToolEffect, ToolInvocationContext,
 };
-use operit_host_api::{HostError, HostResult, TerminalHost};
+use operit_host_api::{HostError, HostResult, HostRuntimeTaskSchedulerHost, TerminalHost};
 use operit_plugin_sdk::js_sdk::results::{
     JsNullable, TerminalImplementation, TerminalObservationResultData, TerminalType, ToolResultData,
 };
@@ -17,7 +17,6 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
 };
-use std::time::{Duration, Instant};
 
 const MAX_OBSERVATIONS: usize = 32;
 const MAX_QUEUED_BYTES: usize = 1024 * 1024;
@@ -38,6 +37,7 @@ struct Arguments {
 
 pub(crate) struct TerminalStreamExecutor {
     host: Option<Arc<dyn TerminalHost>>,
+    scheduler: Option<Arc<dyn HostRuntimeTaskSchedulerHost>>,
     observations: Mutex<HashMap<String, Arc<Observation>>>,
     workers: Arc<AtomicUsize>,
 }
@@ -77,20 +77,23 @@ struct ObservationState {
     events: VecDeque<TerminalExecEvent>,
     queuedBytes: usize,
     result: Option<Result<(), String>>,
-    completedAt: Option<Instant>,
+    completedAt: Option<u64>,
 }
 impl TerminalStreamExecutor {
-    pub(crate) fn new(host: Option<Arc<dyn TerminalHost>>) -> Self {
+    /// Binds terminal execution to the host-owned blocking task scheduler.
+    pub(crate) fn new(
+        host: Option<Arc<dyn TerminalHost>>,
+        scheduler: Option<Arc<dyn HostRuntimeTaskSchedulerHost>>,
+    ) -> Self {
         Self {
             host,
+            scheduler,
             observations: Mutex::new(HashMap::new()),
             workers: Arc::new(AtomicUsize::new(0)),
         }
     }
+    /// Validates one observation and schedules its command through the registered host.
     fn open(&self, owner: String, request: TerminalExecRequest) -> Result<String, String> {
-        if cfg!(target_arch = "wasm32") {
-            return Err("Live terminal execution is not supported by the browser host yet".into());
-        }
         if request.sessionId.trim().is_empty()
             || request.sessionId.trim() != request.sessionId
             || request.sessionId.contains('\0')
@@ -101,6 +104,10 @@ impl TerminalStreamExecutor {
             return Err("Terminal stream requires a command without NUL bytes".into());
         }
         let host = self.host.clone().ok_or("Terminal host is unavailable")?;
+        let scheduler = self
+            .scheduler
+            .as_ref()
+            .ok_or("Runtime task scheduler host is unavailable")?;
         let session = host
             .listSessions()
             .map_err(|error| error.message)?
@@ -128,6 +135,7 @@ impl TerminalStreamExecutor {
             }),
         });
         let handle = uuid::Uuid::new_v4().to_string();
+        let now = scheduler.monotonicTimeMillis().map_err(|error| error.message)?;
         let permit = {
             let mut registry = self
                 .observations
@@ -137,7 +145,7 @@ impl TerminalStreamExecutor {
                 value.inner.lock().map_or(false, |inner| {
                     !inner
                         .completedAt
-                        .is_some_and(|at| at.elapsed() > Duration::from_secs(60))
+                        .is_some_and(|at| now.saturating_sub(at) > 60_000)
                 })
             });
             if registry.len() >= MAX_OBSERVATIONS
@@ -149,9 +157,10 @@ impl TerminalStreamExecutor {
             self.workers.fetch_add(1, Ordering::AcqRel);
             WorkerPermit(self.workers.clone())
         };
-        let thread = std::thread::Builder::new()
-            .name("terminal-command-stream".into())
-            .spawn(move || {
+        let taskScheduler = Arc::clone(scheduler);
+        let scheduled = scheduler.scheduleHostRuntimeTask(
+            "terminal-command-stream",
+            Box::new(move || {
                 let _permit = permit;
                 let mut totalBytes = 0usize;
                 let mut decoder = OutputDecoder::default();
@@ -211,6 +220,10 @@ impl TerminalStreamExecutor {
                     Ok(receipt)
                 });
                 if let Ok(mut inner) = observation.inner.lock() {
+                    let result = taskScheduler.monotonicTimeMillis().and_then(|at| {
+                        inner.completedAt = Some(at);
+                        result
+                    });
                     inner.result = Some(match result {
                         Ok(receipt) => {
                             inner.events.push_back(TerminalExecEvent::Completed {
@@ -220,16 +233,19 @@ impl TerminalStreamExecutor {
                         }
                         Err(error) => Err(error.message),
                     });
-                    inner.completedAt = Some(Instant::now());
                 }
                 observation.ready.notify_waiters();
-            });
-        if let Err(error) = thread {
+            }),
+        );
+        if let Err(error) = scheduled {
             self.observations
                 .lock()
                 .map_err(|_| "Terminal observation registry is poisoned")?
                 .remove(&handle);
-            return Err(format!("Cannot start terminal streaming worker: {error}"));
+            return Err(format!(
+                "Cannot schedule terminal streaming task: {}",
+                error.message
+            ));
         }
         Ok(handle)
     }
@@ -405,6 +421,7 @@ impl OutputDecoder {
 mod tests {
     use super::*;
     use operit_host_native_terminal::NativePtyTerminalHost;
+    use std::time::Duration;
 
     #[test]
     fn output_decoder_preserves_split_unicode_and_hides_split_native_markers() {
@@ -418,12 +435,18 @@ mod tests {
         assert_eq!(output, "雪🌍done!");
         assert!(decoder.pending.is_empty() && decoder.utf8.is_empty());
     }
+    /// Opens a native terminal with the same host-owned scheduler used in production.
     fn fixture() -> (Arc<NativePtyTerminalHost>, TerminalStreamExecutor, String) {
         let host = Arc::new(NativePtyTerminalHost::default());
         let session = host
             .createOrGetSession(&uuid::Uuid::new_v4().to_string())
             .unwrap();
-        let tools = TerminalStreamExecutor::new(Some(host.clone()));
+        let tools = TerminalStreamExecutor::new(
+            Some(host.clone()),
+            Some(Arc::new(
+                operit_host_native_scheduler::NativeHostRuntimeTaskSchedulerHost::new(),
+            )),
+        );
         (host, tools, session.sessionId)
     }
     async fn idle(host: &dyn TerminalHost, session: &str) {

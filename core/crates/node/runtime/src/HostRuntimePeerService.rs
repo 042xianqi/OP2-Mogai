@@ -1580,6 +1580,14 @@ mod dial_route_tests {
     #[derive(Default)]
     struct Storage(Mutex<BTreeMap<String, Vec<u8>>>);
     impl operit_host_api::RuntimeStorageHost for Storage {
+        /// Confirms synchronous in-memory publication without copying or rewriting bytes.
+        fn flushFile(&self, path: &str) -> operit_host_api::HostResult<()> {
+            if !self.exists(path)? {
+                return Err(operit_host_api::HostError::new("runtime storage entry not found"));
+            }
+            Ok(())
+        }
+
         fn runtimeRootDir(&self) -> Option<std::path::PathBuf> { None }
         fn workspaceRootDir(&self) -> Option<std::path::PathBuf> { None }
         fn readBytes(&self, p: &str) -> HostResult<Vec<u8>> { self.0.lock().unwrap().get(p).cloned().ok_or_else(|| HostError::new("missing")) }

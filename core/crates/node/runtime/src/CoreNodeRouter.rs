@@ -2568,6 +2568,14 @@ mod tests {
     }
 
     impl RuntimeStorageHost for TestRuntimeStorageHost {
+        /// Confirms synchronous in-memory publication without copying or rewriting bytes.
+        fn flushFile(&self, path: &str) -> operit_host_api::HostResult<()> {
+            if !self.exists(path)? {
+                return Err(operit_host_api::HostError::new("runtime storage entry not found"));
+            }
+            Ok(())
+        }
+
         /// Returns the physical runtime root used by path-only test callers.
         #[allow(non_snake_case)]
         fn runtimeRootDir(&self) -> Option<std::path::PathBuf> {

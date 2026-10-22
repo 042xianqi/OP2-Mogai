@@ -77,6 +77,8 @@ interface WorkerRuntimeStorageBridge {
   readRange(prefix: string, path: string, offset: number, length: number): Uint8Array;
   write(prefix: string, path: string, content: Uint8Array): void;
   append(prefix: string, path: string, content: Uint8Array): void;
+  /** Flushes one existing record through its worker-owned OPFS handles. */
+  flush(prefix: string, path: string): void;
   hasFile(prefix: string, path: string): boolean;
   exists(prefix: string, path: string): boolean;
   delete(prefix: string, path: string, recursive: boolean): void;
@@ -654,6 +656,10 @@ function runtimeStorageBridge(): WorkerRuntimeStorageBridge {
     append(prefix: string, path: string, content: Uint8Array): void {
       requiredRuntimeStorage().append(storageKey(prefix, path), content);
     },
+    /** Flushes the data and index that contain the requested runtime record. */
+    flush(prefix: string, path: string): void {
+      requiredRuntimeStorage().flush(storageKey(prefix, path));
+    },
     hasFile(prefix: string, path: string): boolean {
       return requiredRuntimeStorage().hasFile(storageKey(prefix, path));
     },
@@ -796,6 +802,15 @@ class RuntimeWorkerStorage {
       byteLength: (previous?.byteLength ?? 0) + content.byteLength,
     });
     this.persistIndex();
+  }
+
+  /** Flushes a live record without allocating another copy in the OPFS data file. */
+  flush(itemKey: string): void {
+    if (!this.records.has(itemKey)) {
+      throw new Error(`Runtime storage record does not exist: ${itemKey}`);
+    }
+    this.data.flush();
+    this.index.flush();
   }
 
   /** Reports whether one file or virtual directory exists in runtime OPFS storage. */

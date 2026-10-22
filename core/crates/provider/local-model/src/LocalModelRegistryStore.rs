@@ -192,6 +192,12 @@ impl TestRuntimeStorageHost {
 
 #[cfg(test)]
 impl RuntimeStorageHost for TestRuntimeStorageHost {
+    /// Flushes the existing test file through its backing filesystem.
+    fn flushFile(&self, path: &str) -> operit_host_api::HostResult<()> {
+        std::fs::OpenOptions::new().write(true).open(self.resolve(path)?)?.sync_all()?;
+        Ok(())
+    }
+
     /// Returns the runtime root used by root-backed registry tests.
     fn runtimeRootDir(&self) -> Option<PathBuf> {
         self.runtimeRoot.clone()

@@ -618,12 +618,16 @@ fn registerSystemOperationTool(
     );
 }
 
+/// Registers terminal tools with the same host execution and scheduling context.
 #[allow(non_snake_case)]
 fn registerTerminalTools(handler: &mut AIToolHandler, terminalTools: StandardTerminalTools) {
     handler.registerBuiltinTool(
         BuiltinToolName::TerminalObserve,
         operit_tools::ToolExecutionManager::RegisteredToolExecutor::Shared(Arc::new(
-            operit_tools::tools::defaultTool::standard::StandardTerminalStreaming::TerminalStreamExecutor::new(terminalTools.terminalHost.clone()),
+            operit_tools::tools::defaultTool::standard::StandardTerminalStreaming::TerminalStreamExecutor::new(
+                terminalTools.terminalHost.clone(),
+                handler.getContext().hostRuntimeTaskSchedulerHost.clone(),
+            ),
         )),
         ToolRegistrationVisibility::PUBLIC,
     );

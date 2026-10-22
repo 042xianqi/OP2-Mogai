@@ -11,6 +11,14 @@ struct MemoryStorage {
     fail_write: Mutex<Option<String>>,
 }
 impl RuntimeStorageHost for MemoryStorage {
+    /// Confirms synchronous in-memory publication without copying or rewriting bytes.
+    fn flushFile(&self, path: &str) -> operit_host_api::HostResult<()> {
+        if !self.exists(path)? {
+            return Err(operit_host_api::HostError::new("runtime storage entry not found"));
+        }
+        Ok(())
+    }
+
     fn runtimeRootDir(&self) -> Option<std::path::PathBuf> {
         None
     }

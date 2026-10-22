@@ -17,6 +17,11 @@ struct RecordingStorageHost {
 }
 
 impl RuntimeStorageHost for RecordingStorageHost {
+    /// Delegates durability to the real storage host without rewriting the file.
+    fn flushFile(&self, path: &str) -> operit_host_api::HostResult<()> {
+        self.inner.flushFile(path)
+    }
+
     /// Reads the physical root from the real storage host.
     fn runtimeRootDir(&self) -> Option<PathBuf> {
         self.inner.runtimeRootDir()
