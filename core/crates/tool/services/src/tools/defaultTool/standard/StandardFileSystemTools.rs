@@ -48,8 +48,8 @@ use operit_util::RuntimeStorageLayout::RUNTIME_ROOT_PATH_PREFIX;
 
 use super::StandardWebVisitTool::StandardWebVisitTool;
 
-/// Message for file tools that cannot run against another device yet.
-const REMOTE_FILE_SCOPE_MESSAGE: &str = "Cross-device file access currently supports read-only tools (list_files, read_file*, file_exists, file_info, find_files, grep_*). Writing, moving, or presenting files on another device is not available yet.";
+/// Message for calls whose path parameters resolve to different devices.
+const CROSS_NODE_TRANSFER_MESSAGE: &str = "File tools run every operation on one device. Moving or copying between different devices (source and destination on different nodes) is not supported yet; read the file from the source device, then write it on the destination device.";
 
 /// One file-tool invocation resolved to its execution device.
 #[derive(Clone, Debug)]
@@ -130,9 +130,19 @@ impl StandardFileSystemTools {
     ) -> Result<PreparedFileToolCall, String> {
         let mut call = tool.clone();
         let mut remoteTarget: Option<(String, String, String)> = None;
+        let mut localPathSeen = false;
         for name in pathParameters {
             let value = parameterValue(tool, name);
             if splitQualifiedVfsPath(&value).is_none() {
+                if !value.trim().is_empty() {
+                    // A bare path always evaluates on this device; combining it
+                    // with a remote parameter would leave it unrewritten on the
+                    // remote, where its mounts do not exist.
+                    if remoteTarget.is_some() {
+                        return Err(CROSS_NODE_TRANSFER_MESSAGE.to_string());
+                    }
+                    localPathSeen = true;
+                }
                 continue;
             }
             let state = self.runtimeSupport.coreNodeRouteState().map_err(|error| {
@@ -140,11 +150,15 @@ impl StandardFileSystemTools {
             })?;
             match state.resolveQualifiedVfsPath(&value)? {
                 QualifiedVfsResolution::LocalPath(innerPath) => {
+                    if remoteTarget.is_some() {
+                        return Err(CROSS_NODE_TRANSFER_MESSAGE.to_string());
+                    }
+                    localPathSeen = true;
                     Self::rewritePathParameter(&mut call, name, &innerPath);
                 }
                 QualifiedVfsResolution::RemoteTarget { node, pathPrefix, innerPath } => {
-                    if !allowRemote {
-                        return Err(REMOTE_FILE_SCOPE_MESSAGE.to_string());
+                    if localPathSeen {
+                        return Err(CROSS_NODE_TRANSFER_MESSAGE.to_string());
                     }
                     if !node.canExecute {
                         return Err(format!(
@@ -158,12 +172,20 @@ impl StandardFileSystemTools {
                             coreNodeReferenceLabel(node)
                         ));
                     }
+                    match &remoteTarget {
+                        None => {
+                            remoteTarget = Some((
+                                node.nodeId.clone(),
+                                value.trim().to_string(),
+                                pathPrefix.to_string(),
+                            ));
+                        }
+                        Some((nodeId, _, _)) if nodeId != &node.nodeId => {
+                            return Err(CROSS_NODE_TRANSFER_MESSAGE.to_string());
+                        }
+                        _ => {}
+                    }
                     Self::rewritePathParameter(&mut call, name, innerPath);
-                    remoteTarget = Some((
-                        node.nodeId.clone(),
-                        value.trim().to_string(),
-                        pathPrefix.to_string(),
-                    ));
                 }
             }
         }
@@ -172,20 +194,6 @@ impl StandardFileSystemTools {
             Some((nodeId, typedPath, nodePrefix)) => {
                 Ok(PreparedFileToolCall::Remote { call, nodeId, typedPath, nodePrefix })
             }
-        }
-    }
-
-    /// Local-only variant for write and presentation tools: any qualified
-    /// path targeting another device fails with the read-only scope message.
-    #[allow(non_snake_case)]
-    fn prepareLocalFileToolCall(
-        &self,
-        tool: &AITool,
-        pathParameters: &[&str],
-    ) -> Result<AITool, String> {
-        match self.prepareFileToolCall(tool, pathParameters, false)? {
-            PreparedFileToolCall::Local(call) => Ok(call),
-            PreparedFileToolCall::Remote { .. } => Err(REMOTE_FILE_SCOPE_MESSAGE.to_string()),
         }
     }
 
@@ -961,9 +969,14 @@ impl StandardFileSystemTools {
 
     #[allow(non_snake_case)]
     /// Writes text content to a file, optionally appending.
-    pub fn writeFile(&self, tool: &AITool) -> ToolResult {
-        let tool = &match self.prepareLocalFileToolCall(tool, &["path"]) {
-            Ok(call) => call,
+    pub async fn writeFile(&self, tool: &AITool) -> ToolResult {
+        let tool = &match self.prepareFileToolCall(tool, &["path"], true) {
+            Ok(PreparedFileToolCall::Local(call)) => call,
+            Ok(PreparedFileToolCall::Remote { call, nodeId, typedPath, nodePrefix }) => {
+                return self
+                    .dispatchRemoteFileTool(call, nodeId, &typedPath, &nodePrefix)
+                    .await;
+            }
             Err(error) => return toolError(tool, String::new(), error),
         };
         let path = parameterValue(tool, "path");
@@ -990,9 +1003,14 @@ impl StandardFileSystemTools {
 
     #[allow(non_snake_case)]
     /// Writes base64-encoded binary content to a file.
-    pub fn writeFileBinary(&self, tool: &AITool) -> ToolResult {
-        let tool = &match self.prepareLocalFileToolCall(tool, &["path"]) {
-            Ok(call) => call,
+    pub async fn writeFileBinary(&self, tool: &AITool) -> ToolResult {
+        let tool = &match self.prepareFileToolCall(tool, &["path"], true) {
+            Ok(PreparedFileToolCall::Local(call)) => call,
+            Ok(PreparedFileToolCall::Remote { call, nodeId, typedPath, nodePrefix }) => {
+                return self
+                    .dispatchRemoteFileTool(call, nodeId, &typedPath, &nodePrefix)
+                    .await;
+            }
             Err(error) => return toolError(tool, String::new(), error),
         };
         let path = parameterValue(tool, "path");
@@ -1025,9 +1043,14 @@ impl StandardFileSystemTools {
 
     #[allow(non_snake_case)]
     /// Deletes a file or directory through the visual file system.
-    pub fn deleteFile(&self, tool: &AITool) -> ToolResult {
-        let tool = &match self.prepareLocalFileToolCall(tool, &["path"]) {
-            Ok(call) => call,
+    pub async fn deleteFile(&self, tool: &AITool) -> ToolResult {
+        let tool = &match self.prepareFileToolCall(tool, &["path"], true) {
+            Ok(PreparedFileToolCall::Local(call)) => call,
+            Ok(PreparedFileToolCall::Remote { call, nodeId, typedPath, nodePrefix }) => {
+                return self
+                    .dispatchRemoteFileTool(call, nodeId, &typedPath, &nodePrefix)
+                    .await;
+            }
             Err(error) => return toolError(tool, String::new(), error),
         };
         let path = parameterValue(tool, "path");
@@ -1082,9 +1105,14 @@ impl StandardFileSystemTools {
 
     #[allow(non_snake_case)]
     /// Moves a file or directory to another visual path.
-    pub fn moveFile(&self, tool: &AITool) -> ToolResult {
-        let tool = &match self.prepareLocalFileToolCall(tool, &["source", "destination"]) {
-            Ok(call) => call,
+    pub async fn moveFile(&self, tool: &AITool) -> ToolResult {
+        let tool = &match self.prepareFileToolCall(tool, &["source", "destination"], true) {
+            Ok(PreparedFileToolCall::Local(call)) => call,
+            Ok(PreparedFileToolCall::Remote { call, nodeId, typedPath, nodePrefix }) => {
+                return self
+                    .dispatchRemoteFileTool(call, nodeId, &typedPath, &nodePrefix)
+                    .await;
+            }
             Err(error) => return toolError(tool, String::new(), error),
         };
         let sourcePath = parameterValue(tool, "source");
@@ -1112,9 +1140,14 @@ impl StandardFileSystemTools {
 
     #[allow(non_snake_case)]
     /// Copies a file or directory to another visual path.
-    pub fn copyFile(&self, tool: &AITool) -> ToolResult {
-        let tool = &match self.prepareLocalFileToolCall(tool, &["source", "destination"]) {
-            Ok(call) => call,
+    pub async fn copyFile(&self, tool: &AITool) -> ToolResult {
+        let tool = &match self.prepareFileToolCall(tool, &["source", "destination"], true) {
+            Ok(PreparedFileToolCall::Local(call)) => call,
+            Ok(PreparedFileToolCall::Remote { call, nodeId, typedPath, nodePrefix }) => {
+                return self
+                    .dispatchRemoteFileTool(call, nodeId, &typedPath, &nodePrefix)
+                    .await;
+            }
             Err(error) => return toolError(tool, String::new(), error),
         };
         let sourcePath = parameterValue(tool, "source");
@@ -1125,15 +1158,23 @@ impl StandardFileSystemTools {
         match self.synchronizeMappedChanges(&[&destPath], || {
             vfs.copyFile(&sourcePath, &destPath, recursive)
         }) {
-            Ok(()) => successData(
-                tool,
-                fileOperationResult(
-                    "copy",
-                    &sourcePath,
-                    true,
-                    format!("Successfully copied {sourcePath} to {destPath}"),
-                ),
-            ),
+            Ok(()) => {
+                if let Err(verificationError) =
+                    Self::verifyCopyOutcome(&vfs, &sourcePath, &destPath, recursive)
+                {
+                    let message = format!("Copy verification failed: {verificationError}");
+                    return toolError(tool, fileOperationDataToString(&message), message);
+                }
+                successData(
+                    tool,
+                    fileOperationResult(
+                        "copy",
+                        &sourcePath,
+                        true,
+                        format!("Successfully copied {sourcePath} to {destPath}"),
+                    ),
+                )
+            }
             Err(errorValue) => {
                 let message = errorValue;
                 toolError(tool, fileOperationDataToString(&message), message)
@@ -1141,11 +1182,55 @@ impl StandardFileSystemTools {
         }
     }
 
+    /// Confirms a finished copy actually landed: the destination must exist,
+    /// and file copies must keep the source byte size.
+    #[allow(non_snake_case)]
+    fn verifyCopyOutcome(
+        vfs: &VisualFileSystem,
+        sourcePath: &str,
+        destPath: &str,
+        recursive: bool,
+    ) -> Result<(), String> {
+        let destination = vfs
+            .fileExists(destPath)
+            .map_err(|error| format!("destination check failed: {error}"))?;
+        if !destination.exists {
+            return Err(format!("destination does not exist after copy: {destPath}"));
+        }
+        let source = vfs
+            .fileInfo(sourcePath)
+            .map_err(|error| format!("source check failed: {error}"))?;
+        if source.fileType == "directory" {
+            if !destination.isDirectory {
+                return Err(format!("copy destination is not a directory: {destPath}"));
+            }
+            return Ok(());
+        }
+        if destination.isDirectory {
+            if recursive {
+                return Ok(());
+            }
+            return Err(format!("copy destination is a directory: {destPath}"));
+        }
+        if destination.size != source.size {
+            return Err(format!(
+                "size mismatch: source {sourcePath} is {} bytes, destination {destPath} is {} bytes",
+                source.size, destination.size
+            ));
+        }
+        Ok(())
+    }
+
     #[allow(non_snake_case)]
     /// Creates a directory through the visual file system.
-    pub fn makeDirectory(&self, tool: &AITool) -> ToolResult {
-        let tool = &match self.prepareLocalFileToolCall(tool, &["path"]) {
-            Ok(call) => call,
+    pub async fn makeDirectory(&self, tool: &AITool) -> ToolResult {
+        let tool = &match self.prepareFileToolCall(tool, &["path"], true) {
+            Ok(PreparedFileToolCall::Local(call)) => call,
+            Ok(PreparedFileToolCall::Remote { call, nodeId, typedPath, nodePrefix }) => {
+                return self
+                    .dispatchRemoteFileTool(call, nodeId, &typedPath, &nodePrefix)
+                    .await;
+            }
             Err(error) => return toolError(tool, String::new(), error),
         };
         let path = parameterValue(tool, "path");
@@ -1353,9 +1438,14 @@ impl StandardFileSystemTools {
 
     #[allow(non_snake_case)]
     /// Downloads a URL into a file-system destination.
-    pub fn downloadFile(&self, tool: &AITool) -> ToolResult {
-        let tool = &match self.prepareLocalFileToolCall(tool, &["destination"]) {
-            Ok(call) => call,
+    pub async fn downloadFile(&self, tool: &AITool) -> ToolResult {
+        let tool = &match self.prepareFileToolCall(tool, &["destination"], true) {
+            Ok(PreparedFileToolCall::Local(call)) => call,
+            Ok(PreparedFileToolCall::Remote { call, nodeId, typedPath, nodePrefix }) => {
+                return self
+                    .dispatchRemoteFileTool(call, nodeId, &typedPath, &nodePrefix)
+                    .await;
+            }
             Err(error) => return toolError(tool, String::new(), error),
         };
         let urlParam = parameterValue(tool, "url");
@@ -1495,26 +1585,28 @@ impl StandardFileSystemTools {
 
     #[allow(non_snake_case)]
     /// Creates a new file from structured tool parameters.
-    pub fn createFile(&self, tool: &AITool) -> ToolResult {
+    pub async fn createFile(&self, tool: &AITool) -> ToolResult {
         let path = parameterValue(tool, "path");
         let newContent = parameterValue(tool, "new");
-        let mut results = self.applyFile(&AITool {
-            name: "apply_file".to_string(),
-            parameters: vec![
-                ToolParameter {
-                    name: "path".to_string(),
-                    value: path,
-                },
-                ToolParameter {
-                    name: "type".to_string(),
-                    value: "create".to_string(),
-                },
-                ToolParameter {
-                    name: "new".to_string(),
-                    value: newContent,
-                },
-            ],
-        });
+        let mut results = self
+            .applyFile(&AITool {
+                name: "apply_file".to_string(),
+                parameters: vec![
+                    ToolParameter {
+                        name: "path".to_string(),
+                        value: path,
+                    },
+                    ToolParameter {
+                        name: "type".to_string(),
+                        value: "create".to_string(),
+                    },
+                    ToolParameter {
+                        name: "new".to_string(),
+                        value: newContent,
+                    },
+                ],
+            })
+            .await;
         let mut result = results.remove(results.len() - 1);
         result.toolName = tool.name.clone();
         result
@@ -1522,31 +1614,33 @@ impl StandardFileSystemTools {
 
     #[allow(non_snake_case)]
     /// Applies structured edits to an existing file.
-    pub fn editFile(&self, tool: &AITool) -> ToolResult {
+    pub async fn editFile(&self, tool: &AITool) -> ToolResult {
         let path = parameterValue(tool, "path");
         let oldContent = parameterValue(tool, "old");
         let newContent = parameterValue(tool, "new");
-        let mut results = self.applyFile(&AITool {
-            name: "apply_file".to_string(),
-            parameters: vec![
-                ToolParameter {
-                    name: "path".to_string(),
-                    value: path,
-                },
-                ToolParameter {
-                    name: "type".to_string(),
-                    value: "replace".to_string(),
-                },
-                ToolParameter {
-                    name: "old".to_string(),
-                    value: oldContent,
-                },
-                ToolParameter {
-                    name: "new".to_string(),
-                    value: newContent,
-                },
-            ],
-        });
+        let mut results = self
+            .applyFile(&AITool {
+                name: "apply_file".to_string(),
+                parameters: vec![
+                    ToolParameter {
+                        name: "path".to_string(),
+                        value: path,
+                    },
+                    ToolParameter {
+                        name: "type".to_string(),
+                        value: "replace".to_string(),
+                    },
+                    ToolParameter {
+                        name: "old".to_string(),
+                        value: oldContent,
+                    },
+                    ToolParameter {
+                        name: "new".to_string(),
+                        value: newContent,
+                    },
+                ],
+            })
+            .await;
         let mut result = results.remove(results.len() - 1);
         result.toolName = tool.name.clone();
         result
@@ -1554,9 +1648,14 @@ impl StandardFileSystemTools {
 
     #[allow(non_snake_case)]
     /// Applies multi-step file patch operations and streams per-step results.
-    pub fn applyFile(&self, tool: &AITool) -> Vec<ToolResult> {
-        let tool = &match self.prepareLocalFileToolCall(tool, &["path"]) {
-            Ok(call) => call,
+    pub async fn applyFile(&self, tool: &AITool) -> Vec<ToolResult> {
+        let tool = &match self.prepareFileToolCall(tool, &["path"], true) {
+            Ok(PreparedFileToolCall::Local(call)) => call,
+            Ok(PreparedFileToolCall::Remote { call, nodeId, typedPath, nodePrefix }) => {
+                return vec![
+                    self.dispatchRemoteFileTool(call, nodeId, &typedPath, &nodePrefix).await
+                ];
+            }
             Err(error) => return vec![toolError(tool, String::new(), error)],
         };
         let path = parameterValue(tool, "path");
@@ -1731,9 +1830,14 @@ impl StandardFileSystemTools {
 
     #[allow(non_snake_case)]
     /// Creates a zip archive from a file-system path.
-    pub fn zipFiles(&self, tool: &AITool) -> ToolResult {
-        let tool = &match self.prepareLocalFileToolCall(tool, &["source", "destination"]) {
-            Ok(call) => call,
+    pub async fn zipFiles(&self, tool: &AITool) -> ToolResult {
+        let tool = &match self.prepareFileToolCall(tool, &["source", "destination"], true) {
+            Ok(PreparedFileToolCall::Local(call)) => call,
+            Ok(PreparedFileToolCall::Remote { call, nodeId, typedPath, nodePrefix }) => {
+                return self
+                    .dispatchRemoteFileTool(call, nodeId, &typedPath, &nodePrefix)
+                    .await;
+            }
             Err(error) => return toolError(tool, String::new(), error),
         };
         let source = parameterValue(tool, "source");
@@ -1758,9 +1862,14 @@ impl StandardFileSystemTools {
 
     #[allow(non_snake_case)]
     /// Extracts a zip archive into a file-system path.
-    pub fn unzipFiles(&self, tool: &AITool) -> ToolResult {
-        let tool = &match self.prepareLocalFileToolCall(tool, &["source", "destination"]) {
-            Ok(call) => call,
+    pub async fn unzipFiles(&self, tool: &AITool) -> ToolResult {
+        let tool = &match self.prepareFileToolCall(tool, &["source", "destination"], true) {
+            Ok(PreparedFileToolCall::Local(call)) => call,
+            Ok(PreparedFileToolCall::Remote { call, nodeId, typedPath, nodePrefix }) => {
+                return self
+                    .dispatchRemoteFileTool(call, nodeId, &typedPath, &nodePrefix)
+                    .await;
+            }
             Err(error) => return toolError(tool, String::new(), error),
         };
         let source = parameterValue(tool, "source");
@@ -1785,9 +1894,14 @@ impl StandardFileSystemTools {
 
     #[allow(non_snake_case)]
     /// Opens a file with the host operating environment.
-    pub fn openFile(&self, tool: &AITool) -> ToolResult {
-        let tool = &match self.prepareLocalFileToolCall(tool, &["path"]) {
-            Ok(call) => call,
+    pub async fn openFile(&self, tool: &AITool) -> ToolResult {
+        let tool = &match self.prepareFileToolCall(tool, &["path"], true) {
+            Ok(PreparedFileToolCall::Local(call)) => call,
+            Ok(PreparedFileToolCall::Remote { call, nodeId, typedPath, nodePrefix }) => {
+                return self
+                    .dispatchRemoteFileTool(call, nodeId, &typedPath, &nodePrefix)
+                    .await;
+            }
             Err(error) => return toolError(tool, String::new(), error),
         };
         let path = parameterValue(tool, "path");
@@ -1806,9 +1920,14 @@ impl StandardFileSystemTools {
 
     #[allow(non_snake_case)]
     /// Shares a file through the host operating environment.
-    pub fn shareFile(&self, tool: &AITool) -> ToolResult {
-        let tool = &match self.prepareLocalFileToolCall(tool, &["path"]) {
-            Ok(call) => call,
+    pub async fn shareFile(&self, tool: &AITool) -> ToolResult {
+        let tool = &match self.prepareFileToolCall(tool, &["path"], true) {
+            Ok(PreparedFileToolCall::Local(call)) => call,
+            Ok(PreparedFileToolCall::Remote { call, nodeId, typedPath, nodePrefix }) => {
+                return self
+                    .dispatchRemoteFileTool(call, nodeId, &typedPath, &nodePrefix)
+                    .await;
+            }
             Err(error) => return toolError(tool, String::new(), error),
         };
         let path = parameterValue(tool, "path");
@@ -1957,27 +2076,27 @@ impl AsyncToolExecutor for FileSystemToolExecutor {
                                 FileSystemToolOperation::ReadFileBinary => {
                                     tools.readFileBinary(tool).await
                                 }
-                                FileSystemToolOperation::WriteFile => tools.writeFile(tool),
+                                FileSystemToolOperation::WriteFile => tools.writeFile(tool).await,
                                 FileSystemToolOperation::WriteFileBinary => {
-                                    tools.writeFileBinary(tool)
+                                    tools.writeFileBinary(tool).await
                                 }
-                                FileSystemToolOperation::DeleteFile => tools.deleteFile(tool),
+                                FileSystemToolOperation::DeleteFile => tools.deleteFile(tool).await,
                                 FileSystemToolOperation::FileExists => tools.fileExists(tool).await,
-                                FileSystemToolOperation::MoveFile => tools.moveFile(tool),
-                                FileSystemToolOperation::CopyFile => tools.copyFile(tool),
-                                FileSystemToolOperation::MakeDirectory => tools.makeDirectory(tool),
+                                FileSystemToolOperation::MoveFile => tools.moveFile(tool).await,
+                                FileSystemToolOperation::CopyFile => tools.copyFile(tool).await,
+                                FileSystemToolOperation::MakeDirectory => tools.makeDirectory(tool).await,
                                 FileSystemToolOperation::FindFiles => tools.findFiles(tool).await,
                                 FileSystemToolOperation::FileInfo => tools.fileInfo(tool).await,
                                 FileSystemToolOperation::GrepCode => tools.grepCode(tool).await,
                                 FileSystemToolOperation::GrepContext => tools.grepContext(tool).await,
-                                FileSystemToolOperation::DownloadFile => tools.downloadFile(tool),
-                                FileSystemToolOperation::ApplyFile => return tools.applyFile(tool),
-                                FileSystemToolOperation::CreateFile => tools.createFile(tool),
-                                FileSystemToolOperation::EditFile => tools.editFile(tool),
-                                FileSystemToolOperation::ZipFiles => tools.zipFiles(tool),
-                                FileSystemToolOperation::UnzipFiles => tools.unzipFiles(tool),
-                                FileSystemToolOperation::OpenFile => tools.openFile(tool),
-                                FileSystemToolOperation::ShareFile => tools.shareFile(tool),
+                                FileSystemToolOperation::DownloadFile => tools.downloadFile(tool).await,
+                                FileSystemToolOperation::ApplyFile => return tools.applyFile(tool).await,
+                                FileSystemToolOperation::CreateFile => tools.createFile(tool).await,
+                                FileSystemToolOperation::EditFile => tools.editFile(tool).await,
+                                FileSystemToolOperation::ZipFiles => tools.zipFiles(tool).await,
+                                FileSystemToolOperation::UnzipFiles => tools.unzipFiles(tool).await,
+                                FileSystemToolOperation::OpenFile => tools.openFile(tool).await,
+                                FileSystemToolOperation::ShareFile => tools.shareFile(tool).await,
                             };
                             vec![result]
                         };

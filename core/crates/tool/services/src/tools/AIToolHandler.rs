@@ -921,9 +921,10 @@ impl AIToolHandler {
             )));
         }
         if operit_tools::runtime_support::splitQualifiedVfsPath(path).is_some() {
-            return Err(WorkspaceBoundaryError::InvalidRequest(
-                "Cross-device file access currently supports read-only tools; writing to another device is not available yet".to_string(),
-            ));
+            // Qualified `node:` paths execute on the target device under its own
+            // capability mode, so the local workspace boundary does not apply.
+            // Cross-node transfers are rejected by the file tools themselves.
+            return Ok(());
         }
 
         let runtimeContext =
