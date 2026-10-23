@@ -1029,6 +1029,7 @@ impl ChatServiceCore {
         &mut self,
         setAsCurrentChat: bool,
         sourceChatId: Option<String>,
+        parentChatId: Option<String>,
         input: Option<serde_json::Value>,
     ) -> Result<String, String> {
         let service = self
@@ -1038,7 +1039,7 @@ impl ChatServiceCore {
             .clone();
         let chatId = self
             .chatHistoryDelegate
-            .createNewChat(&service, setAsCurrentChat, sourceChatId, input)
+            .createNewChat(&service, setAsCurrentChat, sourceChatId, parentChatId, input)
             .await?;
         if setAsCurrentChat {
             self.initialized = true;
@@ -2436,7 +2437,7 @@ impl ChatServiceCore {
         chatId: String,
         input: Option<serde_json::Value>,
     ) -> Result<String, String> {
-        self.createNewChat(false, Some(chatId), input).await
+        self.createNewChat(false, Some(chatId), None, input).await
     }
 
     /// Returns messages from the Core selected by Binding for one explicit chat.

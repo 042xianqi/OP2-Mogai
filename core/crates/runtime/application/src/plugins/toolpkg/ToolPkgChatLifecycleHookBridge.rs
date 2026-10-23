@@ -151,25 +151,45 @@ impl ToolPkgChatLifecycleDispatchContext {
 /// Rejects inconsistent generic new or branch draft context before even an empty registration set can succeed.
 #[allow(non_snake_case)]
 fn validateCreationDraft(draft: &ToolPkgChatCreationDraft) -> Result<(), String> {
-    if draft.chat.id.trim().is_empty() { return Err("Chat creation draft id is required".to_string()); }
-    for (label, value) in [("workspaceId", &draft.chat.workspaceId), ("parentChatId", &draft.chat.parentChatId), ("sourceChatId", &draft.sourceChatId)] {
+    if draft.chat.id.trim().is_empty() {
+        return Err("Chat creation draft id is required".to_string());
+    }
+    for (label, value) in [
+        ("workspaceId", &draft.chat.workspaceId),
+        ("parentChatId", &draft.chat.parentChatId),
+        ("sourceChatId", &draft.sourceChatId),
+    ] {
         if value.as_ref().is_some_and(|id| id.trim().is_empty()) {
-            return Err(format!("Chat creation {label} must be nonblank when present"));
+            return Err(format!(
+                "Chat creation {label} must be nonblank when present"
+            ));
         }
     }
     if draft.sourceChatId.as_ref() == Some(&draft.chat.id) {
         return Err("Chat creation source and draft ids must be distinct".to_string());
     }
+    if draft.chat.parentChatId.as_ref() == Some(&draft.chat.id) {
+        return Err("Chat creation parent and draft ids must be distinct".to_string());
+    }
     match draft.creationKind {
         ToolPkgChatCreationKind::New => {
-            if draft.sourceMessageTimestamp.is_some() || draft.chat.parentChatId.is_some() {
-                return Err("New chat creation must not provide branch parent or message timestamp".to_string());
+            if draft.sourceMessageTimestamp.is_some() {
+                return Err(
+                    "New chat creation must not provide a branch message timestamp".to_string(),
+                );
             }
         }
         ToolPkgChatCreationKind::Branch => {
-            let source = draft.sourceChatId.as_ref().ok_or_else(|| "Branch creation requires sourceChatId".to_string())?;
-            let timestamp = draft.sourceMessageTimestamp.ok_or_else(|| "Branch creation requires sourceMessageTimestamp".to_string())?;
-            if timestamp <= 0 { return Err("Branch creation sourceMessageTimestamp must be positive".to_string()); }
+            let source = draft
+                .sourceChatId
+                .as_ref()
+                .ok_or_else(|| "Branch creation requires sourceChatId".to_string())?;
+            let timestamp = draft
+                .sourceMessageTimestamp
+                .ok_or_else(|| "Branch creation requires sourceMessageTimestamp".to_string())?;
+            if timestamp <= 0 {
+                return Err("Branch creation sourceMessageTimestamp must be positive".to_string());
+            }
             if draft.chat.parentChatId.as_ref() != Some(source) {
                 return Err("Branch creation parentChatId must match sourceChatId".to_string());
             }
@@ -360,9 +380,9 @@ mod tests {
         );
     }
 
-    /// Allows a genuinely first conversation while rejecting branch-only context on sourced new conversations.
+    /// Allows independent source and parent identities while reserving message cutoffs for true branches.
     #[test]
-    fn new_creation_accepts_explicit_source_or_none_without_branch_fields() {
+    fn new_creation_accepts_source_and_parent_without_branch_timestamp() {
         let mut new = draft();
         new.creationKind = ToolPkgChatCreationKind::New;
         new.sourceMessageTimestamp = None;
@@ -371,7 +391,11 @@ mod tests {
         new.sourceChatId = None;
         validateCreationDraft(&new).unwrap();
         new.sourceChatId = Some("source".to_string());
-        new.chat.parentChatId = Some("source".to_string());
+        new.chat.parentChatId = Some("parent".to_string());
+        validateCreationDraft(&new).unwrap();
+        new.sourceChatId = None;
+        validateCreationDraft(&new).unwrap();
+        new.chat.parentChatId = Some(new.chat.id.clone());
         assert!(validateCreationDraft(&new).is_err());
         new.chat.parentChatId = None;
         new.sourceMessageTimestamp = Some(1720000000000);
