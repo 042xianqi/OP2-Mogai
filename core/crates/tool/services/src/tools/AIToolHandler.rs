@@ -967,6 +967,11 @@ impl AIToolHandler {
                 "{parameterName} parameter is required"
             )));
         }
+        if operit_tools::runtime_support::splitQualifiedVfsPath(path).is_some() {
+            return Err(WorkspaceBoundaryError::InvalidRequest(
+                "Cross-device file access currently supports read-only tools; writing to another device is not available yet".to_string(),
+            ));
+        }
 
         let runtimeContext =
             ToolExecutionManager::currentToolRuntimeContext().ok_or_else(|| {
