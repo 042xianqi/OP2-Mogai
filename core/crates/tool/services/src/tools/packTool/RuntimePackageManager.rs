@@ -1257,7 +1257,7 @@ impl RuntimePackageManager {
     }
 
     #[allow(non_snake_case)]
-    /// Removes custom code from built-in identities or deletes ordinary external packages.
+    /// Removes custom code from built-in identities or deletes the selected package installation.
     pub fn deletePackage(&mut self, packageName: &str) -> bool {
         let name = match self
             .toolPkgManager()
@@ -1286,9 +1286,6 @@ impl RuntimePackageManager {
             }
             self.loadAvailablePackages();
             return true;
-        }
-        if record.settings["builtin"] == true {
-            return false;
         }
         self.disablePackage(&name);
         if let Err(error) = ExtensionStore::default().delete("package", &name) {
@@ -1319,10 +1316,6 @@ impl RuntimePackageManager {
             })
             .ok_or("Package load issue is no longer present; refresh the package list")?;
 
-        if self.toolHandler.runtimeSupport().builtinPluginAssets().iter()
-            .any(|asset| asset.name == issue.sourcePath) {
-            return Err("Built-in packages cannot be deleted".into());
-        }
         let source = Path::new(&issue.sourcePath);
         let installedScope = ["device", "space"].into_iter().find(|scope| {
             let root = ExtensionStore::root("package", scope).expect("valid package scope");
@@ -1974,19 +1967,27 @@ impl RuntimePackageManager {
     }
 
     #[allow(non_snake_case)]
-    /// Lists bundled external standalone packages that are not currently loaded.
+    /// Lists bundled packages available for installation or an explicit source update.
     pub fn getBundledExternalPackageCandidates(&mut self) -> Vec<BundledExternalPackageCandidate> {
-        let loadedPackageNames = self
-            .availablePackages()
-            .keys()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let mut candidates = self
-            .scanBundledExternalPackageCandidates()
+        let scanned = self.scanBundledExternalPackageCandidates();
+        let mut candidates = Vec::new();
+        for candidate in scanned
             .into_iter()
             .filter_map(Self::bundledExternalPackageCandidateFromScanResult)
-            .filter(|candidate| !loadedPackageNames.contains(&candidate.packageName))
-            .collect::<Vec<_>>();
+        {
+            match self.bundledCandidateNeedsInstallation(&candidate) {
+                Ok(true) => candidates.push(candidate),
+                Ok(false) => {}
+                Err(error) => {
+                    self.recordAndReturnPackageError(
+                        &candidate.sourcePath,
+                        "bundled_update_check_failed",
+                        &error,
+                        &candidate.packageKind,
+                    );
+                }
+            }
+        }
         candidates.sort_by(|left, right| {
             left.displayName
                 .resolve(false)
@@ -1994,6 +1995,43 @@ impl RuntimePackageManager {
                 .then_with(|| left.packageName.cmp(&right.packageName))
         });
         candidates
+    }
+
+    /// Compares the installed source with its bundled asset without replacing custom implementations.
+    fn bundledCandidateNeedsInstallation(
+        &self,
+        candidate: &BundledExternalPackageCandidate,
+    ) -> Result<bool, String> {
+        let records = self.scopeState.lock().map_err(|error| error.to_string())?;
+        let Some(record) = records.get(&candidate.packageName) else {
+            return Ok(true);
+        };
+        if record.settings["builtin"] == true || record.settings["customized"] == true {
+            return Ok(false);
+        }
+        if record.sourceName != candidate.sourceFileName {
+            return Ok(false);
+        }
+        let root = ExtensionStore::root("package", &record.scope)?;
+        let path = self
+            .storePaths
+            .runtime_storage_path(&root)
+            .join(&record.sourceName);
+        let installed = self
+            .fileSystemHost
+            .readFileBytes(&hostPath(&path))
+            .map_err(|error| {
+                format!(
+                    "Cannot read installed package {}: {error}",
+                    candidate.packageName
+                )
+            })?;
+        let asset = bundledExternalPluginAssetByName(
+            self.toolHandler.runtimeSupport().as_ref(),
+            &candidate.sourcePath,
+        )
+        .ok_or_else(|| format!("Bundled package asset not found: {}", candidate.sourcePath))?;
+        Ok(installed.as_slice() != asset.bytes)
     }
 
     #[allow(non_snake_case)]
@@ -2064,7 +2102,7 @@ impl RuntimePackageManager {
         )
     }
 
-    /// Imports a bundled asset into the scope declared by its manifest.
+    /// Updates an existing installation in its scope or installs into the manifest scope.
     #[allow(non_snake_case)]
     fn importBundledExternalPackageCandidate(
         &mut self,
@@ -2088,7 +2126,12 @@ impl RuntimePackageManager {
                 packageKind,
             );
         };
-        let scope = match Self::bundledCandidateScope(&result.toolPkgLoadResult) {
+        let sourceFileName = packageSourceFileName(&sourcePath);
+        let scope = match self.bundledInstallationScope(
+            packageName,
+            &sourceFileName,
+            &result.toolPkgLoadResult,
+        ) {
             Ok(scope) => scope,
             Err(error) => {
                 return self.recordAndReturnPackageError(
@@ -2099,7 +2142,6 @@ impl RuntimePackageManager {
                 )
             }
         };
-        let sourceFileName = packageSourceFileName(&sourcePath);
         let packagesDir = self.storePaths.runtime_storage_path(
             &ExtensionStore::root("package", scope.as_str()).expect("Validated package scope"),
         );
@@ -2167,7 +2209,11 @@ impl RuntimePackageManager {
         self.externalPackageScanCache
             .remove(&destinationFile.to_string_lossy().to_string());
         self.loadAvailablePackages();
-        format!("Successfully imported package: {}\nStored at: {}", packageName, destinationFile.to_string_lossy())
+        format!(
+            "Successfully imported package: {}\nStored at: {}",
+            packageName,
+            destinationFile.to_string_lossy()
+        )
     }
 
     #[allow(non_snake_case)]
@@ -3358,10 +3404,26 @@ impl RuntimePackageManager {
                         return Err(format!("Package location conflicts with its owner: {name}"));
                     }
                 }
-                let currentMembers = serde_json::to_value(members).map_err(|error| error.to_string())?;
-                if record.settings["members"] != currentMembers {
-                    record.settings["members"] = currentMembers;
-                    store.setSettings("package", name, record.settings.clone())?;
+                let mut settings = record.settings.clone();
+                settings["members"] =
+                    serde_json::to_value(members).map_err(|error| error.to_string())?;
+                let fields = settings
+                    .as_object_mut()
+                    .ok_or("Package settings must be an object")?;
+                match requiredScope {
+                    Some(scope) => {
+                        fields.insert(
+                            "installationScope".into(),
+                            serde_json::to_value(scope).map_err(|error| error.to_string())?,
+                        );
+                    }
+                    None => {
+                        fields.remove("installationScope");
+                    }
+                }
+                if record.settings != settings {
+                    store.setSettings("package", name, settings.clone())?;
+                    record.settings = settings;
                 }
                 self.scopeState
                     .lock()
@@ -3588,6 +3650,51 @@ impl RuntimePackageManager {
             metadata.as_ref().map(|value| value.size).unwrap_or(0),
             metadata.map(|value| value.lastModified).unwrap_or_default()
         )
+    }
+
+    /// Validates source ownership and manifest restrictions before writing an installed update.
+    fn bundledInstallationScope(
+        &self,
+        packageName: &str,
+        sourceFileName: &str,
+        loadResult: &Option<ToolPkgLoadResult>,
+    ) -> Result<ToolPkgConfigScope, String> {
+        let records = self.scopeState.lock().map_err(|error| error.to_string())?;
+        let Some(record) = records.get(packageName) else {
+            return Self::bundledCandidateScope(loadResult);
+        };
+        if record.settings["customized"] == true {
+            return Err(format!(
+                "Package has a custom implementation: {packageName}"
+            ));
+        }
+        if record.settings["builtin"] == true {
+            if !record.sourceName.is_empty() {
+                return Err(format!(
+                    "Built-in package has an unexpected source: {packageName}"
+                ));
+            }
+        } else if record.sourceName != sourceFileName {
+            return Err(format!(
+                "Package source conflicts with installation: {packageName}"
+            ));
+        }
+        let scope = serde_json::from_value::<ToolPkgConfigScope>(serde_json::Value::String(
+            record.scope.clone(),
+        ))
+        .map_err(|error| error.to_string())?;
+        let requiredScope = loadResult
+            .as_ref()
+            .map(|loaded| Self::requiredInstallationScope(&loaded.containerRuntime))
+            .transpose()?
+            .flatten();
+        if requiredScope.is_some_and(|required| required != scope) {
+            return Err(format!(
+                "Package {packageName} cannot be updated in {} scope",
+                scope.as_str()
+            ));
+        }
+        Ok(scope)
     }
 
     /// Resolves the manifest restriction for a bundled asset before installation.

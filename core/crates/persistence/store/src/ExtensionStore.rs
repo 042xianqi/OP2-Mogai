@@ -405,6 +405,10 @@ impl ExtensionStore {
             }
             (Some(record), None) | (None, Some(record)) => record,
             (None, None) => {
+                let local = recordPath("package", id, "device")?.replace("/records/", "/uninstalled/");
+                if self.storage.exists(&local).map_err(|e| e.to_string())? {
+                    return Ok(false);
+                }
                 let path = recordPath("package", id, "space")?;
                 return Ok(!RuntimeFileSyncStore::new(self.storage.clone(), RUNTIME_SYNC_DIR_PATH).hasSnapshot(&path)?);
             }
@@ -608,14 +612,12 @@ impl ExtensionStore {
         if record.kind != kind || record.id != id {
             return Err("Deletion journal identity mismatch".into());
         }
-        if record.kind == "package" && record.settings["builtin"] == true {
-            return Err("Built-in packages cannot be deleted".into());
-        }
         if !resuming {
             record.files = self.snapshot(&record)?;
             self.storage.writeBytes(&journal, &serde_json::to_vec(&record).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
         }
+        self.retireBuiltinPackage(&record)?;
         self.remove(&record)?;
         self.storage.delete(&journal, false).map_err(|e| e.to_string())?;
         notifyCatalogChanged();
@@ -630,16 +632,23 @@ impl ExtensionStore {
             .into_iter()
             .filter(|record| record.id == id)
             .collect::<Vec<_>>();
-        if records.iter().any(|record| record.settings["builtin"] == true) {
-            return Err("Built-in packages cannot be deleted".into());
-        }
         for record in &records {
+            self.retireBuiltinPackage(record)?;
             self.remove(record)?;
         }
         if !records.is_empty() {
             notifyCatalogChanged();
         }
         Ok(!records.is_empty())
+    }
+
+    /// Records explicit device-local uninstallation so bundled scans cannot recreate the package.
+    fn retireBuiltinPackage(&self, record: &ExtensionRecord) -> Result<(), String> {
+        if record.kind == "package" && record.scope == "device" && record.settings["builtin"] == true {
+            let path = recordPath("package", &record.id, "device")?.replace("/records/", "/uninstalled/");
+            self.storage.writeBytes(&path, b"true").map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     /// Resolves a known package scope before registration without requiring an installation record.

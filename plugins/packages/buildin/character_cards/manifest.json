@@ -14,7 +14,6 @@
     "en": "An offline Material character plugin with groups, an editor, memory libraries, USER.md and graphs. Domain records use plugin Storage; application startup centrally imports legacy characters and memories."
   },
   "enabled_by_default": true,
-  "installation_scope": "space",
   "subpackages": [
     {
       "id": "character_memory",

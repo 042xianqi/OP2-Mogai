@@ -1035,7 +1035,7 @@ fn late_builtin_initialization_preserves_explicit_shared_installation() {
 
 /// Moves bundled ownership through the existing sync path and preserves the selected subpackage flags.
 #[test]
-fn builtin_scope_moves_sync_flags_and_never_delete_bundled_installations() {
+fn builtin_scope_moves_sync_flags_and_allows_deleting_bundled_installations() {
     let source = host();
     let target = host();
     let store = ExtensionStore::new(source.clone());
@@ -1065,8 +1065,6 @@ fn builtin_scope_moves_sync_flags_and_never_delete_bundled_installations() {
     assert!(!target.exists(&local_config).unwrap());
     assert_eq!(target.readBytes(&shared_config).unwrap(), b"shared configuration");
     assert_eq!(target.readBytes(&private_data).unwrap(), b"private device data");
-    assert!(store.delete("package", "demo").unwrap_err().contains("cannot be deleted"));
-    assert!(store.deleteFailedPackageInstallations("demo").unwrap_err().contains("cannot be deleted"));
     let before_toggle = clock(&source);
     let mut updated = store.record("package", "demo").unwrap().settings;
     updated["subpackageStates"]["demo_tools"] = json!(true);
@@ -1085,7 +1083,73 @@ fn builtin_scope_moves_sync_flags_and_never_delete_bundled_installations() {
     assert_eq!(local.scope, "device");
     assert_eq!(local.settings["subpackageStates"]["demo_tools"], true);
     assert_eq!(local.settings["order"], 7);
-    assert!(peer.delete("package", "demo").unwrap_err().contains("cannot be deleted"));
+    peer.delete("package", "demo").unwrap();
+    assert!(peer.record("package", "demo").is_err());
+    assert!(!peer.acceptsBuiltinPackage("demo").unwrap());
+    assert!(!target.exists(&local_config).unwrap());
+    assert_eq!(target.readBytes(&private_data).unwrap(), b"private device data");
+}
+
+/// Preserves plugin data during bundled uninstallation and synchronizes only installation removal.
+#[test]
+fn builtin_deletion_retires_installations_and_syncs_shared_removal() {
+    for scope in ["device", "space"] {
+        for failed in [false, true] {
+            let source = host();
+            let target = host();
+            let store = ExtensionStore::new(source.clone());
+            let peer = ExtensionStore::new(target.clone());
+            let settings = json!({
+                "members": ["demo"], "enabledNames": ["demo"], "disabledNames": [],
+                "subpackageStates": {}, "order": 0, "builtin": true,
+                "installationId": "00000000000000000000000000000000"
+            });
+            store.registerInScope("package", "demo", "", settings.clone(), scope).unwrap();
+            let mut data_files = Vec::new();
+            for data_scope in ["device", "space"] {
+                let root = ExtensionStore::dataPathForScope("demo", data_scope).unwrap();
+                for name in ["cards.preferences.json", "groups.preferences.json", "memory.sqlite", "owner/USER.md"] {
+                    let path = format!("{root}/{name}");
+                    let bytes = format!("existing {data_scope} {name}").into_bytes();
+                    source.writeBytes(&path, &bytes).unwrap();
+                    data_files.push((path, bytes));
+                }
+            }
+            if scope == "space" {
+                transfer(&source, &target, &operations(&source, &SyncClock::empty())).unwrap();
+                assert!(peer.acceptsBuiltinPackage("demo").unwrap());
+            }
+            let before_delete = clock(&source);
+            if failed {
+                assert!(store.deleteFailedPackageInstallations("demo").unwrap());
+                assert!(!store.deleteFailedPackageInstallations("demo").unwrap());
+            } else {
+                store.delete("package", "demo").unwrap();
+            }
+            assert!(store.record("package", "demo").is_err());
+            assert!(!ExtensionStore::new(source.clone()).acceptsBuiltinPackage("demo").unwrap());
+            for (path, bytes) in &data_files {
+                assert_eq!(source.readBytes(path).unwrap(), *bytes, "Uninstallation changed plugin data: {path}");
+            }
+            assert!(operations(&source, &before_delete).iter()
+                .all(|operation| !operation.entityId.starts_with("runtime/plugin_data/")));
+            if scope == "space" {
+                transfer(&source, &target, &operations(&source, &before_delete)).unwrap();
+                assert!(peer.record("package", "demo").is_err());
+                assert!(!peer.acceptsBuiltinPackage("demo").unwrap());
+            } else {
+                assert!(operations(&source, &before_delete).is_empty());
+                assert!(peer.acceptsBuiltinPackage("demo").unwrap());
+                store.registerDevice("package", "demo", "", settings).unwrap();
+                for (path, bytes) in &data_files {
+                    assert_eq!(source.readBytes(path).unwrap(), *bytes, "Reinstallation changed plugin data: {path}");
+                }
+                assert!(store.acceptsBuiltinPackage("demo").unwrap());
+                store.delete("package", "demo").unwrap();
+                assert!(!store.acceptsBuiltinPackage("demo").unwrap());
+            }
+        }
+    }
 }
 
 /// Retires the duplicate settings copy without letting it replace descriptor ownership.
