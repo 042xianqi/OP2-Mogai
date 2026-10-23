@@ -527,13 +527,13 @@ fn hostPromptHeader(host_environment: &HostEnvironmentDescriptor, use_english: b
     let pathList = formatBacktickedPaths(&headerPaths, separator);
     if use_english {
         format!(
-            "Current file VFS host: {} (`{}`).\n- Use VFS paths only: {pathList}.\n- When `/mnt` is listed, it contains the mounted entries available on this host.\n- Hidden Android aliases `/sdcard` and `/data` can be opened directly on Android hosts but are not listed at root.\n- Bare paths target this device; prefixing a path with `nodeName:` (names from `list_core_nodes`) reads files on another device in the space. File operations run on the target device; moving or copying between two devices in one call is not supported.",
+            "Current file VFS host: {} (`{}`).\n- Use VFS paths only: {pathList}.\n- When `/mnt` is listed, it contains the mounted entries available on this host.\n- Hidden Android aliases `/sdcard` and `/data` can be opened directly on Android hosts but are not listed at root.\n- Bare paths target this device; prefixing a path with `nodeName:` (names from `list_core_nodes`) reads files on another device in the space. File operations run on the target device; copying or moving across devices streams the file between them, which may take time for large files.",
             host_environment.displayName,
             host_environment.id
         )
     } else {
         format!(
-            "当前文件 VFS Host：{}（`{}`）。\n- 只使用 VFS 路径：{pathList}。\n- 当 `/mnt` 出现在根目录时，其中只包含当前 Host 已挂载入口。\n- Android 隐藏别名 `/sdcard` 和 `/data` 可在 Android Host 上直接访问，但不会在根目录列表展示。\n- 裸路径指向本机；在路径前加 `nodeName:`（名字来自 `list_core_nodes`）可读取空间内其他设备上的文件。文件操作在目标设备上执行；单次调用内跨两台设备的移动或复制暂不支持。",
+            "当前文件 VFS Host：{}（`{}`）。\n- 只使用 VFS 路径：{pathList}。\n- 当 `/mnt` 出现在根目录时，其中只包含当前 Host 已挂载入口。\n- Android 隐藏别名 `/sdcard` 和 `/data` 可在 Android Host 上直接访问，但不会在根目录列表展示。\n- 裸路径指向本机；在路径前加 `nodeName:`（名字来自 `list_core_nodes`）可读取空间内其他设备上的文件。文件操作在目标设备上执行；跨设备的复制或移动会在设备间流式传输文件，大文件可能耗时较长。",
             host_environment.displayName,
             host_environment.id
         )

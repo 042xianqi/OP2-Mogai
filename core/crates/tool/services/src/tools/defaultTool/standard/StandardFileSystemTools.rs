@@ -26,6 +26,7 @@ use operit_tools::runtime_support::{
     coreNodeReferenceLabel, splitQualifiedVfsPath, QualifiedVfsResolution,
 };
 use operit_tools::tools::ToolExecutionLimits::ToolExecutionLimits;
+use operit_tools::tools::transfer::FileTransferTools::TransferEndpoint;
 use operit_tools::tools::ToolResultDataClasses::{
     stringResultData, BinaryFileContentData, DirectoryListingData, FileApplyResultData,
     FileContentData, FileEntry as ToolFileEntry, FileExistsData, FileInfoData, FileOperationData,
@@ -100,6 +101,20 @@ impl StandardFileSystemTools {
             workspaceCollectionRoot,
             runtimeSupport,
         }
+    }
+
+    /// VFS surface for the internal cross-node transfer endpoints.
+    #[allow(non_snake_case)]
+    pub(crate) fn transferVfs(&self) -> VisualFileSystem {
+        self.vfs()
+    }
+
+    /// Transport gateway for the internal cross-node transfer endpoints.
+    #[allow(non_snake_case)]
+    pub(crate) fn transferRuntimeSupport(
+        &self,
+    ) -> std::sync::Arc<dyn operit_tools::runtime_support::ToolRuntimeSupport> {
+        self.runtimeSupport.clone()
     }
 
     fn vfs(&self) -> VisualFileSystem {
@@ -1104,8 +1119,31 @@ impl StandardFileSystemTools {
     }
 
     #[allow(non_snake_case)]
-    /// Moves a file or directory to another visual path.
+    /// Moves a file or directory to another visual path, or streams it to
+    /// another device (deleting the source) when the endpoints differ.
     pub async fn moveFile(&self, tool: &AITool) -> ToolResult {
+        let transferPlan = match self.resolveTransferEndpoints(tool, &["source", "destination"]) {
+            Ok(plan) => plan,
+            Err(error) => return toolError(tool, String::new(), error),
+        };
+        if let Some((source, destination)) = transferPlan {
+            let result = self
+                .finishCrossNodeResult(tool, &source, &destination, "move")
+                .await;
+            if result.success {
+                if let Err(deleteError) = self.deleteTransferSource(&source).await {
+                    let ToolResultData::FileOperationData(mut operation) = result.result else {
+                        return result;
+                    };
+                    operation.details = format!(
+                        "{} Source deletion failed: {}",
+                        operation.details, deleteError
+                    );
+                    return successData(tool, ToolResultData::FileOperationData(operation));
+                }
+            }
+            return result;
+        }
         let tool = &match self.prepareFileToolCall(tool, &["source", "destination"], true) {
             Ok(PreparedFileToolCall::Local(call)) => call,
             Ok(PreparedFileToolCall::Remote { call, nodeId, typedPath, nodePrefix }) => {
@@ -1139,8 +1177,18 @@ impl StandardFileSystemTools {
     }
 
     #[allow(non_snake_case)]
-    /// Copies a file or directory to another visual path.
+    /// Copies a file or directory to another visual path, or streams it to
+    /// another device when the endpoints live on different nodes.
     pub async fn copyFile(&self, tool: &AITool) -> ToolResult {
+        let transferPlan = match self.resolveTransferEndpoints(tool, &["source", "destination"]) {
+            Ok(plan) => plan,
+            Err(error) => return toolError(tool, String::new(), error),
+        };
+        if let Some((source, destination)) = transferPlan {
+            return self
+                .finishCrossNodeResult(tool, &source, &destination, "copy")
+                .await;
+        }
         let tool = &match self.prepareFileToolCall(tool, &["source", "destination"], true) {
             Ok(PreparedFileToolCall::Local(call)) => call,
             Ok(PreparedFileToolCall::Remote { call, nodeId, typedPath, nodePrefix }) => {
@@ -1219,6 +1267,35 @@ impl StandardFileSystemTools {
             ));
         }
         Ok(())
+    }
+
+    /// Runs one cross-node transfer and formats its tool result.
+    #[allow(non_snake_case)]
+    async fn finishCrossNodeResult(
+        &self,
+        tool: &AITool,
+        source: &TransferEndpoint,
+        destination: &TransferEndpoint,
+        verb: &str,
+    ) -> ToolResult {
+        match self.executeCrossNodeTransfer(source, destination).await {
+            Ok((size, sha)) => successData(
+                tool,
+                fileOperationResult(
+                    verb,
+                    &source.typed,
+                    true,
+                    format!(
+                        "Transferred {} bytes across devices (sha256 {sha}): {} -> {}",
+                        size, source.typed, destination.typed
+                    ),
+                ),
+            ),
+            Err(error) => {
+                let message = format!("Cross-node transfer failed: {error}");
+                toolError(tool, fileOperationDataToString(&message), message)
+            }
+        }
     }
 
     #[allow(non_snake_case)]
