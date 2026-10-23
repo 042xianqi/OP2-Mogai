@@ -1116,7 +1116,7 @@ class _AIChatSurfaceState extends State<_AIChatSurface> {
       if (decision.timedOut && timeoutMessage != null) {
         _showLocalToast(timeoutMessage);
       }
-      if (decision.action == 'block') {
+      if (decision.action == chatInputActionBlock) {
         if (cancelCurrentConversation) {
           await _viewModel.clearPendingQueueAutoDequeueSuppression(queueChatId);
         }
@@ -1130,7 +1130,7 @@ class _AIChatSurfaceState extends State<_AIChatSurface> {
         }
         return;
       }
-      if (decision.action == 'consume') {
+      if (decision.action == chatInputActionConsume) {
         if (cancelCurrentConversation) {
           await _viewModel.clearPendingQueueAutoDequeueSuppression(queueChatId);
         }
@@ -1140,7 +1140,7 @@ class _AIChatSurfaceState extends State<_AIChatSurface> {
         }
         return;
       }
-      if (decision.action == 'replace') {
+      if (decision.action == chatInputActionReplace) {
         final updatedText = decision.text;
         if (updatedText != null) {
           queuedText = updatedText;
@@ -1822,8 +1822,10 @@ class _AIChatSurfaceState extends State<_AIChatSurface> {
       if (decision.timedOut && timeoutMessage != null) {
         _showLocalToast(timeoutMessage);
       }
-      if (decision.action == 'block' || decision.action == 'consume') {
-        if (decision.action == 'consume' && decision.clearInput) {
+      if (decision.action == chatInputActionBlock ||
+          decision.action == chatInputActionConsume) {
+        if (decision.action == chatInputActionConsume &&
+            decision.clearInput) {
           _clearMentionSuggestionState();
           _messageController.clear();
           await _viewModel.clearAttachments();
@@ -1834,7 +1836,7 @@ class _AIChatSurfaceState extends State<_AIChatSurface> {
         }
         return;
       }
-      if (decision.action == 'replace') {
+      if (decision.action == chatInputActionReplace) {
         final updatedText = decision.text;
         if (updatedText != null) {
           _messageController.value = TextEditingValue(

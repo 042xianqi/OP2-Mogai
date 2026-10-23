@@ -64,6 +64,12 @@ class PastedImageAttachmentPayload {
   }
 }
 
+/// Canonical submit actions returned by the Core chat input hook bridge.
+const String chatInputActionAllow = 'Allow';
+const String chatInputActionBlock = 'Block';
+const String chatInputActionConsume = 'Consume';
+const String chatInputActionReplace = 'Replace';
+
 class ChatInputSubmitDecision {
   const ChatInputSubmitDecision({
     required this.action,
@@ -74,9 +80,28 @@ class ChatInputSubmitDecision {
   });
 
   /// Parses the JSON decision returned by the Core ToolPkg chat input bridge.
+  ///
+  /// Core serializes the canonical capitalized actions (`Allow`, `Block`,
+  /// `Consume`, `Replace`); lowercase protocol spellings are rejected there,
+  /// so the value is normalized case-insensitively instead of being compared
+  /// with ad-hoc literals at every call site.
   factory ChatInputSubmitDecision.fromJson(Map<String, Object?> json) {
+    final rawAction = (json['action'] as String).toLowerCase();
+    final String action;
+    switch (rawAction) {
+      case 'allow':
+        action = chatInputActionAllow;
+      case 'block':
+        action = chatInputActionBlock;
+      case 'consume':
+        action = chatInputActionConsume;
+      case 'replace':
+        action = chatInputActionReplace;
+      default:
+        action = json['action'] as String;
+    }
     return ChatInputSubmitDecision(
-      action: json['action'] as String,
+      action: action,
       text: json['text'] == null ? null : json['text'] as String,
       message: json['message'] == null ? null : json['message'] as String,
       clearInput: json['clearInput'] == null

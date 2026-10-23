@@ -14,6 +14,7 @@ use crate::services::core::MessageProcessingDelegate::{
     SendUserMessageProcessingRequest,
 };
 use crate::services::core::TokenStatisticsDelegate::TokenStatisticsDelegate;
+use crate::services::ProviderRuntimeSupportService::ChatConfigurationApi;
 use operit_host_api::HostManager::defaultHostRuntimeTaskSchedulerHost;
 use operit_host_api::HostRuntimeTaskSchedulerHost;
 use operit_model::AttachmentInfo::AttachmentInfo;
@@ -108,6 +109,54 @@ impl MessageCoordinationDelegate {
         self.nonFatalErrorCollectorJob = Some("nonFatalErrorCollectorJob".to_string());
     }
 
+    /// Reads the exact persisted configuration-owner participant of one message revision.
+    pub(crate) async fn messageAuthorParticipantId(
+        &self,
+        service: &EnhancedAIService,
+        chatId: &str,
+        messageTimestamp: i64,
+        variantIndex: i32,
+    ) -> Option<String> {
+        let api = ChatConfigurationApi::ready(&service.tool_handler).await.ok()?;
+        let extensions = self
+            .chatHistoryDelegate
+            .chatHistoryManager
+            .readPluginExtensions(&operit_model::PluginExtensionTarget::PluginExtensionTarget::Message {
+                chatId: chatId.to_string(),
+                messageTimestamp,
+                variantIndex,
+            })
+            .ok()?;
+        extensions
+            .get(api.extensionOwner())?
+            .get("participantId")?
+            .as_str()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+    }
+
+    /// Resolves the chat-level context participant: the recorded author of the latest assistant revision.
+    pub(crate) async fn latestAssistantParticipantId(
+        &self,
+        service: &EnhancedAIService,
+        chatId: &str,
+    ) -> Option<String> {
+        let latest = self
+            .chatHistoryDelegate
+            .chatMessagesSnapshotForChat(chatId.to_string())
+            .into_iter()
+            .rev()
+            .find(|message| message.sender == "ai")?;
+        self.messageAuthorParticipantId(
+            service,
+            chatId,
+            latest.timestamp,
+            latest.selectedVariantIndex,
+        )
+        .await
+    }
+
     /// Recalculates the stable context window size for a chat and prompt mode.
     pub async fn recalculateStableWindowSize(
         &mut self,
@@ -175,7 +224,12 @@ impl MessageCoordinationDelegate {
         chatModelIdOverride: Option<String>,
     ) -> Option<i64> {
         let targetChatId = chatId.or_else(|| self.chatHistoryDelegate.currentChatIdFlow.value())?;
-        let executionParticipantId = participantId;
+        // Chat-level recalculations have no caller-selected participant; the latest recorded
+        // assistant author keeps group conversations resolvable instead of failing them.
+        let executionParticipantId = match participantId {
+            Some(id) => Some(id),
+            None => self.latestAssistantParticipantId(service, &targetChatId).await,
+        };
         let effectivePromptFunctionType =
             promptFunctionType.unwrap_or_else(|| self.currentPromptFunctionType.clone());
         let effectiveChatModelIdOverride =
@@ -311,6 +365,16 @@ impl MessageCoordinationDelegate {
             .resolveChatConfigurationForOptions(&SendMessageOptions {
                 chatId: Some(chatId.clone()),
                 promptFunctionType: self.currentPromptFunctionType.clone(),
+                // Regeneration must execute as the message's actual recorded author, which
+                // also keeps group participants resolvable without an implicit member pick.
+                executionParticipantId: self
+                    .messageAuthorParticipantId(
+                        enhancedAiService,
+                        &chatId,
+                        targetMessage.timestamp,
+                        targetMessage.selectedVariantIndex,
+                    )
+                    .await,
                 ..SendMessageOptions::new()
             })
             .await
