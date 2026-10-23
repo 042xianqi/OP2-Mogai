@@ -604,6 +604,19 @@ impl AIToolHandler {
         self.publishToolExecutor(name, RegisteredToolExecutor::Asynchronous(executor), ToolRegistrationVisibility::PUBLIC);
     }
 
+    /// Registers an internal tool with an explicitly asynchronous execution contract.
+    pub fn registerInternalAsyncTool(&mut self, name: String, executor: Box<dyn AsyncToolExecutor>) {
+        assert!(
+            BuiltinToolName::from_name(&name).is_none(),
+            "Built-in tools must use their typed registration"
+        );
+        self.publishToolExecutor(
+            name,
+            RegisteredToolExecutor::Asynchronous(executor),
+            ToolRegistrationVisibility::INTERNAL,
+        );
+    }
+
     /// Registers an explicitly concurrent operation on the same public or internal executor registry.
     pub fn registerSharedTool(&mut self, name: String, executor: Arc<dyn SharedToolExecutor>, visibility: ToolRegistrationVisibility) {
         assert!(BuiltinToolName::from_name(&name).is_none(), "Built-in tools must use their typed registration");
@@ -919,6 +932,12 @@ impl AIToolHandler {
             return Err(WorkspaceBoundaryError::InvalidRequest(format!(
                 "{parameterName} parameter is required"
             )));
+        }
+        if operit_tools::runtime_support::splitQualifiedVfsPath(path).is_some() {
+            // Qualified `node:` paths execute on the target device under its own
+            // capability mode, so the local workspace boundary does not apply.
+            // Cross-node transfers are rejected by the file tools themselves.
+            return Ok(());
         }
 
         let runtimeContext =
