@@ -126,7 +126,9 @@ fn main() {
                 println!("cargo:rustc-link-lib=c++_static");
                 println!("cargo:rustc-link-lib=log");
             }
-            "windows" => {}
+            // ggml's Windows CPU detection reads the registry. Propagate this
+            // system dependency even when no concrete Windows host is linked.
+            "windows" => println!("cargo:rustc-link-lib=advapi32"),
             _ => {
                 println!("cargo:rustc-link-lib=stdc++");
                 println!("cargo:rustc-link-lib=pthread");
