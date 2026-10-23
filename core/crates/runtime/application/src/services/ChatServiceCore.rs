@@ -301,6 +301,16 @@ impl ChatServiceCore {
             .clone()
     }
 
+    /// Executes only model inference on the Binding's owner; conversation and tools keep their own routes.
+    #[operit_route_macros::operit_core_route(binding = bindingKey, permission = "target:runtime.execute")]
+    pub async fn generateLocalLlm(&self, bindingKey: String, modelBinding: String,
+        requestJson: String, settingsJson: String) -> Result<operit_local_models::LocalInference::LocalChatResponse, String> {
+        let _ = bindingKey;
+        let context = self.runtimeToolHandler().getContext();
+        let storage = context.runtimeStorageHost.clone().ok_or("Local inference requires runtime storage")?;
+        super::LocalLlmService::executeLocalLlm(storage, modelBinding, requestJson, settingsJson).await
+    }
+
     /// Clones the plugin execution host before releasing the borrowed chat core.
     #[operit_route_macros::operit_core_internal]
     pub fn toolPkgRouteHost(&self) -> AIToolHandler {
