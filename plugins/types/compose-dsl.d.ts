@@ -3312,6 +3312,11 @@ export interface IconButtonProps extends ComposeCommonProps {
 }
 
 /**
+ * Global surface layer whose material treatment follows the host theme settings.
+ */
+export type ComposeThemeSurfaceLayer = "panel" | "card" | "control";
+
+/**
  * Elevated or outlined Material container for grouped content.
  */
 export interface CardProps extends ComposeCommonProps {
@@ -3319,6 +3324,10 @@ export interface CardProps extends ComposeCommonProps {
    * Child nodes rendered inside the card container.
    */
   content?: ComposeChildren;
+  /**
+   * Uses global transparency and blur for this layer; requires containerColor and has no elevation.
+   */
+  themeSurface?: ComposeThemeSurfaceLayer;
   /**
    * Background color of the card surface.
    */
