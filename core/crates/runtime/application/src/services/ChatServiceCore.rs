@@ -2665,13 +2665,13 @@ impl ChatServiceCore {
         }
         // Fixed export names and no user-supplied tool name/arguments. Existing
         // ToolPkg hook runtime and nested tool permission checks remain in force.
-        let raw = manager.runToolPkgMainHookWithTimeoutMillis(
+        let raw = manager.runToolPkgMainHook(
             &packageName, function,
             operit_plugin_sdk::toolpkg::ToolPkgCommonPluginConstants::TOOLPKG_EVENT_CORE_COMMAND,
             Some("core_command"), None, None,
             serde_json::json!({"chatId":chatId,"diagnostic":true}),
-            None, None, None, 6000,
-        ).await.map_err(|_| "插件测试函数不可用、执行失败或超时".to_string())?
+            None, None, None,
+        ).await.map_err(|error| format!("插件测试函数执行失败：{error}"))?
             .ok_or_else(|| "插件未提供测试结果".to_string())?;
         let value: serde_json::Value = serde_json::from_str(&raw)
             .map_err(|_| "插件测试结果格式错误".to_string())?;

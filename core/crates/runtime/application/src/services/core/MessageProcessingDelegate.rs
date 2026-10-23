@@ -210,11 +210,6 @@ fn sendCoreTextEvent(
     }
 }
 
-/// Builds the localized host notice for a timed-out ToolPkg pre-send hook.
-fn buildToolPkgHookTimeoutNotice(pluginIdentifier: String) -> String {
-    format!("前置插件「{pluginIdentifier}」响应超时，已跳过并继续发送")
-}
-
 /// Waits for the actual originating stream and persistence completion without retaining the chat holder lock.
 #[derive(Debug)]
 pub(crate) enum ChatTurnSubmission {
@@ -1332,10 +1327,6 @@ impl MessageProcessingDelegate {
         );
 
         let buildUserMessageStartTime = messageTimingNow();
-        let nonFatalErrorEventFlow = self.nonFatalErrorEventFlow.clone();
-        let onHookTimeout = Arc::new(move |pluginIdentifier: String| {
-            nonFatalErrorEventFlow.set_value(Some(buildToolPkgHookTimeoutNotice(pluginIdentifier)));
-        });
         let finalMessageContent =
             AIMessageManager::buildUserMessageContent(BuildUserMessageContentRequest {
                 messageText: request.messageText,
@@ -1349,7 +1340,6 @@ impl MessageProcessingDelegate {
                 enableDirectVideoProcessing,
                 chatId: Some(request.chatId.clone()),
                 participantId: Some(request.participantId),
-                onHookTimeout: Some(onHookTimeout),
             })
             .await?;
         logMessageTiming(
