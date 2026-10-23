@@ -139,6 +139,8 @@ profile carries this Binding alongside its `modelId@version` reference.
 `ChatServiceCore.generateLocalLlm` uses `target:runtime.execute` route permission
 to send only the prompt, generation settings, and model reference to the device
 owning the Binding. The conversation and tools can remain on the calling node.
+Installing the same model and version locally preserves an explicitly saved remote
+inference Binding; changing the inference device requires an explicit selection.
 The target resolves its own exact installed files. An unavailable remote owner
 returns an error rather than silently choosing local weights.
 

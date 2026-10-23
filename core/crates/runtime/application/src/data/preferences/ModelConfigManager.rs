@@ -1229,9 +1229,18 @@ impl ModelConfigManager {
             let mut model = saved
                 .remove(&id)
                 .unwrap_or_else(|| ModelProfile::new(id.clone()));
-            model.localRuntime.inferenceBindingKey =
-                crate::services::LocalLlmService::ensureLocalLlmBinding(storage.clone(), &id)
-                    .map_err(ModelConfigError::ModelListFetch)?;
+            let binding_key = &model.localRuntime.inferenceBindingKey;
+            let uses_remote_inference = !binding_key.is_empty()
+                && bindings
+                    .bindingOptional(binding_key)
+                    .map_err(ModelConfigError::ModelListFetch)?
+                    .is_some_and(|binding| binding.nodeId != identity.nodeId);
+            // Installing matching weights here must preserve an explicitly selected remote owner.
+            if !uses_remote_inference {
+                model.localRuntime.inferenceBindingKey =
+                    crate::services::LocalLlmService::ensureLocalLlmBinding(storage.clone(), &id)
+                        .map_err(ModelConfigError::ModelListFetch)?;
+            }
             if model.contextOverride.is_none() {
                 model.contextOverride = Some(ModelContextSpec {
                     maxContextLength: model.localRuntime.llamaContextSize as f32 / 1000.0,
@@ -1420,6 +1429,74 @@ mod tests {
         registry_store.write(&registry).unwrap();
         let models = manager.getProviderProfile("LOCAL_MODEL").unwrap().models;
         assert_eq!(models, vec![remote]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn local_model_installation_preserves_an_explicit_remote_inference_binding() {
+        use operit_local_models::{
+            LocalModelCatalog::LocalModelCatalog,
+            LocalModelRegistry::{InstalledLocalModel, LocalModelRegistrySnapshot},
+            LocalModelRegistryStore::LocalModelRegistryStore,
+        };
+        let root = unique_test_root("local_remote_model_collision");
+        setup_test_runtime(root.clone());
+        let storage = operit_store::RuntimeStorageHost::defaultRuntimeStorageHost();
+        let registry_store = LocalModelRegistryStore::forRuntimeStorage(storage.clone());
+        let manifest = LocalModelCatalog::qwen3LlamaCpp();
+        let model_id = manifest.registryKey();
+        let mut registry = LocalModelRegistrySnapshot::empty();
+        registry.installedModels.push(InstalledLocalModel {
+            manifest,
+            storagePath: "runtime/models/local/chat/qwen".into(),
+            installedAtMs: 1,
+            verifiedAtMs: Some(1),
+        });
+        registry_store.write(&registry).unwrap();
+        let manager = ModelConfigManager::new(root.clone());
+        let local = manager.getModelProfile("LOCAL_MODEL", &model_id).unwrap();
+        assert!(!local.localRuntime.inferenceBindingKey.is_empty());
+        operit_store::CoreNodeBindingStore::CoreNodeBindingStore::new(storage)
+            .unwrap()
+            .create("remote-same-model", "remote-model-device")
+            .unwrap();
+        let mut remote = local.clone();
+        remote.localRuntime.inferenceBindingKey = "remote-same-model".into();
+        remote.localRuntime.llamaThreadCount = 7;
+        remote.localRuntime.llamaContextSize = 4096;
+        manager
+            .updateModelProfile("LOCAL_MODEL", remote.clone())
+            .unwrap();
+
+        // A fresh read must preserve the selected device even with identical local weights.
+        let reloaded = ModelConfigManager::new(root.clone());
+        assert_eq!(
+            reloaded.getModelProfile("LOCAL_MODEL", &model_id).unwrap(),
+            remote
+        );
+
+        // Removing and reinstalling this node's weights must not change the remote reference.
+        registry_store
+            .write(&LocalModelRegistrySnapshot::empty())
+            .unwrap();
+        assert_eq!(
+            reloaded.getModelProfile("LOCAL_MODEL", &model_id).unwrap(),
+            remote
+        );
+        registry_store.write(&registry).unwrap();
+        assert_eq!(
+            reloaded.getModelProfile("LOCAL_MODEL", &model_id).unwrap(),
+            remote
+        );
+
+        // An explicit change back to this node remains possible.
+        reloaded
+            .updateModelProfile("LOCAL_MODEL", local.clone())
+            .unwrap();
+        assert_eq!(
+            reloaded.getModelProfile("LOCAL_MODEL", &model_id).unwrap(),
+            local
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
