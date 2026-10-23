@@ -833,3 +833,36 @@ async fn native_character_avatar_picker_keeps_all_retained_revisions() {
     assert!(snapshot.upserts.iter().any(|node| node.props.get("key").and_then(Value::as_str) == Some("entity-edit-avatar") && node.props.get("uri").and_then(Value::as_str).is_some_and(|uri| uri.starts_with("/app/character-config/avatars/"))), "avatar selection must finish");
     session.close(); engine.destroy();
 }
+
+/// Publishes an initial effect's state after render completion without a UI action or input refresh.
+#[tokio::test(flavor = "current_thread")]
+async fn native_initial_effect_publishes_after_render_completion() {
+    let (session, engine) = native_session();
+    let mut stream = session.updates().unwrap();
+    let source = r#"exports.default = function(ctx) {
+        const [count, setCount] = ctx.useState('count', 0);
+        ctx.useEffect('initial-watch', function() {
+            const timer = setInterval(function() { setCount(1); clearInterval(timer); }, 50);
+            return function() { clearInterval(timer); };
+        }, []);
+        return ctx.UI.Text({text: String(count)});
+    };"#;
+    session.execute(command("initial-owner", Some(source.into()), None, None)).await;
+    let mut events = drain(&mut stream);
+    assert!(events.iter().any(|event| event.phase == "complete"));
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let event = stream.receiver.recv().await.expect("the initial effect must keep the session observable");
+            assert!(event.error.is_none(), "{event:?}");
+            let changed = event.update.as_ref().is_some_and(|update| update.upserts.iter().any(|node| node.props.get("text") == Some(&Value::String("1".into()))));
+            if changed {
+                assert_eq!(event.requestId, "initial-owner");
+                assert_eq!(event.phase, "intermediate");
+            }
+            events.push(event);
+            if changed { break; }
+        }
+    }).await.expect("an effect state update must stream without a click");
+    assert_revisions(&events);
+    session.close(); engine.destroy();
+}
