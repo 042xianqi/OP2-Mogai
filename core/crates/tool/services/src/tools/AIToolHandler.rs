@@ -2024,7 +2024,7 @@ mod tests {
                         ..Default::default() },
                     runtimeDependencies: ToolRuntimeDependencies::new(
                         Arc::new(UnusedRuntimeSupport { package_assets }),
-                        Arc::new(operit_js_bridge::javascript::JsExecutionProvider::QuickJsExecutionProvider::new()),
+                        Arc::new(operit_js_bridge::javascript::JsExecutionProvider::HostJsExecutionProvider::new()),
                     ),
                     hooks: Vec::new(), toolPermissionSystem: permissions, packageManager: None,
                 })),
