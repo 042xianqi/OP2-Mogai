@@ -3533,6 +3533,14 @@ export interface SnackbarHostProps extends ComposeCommonProps {
  * Properties for embedding the host AI chat content without its workspace panel.
  */
 export interface AiChatProps extends ComposeCommonProps {
+  /**
+   * Identifies the conversation shown in a local embedded chat runtime without changing the main selection.
+   */
+  chatId?: string;
+  /**
+   * Controls the native composer; false leaves sending and cancellation to the surrounding workflow.
+   */
+  showInput?: boolean;
 }
 
 /**

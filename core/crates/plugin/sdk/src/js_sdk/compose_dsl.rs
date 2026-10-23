@@ -2766,6 +2766,10 @@ pub struct SnackbarHostProps {
 pub struct AiChatProps {
     /// Shared node layout, drawing, identity, and lifecycle properties.
     pub base_compose_common_props: ComposeCommonProps,
+    /// Identifies the conversation shown in a local embedded chat runtime without changing the main selection.
+    pub chatId: Option<String>,
+    /// Controls the native composer; false leaves sending and cancellation to the surrounding workflow.
+    pub showInput: Option<bool>,
 }
 /// Properties for a responsive trailing panel controlled by the Compose screen.
 pub struct AdaptiveSidePanelProps {
