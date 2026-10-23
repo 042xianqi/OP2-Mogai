@@ -42,7 +42,19 @@ set(LLM_SUPPORT_HTTP_RESOURCE OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(mnn URL https://codeload.github.com/alibaba/MNN/zip/refs/tags/3.6.1
     URL_HASH SHA256=93d60848879e68be554c247afe376657630a30652a7d8ec713e9e7d1bbf69260)
 FetchContent_MakeAvailable(mnn)
-add_library(operit_local_llm STATIC inference.cpp)
+# Keep MSVC's C++ implementation outside V8's statically linked libc++ ABI.
+if(WIN32)
+    add_library(operit_local_llm SHARED inference.cpp)
+    # ggml's CPU detection owns the Windows registry dependency.
+    target_link_libraries(operit_local_llm PRIVATE advapi32)
+    set_target_properties(operit_local_llm PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "$<1:${OPERIT_LOCAL_LLM_RUNTIME_DIR}>")
+else()
+    add_library(operit_local_llm STATIC inference.cpp)
+endif()
+include(GenerateExportHeader)
+generate_export_header(operit_local_llm)
+target_include_directories(operit_local_llm PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(operit_local_llm PRIVATE
     ${llama_SOURCE_DIR}/include
     ${mnn_SOURCE_DIR}/include
