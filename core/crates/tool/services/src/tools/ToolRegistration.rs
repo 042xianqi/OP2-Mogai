@@ -1418,12 +1418,10 @@ fn registerFileSystemTools(handler: &mut AIToolHandler, fileSystemTools: Standar
     );
     handler.registerBuiltinTool(
         BuiltinToolName::ApplyFile,
-        crate::ToolExecutionManager::RegisteredToolExecutor::Asynchronous(Box::new(
-            FileSystemToolExecutor {
-                tools: fileSystemTools,
-                operation: FileSystemToolOperation::ApplyFile,
-            },
-        )),
+        RegisteredToolExecutor::Asynchronous(Box::new(FileSystemToolExecutor {
+            tools: fileSystemTools,
+            operation: FileSystemToolOperation::ApplyFile,
+        })),
         ToolRegistrationVisibility::INTERNAL,
     );
     handler.registerBuiltinTool(
@@ -1435,6 +1433,7 @@ fn registerFileSystemTools(handler: &mut AIToolHandler, fileSystemTools: Standar
 }
 
 #[allow(non_snake_case)]
+/// Registers file tools through the asynchronous Host execution contract.
 fn registerFileSystemTool(
     handler: &mut AIToolHandler,
     fileSystemTools: &StandardFileSystemTools,
@@ -1445,12 +1444,10 @@ fn registerFileSystemTool(
     // dispatch to the target device through the device-tool transport.
     handler.registerBuiltinTool(
         name,
-        crate::ToolExecutionManager::RegisteredToolExecutor::Asynchronous(Box::new(
-            FileSystemToolExecutor {
-                tools: fileSystemTools.clone(),
-                operation,
-            },
-        )),
+        RegisteredToolExecutor::Asynchronous(Box::new(FileSystemToolExecutor {
+            tools: fileSystemTools.clone(),
+            operation,
+        })),
         ToolRegistrationVisibility::PUBLIC,
     );
 }

@@ -516,7 +516,6 @@ impl RuntimePackageManager {
                     BTreeMap::new(),
                     None,
                     true,
-                    60_000,
                 )
                 .await;
             let completedAt = currentTimeMillis();
@@ -1258,7 +1257,7 @@ impl RuntimePackageManager {
     }
 
     #[allow(non_snake_case)]
-    /// Removes custom code from built-in identities or deletes ordinary external packages.
+    /// Removes custom code from built-in identities or deletes the selected package installation.
     pub fn deletePackage(&mut self, packageName: &str) -> bool {
         let name = match self
             .toolPkgManager()
@@ -1287,9 +1286,6 @@ impl RuntimePackageManager {
             }
             self.loadAvailablePackages();
             return true;
-        }
-        if record.settings["builtin"] == true {
-            return false;
         }
         self.disablePackage(&name);
         if let Err(error) = ExtensionStore::default().delete("package", &name) {
@@ -1320,10 +1316,6 @@ impl RuntimePackageManager {
             })
             .ok_or("Package load issue is no longer present; refresh the package list")?;
 
-        if self.toolHandler.runtimeSupport().builtinPluginAssets().iter()
-            .any(|asset| asset.name == issue.sourcePath) {
-            return Err("Built-in packages cannot be deleted".into());
-        }
         let source = Path::new(&issue.sourcePath);
         let installedScope = ["device", "space"].into_iter().find(|scope| {
             let root = ExtensionStore::root("package", scope).expect("valid package scope");
@@ -1674,11 +1666,16 @@ impl RuntimePackageManager {
                 eventPayload: serde_json::json!({"action": "click", "chatId": chatId,
                     "messageIndex": messageIndex, "menuItemId": item.id, "message": message}),
                 executionContextKey: None, runtimeKind: None, envOverrides: BTreeMap::new(),
-                timestampMs: currentTimeMillis(), timeoutMillis: 60_000,
+                timestampMs: currentTimeMillis(), timeoutMillis: None,
                 dispatchIntermediateOnMain: true, onIntermediateResult: None,
             })
         })();
-        async move { manager.dispatchToolPkgHook(&enabled, prepared?).await }
+        async move {
+            manager
+                .dispatchToolPkgHook(&enabled, prepared?)
+                .await
+                .map_err(|error| error.to_string())
+        }
     }
 
     #[allow(non_snake_case)]
@@ -1810,7 +1807,7 @@ impl RuntimePackageManager {
             runtimeKind: None,
             envOverrides: BTreeMap::new(),
             timestampMs: currentTimeMillis(),
-            timeoutMillis: 60_000,
+            timeoutMillis: None,
             dispatchIntermediateOnMain: true,
             onIntermediateResult: None,
         };
@@ -1827,7 +1824,8 @@ impl RuntimePackageManager {
             }
             let raw = manager
                 .dispatchToolPkgHook(&enabled, invocation)
-                .await?
+                .await
+                .map_err(|error| error.to_string())?
                 .ok_or_else(|| format!("plugin command /{} returned no result", info.name))?;
             serde_json::from_str::<ToolPkgCoreCommandExecutionResult>(&raw).map_err(|error| {
                 format!(
@@ -1939,7 +1937,7 @@ impl RuntimePackageManager {
                     runtimeKind: None,
                     envOverrides: BTreeMap::new(),
                     timestampMs: currentTimeMillis(),
-                    timeoutMillis: 60_000,
+                    timeoutMillis: None,
                     dispatchIntermediateOnMain: true,
                     onIntermediateResult: None,
                 };
@@ -1949,7 +1947,10 @@ impl RuntimePackageManager {
                 &format!("Navigation action started: {actionContext}"),
                 operit_util::AppLogger::VERBOSE_LEVEL_2,
             );
-            let result = manager.dispatchToolPkgHookAsync(&enabled, invocation).await;
+            let result = manager
+                .dispatchToolPkgHookAsync(&enabled, invocation)
+                .await
+                .map_err(|error| error.to_string());
             match &result {
                 Ok(_) => AppLogger::v_with_level(
                     PACKAGE_MANAGER_LOG_TAG,
@@ -1966,19 +1967,27 @@ impl RuntimePackageManager {
     }
 
     #[allow(non_snake_case)]
-    /// Lists bundled external standalone packages that are not currently loaded.
+    /// Lists bundled packages available for installation or an explicit source update.
     pub fn getBundledExternalPackageCandidates(&mut self) -> Vec<BundledExternalPackageCandidate> {
-        let loadedPackageNames = self
-            .availablePackages()
-            .keys()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let mut candidates = self
-            .scanBundledExternalPackageCandidates()
+        let scanned = self.scanBundledExternalPackageCandidates();
+        let mut candidates = Vec::new();
+        for candidate in scanned
             .into_iter()
             .filter_map(Self::bundledExternalPackageCandidateFromScanResult)
-            .filter(|candidate| !loadedPackageNames.contains(&candidate.packageName))
-            .collect::<Vec<_>>();
+        {
+            match self.bundledCandidateNeedsInstallation(&candidate) {
+                Ok(true) => candidates.push(candidate),
+                Ok(false) => {}
+                Err(error) => {
+                    self.recordAndReturnPackageError(
+                        &candidate.sourcePath,
+                        "bundled_update_check_failed",
+                        &error,
+                        &candidate.packageKind,
+                    );
+                }
+            }
+        }
         candidates.sort_by(|left, right| {
             left.displayName
                 .resolve(false)
@@ -1986,6 +1995,43 @@ impl RuntimePackageManager {
                 .then_with(|| left.packageName.cmp(&right.packageName))
         });
         candidates
+    }
+
+    /// Compares the installed source with its bundled asset without replacing custom implementations.
+    fn bundledCandidateNeedsInstallation(
+        &self,
+        candidate: &BundledExternalPackageCandidate,
+    ) -> Result<bool, String> {
+        let records = self.scopeState.lock().map_err(|error| error.to_string())?;
+        let Some(record) = records.get(&candidate.packageName) else {
+            return Ok(true);
+        };
+        if record.settings["builtin"] == true || record.settings["customized"] == true {
+            return Ok(false);
+        }
+        if record.sourceName != candidate.sourceFileName {
+            return Ok(false);
+        }
+        let root = ExtensionStore::root("package", &record.scope)?;
+        let path = self
+            .storePaths
+            .runtime_storage_path(&root)
+            .join(&record.sourceName);
+        let installed = self
+            .fileSystemHost
+            .readFileBytes(&hostPath(&path))
+            .map_err(|error| {
+                format!(
+                    "Cannot read installed package {}: {error}",
+                    candidate.packageName
+                )
+            })?;
+        let asset = bundledExternalPluginAssetByName(
+            self.toolHandler.runtimeSupport().as_ref(),
+            &candidate.sourcePath,
+        )
+        .ok_or_else(|| format!("Bundled package asset not found: {}", candidate.sourcePath))?;
+        Ok(installed.as_slice() != asset.bytes)
     }
 
     #[allow(non_snake_case)]
@@ -2056,7 +2102,7 @@ impl RuntimePackageManager {
         )
     }
 
-    /// Imports a bundled asset into the scope declared by its manifest.
+    /// Updates an existing installation in its scope or installs into the manifest scope.
     #[allow(non_snake_case)]
     fn importBundledExternalPackageCandidate(
         &mut self,
@@ -2080,7 +2126,12 @@ impl RuntimePackageManager {
                 packageKind,
             );
         };
-        let scope = match Self::bundledCandidateScope(&result.toolPkgLoadResult) {
+        let sourceFileName = packageSourceFileName(&sourcePath);
+        let scope = match self.bundledInstallationScope(
+            packageName,
+            &sourceFileName,
+            &result.toolPkgLoadResult,
+        ) {
             Ok(scope) => scope,
             Err(error) => {
                 return self.recordAndReturnPackageError(
@@ -2091,7 +2142,6 @@ impl RuntimePackageManager {
                 )
             }
         };
-        let sourceFileName = packageSourceFileName(&sourcePath);
         let packagesDir = self.storePaths.runtime_storage_path(
             &ExtensionStore::root("package", scope.as_str()).expect("Validated package scope"),
         );
@@ -2159,7 +2209,11 @@ impl RuntimePackageManager {
         self.externalPackageScanCache
             .remove(&destinationFile.to_string_lossy().to_string());
         self.loadAvailablePackages();
-        format!("Successfully imported package: {}\nStored at: {}", packageName, destinationFile.to_string_lossy())
+        format!(
+            "Successfully imported package: {}\nStored at: {}",
+            packageName,
+            destinationFile.to_string_lossy()
+        )
     }
 
     #[allow(non_snake_case)]
@@ -3350,10 +3404,26 @@ impl RuntimePackageManager {
                         return Err(format!("Package location conflicts with its owner: {name}"));
                     }
                 }
-                let currentMembers = serde_json::to_value(members).map_err(|error| error.to_string())?;
-                if record.settings["members"] != currentMembers {
-                    record.settings["members"] = currentMembers;
-                    store.setSettings("package", name, record.settings.clone())?;
+                let mut settings = record.settings.clone();
+                settings["members"] =
+                    serde_json::to_value(members).map_err(|error| error.to_string())?;
+                let fields = settings
+                    .as_object_mut()
+                    .ok_or("Package settings must be an object")?;
+                match requiredScope {
+                    Some(scope) => {
+                        fields.insert(
+                            "installationScope".into(),
+                            serde_json::to_value(scope).map_err(|error| error.to_string())?,
+                        );
+                    }
+                    None => {
+                        fields.remove("installationScope");
+                    }
+                }
+                if record.settings != settings {
+                    store.setSettings("package", name, settings.clone())?;
+                    record.settings = settings;
                 }
                 self.scopeState
                     .lock()
@@ -3580,6 +3650,51 @@ impl RuntimePackageManager {
             metadata.as_ref().map(|value| value.size).unwrap_or(0),
             metadata.map(|value| value.lastModified).unwrap_or_default()
         )
+    }
+
+    /// Validates source ownership and manifest restrictions before writing an installed update.
+    fn bundledInstallationScope(
+        &self,
+        packageName: &str,
+        sourceFileName: &str,
+        loadResult: &Option<ToolPkgLoadResult>,
+    ) -> Result<ToolPkgConfigScope, String> {
+        let records = self.scopeState.lock().map_err(|error| error.to_string())?;
+        let Some(record) = records.get(packageName) else {
+            return Self::bundledCandidateScope(loadResult);
+        };
+        if record.settings["customized"] == true {
+            return Err(format!(
+                "Package has a custom implementation: {packageName}"
+            ));
+        }
+        if record.settings["builtin"] == true {
+            if !record.sourceName.is_empty() {
+                return Err(format!(
+                    "Built-in package has an unexpected source: {packageName}"
+                ));
+            }
+        } else if record.sourceName != sourceFileName {
+            return Err(format!(
+                "Package source conflicts with installation: {packageName}"
+            ));
+        }
+        let scope = serde_json::from_value::<ToolPkgConfigScope>(serde_json::Value::String(
+            record.scope.clone(),
+        ))
+        .map_err(|error| error.to_string())?;
+        let requiredScope = loadResult
+            .as_ref()
+            .map(|loaded| Self::requiredInstallationScope(&loaded.containerRuntime))
+            .transpose()?
+            .flatten();
+        if requiredScope.is_some_and(|required| required != scope) {
+            return Err(format!(
+                "Package {packageName} cannot be updated in {} scope",
+                scope.as_str()
+            ));
+        }
+        Ok(scope)
     }
 
     /// Resolves the manifest restriction for a bundled asset before installation.
@@ -4491,6 +4606,43 @@ impl RuntimePackageManager {
     }
 
     #[allow(non_snake_case)]
+    /// Executes one before hook with an explicit caller-owned completion deadline.
+    #[allow(non_snake_case)]
+    pub fn runToolPkgMainHookWithTimeoutMillis(
+        &self,
+        containerPackageName: &str,
+        functionName: &str,
+        event: &str,
+        eventName: Option<&str>,
+        pluginId: Option<&str>,
+        inlineFunctionSource: Option<&str>,
+        eventPayload: serde_json::Value,
+        executionContextKey: Option<&str>,
+        runtimeKind: Option<&str>,
+        onIntermediateResult: Option<std::sync::Arc<dyn Fn(String) + Send + Sync>>,
+        timeoutMillis: u64,
+    ) -> operit_plugin_sdk::javascript::JsExecutionCompletion<Result<Option<String>, String>> {
+        self.runToolPkgMainHookWithDeadline(
+            containerPackageName,
+            functionName,
+            event,
+            eventName,
+            pluginId,
+            inlineFunctionSource,
+            eventPayload,
+            executionContextKey,
+            runtimeKind,
+            onIntermediateResult,
+            Some(timeoutMillis),
+        )
+    }
+
+    /// Reports the exact timed-out before hook through the active frontend and returned error.
+    #[allow(non_snake_case)]
+    pub fn reportToolPkgHookTimeout(&self, packageName: &str, hookId: &str, event: &str) -> String {
+        notifyToolPkgHookTimeout(&self.context, packageName, hookId, event)
+    }
+
     /// Runs a main hook exported by a ToolPkg container.
     pub fn runToolPkgMainHook(
         &self,
@@ -4505,7 +4657,7 @@ impl RuntimePackageManager {
         runtimeKind: Option<&str>,
         onIntermediateResult: Option<std::sync::Arc<dyn Fn(String) + Send + Sync>>,
     ) -> operit_plugin_sdk::javascript::JsExecutionCompletion<Result<Option<String>, String>> {
-        self.runToolPkgMainHookWithTimeoutMillis(
+        self.runToolPkgMainHookWithDeadline(
             containerPackageName,
             functionName,
             event,
@@ -4516,13 +4668,13 @@ impl RuntimePackageManager {
             executionContextKey,
             runtimeKind,
             onIntermediateResult,
-            60_000,
+            None,
         )
     }
 
     #[allow(non_snake_case)]
     /// Runs a main hook exported by a ToolPkg container with one explicit millisecond timeout.
-    pub fn runToolPkgMainHookWithTimeoutMillis(
+    fn runToolPkgMainHookWithDeadline(
         &self,
         containerPackageName: &str,
         functionName: &str,
@@ -4534,7 +4686,7 @@ impl RuntimePackageManager {
         executionContextKey: Option<&str>,
         runtimeKind: Option<&str>,
         onIntermediateResult: Option<std::sync::Arc<dyn Fn(String) + Send + Sync>>,
-        timeoutMillis: u64,
+        timeoutMillis: Option<u64>,
     ) -> operit_plugin_sdk::javascript::JsExecutionCompletion<Result<Option<String>, String>> {
         let startedAt = currentTimeMillis();
         let packageName = self.normalizePackageName(containerPackageName);
@@ -4560,6 +4712,8 @@ impl RuntimePackageManager {
             },
         );
         let preparedAt = currentTimeMillis();
+        let manager = self.clone();
+        let hookId = pluginId.map(str::to_owned);
         Box::pin(async move {
             let result = pending.await;
             let completedAt = currentTimeMillis();
@@ -4573,7 +4727,24 @@ impl RuntimePackageManager {
                 ),
                 operit_util::AppLogger::VERBOSE_LEVEL_3,
             );
-            result
+            match result {
+                Ok(value) => Ok(value),
+                Err(error)
+                    if error.kind
+                        == operit_plugin_sdk::execution_result::JsExecutionErrorKind::Timeout =>
+                {
+                    Err(manager.reportToolPkgHookTimeout(
+                        &packageName,
+                        &hookId.ok_or_else(|| {
+                            format!(
+                                "Timed before hook {packageName}:{timedFunction} has no Hook ID"
+                            )
+                        })?,
+                        &timedEvent,
+                    ))
+                }
+                Err(error) => Err(error.to_string()),
+            }
         })
     }
 
@@ -5907,4 +6078,62 @@ pub(crate) fn openComposeDslSessionForContext(
     let id = session.id();
     sessions.insert(key, session);
     Ok(id)
+}
+
+/// Publishes a before-hook deadline failure and preserves presentation errors in the returned failure.
+#[allow(non_snake_case)]
+fn notifyToolPkgHookTimeout(
+    context: &HostManager,
+    packageName: &str,
+    hookId: &str,
+    event: &str,
+) -> String {
+    let message =
+        format!("前置插件「{packageName}:{hookId}」响应超时（{event}），本次 Hook 已终止。");
+    AppLogger::e("ToolPkgHookTimeout", &message);
+    let notification = context
+        .toastHost
+        .as_ref()
+        .ok_or_else(|| "Frontend Toast host is unavailable".to_string())
+        .and_then(|host| host.toast(&message).map_err(|error| error.to_string()));
+    match notification {
+        Ok(()) => format!("TOOLPKG_BEFORE_HOOK_TIMEOUT: {message}"),
+        Err(error) => format!("TOOLPKG_BEFORE_HOOK_TIMEOUT: {message} 超时提示显示失败：{error}"),
+    }
+}
+
+#[cfg(test)]
+mod hook_timeout_notification_tests {
+    use super::*;
+
+    /// Presents the exact owner and stage while returning the same terminal timeout to the caller.
+    #[test]
+    fn before_hook_timeout_is_presented_and_propagated() {
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let received = messages.clone();
+        let context = HostManager::new().withToastHost(Arc::new(move |message: &str| {
+            received.lock().unwrap().push(message.to_string());
+            Ok(())
+        }));
+        let error =
+            notifyToolPkgHookTimeout(&context, "bridge.wechat", "before-send", "submit_requested");
+        let messages = messages.lock().unwrap();
+        assert_eq!(messages.as_slice(), ["前置插件「bridge.wechat:before-send」响应超时（submit_requested），本次 Hook 已终止。"]);
+        assert_eq!(
+            error,
+            format!("TOOLPKG_BEFORE_HOOK_TIMEOUT: {}", messages[0])
+        );
+    }
+
+    /// Propagates a failed presenter instead of claiming that a timeout notice was displayed.
+    #[test]
+    fn before_hook_timeout_preserves_presentation_failure() {
+        let context = HostManager::new().withToastHost(Arc::new(|_message: &str| {
+            Err(operit_host_api::HostError::new("toast channel closed"))
+        }));
+        let error =
+            notifyToolPkgHookTimeout(&context, "bridge.wechat", "before-send", "submit_requested");
+        assert!(error.starts_with("TOOLPKG_BEFORE_HOOK_TIMEOUT: "));
+        assert!(error.ends_with("超时提示显示失败：toast channel closed"));
+    }
 }

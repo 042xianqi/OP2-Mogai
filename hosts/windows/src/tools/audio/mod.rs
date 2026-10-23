@@ -1,7 +1,5 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
 
 use operit_host_api::{
     AudioPlaybackHost, AudioPlaybackStatus, HostError, HostResult, MusicPlaybackRequest,
@@ -128,10 +126,19 @@ impl AudioPlaybackHost for WindowsAudioPlaybackHost {
         }
         let durationMillis = playResult?;
         let cleanupAlias = alias.clone();
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(durationMillis.saturating_add(500)));
-            let _ = mciCommand(&format!("close {cleanupAlias}"));
-        });
+        use operit_host_api::HostRuntimeTaskSchedulerHost;
+        if let Err(error) = operit_host_native_common::NativeHostRuntimeTaskSchedulerHost::new()
+            .scheduleDelayedHostRuntimeTask(
+                "windows-audio-close",
+                durationMillis.saturating_add(500),
+                Box::new(move || {
+                    let _ = mciCommand(&format!("close {cleanupAlias}"));
+                }),
+            )
+        {
+            let _ = mciCommand(&format!("close {alias}"));
+            return Err(error);
+        }
         Ok(AudioPlaybackStatus {
             path: path.to_string(),
             started: true,

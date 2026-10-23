@@ -216,7 +216,11 @@ impl StandardFileSystemTools {
 
     /// File tools honor registered storage ownership; no extension-specific synchronization.
     #[allow(non_snake_case)]
-    fn synchronizeMappedChanges<T>(&self, paths: &[&str], change: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    fn synchronizeMappedChanges<T>(
+        &self,
+        paths: &[&str],
+        change: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
         let mut storagePaths = Vec::new();
         let mut workspaceChanged = false;
         for path in paths {
@@ -226,13 +230,19 @@ impl StandardFileSystemTools {
                 storagePaths.push(format!("runtime/{relative}"));
             }
         }
-        let tracked = || RuntimeFileSyncStore::new(self.runtimeStorageHost.clone(), RUNTIME_SYNC_DIR_PATH)
-            .trackChanges(&storagePaths, change);
+        let tracked = || {
+            RuntimeFileSyncStore::new(self.runtimeStorageHost.clone(), RUNTIME_SYNC_DIR_PATH)
+                .trackChanges(&storagePaths, change)
+        };
         if workspaceChanged {
             operit_store::WorkspaceFileSyncStore::WorkspaceFileSyncStore::new(
-                self.runtimeStorageHost.clone(), RUNTIME_SYNC_DIR_PATH,
-            ).track(tracked)
-        } else { tracked() }
+                self.runtimeStorageHost.clone(),
+                RUNTIME_SYNC_DIR_PATH,
+            )
+            .track(tracked)
+        } else {
+            tracked()
+        }
     }
 
     /// Writes text and publishes changed Space files, including appended bytes.
@@ -419,7 +429,9 @@ impl StandardFileSystemTools {
                     );
                 }
                 if isSpecialFileType(&fileExt) {
-                    return self.handleSpecialFileRead(tool, &vfs, &path, &fileExt);
+                    return self
+                        .handleSpecialFileRead(tool, &vfs, &path, &fileExt)
+                        .await;
                 }
 
                 if !FileUtils::isTextLike(&bytes) {
@@ -455,7 +467,8 @@ impl StandardFileSystemTools {
     }
 
     #[allow(non_snake_case)]
-    fn handleSpecialFileRead(
+    /// Dispatches typed file content while awaiting image model recognition directly.
+    async fn handleSpecialFileRead(
         &self,
         tool: &AITool,
         vfs: &VisualFileSystem,
@@ -463,7 +476,9 @@ impl StandardFileSystemTools {
         fileExt: &str,
     ) -> ToolResult {
         match fileExt {
-            "jpg" | "jpeg" | "png" | "gif" | "bmp" => self.handleImageFileRead(tool, vfs, path),
+            "jpg" | "jpeg" | "png" | "gif" | "bmp" => {
+                self.handleImageFileRead(tool, vfs, path).await
+            }
             "pdf" | "doc" | "docx" => self.handleDocumentFileRead(tool, vfs, path, fileExt),
             "mp3" | "wav" | "m4a" | "aac" | "flac" | "ogg" | "opus" => {
                 self.handleAudioFileRead(tool, vfs, path, fileExt)
@@ -625,7 +640,12 @@ impl StandardFileSystemTools {
     #[allow(non_snake_case)]
     /// Reads image files through the same three-stage chain as the Kotlin client:
     /// direct media link, backend image recognition with intent, then local OCR.
-    fn handleImageFileRead(&self, tool: &AITool, vfs: &VisualFileSystem, path: &str) -> ToolResult {
+    async fn handleImageFileRead(
+        &self,
+        tool: &AITool,
+        vfs: &VisualFileSystem,
+        path: &str,
+    ) -> ToolResult {
         if parameterBool(tool, "direct_image") {
             let directResult = self.handleDirectImageFileRead(tool, vfs, path);
             // A failed direct registration must not abort the read. Kotlin falls back to
@@ -635,7 +655,10 @@ impl StandardFileSystemTools {
             }
         }
 
-        let physicalPath = match vfs.resolvePath(path).and_then(|resolved| resolved.nativePath()) {
+        let physicalPath = match vfs
+            .resolvePath(path)
+            .and_then(|resolved| resolved.nativePath())
+        {
             Ok(path) => path,
             Err(error) => return toolError(tool, String::new(), error),
         };
@@ -645,7 +668,8 @@ impl StandardFileSystemTools {
             .to_string();
 
         if !intent.is_empty() {
-            if let Some(recognitionResult) = self.recognizeImageWithIntent(vfs, path, &intent) {
+            if let Some(recognitionResult) = self.recognizeImageWithIntent(vfs, path, &intent).await
+            {
                 return successData(
                     tool,
                     ToolResultData::FileContentData(FileContentData {
@@ -674,8 +698,8 @@ impl StandardFileSystemTools {
 
     #[allow(non_snake_case)]
     /// Sends an image plus the caller's intent to the configured image-recognition model.
-    /// Returns None on any registration/model failure so the caller can fall back to OCR.
-    fn recognizeImageWithIntent(
+    /// Returns the model result when image registration and recognition succeed.
+    async fn recognizeImageWithIntent(
         &self,
         vfs: &VisualFileSystem,
         path: &str,
@@ -684,17 +708,20 @@ impl StandardFileSystemTools {
         let bytes = match vfs.readFileBytes(path) {
             Ok(bytes) => bytes,
             Err(error) => {
-                operit_util::AppLogger::AppLogger::w("StandardFileSystemTools", &format!("unable to read image for intent recognition: {error}"));
+                operit_util::AppLogger::AppLogger::w(
+                    "StandardFileSystemTools",
+                    &format!("unable to read image for intent recognition: {error}"),
+                );
                 return None;
             }
         };
-        let imageId = ImagePoolManager::add_image_bytes(
-            &bytes,
-            Some(imageMimeTypeFromPath(path)),
-            None,
-        );
+        let imageId =
+            ImagePoolManager::add_image_bytes(&bytes, Some(imageMimeTypeFromPath(path)), None);
         if imageId == "error" {
-            operit_util::AppLogger::AppLogger::w("StandardFileSystemTools", &format!("unable to register image for intent recognition: {path}"));
+            operit_util::AppLogger::AppLogger::w(
+                "StandardFileSystemTools",
+                &format!("unable to register image for intent recognition: {path}"),
+            );
             return None;
         }
 
@@ -705,11 +732,7 @@ impl StandardFileSystemTools {
             recordTokenUsage: false,
             enableThinking: false,
         };
-        let result = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| error.to_string())
-            .and_then(|runtime| runtime.block_on(self.runtimeSupport.callChatModel(request)));
+        let result = self.runtimeSupport.callChatModel(request).await;
         ImagePoolManager::remove_image(&imageId);
 
         match result {
@@ -718,12 +741,18 @@ impl StandardFileSystemTools {
                 if !output.trim().is_empty() {
                     Some(output)
                 } else {
-                    operit_util::AppLogger::AppLogger::w("StandardFileSystemTools", &format!("image recognition returned an empty result: {path}"));
+                    operit_util::AppLogger::AppLogger::w(
+                        "StandardFileSystemTools",
+                        &format!("image recognition returned an empty result: {path}"),
+                    );
                     None
                 }
             }
             Err(error) => {
-                operit_util::AppLogger::AppLogger::w("StandardFileSystemTools", &format!("image recognition failed for {path}: {error}"));
+                operit_util::AppLogger::AppLogger::w(
+                    "StandardFileSystemTools",
+                    &format!("image recognition failed for {path}: {error}"),
+                );
                 None
             }
         }
@@ -1005,8 +1034,7 @@ impl StandardFileSystemTools {
         let recursive = parameterBool(tool, "recursive");
         let vfs = self.vfs();
 
-        match self.synchronizeMappedChanges(&[&path], || vfs.deleteFile(&path, recursive))
-        {
+        match self.synchronizeMappedChanges(&[&path], || vfs.deleteFile(&path, recursive)) {
             Ok(()) => successData(
                 tool,
                 fileOperationResult(
@@ -1063,8 +1091,9 @@ impl StandardFileSystemTools {
         let destPath = parameterValue(tool, "destination");
         let vfs = self.vfs();
 
-        match self.synchronizeMappedChanges(&[&sourcePath, &destPath], || vfs.moveFile(&sourcePath, &destPath))
-        {
+        match self.synchronizeMappedChanges(&[&sourcePath, &destPath], || {
+            vfs.moveFile(&sourcePath, &destPath)
+        }) {
             Ok(()) => successData(
                 tool,
                 fileOperationResult(
@@ -1093,8 +1122,9 @@ impl StandardFileSystemTools {
         let recursive = parameterBoolDefaultTrue(tool, "recursive");
         let vfs = self.vfs();
 
-        match self.synchronizeMappedChanges(&[&destPath], || vfs.copyFile(&sourcePath, &destPath, recursive))
-        {
+        match self.synchronizeMappedChanges(&[&destPath], || {
+            vfs.copyFile(&sourcePath, &destPath, recursive)
+        }) {
             Ok(()) => successData(
                 tool,
                 fileOperationResult(
@@ -1572,24 +1602,26 @@ impl StandardFileSystemTools {
                     message.to_string(),
                 )];
             }
-            return vec![match self.writeMappedText(&vfs, &path, &newContent, false) {
-                Ok(()) => {
-                    let diffContent = self.runtimeSupport.generateUnifiedDiff("", &newContent);
-                    let details = format!("Successfully created new file: {path}");
-                    successData(
-                        tool,
-                        ToolResultData::FileApplyResultData(FileApplyResultData {
-                            operation: fileOperationData("create", &path, true, details),
-                            aiDiffInstructions: String::new(),
-                            diffContent: Some(diffContent),
-                        }),
-                    )
-                }
-                Err(error) => {
-                    let message = format!("Failed to create new file: {error}");
-                    toolError(tool, fileOperationDataToString(&message), message)
-                }
-            }];
+            return vec![
+                match self.writeMappedText(&vfs, &path, &newContent, false) {
+                    Ok(()) => {
+                        let diffContent = self.runtimeSupport.generateUnifiedDiff("", &newContent);
+                        let details = format!("Successfully created new file: {path}");
+                        successData(
+                            tool,
+                            ToolResultData::FileApplyResultData(FileApplyResultData {
+                                operation: fileOperationData("create", &path, true, details),
+                                aiDiffInstructions: String::new(),
+                                diffContent: Some(diffContent),
+                            }),
+                        )
+                    }
+                    Err(error) => {
+                        let message = format!("Failed to create new file: {error}");
+                        toolError(tool, fileOperationDataToString(&message), message)
+                    }
+                },
+            ];
         }
 
         if operationType == "create" {
@@ -1673,26 +1705,28 @@ impl StandardFileSystemTools {
                 aiInstructions,
             )];
         }
-        vec![match self.writeMappedText(&vfs, &path, &mergedContent, false) {
-            Ok(()) => {
-                let details = format!("Successfully applied AI code to file: {path}");
-                let diffContent = self
-                    .runtimeSupport
-                    .generateUnifiedDiff(&originalContent, &mergedContent);
-                successData(
-                    tool,
-                    ToolResultData::FileApplyResultData(FileApplyResultData {
-                        operation: fileOperationData("apply", &path, true, details),
-                        aiDiffInstructions: aiInstructions,
-                        diffContent: Some(diffContent),
-                    }),
-                )
-            }
-            Err(error) => {
-                let message = format!("Failed to write merged file: {error}");
-                toolError(tool, fileOperationDataToString(&message), message)
-            }
-        }]
+        vec![
+            match self.writeMappedText(&vfs, &path, &mergedContent, false) {
+                Ok(()) => {
+                    let details = format!("Successfully applied AI code to file: {path}");
+                    let diffContent = self
+                        .runtimeSupport
+                        .generateUnifiedDiff(&originalContent, &mergedContent);
+                    successData(
+                        tool,
+                        ToolResultData::FileApplyResultData(FileApplyResultData {
+                            operation: fileOperationData("apply", &path, true, details),
+                            aiDiffInstructions: aiInstructions,
+                            diffContent: Some(diffContent),
+                        }),
+                    )
+                }
+                Err(error) => {
+                    let message = format!("Failed to write merged file: {error}");
+                    toolError(tool, fileOperationDataToString(&message), message)
+                }
+            },
+        ]
     }
 
     #[allow(non_snake_case)]
@@ -1830,10 +1864,12 @@ pub enum FileSystemToolOperation {
 }
 
 impl AsyncToolExecutor for FileSystemToolExecutor {
+    /// Validates the concrete file operation before scheduling its work.
     fn validateParameters(&self, tool: &AITool) -> ToolValidationResult {
         validateOperationParameters(&self.operation, tool)
     }
 
+    /// Declares file ownership and write boundaries before asynchronous execution.
     fn accessSpec(&self, _tool: &AITool) -> Result<ToolAccessSpec, String> {
         let spec = match self.operation {
             FileSystemToolOperation::ListFiles
@@ -1891,39 +1927,87 @@ impl AsyncToolExecutor for FileSystemToolExecutor {
         Ok(spec)
     }
 
+    /// Awaits model work directly while synchronous file APIs stay on Host blocking capacity.
     fn invokeAndStreamAsync<'a>(
         &'a mut self,
         tool: &'a AITool,
         _context: &'a ToolInvocationContext,
     ) -> ToolInvocationFuture<'a> {
+        let tools = self.tools.clone();
+        let operation = self.operation.clone();
+        let request = tool.clone();
+        let runtimeContext = ToolExecutionManager::currentToolRuntimeContext();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let scheduled = operit_host_api::HostManager::defaultHostRuntimeTaskSchedulerHost()
+            .scheduleHostRuntimeBlockingAsyncTask(
+                "file-tool-invocation",
+                Box::new(move || {
+                    Box::pin(async move {
+                        let invocation = async move {
+                            let tool = &request;
+                            let result = match operation {
+                                FileSystemToolOperation::ListFiles => tools.listFiles(tool).await,
+                                FileSystemToolOperation::ReadFile => tools.readFile(tool).await,
+                                FileSystemToolOperation::ReadFilePart => {
+                                    tools.readFilePart(tool).await
+                                }
+                                FileSystemToolOperation::ReadFileFull => {
+                                    tools.readFileFull(tool).await
+                                }
+                                FileSystemToolOperation::ReadFileBinary => {
+                                    tools.readFileBinary(tool).await
+                                }
+                                FileSystemToolOperation::WriteFile => tools.writeFile(tool),
+                                FileSystemToolOperation::WriteFileBinary => {
+                                    tools.writeFileBinary(tool)
+                                }
+                                FileSystemToolOperation::DeleteFile => tools.deleteFile(tool),
+                                FileSystemToolOperation::FileExists => tools.fileExists(tool).await,
+                                FileSystemToolOperation::MoveFile => tools.moveFile(tool),
+                                FileSystemToolOperation::CopyFile => tools.copyFile(tool),
+                                FileSystemToolOperation::MakeDirectory => tools.makeDirectory(tool),
+                                FileSystemToolOperation::FindFiles => tools.findFiles(tool).await,
+                                FileSystemToolOperation::FileInfo => tools.fileInfo(tool).await,
+                                FileSystemToolOperation::GrepCode => tools.grepCode(tool).await,
+                                FileSystemToolOperation::GrepContext => tools.grepContext(tool).await,
+                                FileSystemToolOperation::DownloadFile => tools.downloadFile(tool),
+                                FileSystemToolOperation::ApplyFile => return tools.applyFile(tool),
+                                FileSystemToolOperation::CreateFile => tools.createFile(tool),
+                                FileSystemToolOperation::EditFile => tools.editFile(tool),
+                                FileSystemToolOperation::ZipFiles => tools.zipFiles(tool),
+                                FileSystemToolOperation::UnzipFiles => tools.unzipFiles(tool),
+                                FileSystemToolOperation::OpenFile => tools.openFile(tool),
+                                FileSystemToolOperation::ShareFile => tools.shareFile(tool),
+                            };
+                            vec![result]
+                        };
+                        let results = match runtimeContext {
+                            Some(context) => {
+                                ToolExecutionManager::scopeToolRuntimeContext(context, invocation)
+                                    .await
+                            }
+                            None => invocation.await,
+                        };
+                        let _ = sender.send(results);
+                    })
+                }),
+            );
         Box::pin(async move {
-            let result = match self.operation {
-                FileSystemToolOperation::ListFiles => self.tools.listFiles(tool).await,
-                FileSystemToolOperation::ReadFile => self.tools.readFile(tool).await,
-                FileSystemToolOperation::ReadFilePart => self.tools.readFilePart(tool).await,
-                FileSystemToolOperation::ReadFileFull => self.tools.readFileFull(tool).await,
-                FileSystemToolOperation::ReadFileBinary => self.tools.readFileBinary(tool).await,
-                FileSystemToolOperation::WriteFile => self.tools.writeFile(tool),
-                FileSystemToolOperation::WriteFileBinary => self.tools.writeFileBinary(tool),
-                FileSystemToolOperation::DeleteFile => self.tools.deleteFile(tool),
-                FileSystemToolOperation::FileExists => self.tools.fileExists(tool).await,
-                FileSystemToolOperation::MoveFile => self.tools.moveFile(tool),
-                FileSystemToolOperation::CopyFile => self.tools.copyFile(tool),
-                FileSystemToolOperation::MakeDirectory => self.tools.makeDirectory(tool),
-                FileSystemToolOperation::FindFiles => self.tools.findFiles(tool).await,
-                FileSystemToolOperation::FileInfo => self.tools.fileInfo(tool).await,
-                FileSystemToolOperation::GrepCode => self.tools.grepCode(tool).await,
-                FileSystemToolOperation::GrepContext => self.tools.grepContext(tool).await,
-                FileSystemToolOperation::DownloadFile => self.tools.downloadFile(tool),
-                FileSystemToolOperation::ApplyFile => return self.tools.applyFile(tool),
-                FileSystemToolOperation::CreateFile => self.tools.createFile(tool),
-                FileSystemToolOperation::EditFile => self.tools.editFile(tool),
-                FileSystemToolOperation::ZipFiles => self.tools.zipFiles(tool),
-                FileSystemToolOperation::UnzipFiles => self.tools.unzipFiles(tool),
-                FileSystemToolOperation::OpenFile => self.tools.openFile(tool),
-                FileSystemToolOperation::ShareFile => self.tools.shareFile(tool),
-            };
-            vec![result]
+            match scheduled {
+                Err(error) => vec![toolError(
+                    tool,
+                    String::new(),
+                    format!("File tool scheduling failed: {error}"),
+                )],
+                Ok(()) => match receiver.await {
+                    Ok(results) => results,
+                    Err(error) => vec![toolError(
+                        tool,
+                        String::new(),
+                        format!("File tool execution ended: {error}"),
+                    )],
+                },
+            }
         })
     }
 }
