@@ -286,6 +286,7 @@ core_proxy.ToolPackage _package(String name, List<String> keys) =>
             name: key,
             description: const core_proxy.LocalizedText(values: {}),
             requiredValue: false,
+            defaultValue: null,
           ),
       ],
       isBuiltIn: false,
