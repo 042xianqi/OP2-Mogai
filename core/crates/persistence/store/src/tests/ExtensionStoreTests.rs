@@ -1190,6 +1190,7 @@ fn package_environment_follows_installation_scope_and_subpackage_ownership() {
     let source = host();
     let target = host();
     let store = ExtensionStore::new(source.clone());
+    source.writeBytes("runtime/extensions/device/packages/shared.toolpkg", b"package").unwrap();
     register_package_owner(&store, "shared", &["shared", "shared.tools"]);
     register_package_owner(&store, "local", &["local"]);
     store.editPackageEnvironment("shared.tools", BTreeMap::from([
@@ -1241,6 +1242,7 @@ fn package_environment_follows_installation_scope_and_subpackage_ownership() {
 fn package_environment_edits_preserve_other_values_and_skip_unchanged_snapshots() {
     let storage = host();
     let store = ExtensionStore::new(storage.clone());
+    storage.writeBytes("runtime/extensions/device/packages/demo.toolpkg", b"package").unwrap();
     register_package_owner(&store, "demo", &["demo"]);
     store.moveScope("package", "demo", "space").unwrap();
     store.editPackageEnvironment("demo", BTreeMap::from([
@@ -1260,6 +1262,7 @@ fn package_environment_rejects_missing_owners_and_corrupt_configuration() {
     let storage = host();
     let store = ExtensionStore::new(storage.clone());
     assert!(store.editPackageEnvironment("missing", BTreeMap::new()).is_err());
+    storage.writeBytes("runtime/extensions/device/packages/demo.toolpkg", b"package").unwrap();
     register_package_owner(&store, "demo", &["demo"]);
     let path = format!("{}/environment.json", store.configPath("demo").unwrap());
     storage.writeBytes(&path, b"[]").unwrap();
@@ -1290,6 +1293,7 @@ fn package_environment_migration_is_once_only_and_respects_explicit_space_edits(
     let target = host();
     let local = ExtensionStore::new(source.clone());
     let remote = ExtensionStore::new(target.clone());
+    source.writeBytes("runtime/extensions/device/packages/demo.toolpkg", b"package").unwrap();
     register_package_owner(&local, "demo", &["demo"]);
     local.moveScope("package", "demo", "space").unwrap();
     transfer(&source, &target, &operations(&source, &SyncClock::empty())).unwrap();

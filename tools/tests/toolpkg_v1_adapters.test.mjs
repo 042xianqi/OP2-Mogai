@@ -46,9 +46,9 @@ function engine(version = '1.0.0') {
     Files: files,
     SoftwareSettings: {
       /** Returns the exact current host result for the versioned legacy variable reader. */
-      async readEnvironmentVariable(key) { calls.push({ name: 'readEnvironmentVariable', args: [key] }); return { key, value: 'configured', exists: true, toString() { return this.value; } }; },
+      async readEnvironmentVariable(packageName, key) { calls.push({ name: 'readEnvironmentVariable', args: [packageName, key] }); return { key, value: 'configured', exists: true, toString() { return this.value; } }; },
       /** Preserves the optional value argument and reports the actual modeled write. */
-      async writeEnvironmentVariable(key, value) { calls.push({ name: 'writeEnvironmentVariable', args: [key, value] }); return { key, requestedValue: value, value, exists: value !== undefined, cleared: value === undefined, toString() { return this.key; } }; },
+      async writeEnvironmentVariable(packageName, key, value) { calls.push({ name: 'writeEnvironmentVariable', args: [packageName, key, value] }); return { key, requestedValue: value, value, exists: value !== undefined, cleared: value === undefined, toString() { return this.key; } }; },
     },
     Chat: {
       /** Captures the current object-based creation contract. */
@@ -72,7 +72,7 @@ function engine(version = '1.0.0') {
     },
   };
   const context = vm.createContext({
-    version, params: {}, Tools: tools, __operitCurrentCallId: 'call',
+    version, params: { __operit_environment_owner: 'test.package' }, Tools: tools, __operitCurrentCallId: 'call',
     /** Retains the actual owner call while the production dependency callback is outstanding. */
     __operitRetainCallReference(callId) { assert.equal(callId, 'call'); },
     /** Releases the same retained dependency call after native completion. */
@@ -564,12 +564,13 @@ test('legacy role callers keep the actual shared memory binding', async t => {
 test('V1 environment adapters preserve exact host results and optional write arguments', async () => {
   for (const version of ['1.0.0', '1.0.1', '2.0.0']) {
     const { context, tools, calls } = engine(version);
-    const result = await tools.SoftwareSettings.readEnvironmentVariable('EXACT_KEY');
+    const args = version === '2.0.0' ? ['test.package', 'EXACT_KEY'] : ['EXACT_KEY'];
+    const result = await tools.SoftwareSettings.readEnvironmentVariable(...args);
     assert.equal(result.key, 'EXACT_KEY'); assert.equal(result.value, 'configured'); assert.equal(result.toString(), 'configured');
-    await tools.SoftwareSettings.writeEnvironmentVariable('EXACT_KEY');
-    assert.deepEqual(calls.map(call => call.args), [['EXACT_KEY'], ['EXACT_KEY', undefined]]);
+    await tools.SoftwareSettings.writeEnvironmentVariable(...args);
+    assert.deepEqual(calls.map(call => call.args), [['test.package', 'EXACT_KEY'], ['test.package', 'EXACT_KEY', undefined]]);
     const original = new Error('EXACT_HOST_REJECTION');
-    const adapter = context.__operitCreateV1SoftwareSettings({ readEnvironmentVariable: async () => { throw original; }, writeEnvironmentVariable: async () => { throw original; } });
+    const adapter = context.__operitCreateV1SoftwareSettings({ readEnvironmentVariable: async () => { throw original; }, writeEnvironmentVariable: async () => { throw original; } }, () => 'test.package');
     await assert.rejects(adapter.readEnvironmentVariable('EXACT_KEY'), error => error === original);
     await assert.rejects(adapter.writeEnvironmentVariable('EXACT_KEY'), error => error === original);
   }

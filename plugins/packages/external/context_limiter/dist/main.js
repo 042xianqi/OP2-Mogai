@@ -27,7 +27,7 @@ function readLimiterEnabled() {
     return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 async function writeEnvValue(key, value) {
-    await Tools.SoftwareSettings.writeEnvironmentVariable(key, value);
+    await Tools.SoftwareSettings.writeEnvironmentVariable("com.operit.context_limiter", key, value);
 }
 async function writeFloorLimit(nextLimit) {
     await writeEnvValue(constants_1.ENV_KEYS.floorLimit, String(nextLimit));

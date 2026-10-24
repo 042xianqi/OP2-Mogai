@@ -1,17 +1,18 @@
 /**
  * Preserves the copied v1 environment-variable signatures using the canonical v2 host methods.
  * @param {Pick<typeof import('../../../../../../../plugins/types/software_settings').SoftwareSettings, 'readEnvironmentVariable' | 'writeEnvironmentVariable'>} current
+ * @param {() => string} packageName
  * @returns {Pick<typeof import('../../../../../../../plugins/types-v1/software_settings').SoftwareSettings, 'readEnvironmentVariable' | 'writeEnvironmentVariable'>}
  */
-function __operitCreateV1SoftwareSettings(current) {
+function __operitCreateV1SoftwareSettings(current, packageName) {
     return {
         /** Reads the exact configured variable and preserves the host result and rejection. */
         readEnvironmentVariable(key) {
-            return current.readEnvironmentVariable(key);
+            return current.readEnvironmentVariable(packageName(), key);
         },
         /** Writes through the canonical host without changing the legacy optional value contract. */
         writeEnvironmentVariable(key, value) {
-            return current.writeEnvironmentVariable(key, value);
+            return current.writeEnvironmentVariable(packageName(), key, value);
         },
     };
 }
@@ -24,7 +25,16 @@ function installV1Adapters(runtime) {
     var Tools = runtime.Tools;
     var api = runtime.__operitToolPkgApi;
     var currentSettings = Object.assign({}, Tools.SoftwareSettings);
-    var legacySettings = __operitCreateV1SoftwareSettings(currentSettings);
+    /** Resolves the native installation owner retained by the exact active call. */
+    function environmentPackageName() {
+        var state = runtime.__operitGetCallState(api.currentCallId());
+        var owner = state.params.__operit_environment_owner;
+        if (typeof owner !== 'string' || !owner.trim()) {
+            throw new Error('Environment access requires an owning package installation');
+        }
+        return owner;
+    }
+    var legacySettings = __operitCreateV1SoftwareSettings(currentSettings, environmentPackageName);
     for (var [settingsMethod, settingsImplementation] of Object.entries(legacySettings)) {
         Tools.SoftwareSettings[settingsMethod] = api.method()
             .between('1.0.0', '2.0.0', settingsImplementation)

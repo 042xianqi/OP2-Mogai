@@ -1207,6 +1207,7 @@ impl JsEngineState {
             self.initJavaScriptEnvironment()
                 .map_err(JsExecutionError::initialization)?;
             let mut effectiveParams = params;
+            bindEnvironmentOwner(&mut effectiveParams, context.environmentOwner.as_ref());
             // Async Compose renders and actions need the same API contract as synchronous calls.
             let apiVersion = match self.toolPkgContext.as_ref() {
                 Some(context) => context.api_version.clone(),
@@ -1307,6 +1308,7 @@ impl JsEngineState {
 
         let environmentOwner = environmentOwner(self.toolPkgContext.as_ref(), params, false)?;
         let mut effectiveParams = params.clone();
+        bindEnvironmentOwner(&mut effectiveParams, environmentOwner.as_ref());
         // Standalone scripts use the current SDK contract; ToolPkg engines retain their manifest contract.
         let apiVersion = match self.toolPkgContext.as_ref() {
             Some(context) => context.api_version.clone(),
@@ -1427,6 +1429,7 @@ impl JsEngineState {
         let registrationResult = (|| {
             let environmentOwner = environmentOwner(self.toolPkgContext.as_ref(), params, true)?;
             let mut registrationParams = params.clone();
+            bindEnvironmentOwner(&mut registrationParams, environmentOwner.as_ref());
             registrationParams.insert("__operit_registration_mode".to_string(), Value::Bool(true));
             let explicitLanguage = registrationParams
                 .get("__operit_package_lang")
@@ -3365,6 +3368,15 @@ fn storeExecutionError(callId: String, error: String) -> HostResult<()> {
         results.borrow_mut().insert(callId, Err(JsExecutionError::runtime(extractJsExecutionErrorMessage(Some(&error)).expect("Native error must contain a structured error message"))));
     });
     Ok(())
+}
+
+/// Publishes native ownership metadata for versioned SDK adapters without accepting caller aliases.
+#[allow(non_snake_case)]
+fn bindEnvironmentOwner(params: &mut BTreeMap<String, Value>, owner: Option<&JsEnvironmentOwner>) {
+    params.remove("__operit_environment_owner");
+    if let Some(owner) = owner {
+        params.insert("__operit_environment_owner".into(), Value::String(owner.package_name().into()));
+    }
 }
 
 /// Captures the environment owner before JavaScript runs or schedules asynchronous callbacks.

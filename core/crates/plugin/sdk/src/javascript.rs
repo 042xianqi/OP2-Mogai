@@ -193,6 +193,15 @@ pub enum JsEnvironmentOwner {
     Registration { id: String, scope: ToolPkgConfigScope },
 }
 
+impl JsEnvironmentOwner {
+    /// Returns the exact installation identity carried by this native execution context.
+    pub fn package_name(&self) -> &str {
+        match self {
+            Self::Package(id) | Self::Registration { id, .. } => id,
+        }
+    }
+}
+
 /// Defines the fixed Rust execution contract required by package JavaScript.
 pub trait JsExecutionHost: Send + Sync {
     /// Captures immutable native caller state before crossing the JavaScript runtime scheduler.
