@@ -246,6 +246,8 @@ export type Request =
   | { action: "readGlobalMemoryPreferences" }
   | { action: "readChatMemoryAutoSaveStatus"; chatId: string }
   | { action: "updateCurrentChatMemory"; chatId: string }
+  | { action: "retryFailedCandidates"; chatId: string }
+  | { action: "clearFailedCandidates"; chatId: string }
   | { action: "writeGlobalMemoryPreference"; key: keyof GlobalMemoryPreferences; value: boolean }
   | { action: "searchMemoryDebug"; ownerKey: string; query: string; config: MemorySearchConfig; relevanceThreshold: number }
   | { action: "readMemoryLink"; ownerKey: string; linkId: string }
@@ -439,6 +441,8 @@ export interface RequestResults {
   readGlobalMemoryPreferences: GlobalMemoryPreferences;
   readChatMemoryAutoSaveStatus: MemoryAutoSaveStatus;
   updateCurrentChatMemory: MemoryExtractionResult;
+  retryFailedCandidates: { retried: number };
+  clearFailedCandidates: { cleared: number };
   writeGlobalMemoryPreference: GlobalMemoryPreferences;
   searchMemoryDebug: MemorySearchDebug;
   readMemoryLink: MemoryLink;

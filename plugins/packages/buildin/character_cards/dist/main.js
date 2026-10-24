@@ -91,6 +91,8 @@ __export(main_exports, {
   groupSetActiveApi: () => groupSetActiveApi,
   groupUpdateApi: () => groupUpdateApi,
   memoryCandidateEnqueueApi: () => memoryCandidateEnqueueApi,
+  memoryCandidatesClearFailedApi: () => memoryCandidatesClearFailedApi,
+  memoryCandidatesRetryFailedApi: () => memoryCandidatesRetryFailedApi,
   memoryCategorizeApi: () => memoryCategorizeApi,
   memoryChatListApi: () => memoryChatListApi,
   memoryChatPruneMissingApi: () => memoryChatPruneMissingApi,
@@ -1282,6 +1284,8 @@ var validators = {
   "memory.rebuild.cancel": ownerOnly,
   "memory.embeddings.rebuild": ownerOnly,
   "memory.candidate.enqueue": shape({ chatId: required(nonblank), timestamp: required(integer), variantIndex: required(messageVariant), sourceType: required(enumeration("reply_finalized_auto", "selected_user_message")), ownerKey: required(nullable(owner)) }),
+  "memory.candidates.retryFailed": ownerOnly,
+  "memory.candidates.clearFailed": ownerOnly,
   "chat.configuration.resolve": parseChatConfigurationRequest,
   "chat.configuration.binding.read": shape({ chatId: required(nonblank) }),
   "chat.configuration.binding.write": shape({ chatId: required(nonblank), selection: required(nonblank) }),
@@ -3765,6 +3769,34 @@ function enqueueCandidate(input, repository) {
     return result2;
   });
 }
+function retryFailedCandidates(ownerKey, repository) {
+  return __async(this, null, function* () {
+    const space = yield repository.readMemorySpace(ownerKey), now = Date.now();
+    let retried = 0;
+    for (const candidate of space.candidates) if (candidate.status === "failed") {
+      candidate.status = "pending";
+      candidate.lastError = "";
+      candidate.updatedAt = now;
+      retried += 1;
+    }
+    if (retried !== 0) yield repository.writeMemorySpace(ownerKey, space);
+    return { retried };
+  });
+}
+function clearFailedCandidates(ownerKey, repository) {
+  return __async(this, null, function* () {
+    const space = yield repository.readMemorySpace(ownerKey);
+    const remaining = space.candidates.filter(
+      /** Retains pending and processing records for their real owners. */
+      (candidate) => candidate.status !== "failed"
+    ), cleared = space.candidates.length - remaining.length;
+    if (cleared !== 0) {
+      space.candidates = remaining;
+      yield repository.writeMemorySpace(ownerKey, space);
+    }
+    return { cleared };
+  });
+}
 function startMemoryRebuild(ownerKey, rebuild, repository) {
   return __async(this, null, function* () {
     assertObject(rebuild, "memory rebuild");
@@ -4465,6 +4497,10 @@ var handlers = {
   "memory.embeddings.rebuild": (input, repository) => rebuildMemoryEmbeddings(input.ownerKey, repository),
   /** Enqueues only actual persisted message sources and genuine bound owners. */
   "memory.candidate.enqueue": (input, repository) => enqueueCandidate(input, repository),
+  /** Returns genuine terminal failures to the pending queue for one later interval retry. */
+  "memory.candidates.retryFailed": (input, repository) => retryFailedCandidates(input.ownerKey, repository),
+  /** Removes genuine terminal failures from the owner queue. */
+  "memory.candidates.clearFailed": (input, repository) => clearFailedCandidates(input.ownerKey, repository),
   /** Resolves chat configuration using this operation's existing repository snapshot. */
   "chat.configuration.resolve": (input, repository) => resolveConfiguration(input, {
     /** Reads only the requested character. */
@@ -5861,6 +5897,18 @@ function dispatch(request, host) {
             ownerKey: yield menuMemoryOwner(request.chatId, host),
             chatId: request.chatId
           },
+          host
+        );
+      case "retryFailedCandidates":
+        return executeDomain(
+          "memory.candidates.retryFailed",
+          { ownerKey: yield menuMemoryOwner(request.chatId, host) },
+          host
+        );
+      case "clearFailedCandidates":
+        return executeDomain(
+          "memory.candidates.clearFailed",
+          { ownerKey: yield menuMemoryOwner(request.chatId, host) },
           host
         );
       case "writeGlobalMemoryPreference":
@@ -9118,6 +9166,16 @@ function memoryRebuildProgressApi(event) {
     return dispatchDomain2("memory.rebuild.progress", parseDomainPayload("memory.rebuild.progress", event.payload));
   });
 }
+function memoryCandidatesRetryFailedApi(event) {
+  return __async(this, null, function* () {
+    return dispatchDomain2("memory.candidates.retryFailed", parseDomainPayload("memory.candidates.retryFailed", event.payload));
+  });
+}
+function memoryCandidatesClearFailedApi(event) {
+  return __async(this, null, function* () {
+    return dispatchDomain2("memory.candidates.clearFailed", parseDomainPayload("memory.candidates.clearFailed", event.payload));
+  });
+}
 function memoryRebuildCancelApi(event) {
   return __async(this, null, function* () {
     return dispatchDomain2("memory.rebuild.cancel", parseDomainPayload("memory.rebuild.cancel", event.payload));
@@ -9459,6 +9517,8 @@ function registerDomainApis() {
   ToolPkg.registerApi({ name: "memory.embeddings.rebuild", function: memoryEmbeddingsRebuildApi });
   ToolPkg.registerApi({ name: "memory.rebuild.cancel", function: memoryRebuildCancelApi });
   ToolPkg.registerApi({ name: "memory.rebuild.progress", function: memoryRebuildProgressApi });
+  ToolPkg.registerApi({ name: "memory.candidates.retryFailed", function: memoryCandidatesRetryFailedApi });
+  ToolPkg.registerApi({ name: "memory.candidates.clearFailed", function: memoryCandidatesClearFailedApi });
   ToolPkg.registerApi({ name: "memory.rebuild.start", function: memoryRebuildStartApi });
   ToolPkg.registerApi({ name: "memory.categorize", function: memoryCategorizeApi });
   ToolPkg.registerApi({ name: "memory.chat.update", function: memoryChatUpdateApi });

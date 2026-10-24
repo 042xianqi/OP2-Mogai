@@ -179,6 +179,29 @@ test("controlled Chat/AI: unresolvable model titles skip their own items instead
   assert.equal(saved.candidates.length, 0); assert.equal(saved.memories.length, 1); assert.equal(saved.memories[0].title, "Valid extraction");
 });
 
+/** Requeues genuine terminal failures for a later real extraction and removes failures on explicit clear. */
+test("controlled Chat/AI: retryFailed requeues terminal failures and clearFailed removes them without retrying", async t => {
+  const harness = await createMemoryJobsHarness(t), runtime = harness.openRuntime(); await runtime.initialize(); await runtime.bind();
+  await runtime.enqueueReplies(); await runtime.makeDue();
+  const failure = new Error("Controlled model outage"); harness.queueExecutionError(failure);
+  await assert.rejects(runtime.interval(), error => error === failure);
+  const failed = await readOwner(harness); assert.equal(failed.candidates.length, 5);
+  for (const candidate of failed.candidates) { assert.equal(candidate.status, "failed"); assert.equal(candidate.lastError, failure.message); }
+  assert.deepEqual(plain(await runtime.api("memory.candidates.retryFailed", owner)), { retried: 5 });
+  const retried = await readOwner(harness);
+  for (const candidate of retried.candidates) { assert.equal(candidate.status, "pending"); assert.equal(candidate.lastError, ""); }
+  await runtime.makeDue(); harness.queueAnalysis({});
+  await runtime.interval(); harness.assertOutputsConsumed(); assert.equal(harness.modelCalls.length, 2);
+  assert.equal((await readOwner(harness)).candidates.length, 0);
+  /** A second terminal failure set is removed directly instead of being processed again. */
+  await runtime.enqueueReplies(); await runtime.makeDue(); harness.queueExecutionError(failure);
+  await assert.rejects(runtime.interval(), error => error === failure);
+  assert.equal((await readOwner(harness)).candidates.length, 5);
+  assert.deepEqual(plain(await runtime.api("memory.candidates.clearFailed", owner)), { cleared: 5 });
+  assert.equal((await readOwner(harness)).candidates.length, 0);
+  assert.equal(harness.modelCalls.length, 3);
+});
+
 /** Preserves both original failures when execution and real status-file publication fail, for each production job path. */
 test("controlled Chat/AI: rebuild and candidate execution plus state-publication failures retain both errors and stop the same repository", async t => {
   for (const kind of ["rebuild", "candidates"]) {
