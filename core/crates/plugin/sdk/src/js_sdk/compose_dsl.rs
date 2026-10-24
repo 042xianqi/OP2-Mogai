@@ -2549,6 +2549,27 @@ pub struct LoadingIndicatorProps {
     pub size: Option<f64>,
     pub color: Option<ComposeColor>,
 }
+/// Controlled Material slider with explicit bounds and independent drag completion.
+pub struct SliderProps {
+    /// Shared layout and identity properties.
+    pub base_compose_common_props: ComposeCommonProps,
+    /// Current value within the declared bounds.
+    pub value: f64,
+    /// Inclusive lower bound.
+    pub min: f64,
+    /// Inclusive upper bound.
+    pub max: f64,
+    /// Optional number of evenly spaced intervals.
+    pub divisions: Option<i32>,
+    /// Value label shown during interaction.
+    pub label: Option<String>,
+    /// Whether the slider accepts interaction.
+    pub enabled: Option<bool>,
+    /// Receives each local value change.
+    pub onValueChange: Arc<dyn Fn(f64) -> () + Send + Sync>,
+    /// Receives the final drag value for durable settings writes.
+    pub onValueChangeFinished: Option<Arc<dyn Fn(f64) -> () + Send + Sync>>,
+}
 /// Controlled state and colors for a binary sliding switch.
 pub struct SwitchProps {
     /// Shared node layout, drawing, identity, and lifecycle properties.
@@ -3128,6 +3149,8 @@ pub struct ComposeUiFactoryRegistry {
     pub HorizontalPager: ComposeNodeFactory<HorizontalPagerProps>,
     /// Creates a controlled binary switch.
     pub Switch: ComposeNodeFactory<SwitchProps>,
+    /// Factory used to construct a bounded native Material slider.
+    pub Slider: ComposeNodeFactory<SliderProps>,
     /// Creates a controlled checkbox.
     pub Checkbox: ComposeNodeFactory<CheckboxProps>,
     /// Creates a standard Material button.

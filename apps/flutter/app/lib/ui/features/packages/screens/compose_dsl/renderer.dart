@@ -558,6 +558,8 @@ class _ComposeProgramExecutorState extends State<_ComposeProgramExecutor> {
         return _textField(context, type);
       case 'Switch':
         return _switch(context);
+      case 'Slider':
+        return _slider();
       case 'Checkbox':
         return _checkbox();
       case 'RadioButton':

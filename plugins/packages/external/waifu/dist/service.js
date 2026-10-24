@@ -3,9 +3,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.settingsGet = settingsGet;
 exports.settingsSet = settingsSet;
 exports.sessionOpen = sessionOpen;
+exports.resolveEmotion = resolveEmotion;
 exports.sessionFeed = sessionFeed;
 exports.sessionClose = sessionClose;
+exports.externalSettings = externalSettings;
 exports.composePrompt = composePrompt;
+const mode_js_1 = require("./mode.js");
 const sentences_js_1 = require("./sentences.js");
 const settings_js_1 = require("./settings.js");
 const sessions = new Map();
@@ -75,17 +78,23 @@ async function sessionClose(event) {
     sessions.delete(event.payload.sessionId);
     return { closed: true };
 }
-/** Adds waifu prompt rules only while an explicitly opened response session is active. */
+/** Reads only explicitly opened dependency settings for one actual conversation. */
+function externalSettings(chatId) {
+    const active = [...sessions.values()].find(session => session.chatId === chatId);
+    return active === undefined ? null : active.settings;
+}
+/** Adds mode rules for ordinary role-bound chat or an explicitly opened dependency session. */
 async function composePrompt(event) {
     const payload = event.eventPayload;
-    const active = [...sessions.values()].find(session => session.chatId === payload.chatId);
-    if (active === undefined)
+    if (event.event !== "after_compose_system_prompt" || typeof payload.chatId !== "string")
         return;
-    if (event.event !== "after_compose_system_prompt")
+    const external = externalSettings(payload.chatId);
+    const mode = external === null ? await (0, mode_js_1.modeForChat)(payload.chatId) : null;
+    if (external === null && mode === null)
         return;
     if (typeof payload.systemPrompt !== "string")
         throw new Error("Waifu system prompt hook requires the composed system prompt");
-    const settings = active.settings;
+    const settings = external === null ? mode.settings : external;
     const rules = [settings.customPrompt];
     if (settings.enableEmoticons) {
         const categories = Object.keys(settings.emojis);

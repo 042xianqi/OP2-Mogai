@@ -449,6 +449,15 @@ impl JsExecutionHost for TestPluginConfigExecutionHost {
         Ok("zh-CN".to_string())
     }
 
+    /// Prepares registration values inside test-owned state before any module code runs.
+    fn prepare_environment(&self, owner: &operit_plugin_sdk::javascript::JsEnvironmentOwner, declared_names: &[String]) -> Result<(), String> {
+        self.environmentOwners.lock().unwrap().push(owner.clone());
+        for name in declared_names {
+            self.environment.lock().unwrap().insert(name.clone(), "prepared".into());
+        }
+        Ok(())
+    }
+
     /// Keeps environment state isolated from the application's actual preferences.
     fn read_environment_variable(&self, owner: &operit_plugin_sdk::javascript::JsEnvironmentOwner, key: &str) -> Result<Option<String>, String> {
         self.environmentOwners.lock().unwrap().push(owner.clone());
@@ -1818,6 +1827,8 @@ async fn blocking_host_call_leaves_other_package_runtime_responsive() {
 #[tokio::test(flavor = "current_thread")]
 async fn call_environment_updates_survive_state_turns() {
     let engine = newTestJsEngine(Arc::new(TestPluginConfigExecutionHost::default()));
+    let mut params = testParams();
+    params.insert("__operit_package_name".into(), Value::String("test.package".into()));
     let output = engine
         .execute_script_function(
             r#"exports.update = async function() {
@@ -1827,7 +1838,7 @@ async fn call_environment_updates_survive_state_turns() {
             return { owner: getEnv('CALL_OWNER'), second: getEnv('SECOND') };
         };"#,
             "update",
-            &testParams(),
+            &params,
             &BTreeMap::from([("CALL_OWNER".to_string(), "original".to_string())]),
             None,
             true,
@@ -2435,6 +2446,7 @@ fn execute_minified_package_script_with_metadata() {
     );
 }
 
+/// Registers the bundled package with its explicit installation scope.
 #[test]
 fn register_thinking_guidance_toolpkg_main() {
     ensure_test_runtime_root();
@@ -2446,6 +2458,10 @@ fn register_thinking_guidance_toolpkg_main() {
     params.insert(
         "toolPkgId".to_string(),
         Value::String("thinking_guidance".to_string()),
+    );
+    params.insert(
+        "__operit_registration_config_scope".to_string(),
+        Value::String("device".to_string()),
     );
 
     let capture = engine
@@ -2460,6 +2476,7 @@ fn register_thinking_guidance_toolpkg_main() {
     assert_eq!(prompt["function"], "onSystemPromptCompose");
 }
 
+/// Registers the package and its text resources in the selected installation scope.
 #[test]
 fn register_message_insert_toolpkg_main() {
     ensure_test_runtime_root();
@@ -2476,6 +2493,10 @@ fn register_message_insert_toolpkg_main() {
     params.insert(
         "toolPkgId".to_string(),
         Value::String("message_insert".to_string()),
+    );
+    params.insert(
+        "__operit_registration_config_scope".to_string(),
+        Value::String("device".to_string()),
     );
     params.insert(
         "__operit_ui_package_name".to_string(),
@@ -3086,6 +3107,7 @@ fn execute_script_can_require_axios_and_uuid() {
     );
 }
 
+/// Registers UI routes without evaluating UI modules in the selected installation scope.
 #[test]
 fn registration_mode_uses_ui_module_placeholder() {
     let engine = newTestToolPkgRegistrationEngine();
@@ -3102,6 +3124,10 @@ fn registration_mode_uses_ui_module_placeholder() {
     "#;
     let mut params = testParams();
     params.insert("toolPkgId".to_string(), Value::String("ui_pkg".to_string()));
+    params.insert(
+        "__operit_registration_config_scope".to_string(),
+        Value::String("device".to_string()),
+    );
 
     let capture = engine
         .execute_toolpkg_main_registration_function(script, "registerToolPkg", &params)
@@ -5126,11 +5152,21 @@ async fn before_hook_timeout_interrupts_a_busy_rejection_continuation() {
 async fn environment_requires_an_explicit_package_owner() {
     let host = Arc::new(TestPluginConfigExecutionHost::default());
     let engine = newTestJsEngine(host.clone());
-    let error = engine.execute_script_function(
-        "exports.main = function() { return getEnv('TOKEN'); };",
-        "main", &testParams(), &BTreeMap::new(), None, true, None,
-    ).await.unwrap_err();
-    assert!(error.to_string().contains("Environment access requires an owning package installation"));
+    let error = engine
+        .execute_script_function(
+            "exports.main = function() { return getEnv('TOKEN'); };",
+            "main",
+            &testParams(),
+            &BTreeMap::new(),
+            None,
+            true,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("Environment access requires an owning package installation"));
     assert!(host.environmentOwners.lock().unwrap().is_empty());
 }
 
@@ -5139,17 +5175,27 @@ async fn environment_requires_an_explicit_package_owner() {
 async fn environment_owner_is_bound_to_the_engine_across_async_callbacks() {
     let host = Arc::new(TestPluginConfigExecutionHost::default());
     let engine = newTestIpcEngine(host.clone());
-    host.environment.lock().unwrap().insert("TOKEN".into(), "package-token".into());
+    host.environment
+        .lock()
+        .unwrap()
+        .insert("TOKEN".into(), "package-token".into());
     let mut params = testParams();
-    params.insert("__operit_package_name".into(), Value::String("wrong-owner".into()));
+    params.insert(
+        "__operit_package_name".into(),
+        Value::String("wrong-owner".into()),
+    );
     let result = engine.execute_script_function(
-        "exports.main = async function() { await Promise.resolve(); var value = getEnv('TOKEN'); __operitNativeSetEnv(String(globalThis.__operitCurrentCallId), 'UPDATED', value); return value; };",
-        "main", &params, &BTreeMap::new(), None, true, None,
-    ).await;
-    assert_eq!(expect_js_output(result, "package environment"), "\"package-token\"");
+    "exports.main = async function() { await Promise.resolve(); var value = getEnv('TOKEN'); __operitNativeSetEnv(String(globalThis.__operitCurrentCallId), 'UPDATED', value); return value; };",
+    "main", &params, &BTreeMap::new(), None, true, None,
+).await;
+    assert_eq!(
+        expect_js_output(result, "package environment"),
+        "\"package-token\""
+    );
     let owners = host.environmentOwners.lock().unwrap();
     assert_eq!(owners.len(), 2);
-    assert!(owners.iter().all(|owner| owner == &operit_plugin_sdk::javascript::JsEnvironmentOwner::Package("test.package".into())));
+    assert!(owners.iter().all(|owner| owner
+        == &operit_plugin_sdk::javascript::JsEnvironmentOwner::Package("test.package".into())));
 }
 
 /// Registration environment calls carry the explicit scope before an installation record exists.
@@ -5160,13 +5206,26 @@ fn registration_environment_uses_the_native_owner_and_scope() {
         let engine = newTestJsEngine(host.clone());
         let mut params = testParams();
         params.insert("toolPkgId".into(), Value::String("first_import".into()));
-        params.insert("__operit_registration_config_scope".into(), Value::String(scope.as_str().into()));
-        engine.execute_toolpkg_main_registration_function_with_text_resources(
-            "const value = getEnv('TOKEN'); exports.registerToolPkg = function() { __operitNativeSetEnv(String(globalThis.__operitCurrentCallId), 'TOKEN', 'registered'); return true; };",
-            "registerToolPkg", &params, None,
-        ).expect("registration environment access");
+        params.insert(
+            "__operit_registration_config_scope".into(),
+            Value::String(scope.as_str().into()),
+        );
+        params.insert(
+            "__operit_registration_environment_names".into(),
+            serde_json::json!(["TOKEN"]),
+        );
+        let capture = engine.execute_toolpkg_main_registration_function_with_text_resources(
+        "const value = getEnv('TOKEN'); exports.registerToolPkg = function() { __operitNativeSetEnv(String(globalThis.__operitCurrentCallId), 'TOKEN', 'registered'); ToolPkg.registerNavigationEntry({id: 'environment', surface: 'toolbox', value: value}); return true; };",
+        "registerToolPkg", &params, None,
+    ).expect("registration environment access");
+        let entry: Value = serde_json::from_str(&capture.navigationEntries[0]).unwrap();
+        assert_eq!(entry["value"], "prepared");
         let owners = host.environmentOwners.lock().unwrap();
-        assert_eq!(owners.len(), 2);
-        assert!(owners.iter().all(|owner| owner == &operit_plugin_sdk::javascript::JsEnvironmentOwner::Registration { id: "first_import".into(), scope }));
+        assert_eq!(owners.len(), 3);
+        assert!(owners.iter().all(|owner| owner
+            == &operit_plugin_sdk::javascript::JsEnvironmentOwner::Registration {
+                id: "first_import".into(),
+                scope
+            }));
     }
 }

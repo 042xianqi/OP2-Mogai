@@ -575,3 +575,16 @@ test('V1 environment adapters preserve exact host results and optional write arg
     await assert.rejects(adapter.writeEnvironmentVariable('EXACT_KEY'), error => error === original);
   }
 });
+
+/** Keeps each legacy environment call bound to the native installation of its current call. */
+test('V1 environment adapters use the current native installation and reject unowned calls', async () => {
+  const { context, tools, calls } = engine('1.0.0');
+  context.params.__operit_environment_owner = 'first.package';
+  await tools.SoftwareSettings.readEnvironmentVariable('TOKEN');
+  context.params.__operit_environment_owner = 'second.package';
+  await tools.SoftwareSettings.writeEnvironmentVariable('TOKEN', 'value');
+  assert.deepEqual(calls.map(call => call.args), [['first.package', 'TOKEN'], ['second.package', 'TOKEN', 'value']]);
+  delete context.params.__operit_environment_owner;
+  assert.throws(() => tools.SoftwareSettings.readEnvironmentVariable('TOKEN'), /Environment access requires an owning package installation/);
+  assert.equal(calls.length, 2);
+});

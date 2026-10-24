@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "toolpkg_id": "com.operit.waifu",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "api_version": "2.0.0",
   "main": "dist/main.js",
   "public_api": "src/api.ts",
@@ -10,8 +10,8 @@
     "en": "Waifu Mode"
   },
   "description": {
-    "zh": "流式分句、打字节奏、情绪表情和自拍提示规则，为其他插件提供公开 API。",
-    "en": "Streaming sentences, typing rhythm, emotion stickers and selfie prompts for dependent plugins."
+    "zh": "普通聊天中的分句气泡、打字节奏、角色绑定、情绪表情和自拍提示，并提供依赖插件公开 API。",
+    "en": "Role-bound sentence bubbles, typing rhythm, stickers and selfie prompts for native chat and dependent plugins."
   },
   "enabled_by_default": false,
   "subpackages": [
@@ -285,6 +285,12 @@
       "key": "emoji_surprised_surprised_5",
       "path": "resources/emoji/surprised/surprised_5.gif",
       "mime": "image/gif"
+    }
+  ],
+  "requires": [
+    {
+      "id": "com.operit.character_cards",
+      "min_version": "0.1.0"
     }
   ]
 }

@@ -681,11 +681,20 @@ impl ExtensionStore {
         scope: &str,
     ) -> Result<BTreeMap<String, String>, String> {
         let path = format!("{}/environment.json", Self::configPathForScope(id, scope)?);
-        if !self.storage.exists(&path).map_err(|error| error.to_string())? {
+        if !self
+            .storage
+            .exists(&path)
+            .map_err(|error| error.to_string())?
+        {
             return Ok(BTreeMap::new());
         }
-        serde_json::from_slice(&self.storage.readBytes(&path).map_err(|error| error.to_string())?)
-            .map_err(|error| format!("Invalid package environment for {id}: {error}"))
+        serde_json::from_slice(
+            &self
+                .storage
+                .readBytes(&path)
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| format!("Invalid package environment for {id}: {error}"))
     }
 
     /// Applies only the edited keys to the environment owned by a package installation.
@@ -712,8 +721,12 @@ impl ExtensionStore {
                 return Err("Environment variable names must be nonempty and trimmed".into());
             }
             match value {
-                Some(value) => { variables.insert(key, value); }
-                None => { variables.remove(&key); }
+                Some(value) => {
+                    variables.insert(key, value);
+                }
+                None => {
+                    variables.remove(&key);
+                }
             }
         }
         if variables == original {
@@ -724,7 +737,9 @@ impl ExtensionStore {
         match scope {
             "space" => RuntimeFileSyncStore::new(self.storage.clone(), RUNTIME_SYNC_DIR_PATH)
                 .writeBytes(&path, &bytes),
-            "device" => self.storage.writeBytesAtomically(&path, &bytes)
+            "device" => self
+                .storage
+                .writeBytesAtomically(&path, &bytes)
                 .map_err(|error| error.to_string()),
             _ => Err("Unknown extension scope".into()),
         }
@@ -737,28 +752,50 @@ impl ExtensionStore {
         declaredNames: &[String],
     ) -> Result<(), String> {
         let owner = self.packageOwner(packageName)?;
-        let path = format!("{}/environment.json", self.configRoot(&owner)?);
-        if self.storage.exists(&path).map_err(|error| error.to_string())? {
+        self.initializePackageEnvironmentForScope(&owner.id, &owner.scope, declaredNames)
+    }
+
+    /// Prepares declared legacy values before registration evaluates the package's main module.
+    pub fn initializePackageEnvironmentForScope(
+        &self,
+        id: &str,
+        scope: &str,
+        declaredNames: &[String],
+    ) -> Result<(), String> {
+        let path = format!("{}/environment.json", Self::configPathForScope(id, scope)?);
+        if self
+            .storage
+            .exists(&path)
+            .map_err(|error| error.to_string())?
+        {
             return Ok(());
         }
-        let legacy = CoreNodeStateStore::newWithStorage(
-            self.storage.clone(),
-            operit_util::RuntimeStorageLayout::LEGACY_ENV_PREFERENCES_PATH,
-        ).data().map_err(|error| error.to_string())?;
         let mut variables = BTreeMap::new();
-        for name in declaredNames {
-            if let Some(value) = legacy.getTyped::<String>(&stringPreferencesKey(name))
-                .map_err(|error| error.to_string())? {
-                if !value.is_empty() {
-                    variables.insert(name.clone(), value);
+        if !declaredNames.is_empty() {
+            let legacy = CoreNodeStateStore::newWithStorage(
+                self.storage.clone(),
+                operit_util::RuntimeStorageLayout::LEGACY_ENV_PREFERENCES_PATH,
+            )
+            .data()
+            .map_err(|error| error.to_string())?;
+            for name in declaredNames {
+                if let Some(value) = legacy
+                    .getTyped::<String>(&stringPreferencesKey(name))
+                    .map_err(|error| error.to_string())?
+                {
+                    if !value.is_empty() {
+                        variables.insert(name.clone(), value);
+                    }
                 }
             }
         }
         let bytes = serde_json::to_vec(&variables).map_err(|error| error.to_string())?;
-        match owner.scope.as_str() {
+        match scope {
             "space" => RuntimeFileSyncStore::new(self.storage.clone(), RUNTIME_SYNC_DIR_PATH)
                 .initializeBytes(&path, &bytes),
-            "device" => self.storage.writeBytesAtomically(&path, &bytes)
+            "device" => self
+                .storage
+                .writeBytesAtomically(&path, &bytes)
                 .map_err(|error| error.to_string()),
             _ => Err("Unknown extension scope".into()),
         }

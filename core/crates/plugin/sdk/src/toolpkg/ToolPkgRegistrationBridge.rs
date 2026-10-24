@@ -31,6 +31,7 @@ pub fn buildToolPkgRegistrationBridgeScript(restrictHostCapabilities: bool) -> S
             chatLifecycleHooks: [],
             chatMessageMenuItems: [],
             chatRuntimeHooks: [],
+            chatResponseHooks: [],
             hostEventHooks: [],
             toolLifecycleHooks: [],
             promptInputHooks: [],
@@ -707,6 +708,7 @@ pub fn buildToolPkgRegistrationBridgeScript(restrictHostCapabilities: bool) -> S
                 .between('1.0.1', '2.0.0')
                 .since('2.0.0')
                 .implement(registerFunction('chatRuntimeHooks', 'registerChatRuntimeHook')),
+            registerChatResponseHook: registerFunction('chatResponseHooks', 'registerChatResponseHook'),
             registerHostEventHook: registerFunction('hostEventHooks', 'registerHostEventHook'),
             registerToolLifecycleHook: registerFunction('toolLifecycleHooks', 'registerToolLifecycleHook'),
             registerPromptInputHook: registerFunction('promptInputHooks', 'registerPromptInputHook'),

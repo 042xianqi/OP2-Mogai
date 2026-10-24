@@ -8,7 +8,7 @@ test("QQBot declares the real waifu dependency and ships the exact standalone cl
   const manifest = JSON.parse(await readFile(new URL("manifest.json", base), "utf8"));
   const consumer = JSON.parse(await readFile(new URL("../../qqbot/manifest.json", import.meta.url), "utf8"));
   assert.equal(manifest.api_version, "2.0.0"); assert.equal(manifest.public_api, "src/api.ts");
-  assert.ok(consumer.requires.some(requirement => requirement.id === manifest.toolpkg_id && requirement.min_version === manifest.version));
+  assert.ok(consumer.requires.some(requirement => requirement.id === manifest.toolpkg_id && requirement.min_version === "1.0.0"));
   const authored = await readFile(new URL(manifest.public_api, base), "utf8");
   const copied = await readFile(new URL("../../qqbot/src/dependencies/waifu/api.ts", import.meta.url), "utf8");
   assert.equal(copied, authored); assert.doesNotMatch(authored, /^import\s/m);

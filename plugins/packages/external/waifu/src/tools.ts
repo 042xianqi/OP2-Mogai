@@ -6,7 +6,7 @@
     "en": "Waifu Mode"
   },
   "description": {
-    "zh": "管理独立的流式分句与表情配置。",
+    "zh": "管理普通聊天的角色绑定模式及外部插件分句配置。",
     "en": "Manage waifu sentence and sticker profiles."
   },
   "category": "Chat",
@@ -55,12 +55,48 @@
           }
         }
       ]
+    },
+    {
+      "name": "waifu_mode_get",
+      "description": {
+        "zh": "读取当前角色卡或角色组的普通聊天 Waifu 设置。",
+        "en": "Read the active role-bound native chat mode."
+      },
+      "parameters": []
+    },
+    {
+      "name": "waifu_mode_set",
+      "description": {
+        "zh": "保存指定角色绑定的完整普通聊天 Waifu 设置。",
+        "en": "Save a complete role-bound native chat mode."
+      },
+      "parameters": [
+        {
+          "name": "selection",
+          "type": "string",
+          "required": true,
+          "description": {
+            "zh": "角色插件返回的绑定标识",
+            "en": "Selection returned by the character plugin"
+          }
+        },
+        {
+          "name": "mode_json",
+          "type": "string",
+          "required": true,
+          "description": {
+            "zh": "完整 Mode JSON，包含 enabled、mergeSend、mergeDelayMs 和 settings",
+            "en": "Complete Mode JSON"
+          }
+        }
+      ]
     }
   ],
   "enabled_by_default": true
 }
 */
 import { callAdmin } from "./admin.js";
+import type { Mode, ModeContext } from "./mode.js";
 import type { Settings } from "./api.js";
 
 /** Reads a named profile from the provider's authoritative runtime. */
@@ -72,4 +108,14 @@ export function waifu_settings_get(params: { profile?: string } = {}): Promise<S
 /** Parses and saves one explicitly supplied complete profile. */
 export function waifu_settings_set(params: { profile: string; settings_json: string }): Promise<Settings> {
   return callAdmin({ action: "set", profile: params.profile, settings: JSON.parse(params.settings_json) });
+}
+
+/** Reads the active character's normal-chat mode through the same channel as the settings page. */
+export function waifu_mode_get(): Promise<ModeContext> {
+  return callAdmin({ action: "mode.get" });
+}
+
+/** Saves a complete ordinary-chat mode for an explicitly selected role binding. */
+export function waifu_mode_set(params: { selection: string; mode_json: string }): Promise<Mode> {
+  return callAdmin({ action: "mode.set", selection: params.selection, mode: JSON.parse(params.mode_json) });
 }

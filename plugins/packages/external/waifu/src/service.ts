@@ -1,4 +1,5 @@
 import type { FeedRequest, OpenRequest, OpenResult, Segment, Settings } from "./api.js";
+import { modeForChat } from "./mode.js";
 import { SentenceSession } from "./sentences.js";
 import { identifier, readSettings, writeSettings } from "./settings.js";
 
@@ -33,7 +34,7 @@ export async function sessionOpen(event: ToolPkg.PublicApiEvent<OpenRequest>): P
 }
 
 /** Resolves a configured emotion to an actual image through packaged resources or explicit custom sources. */
-async function resolveEmotion(category: string, settings: Settings): Promise<Segment> {
+export async function resolveEmotion(category: string, settings: Settings): Promise<Segment> {
   const images = settings.emojis[category];
   if (images === undefined) throw new Error(`No image is configured for emotion: ${category}`);
   const selected = images[Math.floor(Math.random() * images.length)];
@@ -69,14 +70,21 @@ export async function sessionClose(event: ToolPkg.PublicApiEvent<{ sessionId: st
   return { closed: true };
 }
 
-/** Adds waifu prompt rules only while an explicitly opened response session is active. */
+/** Reads only explicitly opened dependency settings for one actual conversation. */
+export function externalSettings(chatId: string): Settings | null {
+  const active = [...sessions.values()].find(session => session.chatId === chatId);
+  return active === undefined ? null : active.settings;
+}
+
+/** Adds mode rules for ordinary role-bound chat or an explicitly opened dependency session. */
 export async function composePrompt(event: ToolPkg.SystemPromptComposeHookEvent): Promise<ToolPkg.PromptHookObjectResult | void> {
   const payload = event.eventPayload;
-  const active = [...sessions.values()].find(session => session.chatId === payload.chatId);
-  if (active === undefined) return;
-  if (event.event !== "after_compose_system_prompt") return;
+  if (event.event !== "after_compose_system_prompt" || typeof payload.chatId !== "string") return;
+  const external = externalSettings(payload.chatId);
+  const mode = external === null ? await modeForChat(payload.chatId) : null;
+  if (external === null && mode === null) return;
   if (typeof payload.systemPrompt !== "string") throw new Error("Waifu system prompt hook requires the composed system prompt");
-  const settings = active.settings;
+  const settings = external === null ? mode!.settings : external;
   const rules = [settings.customPrompt];
   if (settings.enableEmoticons) {
     const categories = Object.keys(settings.emojis);

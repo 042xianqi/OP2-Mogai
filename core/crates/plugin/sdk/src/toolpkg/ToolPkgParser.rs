@@ -469,6 +469,8 @@ pub struct ToolPkgMainRegistration {
     pub chatMessageMenuItems: Vec<ToolPkgRegisteredChatMessageMenuItem>,
     #[serde(rename = "chatRuntimeHooks", default)]
     pub chatRuntimeHooks: Vec<ToolPkgRegisteredFunctionHook>,
+    #[serde(rename = "chatResponseHooks", default)]
+    pub chatResponseHooks: Vec<ToolPkgRegisteredFunctionHook>,
     #[serde(rename = "hostEventHooks", default)]
     pub hostEventHooks: Vec<ToolPkgRegisteredHostEventHook>,
     #[serde(rename = "toolLifecycleHooks", default)]
@@ -581,6 +583,8 @@ pub struct ToolPkgContainerRuntime {
     pub chatMessageMenuItems: Vec<ToolPkgChatMessageMenuItemRuntime>,
     #[serde(rename = "chatRuntimeHooks")]
     pub chatRuntimeHooks: Vec<ToolPkgFunctionHookRuntime>,
+    #[serde(rename = "chatResponseHooks", default)]
+    pub chatResponseHooks: Vec<ToolPkgFunctionHookRuntime>,
     #[serde(rename = "hostEventHooks")]
     pub hostEventHooks: Vec<ToolPkgHostEventHookRuntime>,
     #[serde(rename = "toolLifecycleHooks")]
@@ -831,7 +835,7 @@ impl ToolPkgArchiveParser {
         FReadEntryText: FnMut(&str) -> Option<String>,
         FReadEntryProtectionHeader: FnMut(&str) -> Option<Vec<u8>>,
         FParseJsPackage: FnMut(&str, &mut dyn FnMut(String, String)) -> Option<ToolPackage>,
-        FParseMainRegistration: FnMut(&str, &str, &str, &str) -> ToolPkgMainRegistrationParseResult,
+        FParseMainRegistration: FnMut(&str, &str, &str, &str, &[String]) -> ToolPkgMainRegistrationParseResult,
         FReportPackageLoadError: FnMut(String, String),
     {
         let manifestEntryName = findManifestEntry(&entryIndex.entryNames)
@@ -1160,7 +1164,14 @@ impl ToolPkgArchiveParser {
                 ToolPkgMainRegistration { marketOrigin, ..Default::default() }
             },
             Some(source) => match parseMainRegistration(
-                &source, &manifest.toolpkgId, &normalizedMainEntry, &apiVersionText,
+                &source,
+                &manifest.toolpkgId,
+                &normalizedMainEntry,
+                &apiVersionText,
+                &subpackagePackages
+                    .iter()
+                    .flat_map(|package| package.env.iter().map(|variable| variable.name.clone()))
+                    .collect::<Vec<_>>(),
             ) {
                 ToolPkgMainRegistrationParseResult::Success { registration } => registration,
                 ToolPkgMainRegistrationParseResult::Failure { message } => {
@@ -1426,6 +1437,10 @@ impl ToolPkgArchiveParser {
             &mainRegistration.chatRuntimeHooks,
             TOOLPKG_REGISTRATION_CHAT_RUNTIME_HOOK,
         )?;
+        let chatResponseHooks = validateFunctionHooks(
+            &mainRegistration.chatResponseHooks,
+            TOOLPKG_REGISTRATION_CHAT_RESPONSE_HOOK,
+        )?;
         let hostEventHooks = validateHostEventHooks(
             &mainRegistration.hostEventHooks,
             TOOLPKG_REGISTRATION_HOST_EVENT_HOOK,
@@ -1524,6 +1539,7 @@ impl ToolPkgArchiveParser {
             chatLifecycleHooks,
             chatMessageMenuItems,
             chatRuntimeHooks,
+            chatResponseHooks,
             hostEventHooks,
             toolLifecycleHooks,
             promptInputHooks,
@@ -2663,7 +2679,7 @@ mod api_compatibility_tests {
                 "compat_fixture.toolpkg",
                 false,
                 |_, _| panic!("fixture does not contain subpackages"),
-                |_, id, path, declared| {
+                |_, id, path, declared, _environment| {
                     assert_eq!(id, "compat_fixture");
                     assert_eq!(path, "main.js");
                     assert_eq!(declared, version);
@@ -2767,7 +2783,7 @@ mod api_compatibility_tests {
                 &index, |name| entries.get(name).cloned(), |_| None,
                 ToolPkgSourceType::EXTERNAL, "theme_fixture.toolpkg", false,
                 |_, _| panic!("declarative theme has no scripts"),
-                |_, _, _, _| panic!("declarative theme must not execute registration"),
+                |_, _, _, _, _| panic!("declarative theme must not execute registration"),
                 |_, _| panic!("declarative theme has no subpackages"),
             );
             match missing {
@@ -2800,7 +2816,7 @@ mod api_compatibility_tests {
         let loaded = ToolPkgArchiveParser::parseToolPkgFromIndexedEntries(
             &index, |name| entries.get(name).cloned(), |_| None,
             ToolPkgSourceType::EXTERNAL, "resource_fixture.toolpkg", false,
-            |_, _| panic!("no executable declarations"), |_, _, _, _| panic!("no main entry"),
+            |_, _| panic!("no executable declarations"), |_, _, _, _, _| panic!("no main entry"),
             |_, _| panic!("resource declarations must load"),
         ).unwrap();
         assert!(loaded.containerRuntime.mainEntry.is_empty());
@@ -2892,7 +2908,7 @@ mod public_api_tests {
             &index, |name| entries.get(name).cloned(), |_| None,
             ToolPkgSourceType::EXTERNAL, "public_fixture.toolpkg", false,
             |_, _| panic!("fixture has no subpackages"),
-            |_, _, _, _| ToolPkgMainRegistrationParseResult::Success {
+            |_, _, _, _, _| ToolPkgMainRegistrationParseResult::Success {
                 registration: ToolPkgMainRegistration {
                     publicApis: (0..methods).map(|_| ToolPkgRegisteredFunctionHook {
                         id: "run".to_string(), function: "runExport".to_string(), ..Default::default()
@@ -2958,7 +2974,7 @@ mod navigation_registration_tests {
             &index, |name| sources.get(name).cloned(), |_| None,
             ToolPkgSourceType::EXTERNAL, "arbitrary_package.toolpkg", false,
             |_, _| panic!("navigation unit input has no subpackages"),
-            |_, _, _, _| ToolPkgMainRegistrationParseResult::Success { registration: registration.clone() },
+            |_, _, _, _, _| ToolPkgMainRegistrationParseResult::Success { registration: registration.clone() },
             |name, message| panic!("unexpected package error {name}: {message}"),
         )
     }
@@ -3022,7 +3038,7 @@ mod navigation_registration_tests {
             &index, |name| sources.get(name).cloned(), |_| None,
             ToolPkgSourceType::EXTERNAL, "arbitrary_package.toolpkg", false,
             |_, _| panic!("sidebar archive input declares no subpackages"),
-            |_, _, _, _| ToolPkgMainRegistrationParseResult::Success { registration: registration.clone() },
+            |_, _, _, _, _| ToolPkgMainRegistrationParseResult::Success { registration: registration.clone() },
             |name, message| panic!("unexpected package error {name}: {message}"),
         )
     }

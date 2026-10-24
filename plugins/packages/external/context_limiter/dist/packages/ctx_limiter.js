@@ -67,6 +67,7 @@ function normalizeLimit(value) {
     const parsed = Number.parseInt(String(value), 10);
     return parsed;
 }
+/** Saves the validated limit in the container installation environment. */
 function set_floor_limit(params) {
     const limit = normalizeLimit(params.n);
     if (!Number.isFinite(limit) || limit < 1) {

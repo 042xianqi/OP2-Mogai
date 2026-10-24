@@ -1,4 +1,5 @@
 use operit_store::ChatExecutionLease::ChatExecutionLease;
+use crate::plugins::toolpkg::ToolPkgChatResponseHookBridge::{ToolPkgChatResponseHookBridge, PRESENTATION_EXTENSION};
 use std::collections::{HashMap, HashSet};
 
 use std::sync::{Arc, Mutex};
@@ -1409,6 +1410,9 @@ impl MessageProcessingDelegate {
             observer.snapshot(aiMessage.timestamp, &aiMessage.parts);
         }
         aiMessage.contentStream = None;
+        if let Some(presentation) = aiMessage.pluginExtensions.get_mut(PRESENTATION_EXTENSION) {
+            presentation["pending"] = serde_json::Value::Bool(false);
+        }
         aiMessage.completedAt = messageTimingNow().startedAtMs as i64;
         Some(aiMessage)
     }
@@ -1980,6 +1984,41 @@ impl MessageProcessingDelegate {
         let workerChatHistoryDelegate =
             Arc::new(Mutex::new(request.chatHistoryDelegate.clone_for_core()));
         let workerMessageProcessingDelegate = Arc::new(Mutex::new(self.clone_for_core()));
+        let presentationSession = if workerTurnOptions.persistTurn {
+            let activeDelegate = workerMessageProcessingDelegate.clone();
+            let activeChatId = workerChatId.clone();
+            let publishDelegate = workerMessageProcessingDelegate.clone();
+            let publishHistory = workerChatHistoryDelegate.clone();
+            let publishChatId = workerChatId.clone();
+            match ToolPkgChatResponseHookBridge::start(
+                workerChatId.clone(), workerAiMessage.clone(),
+                Arc::new(move || activeDelegate.lock().expect("presentation delegate mutex poisoned").isCurrentChatTurn(&activeChatId, workerTurnId)),
+                Arc::new(move |message| {
+                    let delegate = publishDelegate.lock().expect("presentation delegate mutex poisoned");
+                    if !delegate.isCurrentChatTurn(&publishChatId, workerTurnId) { return Ok(()); }
+                    publishHistory.lock().expect("presentation history mutex poisoned")
+                        .commitAssistantMessageSegment(publishChatId.clone(), message.clone(), None)?;
+                    delegate.withExistingRuntime(Some(publishChatId.clone()), |runtime| {
+                        runtime.activeStreamingAiMessage = Some(message);
+                    });
+                    Ok(())
+                }),
+            ).await {
+                Ok(session) => session,
+                Err(message) => {
+                    sharedResponseStream.close();
+                    self.cleanupRuntimeAfterTurn(chatId.clone(), turnId);
+                    self.finishChatExecutionForTurn(chatId.clone(), turnId, InputProcessingState::Error { message: message.clone() });
+                    return Err(operit_providers::chat::llmprovider::AIService::AiServiceError::RequestFailed(message));
+                }
+            }
+        } else { None };
+        let presentationSession = Arc::new(Mutex::new(presentationSession));
+        aiMessage = workerAiMessage.lock().expect("presentation message mutex poisoned").clone();
+        self.withExistingRuntime(Some(chatId.clone()), |runtime| {
+            runtime.activeStreamingAiMessage = Some(aiMessage.clone());
+        });
+        let completionPresentationSession = presentationSession.clone();
         let completionContextWorkspacePath = request.workspacePath.clone();
         let completionContextPromptFunctionType = request.promptFunctionType.clone();
         let completionContextConfiguration = configuration.clone();
@@ -2112,6 +2151,7 @@ impl MessageProcessingDelegate {
                                                     Err(error) => observer.failed(error),
                                                 }
                                             }
+                                            if let Some(session) = presentationSession.lock().expect("presentation session mutex poisoned").as_ref() { session.snapshot(&snapshot); }
                                             persistStreamingSnapshot(&snapshot);
                                         }
                                         return;
@@ -2147,6 +2187,7 @@ impl MessageProcessingDelegate {
                                         Err(error) => observer.failed(error),
                                     }
                                 }
+                                if let Some(session) = presentationSession.lock().expect("presentation session mutex poisoned").as_ref() { session.snapshot(&snapshot); }
                                 persistStreamingSnapshot(&snapshot);
                             })
                             .await;
@@ -2173,6 +2214,13 @@ impl MessageProcessingDelegate {
                             .expect("revision tracker mutex poisoned")
                             .current_content()
                             .to_owned();
+                        let presentation = completionPresentationSession.lock().expect("presentation session mutex poisoned").take();
+                        let presentationError = match presentation {
+                            Some(session) => session.finish(finalContent.clone()).await.err(),
+                            None => None,
+                        };
+                        if !completionMessageProcessingDelegate.lock().expect("worker message processing delegate mutex poisoned")
+                            .isCurrentChatTurn(&completionChatId, completionTurnId) { return; }
                         let mut workerService = workerService;
                         let tokenSnapshot = workerService.getLastTurnTokenSnapshot().unwrap_or(
                             operit_providers::chat::EnhancedAIService::TurnTokenSnapshot {
@@ -2204,6 +2252,9 @@ impl MessageProcessingDelegate {
                                 observer.snapshot(workerAiMessage.timestamp, &parts);
                             }
                             workerAiMessage.parts = parts;
+                            if let Some(presentation) = workerAiMessage.pluginExtensions.get_mut(PRESENTATION_EXTENSION) {
+                                presentation["pending"] = serde_json::Value::Bool(false);
+                            }
                             MessageProcessingDelegate::withTurnMetrics(
                                 ChatMessage {
                                     completedAt: completedElapsed,
@@ -2217,7 +2268,7 @@ impl MessageProcessingDelegate {
                                 completedElapsed,
                             )
                         };
-                        if let Some(error) = completionResponseStream.terminal_failure() {
+                        if let Some(mut error) = completionResponseStream.terminal_failure().or(presentationError) {
                             ChainLogger::error(
                                 RECEIVE_CHAIN,
                                 "receive.stream.failed",
@@ -2238,22 +2289,23 @@ impl MessageProcessingDelegate {
                                     contentStream: None,
                                     ..finalMessage
                                 };
-                                completionChatHistoryDelegate
+                                let committed = completionChatHistoryDelegate
                                     .lock()
                                     .expect("worker chat history mutex poisoned")
-                                    .addMessageToChat(
-                                        failedMessage.clone(),
-                                        Some(completionChatId.clone()),
+                                    .commitAssistantMessageSegment(
+                                        completionChatId.clone(), failedMessage.clone(), None,
                                     );
-                                completionMessageProcessingDelegate
-                                    .lock()
-                                    .expect("worker message processing delegate mutex poisoned")
-                                    .recordCommittedAssistant(
-                                        &completionChatId,
-                                        completionTurnId,
-                                        &failedMessage,
-                                        0,
-                                    );
+                                match committed {
+                                    Ok(_) => completionMessageProcessingDelegate
+                                        .lock()
+                                        .expect("worker message processing delegate mutex poisoned")
+                                        .recordCommittedAssistant(
+                                            &completionChatId, completionTurnId, &failedMessage, 0,
+                                        ),
+                                    Err(commitError) => {
+                                        error = format!("{error}; failed to persist assistant response: {commitError}");
+                                    }
+                                }
                             }
                             let mut delegate = completionMessageProcessingDelegate
                                 .lock()

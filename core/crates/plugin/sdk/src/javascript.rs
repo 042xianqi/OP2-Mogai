@@ -225,11 +225,27 @@ pub trait JsExecutionHost: Send + Sync {
     /// Returns the language code exposed to package JavaScript.
     fn package_language(&self) -> Result<String, String>;
 
+    /// Imports declared legacy values before registration evaluates the owning package.
+    fn prepare_environment(
+        &self,
+        owner: &JsEnvironmentOwner,
+        declared_names: &[String],
+    ) -> Result<(), String>;
+
     /// Reads one environment variable exposed to package JavaScript.
-    fn read_environment_variable(&self, owner: &JsEnvironmentOwner, key: &str) -> Result<Option<String>, String>;
+    fn read_environment_variable(
+        &self,
+        owner: &JsEnvironmentOwner,
+        key: &str,
+    ) -> Result<Option<String>, String>;
 
     /// Writes one environment variable exposed to package JavaScript.
-    fn write_environment_variable(&self, owner: &JsEnvironmentOwner, key: &str, value: &str) -> Result<(), String>;
+    fn write_environment_variable(
+        &self,
+        owner: &JsEnvironmentOwner,
+        key: &str,
+        value: &str,
+    ) -> Result<(), String>;
 
     /// Returns the writable configuration directory for one plugin.
     fn plugin_config_dir(&self, plugin_id: &str) -> Result<String, String>;
@@ -544,6 +560,8 @@ pub struct ToolPkgMainRegistrationCapture {
     pub chatMessageMenuItems: Vec<String>,
     #[serde(rename = "chatRuntimeHooks", default)]
     pub chatRuntimeHooks: Vec<String>,
+    #[serde(rename = "chatResponseHooks", default)]
+    pub chatResponseHooks: Vec<String>,
     #[serde(rename = "hostEventHooks", default)]
     pub hostEventHooks: Vec<String>,
     #[serde(rename = "toolLifecycleHooks", default)]

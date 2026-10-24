@@ -2341,10 +2341,11 @@ impl ChatHistoryDelegate {
             .chatHistoryManager
             .commitAssistantMessageSegment(chatId.clone(), message.clone(), chatMetrics)
             .map_err(|error| error.to_string())?;
-        let persistedMessage = self
+        let mut persistedMessage = self
             .chatHistoryManager
             .loadChatMessageVariant(&chatId, message.timestamp, 0)
             .map_err(|error| error.to_string())?;
+        persistedMessage.contentStream = message.contentStream.clone();
         ToolPkgChatMessageHookBridge::dispatchMessagePersisted(&chatId, &persistedMessage);
         if self.currentChatIdFlow.value().as_ref() == Some(&chatId) {
             self.upsertCurrentChatMessageInMemory(persistedMessage.clone());

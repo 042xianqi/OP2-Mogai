@@ -70,6 +70,7 @@ function normalizeLimit(value: string | number | undefined): number {
   return parsed;
 }
 
+/** Saves the validated limit in the container installation environment. */
 export function set_floor_limit(params: FloorLimitParams) {
   const limit = normalizeLimit(params.n);
   if (!Number.isFinite(limit) || limit < 1) {

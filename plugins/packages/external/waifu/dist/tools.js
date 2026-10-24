@@ -2,6 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.waifu_settings_get = waifu_settings_get;
 exports.waifu_settings_set = waifu_settings_set;
+exports.waifu_mode_get = waifu_mode_get;
+exports.waifu_mode_set = waifu_mode_set;
 /* METADATA
 {
   "name": "waifu",
@@ -10,7 +12,7 @@ exports.waifu_settings_set = waifu_settings_set;
     "en": "Waifu Mode"
   },
   "description": {
-    "zh": "管理独立的流式分句与表情配置。",
+    "zh": "管理普通聊天的角色绑定模式及外部插件分句配置。",
     "en": "Manage waifu sentence and sticker profiles."
   },
   "category": "Chat",
@@ -59,6 +61,41 @@ exports.waifu_settings_set = waifu_settings_set;
           }
         }
       ]
+    },
+    {
+      "name": "waifu_mode_get",
+      "description": {
+        "zh": "读取当前角色卡或角色组的普通聊天 Waifu 设置。",
+        "en": "Read the active role-bound native chat mode."
+      },
+      "parameters": []
+    },
+    {
+      "name": "waifu_mode_set",
+      "description": {
+        "zh": "保存指定角色绑定的完整普通聊天 Waifu 设置。",
+        "en": "Save a complete role-bound native chat mode."
+      },
+      "parameters": [
+        {
+          "name": "selection",
+          "type": "string",
+          "required": true,
+          "description": {
+            "zh": "角色插件返回的绑定标识",
+            "en": "Selection returned by the character plugin"
+          }
+        },
+        {
+          "name": "mode_json",
+          "type": "string",
+          "required": true,
+          "description": {
+            "zh": "完整 Mode JSON，包含 enabled、mergeSend、mergeDelayMs 和 settings",
+            "en": "Complete Mode JSON"
+          }
+        }
+      ]
     }
   ],
   "enabled_by_default": true
@@ -73,4 +110,12 @@ function waifu_settings_get(params = {}) {
 /** Parses and saves one explicitly supplied complete profile. */
 function waifu_settings_set(params) {
     return (0, admin_js_1.callAdmin)({ action: "set", profile: params.profile, settings: JSON.parse(params.settings_json) });
+}
+/** Reads the active character's normal-chat mode through the same channel as the settings page. */
+function waifu_mode_get() {
+    return (0, admin_js_1.callAdmin)({ action: "mode.get" });
+}
+/** Saves a complete ordinary-chat mode for an explicitly selected role binding. */
+function waifu_mode_set(params) {
+    return (0, admin_js_1.callAdmin)({ action: "mode.set", selection: params.selection, mode: JSON.parse(params.mode_json) });
 }

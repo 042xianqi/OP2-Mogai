@@ -16,13 +16,13 @@ export function load(name, globals = {}) {
 
 /** Supplies the real main-runtime handlers and an authenticated dependency transport. */
 export function provider(globals = {}) {
-  let config = null, flushes = 0;
+  const configs = new Map(); let flushes = 0;
   const resources = [];
   const PluginConfig = {
-    async use(_name, defaults) { if (config === null) config = defaults; return config; },
+    async use(name, defaults) { if (!configs.has(name)) configs.set(name, defaults); return configs.get(name); },
     async flush() { flushes++; },
   };
-  const service = load("service", { PluginConfig, ToolPkg: { async readResource(key) { resources.push(key); return `/host/resources/${key}.jpg`; } }, ...globals });
+  const service = load("service", { PluginConfig, ToolPkg: { async callDependency(_owner, method, input) { if (method === "chat.configuration.binding.read") return { chatId: input.chatId, selection: "card:alice" }; throw new Error(`Unexpected dependency method: ${method}`); }, async readResource(key) { resources.push(key); return `/host/resources/${key}.jpg`; } }, ...globals });
   const handlers = { "settings.get": service.settingsGet, "settings.set": service.settingsSet, "session.open": service.sessionOpen, "session.feed": service.sessionFeed, "session.close": service.sessionClose };
   /** Invokes a real declared public handler as a specified dependency owner. */
   async function call(method, payload, callerPackage = "consumer") {

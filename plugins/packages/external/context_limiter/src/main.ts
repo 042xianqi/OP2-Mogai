@@ -34,6 +34,7 @@ function readLimiterEnabled(): boolean {
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
+/** Writes a setting through the owning package environment. */
 async function writeEnvValue(
   key: (typeof ENV_KEYS)[keyof typeof ENV_KEYS],
   value: string

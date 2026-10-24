@@ -4,6 +4,40 @@ part of '../ToolPkgUiLauncherScreen.dart';
 
 /// Renders interactive nodes for Compose DSL nodes.
 extension _ComposeInteractiveNodes on _ComposeProgramExecutorState {
+  /// Renders a bounded Material slider through the same cross-platform action bridge.
+  Widget _slider() {
+    final value = _number(props['value']);
+    final min = _number(props['min']);
+    final max = _number(props['max']);
+    final divisions = _number(props['divisions'])?.toInt();
+    if (value == null ||
+        min == null ||
+        max == null ||
+        min >= max ||
+        value < min ||
+        value > max ||
+        (divisions != null && divisions <= 0)) {
+      throw const FormatException(
+        'Slider requires a value within valid bounds.',
+      );
+    }
+    final enabled = props['enabled'] != false;
+    return Slider(
+      value: value,
+      min: min,
+      max: max,
+      divisions: divisions,
+      label: _string(props['label']),
+      onChanged: enabled
+          ? (value) => _invokeAction(_actionId(props['onValueChange']), value)
+          : null,
+      onChangeEnd: enabled && props['onValueChangeFinished'] != null
+          ? (value) =>
+                _invokeAction(_actionId(props['onValueChangeFinished']), value)
+          : null,
+    );
+  }
+
   /// Builds pull to refresh box for the Compose DSL renderer.
   Widget _pullToRefreshBox(BuildContext context) {
     final refreshing = _bool(props['isRefreshing']);
@@ -53,8 +87,7 @@ extension _ComposeInteractiveNodes on _ComposeProgramExecutorState {
             elevation: _number(props['tonalElevation']) ?? 3,
             shape: RoundedRectangleBorder(
               borderRadius:
-                  _borderRadius(props['shape']) ??
-                  BorderRadius.circular(8),
+                  _borderRadius(props['shape']) ?? BorderRadius.circular(8),
             ),
             child: ConstrainedBox(
               constraints: BoxConstraints(
@@ -176,17 +209,10 @@ extension _ComposeInteractiveNodes on _ComposeProgramExecutorState {
     final enabled = _enabled() && actionId != null;
     final checkedThumbColor = _color(context, props['checkedThumbColor']);
     final checkedTrackColor = _color(context, props['checkedTrackColor']);
-    final uncheckedThumbColor = _color(
-      context,
-      props['uncheckedThumbColor'],
-    );
-    final uncheckedTrackColor = _color(
-      context,
-      props['uncheckedTrackColor'],
-    );
+    final uncheckedThumbColor = _color(context, props['uncheckedThumbColor']);
+    final uncheckedTrackColor = _color(context, props['uncheckedTrackColor']);
     final fitToBounds =
-        _number(props['width']) != null &&
-        _number(props['height']) != null;
+        _number(props['width']) != null && _number(props['height']) != null;
     final control = Switch(
       materialTapTargetSize: fitToBounds
           ? MaterialTapTargetSize.shrinkWrap
@@ -357,7 +383,10 @@ extension _ComposeInteractiveNodes on _ComposeProgramExecutorState {
                         Text(props['text'] as String),
                       if (props['markdown'] is String)
                         _ComposeProgramExecutor(
-                          node: _composeInlineProgram('Markdown', <String, Object?>{'text': props['markdown']}),
+                          node: _composeInlineProgram(
+                            'Markdown',
+                            <String, Object?>{'text': props['markdown']},
+                          ),
                           onAction: onAction,
                           onTextInput: onTextInput,
                           webViewHostContext: webViewHostContext,
@@ -437,8 +466,7 @@ extension _ComposeInteractiveNodes on _ComposeProgramExecutorState {
             )
           : null,
       suffixIconConstraints:
-          props['suffixIconWidth'] != null ||
-              props['suffixIconHeight'] != null
+          props['suffixIconWidth'] != null || props['suffixIconHeight'] != null
           ? BoxConstraints.tightFor(
               width: _number(props['suffixIconWidth']),
               height: _number(props['suffixIconHeight']),

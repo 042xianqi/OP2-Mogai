@@ -382,7 +382,6 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
     fn readEnvironmentVariable(&self, packageName: &str, key: &str) -> Result<Option<String>, String> {
         EnvPreferences::getInstance()
             .getEnv(packageName, key)
-            .map_err(|error| error.to_string())
     }
 
     /// Writes one stored environment variable.
@@ -390,7 +389,6 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
     fn writeEnvironmentVariable(&self, packageName: &str, key: &str, value: &str) -> Result<(), String> {
         EnvPreferences::getInstance()
             .setEnv(packageName, key, value)
-            .map_err(|error| error.to_string())
     }
 
     /// Removes one stored environment variable.
@@ -398,7 +396,6 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
     fn removeEnvironmentVariable(&self, packageName: &str, key: &str) -> Result<(), String> {
         EnvPreferences::getInstance()
             .removeEnv(packageName, key)
-            .map_err(|error| error.to_string())
     }
 
     /// Returns built-in and internal tool prompt categories.

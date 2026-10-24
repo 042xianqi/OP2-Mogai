@@ -1072,7 +1072,7 @@ fn registerInternalTools(handler: &mut AIToolHandler, context: &HostManager) {
                 let writeResult = if cleared {
                     writeEnvironmentRuntimeSupport.removeEnvironmentVariable(&packageName, &key)
                 } else {
-                    writeEnvironmentRuntimeSupport.writeEnvironmentVariable(&packageName, &key, value.trim())
+                    writeEnvironmentRuntimeSupport.writeEnvironmentVariable(&packageName, &key, &value)
                 };
                 if let Err(error) = writeResult {
                     return ToolResult {

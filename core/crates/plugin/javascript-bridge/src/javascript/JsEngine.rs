@@ -1428,6 +1428,23 @@ impl JsEngineState {
         });
         let registrationResult = (|| {
             let environmentOwner = environmentOwner(self.toolPkgContext.as_ref(), params, true)?;
+            if let Some(declared) = params.get("__operit_registration_environment_names") {
+                let declared: Vec<String> = serde_json::from_value(declared.clone()).map_err(|error| {
+                    JsExecutionError::invalid_request(format!("Invalid environment declarations: {error}"))
+                })?;
+                if !declared.is_empty() {
+                    let owner = environmentOwner.as_ref().ok_or_else(|| {
+                        JsExecutionError::invalid_request("Environment preparation requires an owning package")
+                    })?;
+                    self.executionHost
+                        .as_ref()
+                        .ok_or_else(|| {
+                            JsExecutionError::invalid_request("Environment preparation requires an execution host")
+                        })?
+                        .prepare_environment(owner, &declared)
+                        .map_err(JsExecutionError::runtime)?;
+                }
+            }
             let mut registrationParams = params.clone();
             bindEnvironmentOwner(&mut registrationParams, environmentOwner.as_ref());
             registrationParams.insert("__operit_registration_mode".to_string(), Value::Bool(true));
@@ -3375,7 +3392,10 @@ fn storeExecutionError(callId: String, error: String) -> HostResult<()> {
 fn bindEnvironmentOwner(params: &mut BTreeMap<String, Value>, owner: Option<&JsEnvironmentOwner>) {
     params.remove("__operit_environment_owner");
     if let Some(owner) = owner {
-        params.insert("__operit_environment_owner".into(), Value::String(owner.package_name().into()));
+        params.insert(
+            "__operit_environment_owner".into(),
+            Value::String(owner.package_name().into()),
+        );
     }
 }
 
@@ -3390,23 +3410,44 @@ fn environmentOwner(
         return match params.get("toolPkgId") {
             None => Ok(None),
             Some(owner) => {
-                let id = owner.as_str().filter(|id| !id.trim().is_empty())
-                    .ok_or_else(|| JsExecutionError::invalid_request("Registration environment owner is invalid"))?;
-                let scope = params.get("__operit_registration_config_scope")
-                    .ok_or_else(|| JsExecutionError::invalid_request("Registration environment scope is missing"))?;
-                let scope = serde_json::from_value(scope.clone())
-                    .map_err(|error| JsExecutionError::invalid_request(format!("Invalid environment scope: {error}")))?;
-                Ok(Some(JsEnvironmentOwner::Registration { id: id.to_string(), scope }))
+                let id = owner
+                    .as_str()
+                    .filter(|id| !id.trim().is_empty())
+                    .ok_or_else(|| {
+                        JsExecutionError::invalid_request(
+                            "Registration environment owner is invalid",
+                        )
+                    })?;
+                let scope = params
+                    .get("__operit_registration_config_scope")
+                    .ok_or_else(|| {
+                        JsExecutionError::invalid_request(
+                            "ToolPkg registration configuration scope is missing",
+                        )
+                    })?;
+                let scope = serde_json::from_value(scope.clone()).map_err(|error| {
+                    JsExecutionError::invalid_request(format!("Invalid environment scope: {error}"))
+                })?;
+                Ok(Some(JsEnvironmentOwner::Registration {
+                    id: id.to_string(),
+                    scope,
+                }))
             }
         };
     }
     match context {
-        Some(context) => Ok(Some(JsEnvironmentOwner::Package(context.container_package_name.clone()))),
+        Some(context) => Ok(Some(JsEnvironmentOwner::Package(
+            context.container_package_name.clone(),
+        ))),
         None => match params.get("__operit_package_name") {
             None => Ok(None),
-            Some(name) => name.as_str().filter(|name| !name.trim().is_empty())
+            Some(name) => name
+                .as_str()
+                .filter(|name| !name.trim().is_empty())
                 .map(|name| Some(JsEnvironmentOwner::Package(name.to_string())))
-                .ok_or_else(|| JsExecutionError::invalid_request("Package environment owner is invalid")),
+                .ok_or_else(|| {
+                    JsExecutionError::invalid_request("Package environment owner is invalid")
+                }),
         },
     }
 }

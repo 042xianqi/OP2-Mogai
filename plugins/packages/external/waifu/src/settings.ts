@@ -6,8 +6,8 @@ export interface Config { profiles: Record<string, Settings> }
 /** Authors the initial waifu profile using the original typing and prompt defaults. */
 export function defaultSettings(): Settings {
   return { charDelayMs: 250, removePunctuation: false, enableEmoticons: false, enableSelfie: false,
-    customPrompt: "禁止描述动作表情，只允许使用自然的纯文本进行对话。使用简短句子，每句话表达一个意思。",
-    selfiePrompt: "", emojis: Object.fromEntries(Object.entries(bundledEmojis).map(([category, keys]) => [category, keys.map(key => `resource:${key}`)])) };
+    customPrompt: "你必须遵守：禁止使用动作表情，禁止描述动作表情，只允许使用纯文本进行对话。",
+    selfiePrompt: "kipfel vrchat, long hair, Matcha color hair, purple eyes, sweater vest, black skirt, black necktie, collared shirt, long sleeves, black headwear, beanie, pleated skirt, hair bun, white shirt, hair ribbon, hairclip, hair between eyes, black footwear, blush, hair ornament, cat hat, very long hair, sweater, animal ear headwear, bag, bandaid on leg, socks", emojis: Object.fromEntries(Object.entries(bundledEmojis).map(([category, keys]) => [category, keys.map(key => `resource:${key}`)])) };
 }
 
 /** Checks complete settings before persistence or use by an active stream. */

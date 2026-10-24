@@ -17,6 +17,7 @@ use crate::dao::ChatDao::ChatDao;
 use crate::dao::MessageDao::MessageDao;
 use crate::db::AppDatabase::{AppDatabase, AppDatabaseError};
 use operit_model::ChatEntity::ChatEntity;
+use operit_model::ChatMessagePresentation::{ChatMessagePresentation, PRESENTATION_EXTENSION};
 use operit_model::MessageEntity::MessageEntity;
 use operit_model::MessagePart::MessagePartKind;
 use operit_model::MessagePartEntity::MessagePartEntity;
@@ -188,6 +189,9 @@ impl SqlChatSyncStore {
         if baseParts.is_empty() {
             return Err(SqlChatSyncStoreError::Message("Assistant segment requires at least one base part".to_string()));
         }
+        let presentation = message.pluginExtensions.get(PRESENTATION_EXTENSION)
+            .map(|value| serde_json::from_value::<ChatMessagePresentation>(value.clone()))
+            .transpose()?;
         let createdAt = currentTimeMillis()?;
         self.store.transaction(|transaction| {
             let current = extension_transactions::payloadInTransaction(transaction, &chat.id, Some(message.timestamp))?;
@@ -201,6 +205,10 @@ impl SqlChatSyncStore {
             let mut message = message.clone();
             let messageRow = transaction.queryOne("SELECT pluginExtensions FROM messages WHERE chatId = ?1 AND timestamp = ?2", sqliteParams![message.chatId, message.timestamp])?.ok_or_else(|| SqliteStoreError::Message("Assistant base record does not exist".to_string()))?;
             message.pluginExtensions = decodePluginExtensions(&messageRow.get::<_, String>(0)?)?;
+            if let Some(presentation) = &presentation {
+                message.pluginExtensions.insert(PRESENTATION_EXTENSION.to_string(),
+                    serde_json::to_value(presentation).map_err(|error| SqliteStoreError::Message(error.to_string()))?);
+            }
             let mut variantRows = variantRows.clone();
             for variant in &mut variantRows {
                 let row = transaction.queryOne("SELECT pluginExtensions FROM message_variants WHERE chatId = ?1 AND messageTimestamp = ?2 AND variantIndex = ?3", sqliteParams![variant.chatId, variant.messageTimestamp, variant.variantIndex])?.ok_or_else(|| SqliteStoreError::Message("Assistant variant record does not exist".to_string()))?;

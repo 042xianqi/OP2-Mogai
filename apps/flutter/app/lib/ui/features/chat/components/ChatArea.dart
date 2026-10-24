@@ -3,6 +3,7 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -1450,7 +1451,11 @@ class _CachedMessageRow {
 /// Reports whether one cached message row can be reused unchanged.
 bool _sameMessageForRender(ChatUiMessage left, ChatUiMessage right) {
   final contentStreamSame = identical(left.contentStream, right.contentStream);
-  return left.sender == right.sender &&
+  return const DeepCollectionEquality().equals(
+        left.pluginExtensions,
+        right.pluginExtensions,
+      ) &&
+      left.sender == right.sender &&
       (_sameMessagePartsForRender(left, right) ||
           _sameLiveAiStreamForRender(left, right, contentStreamSame)) &&
       left.timestamp == right.timestamp &&

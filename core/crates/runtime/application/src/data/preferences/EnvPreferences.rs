@@ -9,7 +9,9 @@ pub struct EnvPreferences {
 impl EnvPreferences {
     /// Opens package environments through the common installation ownership store.
     pub fn getInstance() -> Self {
-        Self { store: ExtensionStore::default() }
+        Self {
+            store: ExtensionStore::default(),
+        }
     }
 
     /// Reads the environment shared by an installation and its subpackages.
@@ -34,15 +36,20 @@ impl EnvPreferences {
 
     /// Writes a variable to its package installation and removes explicitly empty values.
     pub fn setEnv(&self, packageName: &str, key: &str, value: &str) -> Result<(), String> {
-        self.store.editPackageEnvironment(packageName, BTreeMap::from([
-            (key.trim().to_string(), (!value.is_empty()).then(|| value.to_string()))
-        ]))
+        self.store.editPackageEnvironment(
+            packageName,
+            BTreeMap::from([(
+                key.trim().to_string(),
+                (!value.is_empty()).then(|| value.to_string()),
+            )]),
+        )
     }
 
     /// Removes a variable from its explicitly selected package installation.
     pub fn removeEnv(&self, packageName: &str, key: &str) -> Result<(), String> {
-        self.store.editPackageEnvironment(packageName, BTreeMap::from([
-            (key.trim().to_string(), None)
-        ]))
+        self.store.editPackageEnvironment(
+            packageName,
+            BTreeMap::from([(key.trim().to_string(), None)]),
+        )
     }
 }

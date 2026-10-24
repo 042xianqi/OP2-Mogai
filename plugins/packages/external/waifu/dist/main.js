@@ -5,6 +5,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.composePrompt = exports.sessionClose = exports.sessionFeed = exports.sessionOpen = exports.settingsSet = exports.settingsGet = void 0;
 exports.registerToolPkg = registerToolPkg;
+const merge_js_1 = require("./merge.js");
+const mode_js_1 = require("./mode.js");
+const response_js_1 = require("./response.js");
 const settings_ui_js_1 = __importDefault(require("./ui/settings.ui.js"));
 const admin_js_1 = require("./admin.js");
 const service_js_1 = require("./service.js");
@@ -18,6 +21,9 @@ Object.defineProperty(exports, "composePrompt", { enumerable: true, get: functio
 ToolPkg.ipc.on("waifu.settings", admin_js_1.admin);
 /** Publishes the waifu protocol, prompt hook and native settings surface. */
 function registerToolPkg() {
+    ToolPkg.registerInputMenuTogglePlugin({ id: "waifu_mode", function: mode_js_1.inputMenu });
+    ToolPkg.registerChatInputHook({ id: "waifu_merge_input", function: merge_js_1.mergeInput });
+    ToolPkg.registerChatResponseHook({ id: "waifu_reply", function: response_js_1.responseHook });
     ToolPkg.registerApi({ name: "settings.get", function: service_js_1.settingsGet });
     ToolPkg.registerApi({ name: "settings.set", function: service_js_1.settingsSet });
     ToolPkg.registerApi({ name: "session.open", function: service_js_1.sessionOpen });

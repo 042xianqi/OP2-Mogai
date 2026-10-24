@@ -144,6 +144,7 @@ const _composeNodeTypes = <String, String>{
   'suggestionchip': 'SuggestionChip',
   'surface': 'Surface',
   'switch': 'Switch',
+  'slider': 'Slider',
   'tab': 'Tab',
   'text': 'Text',
   'textbutton': 'TextButton',

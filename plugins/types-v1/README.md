@@ -47,9 +47,11 @@ tsc -p core/crates/plugin/sdk/src/compat/v1/tsconfig.json
 node --test tools/tests/toolpkg_api_compatibility.test.mjs tools/tests/toolpkg_v1_adapters.test.mjs
 ```
 
-Importing updates the declarations and provenance only. It does not establish
-runtime support for newly declared capabilities. Review adapter and fixture
-changes before committing an upstream update. The verification command does not
+Importing reads the committed source bytes, applies the documented `global`
+alias extension, and records the resulting hashes. Git preserves the snapshot's
+bytes across platforms. Importing updates the declarations and provenance only.
+It does not establish runtime support for newly declared capabilities. Review
+adapter and fixture changes before committing an upstream update. The verification command does not
 need the original repository.
 
 See `plugins/docs/V1_COMPATIBILITY.md` for the implemented runtime boundary and

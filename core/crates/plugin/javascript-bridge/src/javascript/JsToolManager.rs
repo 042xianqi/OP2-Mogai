@@ -522,6 +522,11 @@ mod tests {
         }
 
         /// Reports no environment value in manager tests.
+        fn prepare_environment(&self, _owner: &operit_plugin_sdk::javascript::JsEnvironmentOwner, _declared_names: &[String]) -> Result<(), String> {
+            Ok(())
+        }
+
+        /// Returns the environment value selected by the test host.
         fn read_environment_variable(&self, _owner: &operit_plugin_sdk::javascript::JsEnvironmentOwner, _key: &str) -> Result<Option<String>, String> {
             Ok(None)
         }

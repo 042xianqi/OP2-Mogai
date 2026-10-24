@@ -1324,28 +1324,64 @@ impl JsExecutionHost for AIToolHandler {
         LocaleUtils::getCurrentLanguage(&self.getContext(), "")
     }
 
+    /// Prepares declared environment values in the scope fixed before package registration.
+    fn prepare_environment(
+        &self,
+        owner: &JsEnvironmentOwner,
+        declared_names: &[String],
+    ) -> Result<(), String> {
+        let store = operit_store::ExtensionStore::ExtensionStore::default();
+        match owner {
+            JsEnvironmentOwner::Package(id) => {
+                store.initializePackageEnvironment(id, declared_names)
+            }
+            JsEnvironmentOwner::Registration { id, scope } => {
+                store.initializePackageEnvironmentForScope(id, scope.as_str(), declared_names)
+            }
+        }
+    }
+
     /// Reads the environment owned by the native package execution context.
-    fn read_environment_variable(&self, owner: &JsEnvironmentOwner, key: &str) -> Result<Option<String>, String> {
+    fn read_environment_variable(
+        &self,
+        owner: &JsEnvironmentOwner,
+        key: &str,
+    ) -> Result<Option<String>, String> {
         let store = operit_store::ExtensionStore::ExtensionStore::default();
         let variables = match owner {
-            JsEnvironmentOwner::Package(id) => return self.runtimeDependencies()
-                .runtime_support().readEnvironmentVariable(id, key),
-            JsEnvironmentOwner::Registration { id, scope } =>
-                store.packageEnvironmentForScope(id, scope.as_str())?,
+            JsEnvironmentOwner::Package(id) => {
+                return self
+                    .runtimeDependencies()
+                    .runtime_support()
+                    .readEnvironmentVariable(id, key)
+            }
+            JsEnvironmentOwner::Registration { id, scope } => {
+                store.packageEnvironmentForScope(id, scope.as_str())?
+            }
         };
         Ok(variables.get(key.trim()).cloned())
     }
 
     /// Writes package environment changes through their installation's persistence policy.
-    fn write_environment_variable(&self, owner: &JsEnvironmentOwner, key: &str, value: &str) -> Result<(), String> {
-        let changes = BTreeMap::from([(key.to_string(),
-            (!value.is_empty()).then(|| value.to_string()))]);
+    fn write_environment_variable(
+        &self,
+        owner: &JsEnvironmentOwner,
+        key: &str,
+        value: &str,
+    ) -> Result<(), String> {
+        let changes = BTreeMap::from([(
+            key.to_string(),
+            (!value.is_empty()).then(|| value.to_string()),
+        )]);
         let store = operit_store::ExtensionStore::ExtensionStore::default();
         match owner {
-            JsEnvironmentOwner::Package(id) => self.runtimeDependencies()
-                .runtime_support().writeEnvironmentVariable(id, key, value),
-            JsEnvironmentOwner::Registration { id, scope } =>
-                store.editPackageEnvironmentForScope(id, scope.as_str(), changes),
+            JsEnvironmentOwner::Package(id) => self
+                .runtimeDependencies()
+                .runtime_support()
+                .writeEnvironmentVariable(id, key, value),
+            JsEnvironmentOwner::Registration { id, scope } => {
+                store.editPackageEnvironmentForScope(id, scope.as_str(), changes)
+            }
         }
     }
 
