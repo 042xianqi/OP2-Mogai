@@ -21,6 +21,8 @@ FetchContent_Declare(llama URL https://codeload.github.com/ggml-org/llama.cpp/zi
     URL_HASH SHA256=70281a1798762c91045a304cddb64016f605db3290de3c4b28c385b2da051961)
 FetchContent_MakeAvailable(llama)
 set(MNN_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+# Use the standalone CMake build without Android Studio header-copy hooks.
+set(MNN_BUILD_FOR_ANDROID_COMMAND ON CACHE BOOL "" FORCE)
 set(MNN_SEP_BUILD OFF CACHE BOOL "" FORCE)
 set(MNN_BUILD_LLM ON CACHE BOOL "" FORCE)
 set(MNN_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
