@@ -1,4 +1,4 @@
-/// Builds native inference engines with an isolated Windows C++ runtime boundary.
+/// Builds native inference engines and links the configured C++ runtime.
 fn main() {
     println!("cargo:rerun-if-changed=native");
     println!("cargo:rerun-if-env-changed=OPERIT_LLAMA_SOURCE");
@@ -148,7 +148,11 @@ fn main() {
                 println!("cargo:rustc-link-lib=log");
             }
             _ => {
-                println!("cargo:rustc-link-lib=stdc++");
+                let libraries = std::fs::read_to_string(build.join("operit_cxx_runtime.txt"))
+                    .expect("CMake must report the configured C++ runtime");
+                for library in libraries.lines() {
+                    println!("cargo:rustc-link-lib={library}");
+                }
                 println!("cargo:rustc-link-lib=pthread");
                 println!("cargo:rustc-link-lib=dl");
             }
