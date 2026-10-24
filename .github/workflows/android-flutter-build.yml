@@ -2,6 +2,9 @@ name: Android Flutter Build
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - mogai/ci-push
 
 permissions:
   contents: read
