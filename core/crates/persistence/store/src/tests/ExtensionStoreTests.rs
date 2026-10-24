@@ -1182,3 +1182,137 @@ fn legacy_settings_migrate_once_without_changing_the_installation_source() {
     let changes = operations(&storage, &migrated);
     assert!(changes.iter().all(|op| op.domain == "preferences"));
 }
+
+
+/// Replicates package environment values only after their installation belongs to Space.
+#[test]
+fn package_environment_follows_installation_scope_and_subpackage_ownership() {
+    let source = host();
+    let target = host();
+    let store = ExtensionStore::new(source.clone());
+    register_package_owner(&store, "shared", &["shared", "shared.tools"]);
+    register_package_owner(&store, "local", &["local"]);
+    store.editPackageEnvironment("shared.tools", BTreeMap::from([
+        ("TOKEN".into(), Some("shared-token".into())),
+    ])).unwrap();
+    store.editPackageEnvironment("local", BTreeMap::from([
+        ("TOKEN".into(), Some("local-token".into())),
+    ])).unwrap();
+    assert!(operations(&source, &SyncClock::empty()).is_empty());
+    assert_eq!(store.packageEnvironment("shared.tools").unwrap().ownerId, "shared");
+    assert_eq!(store.packageEnvironment("shared").unwrap().variables["TOKEN"], "shared-token");
+    assert_eq!(store.packageEnvironment("local").unwrap().variables["TOKEN"], "local-token");
+
+    store.moveScope("package", "shared", "space").unwrap();
+    transfer(&source, &target, &operations(&source, &SyncClock::empty())).unwrap();
+    let remote = ExtensionStore::new(target.clone());
+    assert_eq!(remote.packageEnvironment("shared.tools").unwrap(), store.packageEnvironment("shared").unwrap());
+    assert!(remote.packageEnvironment("local").is_err());
+    assert!(!source.exists(&format!("{}/environment.json", ExtensionStore::configPathForScope("shared", "device").unwrap())).unwrap());
+
+    let before = clock(&source);
+    store.editPackageEnvironment("shared", BTreeMap::from([
+        ("TOKEN".into(), None), ("URL".into(), Some("https://example.test".into())),
+    ])).unwrap();
+    store.editPackageEnvironment("local", BTreeMap::from([
+        ("TOKEN".into(), Some("new-local-token".into())),
+    ])).unwrap();
+    let changes = operations(&source, &before);
+    assert_eq!(changes.len(), 1);
+    assert!(changes[0].entityId.ends_with("/shared/environment.json"));
+    transfer(&source, &target, &changes).unwrap();
+    assert_eq!(remote.packageEnvironment("shared").unwrap().variables,
+        BTreeMap::from([("URL".into(), "https://example.test".into())]));
+
+    let before = clock(&source);
+    store.moveScope("package", "shared", "device").unwrap();
+    transfer(&source, &target, &operations(&source, &before)).unwrap();
+    assert!(remote.packageEnvironment("shared").is_err());
+    let before = clock(&source);
+    store.editPackageEnvironment("shared.tools", BTreeMap::from([
+        ("TOKEN".into(), Some("device-token".into())),
+    ])).unwrap();
+    assert!(operations(&source, &before).is_empty());
+    assert_eq!(store.packageEnvironment("shared").unwrap().variables["TOKEN"], "device-token");
+}
+
+/// Package edits preserve unrelated keys and an unchanged edit produces no synchronization write.
+#[test]
+fn package_environment_edits_preserve_other_values_and_skip_unchanged_snapshots() {
+    let storage = host();
+    let store = ExtensionStore::new(storage.clone());
+    register_package_owner(&store, "demo", &["demo"]);
+    store.moveScope("package", "demo", "space").unwrap();
+    store.editPackageEnvironment("demo", BTreeMap::from([
+        ("TOKEN".into(), Some("token".into())), ("OTHER".into(), Some("keep".into())),
+    ])).unwrap();
+    let before = clock(&storage);
+    store.editPackageEnvironment("demo", BTreeMap::from([("TOKEN".into(), Some("token".into()))])).unwrap();
+    assert!(operations(&storage, &before).is_empty());
+    store.editPackageEnvironment("demo", BTreeMap::from([("TOKEN".into(), None)])).unwrap();
+    assert_eq!(store.packageEnvironment("demo").unwrap().variables,
+        BTreeMap::from([("OTHER".into(), "keep".into())]));
+}
+
+/// Invalid ownership and malformed configuration fail without overwriting existing bytes.
+#[test]
+fn package_environment_rejects_missing_owners_and_corrupt_configuration() {
+    let storage = host();
+    let store = ExtensionStore::new(storage.clone());
+    assert!(store.editPackageEnvironment("missing", BTreeMap::new()).is_err());
+    register_package_owner(&store, "demo", &["demo"]);
+    let path = format!("{}/environment.json", store.configPath("demo").unwrap());
+    storage.writeBytes(&path, b"[]").unwrap();
+    assert!(store.packageEnvironment("demo").is_err());
+    assert!(store.editPackageEnvironment("demo", BTreeMap::from([("TOKEN".into(), Some("x".into()))])).is_err());
+    assert_eq!(storage.readBytes(&path).unwrap(), b"[]");
+    assert!(operations(&storage, &SyncClock::empty()).is_empty());
+}
+
+/// Registration can use its explicit installation scope before a package record exists.
+#[test]
+fn package_environment_registration_uses_the_declared_scope_before_installation() {
+    let storage = host();
+    let store = ExtensionStore::new(storage.clone());
+    store.editPackageEnvironmentForScope("demo", "space", BTreeMap::from([
+        ("TOKEN".into(), Some("registration-value".into())),
+    ])).unwrap();
+    assert_eq!(store.packageEnvironmentForScope("demo", "space").unwrap()["TOKEN"], "registration-value");
+    assert!(store.packageEnvironmentForScope("demo", "device").unwrap().is_empty());
+    assert!(store.packageEnvironment("demo").is_err());
+    assert_eq!(operations(&storage, &SyncClock::empty()).len(), 1);
+}
+
+/// Imports only declared legacy values once and never consults the legacy file during reads.
+#[test]
+fn package_environment_migration_is_once_only_and_respects_explicit_space_edits() {
+    let source = host();
+    let target = host();
+    let local = ExtensionStore::new(source.clone());
+    let remote = ExtensionStore::new(target.clone());
+    register_package_owner(&local, "demo", &["demo"]);
+    local.moveScope("package", "demo", "space").unwrap();
+    transfer(&source, &target, &operations(&source, &SyncClock::empty())).unwrap();
+    for (storage, token) in [(&source, "legacy-source"), (&target, "legacy-target")] {
+        let legacy = CoreNodeStateStore::newWithStorage(storage.clone(),
+            operit_util::RuntimeStorageLayout::LEGACY_ENV_PREFERENCES_PATH);
+        legacy.edit(|preferences| {
+            preferences.set(&stringPreferencesKey("TOKEN"), token.to_string());
+            preferences.set(&stringPreferencesKey("UNRELATED"), "must-stay-local".to_string());
+        }).unwrap();
+    }
+    let declared = vec!["TOKEN".to_string()];
+    local.initializePackageEnvironment("demo", &declared).unwrap();
+    assert_eq!(local.packageEnvironment("demo").unwrap().variables,
+        BTreeMap::from([("TOKEN".into(), "legacy-source".into())]));
+    local.editPackageEnvironment("demo", BTreeMap::from([("TOKEN".into(), Some("explicit".into()))])).unwrap();
+    remote.initializePackageEnvironment("demo", &declared).unwrap();
+    let remoteOperations = operations(&target, &SyncClock::empty());
+    transfer(&source, &target, &operations(&source, &SyncClock::empty())).unwrap();
+    transfer(&target, &source, &remoteOperations).unwrap();
+    assert_eq!(local.packageEnvironment("demo").unwrap().variables["TOKEN"], "explicit");
+    assert_eq!(remote.packageEnvironment("demo").unwrap().variables["TOKEN"], "explicit");
+    local.editPackageEnvironment("demo", BTreeMap::from([("TOKEN".into(), None)])).unwrap();
+    local.initializePackageEnvironment("demo", &declared).unwrap();
+    assert!(local.packageEnvironment("demo").unwrap().variables.is_empty());
+}

@@ -229,6 +229,7 @@ struct TestPluginConfigExecutionHost {
     toolPkgContextBindings: Arc<AtomicUsize>,
     packageManagerLock: Arc<Mutex<()>>,
     environment: Arc<Mutex<BTreeMap<String, String>>>,
+    environmentOwners: Arc<Mutex<Vec<operit_plugin_sdk::javascript::JsEnvironmentOwner>>>,
     toolCatalogError: Arc<Mutex<Option<String>>>,
     #[cfg(not(target_arch = "wasm32"))]
     toolPkgIpcThreadName: Arc<Mutex<Option<String>>>,
@@ -449,12 +450,14 @@ impl JsExecutionHost for TestPluginConfigExecutionHost {
     }
 
     /// Keeps environment state isolated from the application's actual preferences.
-    fn read_environment_variable(&self, _owner: &operit_plugin_sdk::javascript::JsEnvironmentOwner, key: &str) -> Result<Option<String>, String> {
+    fn read_environment_variable(&self, owner: &operit_plugin_sdk::javascript::JsEnvironmentOwner, key: &str) -> Result<Option<String>, String> {
+        self.environmentOwners.lock().unwrap().push(owner.clone());
         Ok(self.environment.lock().unwrap().get(key).cloned())
     }
 
     /// Supports call-context tests without writing application configuration.
-    fn write_environment_variable(&self, _owner: &operit_plugin_sdk::javascript::JsEnvironmentOwner, key: &str, value: &str) -> Result<(), String> {
+    fn write_environment_variable(&self, owner: &operit_plugin_sdk::javascript::JsEnvironmentOwner, key: &str, value: &str) -> Result<(), String> {
+        self.environmentOwners.lock().unwrap().push(owner.clone());
         self.environment
             .lock()
             .unwrap()
@@ -3474,6 +3477,7 @@ async fn completion_retains_detached_promise_context_until_host_event() {
     let engine = newTestJsEngine(host.clone());
     let (sender, mut progress) = tokio::sync::mpsc::unbounded_channel();
     let mut params = testParams();
+    params.insert("__operit_package_name".into(), Value::String("workflow".into()));
     params.insert(
         "toolPkgId".to_string(),
         Value::String("workflow".to_string()),
@@ -3613,6 +3617,7 @@ async fn promise_jobs_restore_execution_host_for_native_calls() {
     let host = Arc::new(TestPluginConfigExecutionHost::default());
     let engine = newTestJsEngine(host.clone());
     let mut params = testParams();
+    params.insert("__operit_package_name".into(), Value::String("workflow".into()));
     params.insert(
         "toolPkgId".to_string(),
         Value::String("workflow".to_string()),
@@ -5113,4 +5118,55 @@ async fn before_hook_timeout_interrupts_a_busy_rejection_continuation() {
     let result = tokio::time::timeout(Duration::from_secs(2), next).await;
     engine.destroy();
     assert_eq!(result.expect("A cancelled before hook must release its rejection continuation").unwrap().as_deref(), Some("\"ready\""));
+}
+
+
+/// Persistent environment access rejects unowned scripts instead of reading any global store.
+#[tokio::test(flavor = "current_thread")]
+async fn environment_requires_an_explicit_package_owner() {
+    let host = Arc::new(TestPluginConfigExecutionHost::default());
+    let engine = newTestJsEngine(host.clone());
+    let error = engine.execute_script_function(
+        "exports.main = function() { return getEnv('TOKEN'); };",
+        "main", &testParams(), &BTreeMap::new(), None, true, None,
+    ).await.unwrap_err();
+    assert!(error.to_string().contains("Environment access requires an owning package installation"));
+    assert!(host.environmentOwners.lock().unwrap().is_empty());
+}
+
+/// An authenticated engine retains its package environment across Promise jobs and ignores caller aliases.
+#[tokio::test(flavor = "current_thread")]
+async fn environment_owner_is_bound_to_the_engine_across_async_callbacks() {
+    let host = Arc::new(TestPluginConfigExecutionHost::default());
+    let engine = newTestIpcEngine(host.clone());
+    host.environment.lock().unwrap().insert("TOKEN".into(), "package-token".into());
+    let mut params = testParams();
+    params.insert("__operit_package_name".into(), Value::String("wrong-owner".into()));
+    let result = engine.execute_script_function(
+        "exports.main = async function() { await Promise.resolve(); var value = getEnv('TOKEN'); __operitNativeSetEnv(String(globalThis.__operitCurrentCallId), 'UPDATED', value); return value; };",
+        "main", &params, &BTreeMap::new(), None, true, None,
+    ).await;
+    assert_eq!(expect_js_output(result, "package environment"), "\"package-token\"");
+    let owners = host.environmentOwners.lock().unwrap();
+    assert_eq!(owners.len(), 2);
+    assert!(owners.iter().all(|owner| owner == &operit_plugin_sdk::javascript::JsEnvironmentOwner::Package("test.package".into())));
+}
+
+/// Registration environment calls carry the explicit scope before an installation record exists.
+#[test]
+fn registration_environment_uses_the_native_owner_and_scope() {
+    for scope in [ToolPkgConfigScope::Device, ToolPkgConfigScope::Space] {
+        let host = Arc::new(TestPluginConfigExecutionHost::default());
+        let engine = newTestJsEngine(host.clone());
+        let mut params = testParams();
+        params.insert("toolPkgId".into(), Value::String("first_import".into()));
+        params.insert("__operit_registration_config_scope".into(), Value::String(scope.as_str().into()));
+        engine.execute_toolpkg_main_registration_function_with_text_resources(
+            "const value = getEnv('TOKEN'); exports.registerToolPkg = function() { __operitNativeSetEnv(String(globalThis.__operitCurrentCallId), 'TOKEN', 'registered'); return true; };",
+            "registerToolPkg", &params, None,
+        ).expect("registration environment access");
+        let owners = host.environmentOwners.lock().unwrap();
+        assert_eq!(owners.len(), 2);
+        assert!(owners.iter().all(|owner| owner == &operit_plugin_sdk::javascript::JsEnvironmentOwner::Registration { id: "first_import".into(), scope }));
+    }
 }

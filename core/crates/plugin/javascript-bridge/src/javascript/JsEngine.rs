@@ -3375,7 +3375,7 @@ fn environmentOwner(
     registration: bool,
 ) -> JsExecutionResult<Option<JsEnvironmentOwner>> {
     if registration {
-        return match params.get("__operit_registration_config_owner") {
+        return match params.get("toolPkgId") {
             None => Ok(None),
             Some(owner) => {
                 let id = owner.as_str().filter(|id| !id.trim().is_empty())
