@@ -250,7 +250,7 @@ impl ChatConfigurationApi {
         }
         let executionData = serde_json::json!({ "schemaVersion": 1, "contextKey": "model:chat", "profile": profile, "participants": [profile] })
             .as_object().cloned().ok_or("Model execution data is not an object")?;
-        let result = ChatConfigurationResult { contextKey: "model:chat".into(), profile: profile.clone(), participants: vec![profile],
+        let result = ChatConfigurationResult { historyPolicy: operit_providers::runtime_support::ChatHistoryPolicy { isolateParticipants: false, labelUserMessages: false }, contextKey: "model:chat".into(), profile: profile.clone(), participants: vec![profile],
             executionData, extensionOwner: MODEL_CONFIGURATION_OWNER.into() };
         result.validate()?;
         Ok(result)
@@ -373,7 +373,7 @@ pub(crate) fn validateNativeModelExecutionData(snapshot: &operit_providers::runt
     if participantId != Some(saved.profile.id.as_str()) {
         return Err("Native model tool participant differs from its saved profile".into());
     }
-    let result = ChatConfigurationResult { contextKey: saved.contextKey, profile: saved.profile, participants: saved.participants,
+    let result = ChatConfigurationResult { historyPolicy: operit_providers::runtime_support::ChatHistoryPolicy { isolateParticipants: false, labelUserMessages: false }, contextKey: saved.contextKey, profile: saved.profile, participants: saved.participants,
         executionData: snapshot.clone(), extensionOwner: MODEL_CONFIGURATION_OWNER.into() };
     result.validate()
 }
@@ -757,7 +757,7 @@ mod chat_configuration_contract_tests {
             "resources":[{"key":"opaque/resource", "readable":true, "writable":false}]
         });
         let raw = serde_json::json!({
-            "contextKey":"opaque/context", "profile":profile, "participants":[profile],
+            "contextKey":"opaque/context", "historyPolicy":{"isolateParticipants":false,"labelUserMessages":false},"profile":profile, "participants":[profile],
             "executionData":{"actor":{"id":"participant"}, "voice":"voice", "revision":"7"}
         });
         for owner in ["org.example.owner-a", "org.example.owner-b"] {

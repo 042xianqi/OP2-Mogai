@@ -93,6 +93,7 @@ export interface ChatParticipantProfile {
 /** Returns one selected execution profile together with its available participants. */
 export interface ChatConfigurationExecutionResult {
   contextKey: string;
+  historyPolicy: { isolateParticipants: boolean; labelUserMessages: boolean };
   profile: ChatParticipantProfile;
   participants: ChatParticipantProfile[];
   executionData: JsonObject;
