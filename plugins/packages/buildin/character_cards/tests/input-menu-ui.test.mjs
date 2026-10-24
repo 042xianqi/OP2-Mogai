@@ -35,7 +35,7 @@ test("registered TS input menu reproduces one avatar and two-line character row 
   assert.equal(avatars[0].props.uri, card.avatarUri); assert.equal(avatars[0].props.contentScale, "crop");
   const response = await ui.dispatch(keyedNode(tree, "current-character").props.onClick);
   assert.deepEqual(plain(response.actionResult), { type: "toolpkg.ui.present", routeId: "toolpkg:com.operit.character_cards:ui:selection",
-    input: { mode: "select", chatId: "selector-chat", kind: "card", selected: { CharacterCard: { id: card.id } } } });
+    input: { mode: "select", chatId: "selector-chat", kind: "all", selected: { CharacterCard: { id: card.id } } } });
   const selector = mountRegisteredSelector(runtime, { requestId: "menu-click", input: response.actionResult.input }); await selector.load();
   assert.equal(selector.render().tree.type, "Dialog");
 });
@@ -53,19 +53,22 @@ test("unbound TS menu shows its original row and opens a real selector without b
   assert.equal((await runtime.binding("selector-chat")).selection, "card:" + card.id);
 });
 
-/** Ensures a group binding never expands the single original menu slot into extra group controls. */
-test("group-bound TS menu retains one original row and only the character-switch action", async t => {
+/** Ensures a group binding lists groups in the selector and exposes the execution control. */
+test("group-bound TS menu lists groups in the selector and opens the execution control", async t => {
   const runtime = await selectorEnvironment(t), participant = await runtime.api("character.create", { values: { name: "Actual participant" } });
   const group = await runtime.api("group.create", { values: { name: "Actual group", members: [{ characterCardId: participant.id, orderIndex: 0 }] } });
   await runtime.api("chat.configuration.binding.write", { chatId: "selector-chat", selection: "group:" + group.id });
   const ui = menu(runtime, "selector-chat"); await ui.load(); const tree = ui.render().tree;
-  assert.deepEqual(texts(tree), ["当前角色卡", group.name]);
+  assert.deepEqual(texts(tree), ["当前角色卡", group.name, "群组执行", "打开群组执行控制"]);
   assert.equal(composeNodes(tree,
     /** Counts genuine native menu rows that can issue a presentation request. */
     node => node.props.onClick !== undefined,
-  ).length, 1);
-  const response = await ui.dispatch(tree.props.onClick);
-  assert.equal(response.actionResult.input.kind, "card"); assert.equal(response.actionResult.input.selected, null);
+  ).length, 2);
+  const response = await ui.dispatch(keyedNode(tree, "current-character").props.onClick);
+  assert.equal(response.actionResult.input.kind, "group"); assert.equal(response.actionResult.input.selected, null);
+  const control = await ui.dispatch(keyedNode(tree, "group-execution").props.onClick);
+  assert.deepEqual(plain(control.actionResult), { type: "toolpkg.ui.present", routeId: "toolpkg:com.operit.character_cards:ui:group-execution",
+    input: { mode: "group-execution", chatId: "selector-chat" } });
 });
 
 /** Preserves the explicit global new-session mode while keeping all rendering in the plugin DSL. */

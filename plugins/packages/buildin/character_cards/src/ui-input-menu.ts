@@ -35,6 +35,25 @@ function menuAvatar(ctx: ComposeDslContext, option: SelectorOption | null, unbou
   }
 }
 
+/** Opens the package-owned execution control route for the currently bound group only. */
+function groupExecutionRow(ctx: ComposeDslContext, chatId: string): ComposeNode {
+  const colors = ctx.MaterialTheme.colorScheme;
+  return ctx.UI.Row({ key: "group-execution", fillMaxWidth: true, paddingHorizontal: 12, paddingVertical: 6, verticalAlignment: "center",
+    modifier: ctx.Modifier.heightIn({ minHeight: 48 }),
+    /** Presents the registered control screen with the exact bound chat, never another chat. */
+    onClick: (): JsonValue => ({ type: "toolpkg.ui.present", routeId: chatUiRoutes.execution,
+      input: { mode: "group-execution", chatId } }),
+  }, [
+    ctx.UI.Box({ width: 32, height: 32, contentAlignment: "center" }, ctx.UI.Icon({ name: "PlayArrow", size: 24, tint: colors.onSurfaceVariant })),
+    ctx.UI.Spacer({ width: 10 }),
+    ctx.UI.Column({ weight: 1 }, [
+      ctx.UI.Text({ text: "群组执行", style: "labelSmall", color: colors.onSurfaceVariant }),
+      ctx.UI.Text({ text: "打开群组执行控制", style: "bodySmall", color: colors.onSurface, fontWeight: "600", maxLines: 1, overflow: "ellipsis" }),
+    ]),
+    ctx.UI.Icon({ name: "ChevronRight", size: 20, tint: colors.onSurfaceVariant }),
+  ]);
+}
+
 /** Loads and draws the sole menu row in TypeScript, delegating only generic route presentation to the host. */
 export function renderChatInputMenu(ctx: ComposeDslContext): ComposeNode {
   const [chatId] = ctx.useState<string | null>("chatId", null);
@@ -73,13 +92,15 @@ export function renderChatInputMenu(ctx: ComposeDslContext): ComposeNode {
   if (state.error !== "") return ctx.UI.Text({ text: state.error, color: colors.error, paddingHorizontal: 12, paddingVertical: 6 });
   if (state.data === null) return ctx.UI.Box({ key: "current-character-loading", onLoad: load, modifier: ctx.Modifier.heightIn({ minHeight: 48 }), fillMaxWidth: true, contentAlignment: "center" }, ctx.UI.CircularProgressIndicator({ width: 18, height: 18 }));
   const option = selectedOption(state.data);
-  return ctx.UI.Row({ key: "current-character", fillMaxWidth: true, paddingHorizontal: 12, paddingVertical: 6, verticalAlignment: "center",
+  /** Reports the actual binding category so the selector lists groups for group-bound chats. */
+  const boundKind = option !== null && option.kind === "group" ? "group" : "all";
+  const characterRow = ctx.UI.Row({ key: "current-character", fillMaxWidth: true, paddingHorizontal: 12, paddingVertical: 6, verticalAlignment: "center",
     modifier: ctx.Modifier.heightIn({ minHeight: 48 }),
     /** Opens the registered TS selector while the host carries its real chat lifecycle guard. */
     onClick: (): JsonValue => {
       assertOwner();
       return { type: "toolpkg.ui.present", routeId: chatUiRoutes.selection,
-        input: { mode: "select", chatId, kind: "card", selected: option !== null && option.kind !== "group" ? option.selection : null } };
+        input: { mode: "select", chatId, kind: boundKind, selected: option !== null && option.kind !== "group" ? option.selection : null } };
     },
   }, [
     menuAvatar(ctx, option, state.unboundAvatar), ctx.UI.Spacer({ width: 10 }),
@@ -89,4 +110,7 @@ export function renderChatInputMenu(ctx: ComposeDslContext): ComposeNode {
     ]),
     ctx.UI.Icon({ name: "ChevronRight", size: 20, tint: colors.onSurfaceVariant }),
   ]);
+  /** Keeps the execution control reachable only for a chat actually bound to one group. */
+  if (boundKind !== "group" || chatId === null) return characterRow;
+  return ctx.UI.Column({ key: "current-character-menu", fillMaxWidth: true }, [characterRow, groupExecutionRow(ctx, chatId)]);
 }
