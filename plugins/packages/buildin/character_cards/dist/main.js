@@ -3390,38 +3390,43 @@ function link(value) {
   assertString(value.description, "relationship description");
   assertNumber(value.weight, "relationship weight", 0, 1);
 }
-function objectArray(value, label, check) {
-  if (!Array.isArray(value)) throw new Error("Memory analysis requires a named object array: " + label);
+function objectArray(value, check, skipped) {
+  if (!Array.isArray(value)) return [];
   const result2 = [];
-  for (const item of value) {
+  for (const item of value) try {
     check(item);
     result2.push(item);
+  } catch {
+    skipped.count += 1;
   }
   return result2;
 }
 function analysis(value) {
   assertObject(value, "memory analysis");
   if (Object.keys(value).length === 0) return null;
+  const skipped = { count: 0 };
   let main = null;
-  if (value.main !== null) {
+  if (value.main !== null && value.main !== void 0) try {
     entity(value.main, false);
     main = value.main;
+  } catch {
+    skipped.count += 1;
   }
   const result2 = {
     main,
-    new: objectArray(value.new, "new", newEntity),
-    update: objectArray(value.update, "update", update),
-    merge: objectArray(value.merge, "merge", merge2),
-    links: objectArray(value.links, "links", link)
+    new: objectArray(value.new, newEntity, skipped),
+    update: objectArray(value.update, update, skipped),
+    merge: objectArray(value.merge, merge2, skipped),
+    links: objectArray(value.links, link, skipped),
+    skipped: 0
   };
   if (result2.new.length > 5) throw new Error("Memory extraction exceeds the five-entity gate");
   if (Object.prototype.hasOwnProperty.call(value, "profile_markdown")) {
     if (value.profile_markdown === null) result2.profile_markdown = null;
-    else {
-      assertString(value.profile_markdown, "profile Markdown");
-      result2.profile_markdown = value.profile_markdown;
-    }
+    else if (typeof value.profile_markdown === "string") result2.profile_markdown = value.profile_markdown;
+    else skipped.count += 1;
   }
+  result2.skipped = skipped.count;
   return result2;
 }
 function normalizeCandidateSearchText(text2, limit2) {
@@ -3505,6 +3510,7 @@ function applyAnalysis(ownerKey, result2, settings2, repository) {
   return __async(this, null, function* () {
     const report = { ownerKey, created: 0, updated: 0, merged: 0, links: 0, profileUpdated: false, skipped: 0 };
     if (result2 === null) return report;
+    report.skipped = result2.skipped;
     if (result2.profile_markdown !== void 0 && result2.profile_markdown !== null && (!settings2.profileAutoUpdateEnabled || settings2.profileAutoUpdateLocked))
       throw new Error("Model returned a profile update forbidden by the owner settings");
     const index = /* @__PURE__ */ new Map();

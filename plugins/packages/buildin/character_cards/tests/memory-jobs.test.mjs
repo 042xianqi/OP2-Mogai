@@ -202,6 +202,24 @@ test("controlled Chat/AI: retryFailed requeues terminal failures and clearFailed
   assert.equal(harness.modelCalls.length, 3);
 });
 
+/** Skips malformed model items so one wrong field type cannot fail the whole candidate batch. */
+test("controlled Chat/AI: a malformed analysis item is skipped while the rest of the batch still commits", async t => {
+  const harness = await createMemoryJobsHarness(t), runtime = harness.openRuntime(); await runtime.initialize(); await runtime.bind();
+  await runtime.enqueueReplies(); await runtime.makeDue();
+  harness.queueAnalysis({ main: { title: "Surviving fact", content: "Committed despite model drift", tags: ["Project"], folder_path: "Projects" },
+    new: [{ title: "Broken entity", content: "Missing required fields" }],
+    update: [], merge: [],
+    links: [{ source: "Surviving fact", target: "Surviving fact", type: 42, description: "Wrong field type", weight: 0.5 }] });
+  await runtime.interval(); harness.assertOutputsConsumed(); assert.equal(harness.modelCalls.length, 1);
+  const saved = await readOwner(harness);
+  assert.equal(saved.candidates.length, 0); assert.equal(saved.memories.length, 1); assert.equal(saved.memories[0].title, "Surviving fact");
+  assert.equal(saved.links.length, 0);
+  /** The manual update reports the exact number of skipped malformed items for the same drift. */
+  harness.queueAnalysis({ main: null, new: [], update: [], merge: [], links: [{ source: "Surviving fact", target: "Surviving fact", type: null, description: "Wrong field type", weight: 0.5 }] });
+  const result = plain(await runtime.api("memory.chat.update", { ownerKey: CONTROLLED_OWNER, chatId: CONTROLLED_CHAT_ID }));
+  assert.equal(result.skipped, 1); assert.equal(result.links, 0);
+});
+
 /** Preserves both original failures when execution and real status-file publication fail, for each production job path. */
 test("controlled Chat/AI: rebuild and candidate execution plus state-publication failures retain both errors and stop the same repository", async t => {
   for (const kind of ["rebuild", "candidates"]) {
