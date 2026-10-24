@@ -1298,6 +1298,7 @@ fn parseTurnOptions(tool: &AITool) -> Result<ChatTurnOptions, String> {
         nativeExecutionId: None,
         outputObserver: None,
         deferSequenceCompletion: false,
+        deferSummary: false,
     })
 }
 

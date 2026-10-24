@@ -397,7 +397,7 @@ export async function resolveChatExecution(request: ChatConfigurationRequest, se
     const [models, ttsConfigs] = await Promise.all([service.listModels(), service.listTtsConfigs()]);
     const profile = modelParticipant(request, { models, ttsConfigs }), participants = [profile];
     const executionData = encodeExecutionData({ version: 1, selection: marker.selection, promptFunctionType: request.promptFunctionType, primaryOwnerKey: "", profile, participants });
-    return { contextKey: marker.selection, profile, participants, executionData };
+    return { contextKey: marker.selection, historyPolicy: { isolateParticipants: false, labelUserMessages: false }, profile, participants, executionData };
   }
   let cards: CharacterRecord[];
   if (selection.kind === "card") cards = [await service.getCharacter(selection.id)];
@@ -434,5 +434,5 @@ export async function resolveChatExecution(request: ChatConfigurationRequest, se
   const card = chatRecord(cards, profile.id, "selected participant");
   const primaryOwnerKey = (card.memoryBindingMode === "CHARACTER" ? "character:" + card.id : "shared:" + card.sharedMemoryId);
   const executionData = encodeExecutionData({ version: 1, selection: marker.selection, promptFunctionType: request.promptFunctionType, primaryOwnerKey, profile, participants });
-  return { contextKey: marker.selection, profile, participants, executionData };
+  return { contextKey: marker.selection, historyPolicy: { isolateParticipants: true, labelUserMessages: selection.kind === "group" }, profile, participants, executionData };
 }

@@ -703,7 +703,7 @@ impl MessageCoordinationDelegate {
             &chatId,
             participantId.clone(),
             promptFunctionType.clone(),
-            turnOptions.persistTurn && !isBackgroundSend,
+            turnOptions.persistTurn && !isBackgroundSend && !turnOptions.deferSummary,
             !isContinuation && !isAutoContinuation && !isResume,
         )?;
         let runtimeChatHistory = match chatHistoryOverride {
@@ -870,6 +870,40 @@ impl MessageCoordinationDelegate {
             }
         }
         Ok((maxTokens, threshold))
+    }
+
+    /// Checks the completed conversation against every current participant's configured summary threshold.
+    pub(crate) async fn checkSummaryAfterReply(
+        &mut self, service: &mut EnhancedAIService, chatId: String, participantId: String,
+    ) -> Result<(), String> {
+        if let Some(task) = self.messageProcessingDelegate.summaryTaskForChat(&chatId) {
+            task.completion.await?;
+        }
+        let configuration = service.resolveChatConfigurationForOptions(&SendMessageOptions {
+            chatId: Some(chatId.clone()), executionParticipantId: Some(participantId),
+            ..SendMessageOptions::new()
+        }).await.map_err(|error| error.to_string())?;
+        let window = self.recalculateStableWindowSize(
+            service, chatId.clone(), None, PromptFunctionType::CHAT, None, None,
+        ).await?;
+        let messages = self.chatHistoryDelegate.getRuntimeChatHistory(chatId.clone());
+        for participant in &configuration.participants {
+            let settings = self.messageProcessingDelegate.modelConfigManager.getResolvedModelConfig(
+                &participant.modelBinding.providerId, &participant.modelBinding.modelId,
+            ).map_err(|error| error.to_string())?;
+            if AIMessageManager::shouldGenerateSummary(
+                messages.clone(), window, settings.context.maxContextTokens(),
+                settings.summary.tokenThresholdRatio(), settings.summary.enableSummary,
+                settings.summary.enableSummaryByMessageCount, settings.summary.summaryMessageCountThreshold,
+            ) {
+                return self.launchSummary(service, messages, ConversationSummaryRequest {
+                    chatId, participantId: None, promptFunctionType: PromptFunctionType::CHAT,
+                    chatProviderIdOverride: None, chatModelIdOverride: None,
+                    autoContinue: false, requireCurrentChat: false,
+                })?.await;
+            }
+        }
+        Ok(())
     }
 
     /// Schedules one cancellable summary through the host and shares its actual completion.
