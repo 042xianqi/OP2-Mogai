@@ -62,22 +62,7 @@ export function createMemoryControlsFeature(context: EditorContext) {
       dialog.chats = listing.chats; dialog.missingChatIds = listing.missingChatIds;
       dialog.queue = queue; dialog.progress = progress;
       dialog.statusError = ""; startPolling(dialog);
-      void pruneInBackground(dialog);
     } finally { if (exists(dialog)) { dialog.loading = false; renderDialogs(); } }
-  /** Drops stale bindings and orphaned candidates so counters and the error banner reflect only actionable failures. */
-  async function pruneInBackground(dialog: OwnerSettingsDialog): Promise<void> {
-    try {
-      const pruned = await request({ action: "pruneMissingChatBindings", ownerKey: dialog.ownerKey }, { background: true });
-      if (!exists(dialog) || (pruned.removedChatIds.length === 0 && pruned.removedCandidateIds.length === 0)) return;
-      const [chats, queue] = await Promise.all([
-        request({ action: "listMemoryChats", ownerKey: dialog.ownerKey }, { background: true }),
-        request({ action: "readMemoryAutoSaveStatus", ownerKey: dialog.ownerKey }, { background: true }),
-      ]);
-      if (!exists(dialog)) return;
-      dialog.chats = chats.chats; dialog.missingChatIds = chats.missingChatIds; dialog.queue = queue;
-      if (topDialog() === dialog) { renderDialogs(); updateMemoryStatus(dialog, context.dialogsRoot); }
-    } catch { /* best-effort maintenance; the manual reload path still exists */ }
-  }
   }
   /** Applies a real request and refreshes only acknowledged job state. */
   async function handleAction(action: string, element: HTMLElement | SVGElement): Promise<void> {

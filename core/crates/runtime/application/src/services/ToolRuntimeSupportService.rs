@@ -379,25 +379,25 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
 
     /// Reads one stored environment variable.
     #[allow(non_snake_case)]
-    fn readEnvironmentVariable(&self, key: &str) -> Result<Option<String>, String> {
+    fn readEnvironmentVariable(&self, packageName: &str, key: &str) -> Result<Option<String>, String> {
         EnvPreferences::getInstance()
-            .getEnv(key)
+            .getEnv(packageName, key)
             .map_err(|error| error.to_string())
     }
 
     /// Writes one stored environment variable.
     #[allow(non_snake_case)]
-    fn writeEnvironmentVariable(&self, key: &str, value: &str) -> Result<(), String> {
+    fn writeEnvironmentVariable(&self, packageName: &str, key: &str, value: &str) -> Result<(), String> {
         EnvPreferences::getInstance()
-            .setEnv(key, value)
+            .setEnv(packageName, key, value)
             .map_err(|error| error.to_string())
     }
 
     /// Removes one stored environment variable.
     #[allow(non_snake_case)]
-    fn removeEnvironmentVariable(&self, key: &str) -> Result<(), String> {
+    fn removeEnvironmentVariable(&self, packageName: &str, key: &str) -> Result<(), String> {
         EnvPreferences::getInstance()
-            .removeEnv(key)
+            .removeEnv(packageName, key)
             .map_err(|error| error.to_string())
     }
 

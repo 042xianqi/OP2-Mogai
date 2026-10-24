@@ -46,7 +46,7 @@ use crate::tools::ToolResultDataClasses::stringResultData;
 use crate::ConversationMarkupManager::ToolResult;
 use operit_host_api::{
     FileSystemHost, HostEnvironmentDescriptor, HostManager::HostManager, HostPlatform,
-    TimeUtils::currentTimeMillis,
+    TimeUtils::{currentLocalDateTime, currentTimeMillis},
 };
 use operit_plugin_sdk::javascript::{
     JsToolPkgWasmRequest, JsToolPkgWasmResult, ToolPkgConfigScope, ToolPkgExecutionContext,
@@ -3404,6 +3404,11 @@ impl RuntimePackageManager {
                         return Err(format!("Package location conflicts with its owner: {name}"));
                     }
                 }
+                let declaredEnvironment = members.iter()
+                    .filter_map(|member| snapshot.availablePackages.get(member))
+                    .flat_map(|package| package.env.iter().map(|variable| variable.name.clone()))
+                    .collect::<Vec<_>>();
+                store.initializePackageEnvironment(name, &declaredEnvironment)?;
                 let mut settings = record.settings.clone();
                 settings["members"] =
                     serde_json::to_value(members).map_err(|error| error.to_string())?;
@@ -5137,7 +5142,7 @@ impl RuntimePackageManager {
     fn generatePackageSystemPrompt(&self, toolPackage: &ToolPackage) -> String {
         let mut prompt = String::new();
         prompt.push_str(&format!("Using package: {}\n", toolPackage.name));
-        prompt.push_str(&format!("Use Time: {}\n", currentUseTime()));
+        prompt.push_str(&format!("Use Time: {}\n", currentLocalDateTime()));
         prompt.push_str(&format!(
             "Description: {}\n\n",
             toolPackage.description.resolve(false)
@@ -5365,7 +5370,7 @@ impl RuntimePackageManager {
     fn generateMCPSystemPrompt(&self, toolPackage: &ToolPackage, serverName: &str) -> String {
         let mut prompt = String::new();
         prompt.push_str(&format!("Using MCP server: {}\n", serverName));
-        prompt.push_str(&format!("Time: {}\n", currentUseTime()));
+        prompt.push_str(&format!("Time: {}\n", currentLocalDateTime()));
         prompt.push_str(&format!(
             "Description: {}\n\n",
             toolPackage.description.resolve(false)
@@ -5506,16 +5511,6 @@ impl ToolPkgPackageHost for RuntimePackageManager {
     ) -> Option<Vec<u8>> {
         RuntimePackageManager::readToolPkgResourceBytes(self, runtime, resourcePath)
     }
-}
-
-#[allow(non_snake_case)]
-/// Formats the host-provided Unix clock for package prompt metadata.
-fn currentUseTime() -> String {
-    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(currentTimeMillis())
-        .expect("host time must be a valid chrono timestamp")
-        .naive_utc()
-        .format("%Y-%m-%dT%H:%M:%S%.f")
-        .to_string()
 }
 
 #[allow(non_snake_case)]

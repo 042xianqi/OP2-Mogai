@@ -31,6 +31,7 @@ pub struct ToolResultMap {
     pub create_file: FileApplyResultData,
     pub edit_file: FileApplyResultData,
     pub storage_request: StorageRequestResultData,
+    pub web_socket: WebSocketResultData,
     pub http_request: HttpResponseData,
     pub visit_web: VisitWebResultData,
     pub browser_click: String,

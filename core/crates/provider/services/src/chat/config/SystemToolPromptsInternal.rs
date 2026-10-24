@@ -1107,9 +1107,10 @@ fn internalToolCategoriesEnSource() -> Vec<SystemToolPromptCategory> {
             vec![
                 tool(
                     "read_environment_variable",
-                    "Read current value of an environment variable by key.",
+                    "Read an environment variable from its owning package installation.",
                     "",
                     vec![
+                        param("package_name", "string", "installed package or subpackage name", true, None),
                         param("key", "string", "environment variable key", true, None)
                     ],
                     "",
@@ -1117,9 +1118,10 @@ fn internalToolCategoriesEnSource() -> Vec<SystemToolPromptCategory> {
                 ),
                 tool(
                     "write_environment_variable",
-                    "Write an environment variable by key; empty value clears it.",
+                    "Write a package environment variable in its installation scope; empty value clears it.",
                     "",
                     vec![
+                        param("package_name", "string", "installed package or subpackage name", true, None),
                         param("key", "string", "environment variable key", true, None),
                         param("value", "string", "optional, value to write; empty clears the key", false, None)
                     ],
@@ -2353,9 +2355,10 @@ fn internalToolCategoriesCnSource() -> Vec<SystemToolPromptCategory> {
             vec![
                 tool(
                     "read_environment_variable",
-                    "按 key 读取环境变量当前值。",
+                    "按包归属读取环境变量当前值。",
                     "",
                     vec![
+                        param("package_name", "string", "已安装的包或子包名称", true, None),
                         param("key", "string", "环境变量名", true, None)
                     ],
                     "",
@@ -2363,9 +2366,10 @@ fn internalToolCategoriesCnSource() -> Vec<SystemToolPromptCategory> {
                 ),
                 tool(
                     "write_environment_variable",
-                    "按 key 写入环境变量；value 为空时清除该变量。",
+                    "按包安装归属写入环境变量；value 为空时清除该变量。",
                     "",
                     vec![
+                        param("package_name", "string", "已安装的包或子包名称", true, None),
                         param("key", "string", "环境变量名", true, None),
                         param("value", "string", "可选，写入值；空值清除该变量", false, None)
                     ],

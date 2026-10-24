@@ -186,6 +186,13 @@ impl ToolPkgConfigScope {
     }
 }
 
+/// Selects the environment owner from the native execution context.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JsEnvironmentOwner {
+    Package(String),
+    Registration { id: String, scope: ToolPkgConfigScope },
+}
+
 /// Defines the fixed Rust execution contract required by package JavaScript.
 pub trait JsExecutionHost: Send + Sync {
     /// Captures immutable native caller state before crossing the JavaScript runtime scheduler.
@@ -210,10 +217,10 @@ pub trait JsExecutionHost: Send + Sync {
     fn package_language(&self) -> Result<String, String>;
 
     /// Reads one environment variable exposed to package JavaScript.
-    fn read_environment_variable(&self, key: &str) -> Result<Option<String>, String>;
+    fn read_environment_variable(&self, owner: &JsEnvironmentOwner, key: &str) -> Result<Option<String>, String>;
 
     /// Writes one environment variable exposed to package JavaScript.
-    fn write_environment_variable(&self, key: &str, value: &str) -> Result<(), String>;
+    fn write_environment_variable(&self, owner: &JsEnvironmentOwner, key: &str, value: &str) -> Result<(), String>;
 
     /// Returns the writable configuration directory for one plugin.
     fn plugin_config_dir(&self, plugin_id: &str) -> Result<String, String>;

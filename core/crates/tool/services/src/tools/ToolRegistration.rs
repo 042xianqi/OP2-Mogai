@@ -61,6 +61,53 @@ pub fn registerAllTools(handler: &mut AIToolHandler, context: &HostManager) {
     registerInternalTools(handler, context);
 }
 
+/// Exposes enabled package metadata for this session; invoked tools retain their own access checks.
+#[allow(non_snake_case)]
+pub(crate) fn registerPackageActivationTool(handler: &mut AIToolHandler) {
+    let usePackageManager = handler.getOrCreatePackageManager();
+    handler.registerBuiltinTool(
+        BuiltinToolName::UsePackage,
+        crate::ToolExecutionManager::RegisteredToolExecutor::Asynchronous(Box::new(AsyncFnToolExecutor {
+            effect: ToolEffect::READ,
+            validate: Arc::new(|_| ToolValidationResult {
+                valid: true,
+                errorMessage: String::new(),
+            }),
+            invoke: Arc::new(move |tool, invocationContext| {
+                let usePackageManager = usePackageManager.clone();
+                let usePackageHandler = invocationContext.host().clone();
+                Box::pin(async move {
+                    let tool = &tool;
+                    let packageName = requiredParameterValue(tool, "package_name");
+                    if let Err(error) = RuntimePackageManager::prepareMcpPackage(&usePackageManager, &packageName).await {
+                        return toolErrorResult(tool, error);
+                    }
+                    let (result, selectedPackage) = {
+                        let mut guard = usePackageManager
+                            .lock()
+                            .expect("package manager mutex poisoned");
+                        let result = guard.executeUsePackageTool(&tool.name, &packageName);
+                        let selectedPackage = if result.success {
+                            guard
+                                .getEffectivePackageTools(&packageName)
+                                .filter(|package| !guard.isToolPkgContainer(&package.name))
+                        } else {
+                            None
+                        };
+                        (result, selectedPackage)
+                    };
+                    if let Some(selectedPackage) = selectedPackage {
+                        let mut usePackageHandler = usePackageHandler;
+                        usePackageHandler.registerPackageTools(usePackageManager.clone(), selectedPackage);
+                    }
+                    result
+                })
+            }),
+        })),
+        ToolRegistrationVisibility::PUBLIC,
+    );
+}
+
 #[allow(non_snake_case)]
 fn registerPublicTools(handler: &mut AIToolHandler, context: &HostManager) {
     handler.registerBuiltinTool(
@@ -220,49 +267,8 @@ fn registerPublicTools(handler: &mut AIToolHandler, context: &HostManager) {
         StandardChatManagerTool::new(handler.runtimeSupport()),
     );
 
+    registerPackageActivationTool(handler);
     let packageManager = handler.getOrCreatePackageManager();
-    let usePackageManager = packageManager.clone();
-    handler.registerBuiltinTool(
-        BuiltinToolName::UsePackage,
-        crate::ToolExecutionManager::RegisteredToolExecutor::Asynchronous(Box::new(AsyncFnToolExecutor {
-            effect: ToolEffect::WRITE,
-            validate: Arc::new(|_| ToolValidationResult {
-                valid: true,
-                errorMessage: String::new(),
-            }),
-            invoke: Arc::new(move |tool, invocationContext| {
-                let usePackageManager = usePackageManager.clone();
-                let usePackageHandler = invocationContext.host().clone();
-                Box::pin(async move {
-                let tool = &tool;
-                let packageName = requiredParameterValue(tool, "package_name");
-                if let Err(error) = RuntimePackageManager::prepareMcpPackage(&usePackageManager, &packageName).await {
-                    return toolErrorResult(tool, error);
-                }
-                let (result, selectedPackage) = {
-                    let mut guard = usePackageManager
-                        .lock()
-                        .expect("package manager mutex poisoned");
-                    let result = guard.executeUsePackageTool(&tool.name, &packageName);
-                    let selectedPackage = if result.success {
-                        guard
-                            .getEffectivePackageTools(&packageName)
-                            .filter(|package| !guard.isToolPkgContainer(&package.name))
-                    } else {
-                        None
-                    };
-                    (result, selectedPackage)
-                };
-                if let Some(selectedPackage) = selectedPackage {
-                    let mut usePackageHandler = usePackageHandler;
-                    usePackageHandler.registerPackageTools(usePackageManager.clone(), selectedPackage);
-                }
-                result
-                })
-            }),
-        })),
-        ToolRegistrationVisibility::PUBLIC,
-    );
     let searchContext = context.clone();
     let searchPackageManager = packageManager.clone();
     let searchRuntimeSupport = handler.runtimeSupport();
@@ -914,6 +920,11 @@ fn registerInternalTools(handler: &mut AIToolHandler, context: &HostManager) {
     );
     let readEnvironmentRuntimeSupport = handler.runtimeSupport();
     registerHttpTools(handler, ToolGetter::getHttpTools(context));
+    handler.registerBuiltinTool(
+        BuiltinToolName::WebSocket,
+        RegisteredToolExecutor::Shared(Arc::new(super::defaultTool::standard::StandardWebSocketTools::WebSocketToolExecutor)),
+        ToolRegistrationVisibility::INTERNAL,
+    );
     if let Some(browserTools) = ToolGetter::getBrowserAutomationTools(context) {
         registerBrowserAutomationTools(handler, browserTools);
     }
@@ -971,6 +982,10 @@ fn registerInternalTools(handler: &mut AIToolHandler, context: &HostManager) {
                 errorMessage: String::new(),
             }),
             invoke: Arc::new(move |tool| {
+                let packageName = requiredParameterValue(tool, "package_name");
+                if packageName.trim().is_empty() {
+                    return toolErrorResult(tool, "Missing required parameter: package_name".to_string());
+                }
                 let key = requiredParameterValue(tool, "key");
                 if key.trim().is_empty() {
                     return ToolResult {
@@ -986,7 +1001,7 @@ fn registerInternalTools(handler: &mut AIToolHandler, context: &HostManager) {
                         error: Some("Missing required parameter: key".to_string()),
                     };
                 }
-                match readEnvironmentRuntimeSupport.readEnvironmentVariable(&key) {
+                match readEnvironmentRuntimeSupport.readEnvironmentVariable(&packageName, &key) {
                     Ok(value) => ToolResult {
                         toolName: tool.name.clone(),
                         success: true,
@@ -1026,6 +1041,10 @@ fn registerInternalTools(handler: &mut AIToolHandler, context: &HostManager) {
                 errorMessage: String::new(),
             }),
             invoke: Arc::new(move |tool| {
+                let packageName = requiredParameterValue(tool, "package_name");
+                if packageName.trim().is_empty() {
+                    return toolErrorResult(tool, "Missing required parameter: package_name".to_string());
+                }
                 let key = requiredParameterValue(tool, "key");
                 let value = tool
                     .parameters
@@ -1051,9 +1070,9 @@ fn registerInternalTools(handler: &mut AIToolHandler, context: &HostManager) {
                     };
                 }
                 let writeResult = if cleared {
-                    writeEnvironmentRuntimeSupport.removeEnvironmentVariable(&key)
+                    writeEnvironmentRuntimeSupport.removeEnvironmentVariable(&packageName, &key)
                 } else {
-                    writeEnvironmentRuntimeSupport.writeEnvironmentVariable(&key, value.trim())
+                    writeEnvironmentRuntimeSupport.writeEnvironmentVariable(&packageName, &key, value.trim())
                 };
                 if let Err(error) = writeResult {
                     return ToolResult {
@@ -1072,7 +1091,7 @@ fn registerInternalTools(handler: &mut AIToolHandler, context: &HostManager) {
                     };
                 }
 
-                match writeEnvironmentRuntimeSupport.readEnvironmentVariable(&key) {
+                match writeEnvironmentRuntimeSupport.readEnvironmentVariable(&packageName, &key) {
                     Ok(current) => ToolResult {
                         toolName: tool.name.clone(),
                         success: true,

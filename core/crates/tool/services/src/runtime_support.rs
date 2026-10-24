@@ -485,15 +485,15 @@ pub trait ToolRuntimeSupport: Send + Sync {
 
     /// Reads one stored environment variable.
     #[allow(non_snake_case)]
-    fn readEnvironmentVariable(&self, key: &str) -> Result<Option<String>, String>;
+    fn readEnvironmentVariable(&self, packageName: &str, key: &str) -> Result<Option<String>, String>;
 
     /// Writes one stored environment variable.
     #[allow(non_snake_case)]
-    fn writeEnvironmentVariable(&self, key: &str, value: &str) -> Result<(), String>;
+    fn writeEnvironmentVariable(&self, packageName: &str, key: &str, value: &str) -> Result<(), String>;
 
     /// Removes one stored environment variable.
     #[allow(non_snake_case)]
-    fn removeEnvironmentVariable(&self, key: &str) -> Result<(), String>;
+    fn removeEnvironmentVariable(&self, packageName: &str, key: &str) -> Result<(), String>;
 
     /// Returns built-in and internal tool prompt categories for hidden catalog search.
     #[allow(non_snake_case)]

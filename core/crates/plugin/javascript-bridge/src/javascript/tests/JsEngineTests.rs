@@ -449,12 +449,12 @@ impl JsExecutionHost for TestPluginConfigExecutionHost {
     }
 
     /// Keeps environment state isolated from the application's actual preferences.
-    fn read_environment_variable(&self, key: &str) -> Result<Option<String>, String> {
+    fn read_environment_variable(&self, _owner: &operit_plugin_sdk::javascript::JsEnvironmentOwner, key: &str) -> Result<Option<String>, String> {
         Ok(self.environment.lock().unwrap().get(key).cloned())
     }
 
     /// Supports call-context tests without writing application configuration.
-    fn write_environment_variable(&self, key: &str, value: &str) -> Result<(), String> {
+    fn write_environment_variable(&self, _owner: &operit_plugin_sdk::javascript::JsEnvironmentOwner, key: &str, value: &str) -> Result<(), String> {
         self.environment
             .lock()
             .unwrap()

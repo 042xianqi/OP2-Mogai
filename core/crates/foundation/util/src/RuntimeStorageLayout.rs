@@ -332,7 +332,8 @@ pub const TOOLPKG_LOG_PATH: &str = "runtime/logs/toolpkg.log";
 pub const USER_PREFERENCES_PATH: &str =
     "runtime/config/preferences/user_preferences.preferences.json";
 pub const API_PREFERENCES_PATH: &str = "runtime/config/preferences/api_settings.json";
-pub const ENV_PREFERENCES_PATH: &str =
+/// Identifies the retired node-global environment file used only by the one-time package import.
+pub const LEGACY_ENV_PREFERENCES_PATH: &str =
     "runtime/config/preferences/env_preferences.preferences.json";
 pub const GITHUB_AUTH_PREFERENCES_PATH: &str =
     "runtime/config/preferences/github_auth_preferences.json";

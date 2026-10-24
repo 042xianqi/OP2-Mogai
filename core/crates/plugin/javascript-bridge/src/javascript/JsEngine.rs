@@ -31,7 +31,7 @@ use operit_plugin_sdk::execution_result::{
     JsExecutionResult,
 };
 use operit_plugin_sdk::javascript::{
-    JsExecutionCompletion, JsExecutionEngine, JsExecutionFuture, JsExecutionHost,
+    JsEnvironmentOwner, JsExecutionCompletion, JsExecutionEngine, JsExecutionFuture, JsExecutionHost,
     JsToolNameResolutionRequest, JsToolPkgIpcRequest, JsToolPkgResourceRequest, JsToolPkgWasmArg,
     JsToolPkgWasmRequest, ToolPkgConfigScope, ToolPkgExecutionContext,
     ToolPkgMainRegistrationCapture, ToolPkgTextResourceHost,
@@ -119,6 +119,7 @@ struct JsCallContext {
     intermediateCallback: Option<Arc<dyn Fn(operit_host_api::HostJavaScriptValue) + Send + Sync>>,
     executionListener: Option<JsExecutionListenerRef>,
     envOverrides: Arc<Mutex<BTreeMap<String, String>>>,
+    environmentOwner: Option<JsEnvironmentOwner>,
     textResourceSource: JsTextResourceSource,
     ipcTiming: Option<JsIpcTiming>,
 }
@@ -1192,6 +1193,7 @@ impl JsEngineState {
             intermediateCallback: onIntermediateResult,
             executionListener,
             envOverrides: Arc::new(Mutex::new(envOverrides)),
+            environmentOwner: environmentOwner(self.toolPkgContext.as_ref(), &params, false)?,
             textResourceSource,
             ipcTiming,
         };
@@ -1303,6 +1305,7 @@ impl JsEngineState {
             *source.borrow_mut() = Some(textResourceSource.clone());
         });
 
+        let environmentOwner = environmentOwner(self.toolPkgContext.as_ref(), params, false)?;
         let mut effectiveParams = params.clone();
         // Standalone scripts use the current SDK contract; ToolPkg engines retain their manifest contract.
         let apiVersion = match self.toolPkgContext.as_ref() {
@@ -1346,6 +1349,7 @@ impl JsEngineState {
                     executionListener: CURRENT_EXECUTION_LISTENER
                         .with(|value| value.borrow().clone()),
                     envOverrides: Arc::new(Mutex::new(envOverrides.clone())),
+                    environmentOwner,
                     textResourceSource,
                     ipcTiming: None,
                 },
@@ -1421,6 +1425,7 @@ impl JsEngineState {
             *current.borrow_mut() = Some(params.clone());
         });
         let registrationResult = (|| {
+            let environmentOwner = environmentOwner(self.toolPkgContext.as_ref(), params, true)?;
             let mut registrationParams = params.clone();
             registrationParams.insert("__operit_registration_mode".to_string(), Value::Bool(true));
             let explicitLanguage = registrationParams
@@ -1454,6 +1459,7 @@ impl JsEngineState {
                         intermediateCallback: None,
                         executionListener: None,
                         envOverrides: Arc::new(Mutex::new(BTreeMap::new())),
+                        environmentOwner,
                         textResourceSource,
                         ipcTiming: None,
                     },
@@ -3039,7 +3045,8 @@ fn executeHostOperation(name: &str, arguments: Vec<impl Into<operit_host_api::Ho
             context
                 .executionHost
                 .ok_or_else(|| HostError::new("JavaScript execution host is unavailable"))?
-                .read_environment_variable(&key)
+                .read_environment_variable(context.environmentOwner.as_ref().ok_or_else(||
+                    HostError::new("Environment access requires an owning package installation"))?, &key)
                 .map(|value| value.map(Value::String).unwrap_or(Value::Null))
                 .map_err(HostError::new)
         }
@@ -3360,6 +3367,38 @@ fn storeExecutionError(callId: String, error: String) -> HostResult<()> {
     Ok(())
 }
 
+/// Captures the environment owner before JavaScript runs or schedules asynchronous callbacks.
+#[allow(non_snake_case)]
+fn environmentOwner(
+    context: Option<&ToolPkgExecutionContext>,
+    params: &BTreeMap<String, Value>,
+    registration: bool,
+) -> JsExecutionResult<Option<JsEnvironmentOwner>> {
+    if registration {
+        return match params.get("__operit_registration_config_owner") {
+            None => Ok(None),
+            Some(owner) => {
+                let id = owner.as_str().filter(|id| !id.trim().is_empty())
+                    .ok_or_else(|| JsExecutionError::invalid_request("Registration environment owner is invalid"))?;
+                let scope = params.get("__operit_registration_config_scope")
+                    .ok_or_else(|| JsExecutionError::invalid_request("Registration environment scope is missing"))?;
+                let scope = serde_json::from_value(scope.clone())
+                    .map_err(|error| JsExecutionError::invalid_request(format!("Invalid environment scope: {error}")))?;
+                Ok(Some(JsEnvironmentOwner::Registration { id: id.to_string(), scope }))
+            }
+        };
+    }
+    match context {
+        Some(context) => Ok(Some(JsEnvironmentOwner::Package(context.container_package_name.clone()))),
+        None => match params.get("__operit_package_name") {
+            None => Ok(None),
+            Some(name) => name.as_str().filter(|name| !name.trim().is_empty())
+                .map(|name| Some(JsEnvironmentOwner::Package(name.to_string())))
+                .ok_or_else(|| JsExecutionError::invalid_request("Package environment owner is invalid")),
+        },
+    }
+}
+
 /// Writes one environment value and records it only after the host accepts the write.
 #[allow(non_snake_case)]
 fn setHostEnvironmentValue(callId: &str, key: &str, value: &str) -> HostResult<()> {
@@ -3373,7 +3412,8 @@ fn setHostEnvironmentValue(callId: &str, key: &str, value: &str) -> HostResult<(
     context
         .executionHost
         .ok_or_else(|| HostError::new("JavaScript execution host is unavailable"))?
-        .write_environment_variable(key, value)
+        .write_environment_variable(context.environmentOwner.as_ref().ok_or_else(||
+            HostError::new("Environment access requires an owning package installation"))?, key, value)
         .map_err(HostError::new)?;
     context
         .envOverrides

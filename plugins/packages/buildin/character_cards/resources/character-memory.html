@@ -1176,12 +1176,12 @@
     const queue = dialog.queue;
     if (queue === null) return '<p class="muted">\u6B63\u5728\u8BFB\u53D6\u81EA\u52A8\u63D0\u53D6\u961F\u5217\u2026</p>';
     const recovery = queue.failedCandidates === 0 ? "" : `<div class="actions">${dialog.pendingClearFailed ? button("confirm-clear-failed-candidates", "\u786E\u8BA4\u6E05\u9664\u5931\u8D25\u8BB0\u5F55", "trash", "", "filled") + button("cancel-clear-failed-candidates", "\u53D6\u6D88", "close") : button("retry-failed-candidates", "\u91CD\u8BD5\u5931\u8D25\u5019\u9009", "refresh", "", "tonal") + button("clear-failed-candidates", "\u6E05\u9664\u5931\u8D25\u8BB0\u5F55", "trash", "", "tonal")}</div>${dialog.pendingClearFailed ? '<p class="muted">\u6E05\u9664\u53EA\u5220\u9664\u5931\u8D25\u5019\u9009\u8BB0\u5F55\uFF0C\u4E0D\u5F71\u54CD\u5DF2\u5199\u5165\u7684\u8BB0\u5FC6\u3002</p>' : ""}`;
-    return `<div class="muted">\u5F85\u5904\u7406 ${queue.pendingCandidates} \u6761 / ${queue.pendingChats} \u4E2A\u804A\u5929 \xB7 \u5904\u7406\u4E2D ${queue.processingCandidates} \xB7 \u5931\u8D25 ${queue.failedCandidates}</div><div class="muted">${queue.nextRunAtMs === 0 ? "\u5C1A\u672A\u5B89\u6392\u4E0B\u6B21\u68C0\u67E5" : `\u4E0B\u6B21\u68C0\u67E5\uFF1A\u7EA6 ${queue.minutesUntilNextRun} \u5206\u949F\u540E`}</div>${queue.lastError === "" ? "" : `<p class="error-banner">${escapeHtml(queue.lastError)}</p>`}${recovery}`;
+    return `<div class="muted">\u5F85\u5904\u7406 ${queue.pendingCandidates} \u6761 / ${queue.pendingChats} \u4E2A\u804A\u5929 \xB7 \u5904\u7406\u4E2D ${queue.processingCandidates} \xB7 \u5931\u8D25 ${queue.failedCandidates}</div><div class="muted">${queue.nextRunAtMs === 0 ? "\u5C1A\u672A\u5B89\u6392\u4E0B\u6B21\u68C0\u67E5" : `\u4E0B\u6B21\u68C0\u67E5\uFF1A\u7EA6 ${queue.minutesUntilNextRun} \u5206\u949F\u540E`}</div>${queue.lastError === "" ? "" : `<p class="error-banner">\u63D0\u53D6\u5931\u8D25\uFF1A${escapeHtml(queue.lastError)}</p>`}${recovery}`;
   }
   function memoryRebuildStatus(dialog) {
     const progress = dialog.progress;
     if (progress === null) return '<p class="muted">\u6B63\u5728\u8BFB\u53D6\u91CD\u5EFA\u8FDB\u5EA6\u2026</p>';
-    const names = { idle: "\u672A\u5F00\u59CB", preparing: "\u51C6\u5907\u4E2D", running: "\u91CD\u5EFA\u4E2D", completed: "\u5DF2\u5B8C\u6210", cancelled: "\u5DF2\u53D6\u6D88", failed: "\u5931\u8D25" };
+    const names = { idle: "\u672A\u5F00\u59CB", preparing: "\u51C6\u5907\u4E2D", running: "\u91CD\u5EFA\u4E2D", completed: progress.failedWindows === 0 ? "\u5DF2\u5B8C\u6210" : "\u5DF2\u5B8C\u6210\uFF08\u90E8\u5206\u5931\u8D25\uFF09", cancelled: "\u5DF2\u53D6\u6D88", failed: "\u5931\u8D25" };
     return `<p>${escapeHtml(names[progress.status] ?? progress.status)} \xB7 \u804A\u5929 ${progress.completedChats}/${progress.totalChats} \xB7 \u7A97\u53E3 ${progress.completedWindows}/${progress.totalWindows} \xB7 \u5931\u8D25 ${progress.failedWindows}</p><p class="muted">\u5DF2\u5904\u7406\u6E90\u6D88\u606F ${progress.processedSourceMessages}/${progress.totalSourceMessages}${progress.currentChatTitle === "" ? "" : ` \xB7 ${escapeHtml(progress.currentChatTitle)}`}</p>${memoryRebuilding(dialog) ? `<progress aria-label="\u91CD\u5EFA\u8FDB\u5EA6" max="${Math.max(1, progress.totalWindows)}" value="${progress.completedWindows}"></progress><p class="muted">\u5173\u95ED\u6B64\u7A97\u53E3\u4E0D\u4F1A\u7EC8\u6B62\u540E\u53F0\u91CD\u5EFA\uFF1B\u53D6\u6D88\u4F1A\u5728\u5F53\u524D\u7A97\u53E3\u7ED3\u675F\u540E\u751F\u6548\u3002</p>` : ""}${progress.lastError === "" ? "" : `<p class="error-banner">${escapeHtml(progress.lastError)}</p>`}`;
   }
   function numericField(label, key, value, min, max, step = 1) {
@@ -1300,30 +1300,10 @@
         dialog.progress = progress;
         dialog.statusError = "";
         startPolling(dialog);
-        void pruneInBackground(dialog);
       } finally {
         if (exists(dialog)) {
           dialog.loading = false;
           renderDialogs();
-        }
-      }
-      async function pruneInBackground(dialog2) {
-        try {
-          const pruned = await request({ action: "pruneMissingChatBindings", ownerKey: dialog2.ownerKey }, { background: true });
-          if (!exists(dialog2) || pruned.removedChatIds.length === 0 && pruned.removedCandidateIds.length === 0) return;
-          const [chats, queue] = await Promise.all([
-            request({ action: "listMemoryChats", ownerKey: dialog2.ownerKey }, { background: true }),
-            request({ action: "readMemoryAutoSaveStatus", ownerKey: dialog2.ownerKey }, { background: true })
-          ]);
-          if (!exists(dialog2)) return;
-          dialog2.chats = chats.chats;
-          dialog2.missingChatIds = chats.missingChatIds;
-          dialog2.queue = queue;
-          if (topDialog() === dialog2) {
-            renderDialogs();
-            updateMemoryStatus(dialog2, context.dialogsRoot);
-          }
-        } catch {
         }
       }
     }

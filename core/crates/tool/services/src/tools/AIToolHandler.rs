@@ -7,7 +7,7 @@ use operit_host_api::HostEnvironmentDescriptor;
 use operit_host_api::HostManager::HostManager;
 use operit_link::{CoreCallRequest, CoreEventStream, CoreWatchRequest};
 use operit_plugin_sdk::javascript::{
-    JsExecutionHost, JsToolCallRequest, JsToolCallResult, JsToolCallResultData,
+    JsEnvironmentOwner, JsExecutionHost, JsToolCallRequest, JsToolCallResult, JsToolCallResultData,
     JsToolNameResolutionRequest, JsToolPkgIpcCompletion, JsToolPkgIpcRequest,
     JsToolPkgResourceRequest, JsToolPkgWasmRequest, JsToolPkgWasmResult, ToolPkgConfigScope,
 };
@@ -81,6 +81,7 @@ pub struct AIToolHandler {
     inner: Arc<Mutex<AIToolHandlerState>>,
     /// Contains only the immutable package identity bound by the JavaScript engine.
     pub(crate) authenticatedExtensionOwner: Option<String>,
+    pub(crate) webSocketSession: super::defaultTool::standard::StandardWebSocketTools::WebSocketSession,
     pub(crate) storageSession: operit_store::PluginStorage::PluginStorageSession,
     pub(crate) deviceTransportScope: Arc<crate::tools::DeviceTools::DeviceTransportScope>,
     pub(crate) chatObservations: Arc<Mutex<BTreeMap<String, JsAsyncIterable<ChatSendEvent>>>>,
@@ -249,6 +250,7 @@ impl AIToolHandler {
             chatObservations: Arc::new(Mutex::new(BTreeMap::new())),
             coreRoutePushes: Default::default(),
             coreRouteWatches: Arc::new(Mutex::new(BTreeMap::new())),
+            webSocketSession: Default::default(),
             storageSession: operit_store::PluginStorage::PluginStorageSession::default(),
         }
     }
@@ -1179,6 +1181,7 @@ impl JsExecutionHost for AIToolHandler {
         }
         let mut host = self.clone();
         host.authenticatedExtensionOwner = Some(context.container_package_name.clone());
+        host.webSocketSession = Default::default();
         host.storageSession = operit_store::PluginStorage::PluginStorageSession::default();
         host.deviceTransportScope = Default::default();
         host.chatObservations = Arc::new(Mutex::new(BTreeMap::new()));
@@ -1321,18 +1324,29 @@ impl JsExecutionHost for AIToolHandler {
         LocaleUtils::getCurrentLanguage(&self.getContext(), "")
     }
 
-    /// Reads one runtime environment variable.
-    fn read_environment_variable(&self, key: &str) -> Result<Option<String>, String> {
-        self.runtimeDependencies()
-            .runtime_support()
-            .readEnvironmentVariable(key)
+    /// Reads the environment owned by the native package execution context.
+    fn read_environment_variable(&self, owner: &JsEnvironmentOwner, key: &str) -> Result<Option<String>, String> {
+        let store = operit_store::ExtensionStore::ExtensionStore::default();
+        let variables = match owner {
+            JsEnvironmentOwner::Package(id) => return self.runtimeDependencies()
+                .runtime_support().readEnvironmentVariable(id, key),
+            JsEnvironmentOwner::Registration { id, scope } =>
+                store.packageEnvironmentForScope(id, scope.as_str())?,
+        };
+        Ok(variables.get(key.trim()).cloned())
     }
 
-    /// Writes one runtime environment variable.
-    fn write_environment_variable(&self, key: &str, value: &str) -> Result<(), String> {
-        self.runtimeDependencies()
-            .runtime_support()
-            .writeEnvironmentVariable(key, value)
+    /// Writes package environment changes through their installation's persistence policy.
+    fn write_environment_variable(&self, owner: &JsEnvironmentOwner, key: &str, value: &str) -> Result<(), String> {
+        let changes = BTreeMap::from([(key.to_string(),
+            (!value.is_empty()).then(|| value.to_string()))]);
+        let store = operit_store::ExtensionStore::ExtensionStore::default();
+        match owner {
+            JsEnvironmentOwner::Package(id) => self.runtimeDependencies()
+                .runtime_support().writeEnvironmentVariable(id, key, value),
+            JsEnvironmentOwner::Registration { id, scope } =>
+                store.editPackageEnvironmentForScope(id, scope.as_str(), changes),
+        }
     }
 
     /// Registers media for the synchronous v1 image globals and returns the link JSON.
@@ -1883,11 +1897,11 @@ mod tests {
         >,
     > { panic!("Unexpected runtime service: readToolSourceCatalog") }
         /// Rejects unexpected application service access in execution pipeline tests.
-    fn readEnvironmentVariable(&self, key: &str) -> Result<Option<String>, String> { panic!("Unexpected runtime service: readEnvironmentVariable") }
+    fn readEnvironmentVariable(&self, packageName: &str, key: &str) -> Result<Option<String>, String> { panic!("Unexpected runtime service: readEnvironmentVariable") }
         /// Rejects unexpected application service access in execution pipeline tests.
-    fn writeEnvironmentVariable(&self, key: &str, value: &str) -> Result<(), String> { panic!("Unexpected runtime service: writeEnvironmentVariable") }
+    fn writeEnvironmentVariable(&self, packageName: &str, key: &str, value: &str) -> Result<(), String> { panic!("Unexpected runtime service: writeEnvironmentVariable") }
         /// Rejects unexpected application service access in execution pipeline tests.
-    fn removeEnvironmentVariable(&self, key: &str) -> Result<(), String> { panic!("Unexpected runtime service: removeEnvironmentVariable") }
+    fn removeEnvironmentVariable(&self, packageName: &str, key: &str) -> Result<(), String> { panic!("Unexpected runtime service: removeEnvironmentVariable") }
         /// Rejects unexpected application service access in execution pipeline tests.
     fn buildBuiltinAndInternalCategories(
         &self,
@@ -2030,7 +2044,7 @@ mod tests {
                 })),
                     authenticatedExtensionOwner: Some("engine-owner".into()),
                 invocationSnapshot: Default::default(),
-                storageSession: Default::default(), chatObservations: Default::default(), coreRouteWatches: Default::default(), coreRoutePushes: Default::default(), deviceTransportScope: Default::default(),
+                webSocketSession: Default::default(), storageSession: Default::default(), chatObservations: Default::default(), coreRouteWatches: Default::default(), coreRoutePushes: Default::default(), deviceTransportScope: Default::default(),
             };
             Self { handler, root }
         }
@@ -2040,6 +2054,61 @@ mod tests {
         fn drop(&mut self) {
             assert_eq!(self.root.parent(), Some(std::env::temp_dir().as_path()));
             std::fs::remove_dir_all(&self.root).unwrap();
+        }
+    }
+
+    /// Package discovery must work without interactive approval in both restricted AI modes.
+    #[tokio::test(flavor = "current_thread")]
+    async fn package_activation_does_not_require_write_approval() {
+        static ASSETS: &[RuntimePluginAsset] = &[RuntimePluginAsset {
+            name: "clock_probe.js", sha256: "", bytes: br#"/* METADATA
+            {"name":"clock_probe","description":"Clock query tools","enabledByDefault":true,
+             "tools":[{"name":"get_current_date","description":"Get the current date and time","parameters":[]}]}
+            */"#,
+        }];
+        operit_host_api::HostManager::setDefaultHostJavaScriptRuntimeHost(Arc::new(
+            operit_host_native_scheduler::NativeHostJavaScriptRuntimeHost::new(),
+        ));
+        for mode in [AiPermissionMode::ReadOnly, AiPermissionMode::WorkspaceWrite] {
+            let mut fixture = PipelineFixture::with_package_assets(Some(ASSETS));
+            let context = fixture.handler.getContext();
+            operit_store::RuntimeStorageHost::setDefaultRuntimeStorageHost(context.runtimeStorageHost.unwrap());
+            operit_store::RuntimeStorageHost::setDefaultRuntimeSqliteHost(context.runtimeSqliteHost.unwrap());
+            operit_util::RuntimeStoreRoot::setDefaultRuntimeStoreRootConfig(
+                operit_util::RuntimeStoreRoot::RuntimeStoreRootConfig::new(
+                    fixture.root.join("runtime"), fixture.root.join("workspaces"),
+                ),
+            );
+            let manager = fixture.handler.getOrCreatePackageManager();
+            {
+                let mut guard = manager.lock().unwrap();
+                assert!(guard.claimInitialPackageRegistryLoad().unwrap());
+                guard.loadAvailablePackages();
+            }
+            let permissions = fixture.handler.getToolPermissionSystem();
+            permissions.saveAiPermissionMode(mode).unwrap();
+            let approvals = Arc::new(AtomicUsize::new(0));
+            let requested = approvals.clone();
+            permissions.setAsyncPermissionRequester(move |_, _, _| {
+                requested.fetch_add(1, Ordering::SeqCst);
+                async { crate::tools::ToolPermissionSystem::PermissionRequestResult::DENY }
+            });
+            crate::tools::ToolRegistration::registerPackageActivationTool(&mut fixture.handler);
+            let manager = fixture.handler.getOrCreatePackageManager();
+            let enabled = manager.lock().unwrap().getEnabledPackageNames();
+            assert!(!manager.lock().unwrap().isPackageActivated("clock_probe"));
+            let result = fixture.handler.executeToolInvocation(
+                &ToolCall { name: "use_package".into(), parameters: BTreeMap::from_iter([
+                    ("package_name".into(), serde_json::json!("clock_probe")),
+                ]) },
+                ToolExecutionPolicy::Ai { exposure: ToolExposureMode::FULL },
+            ).await.unwrap();
+            assert!(result[0].success, "{:?}", result[0].error);
+            assert_eq!(approvals.load(Ordering::SeqCst), 0);
+            assert!(manager.lock().unwrap().isPackageActivated("clock_probe"));
+            assert_eq!(manager.lock().unwrap().getEnabledPackageNames(), enabled);
+            assert!(fixture.handler.hasToolExecutor("clock_probe:get_current_date"));
+            assert_eq!(fixture.handler.getToolVisibility("clock_probe:get_current_date"), Some(ToolRegistrationVisibility::PUBLIC));
         }
     }
 

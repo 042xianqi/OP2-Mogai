@@ -1485,6 +1485,10 @@ pub trait WebSocketHost: Send + Sync {
     #[allow(non_snake_case)]
     fn sendWebSocketMessage(&self, streamId: &str, message: Vec<u8>) -> HostResult<()>;
 
+    /// Sends one UTF-8 text frame through an opened WebSocket.
+    #[allow(non_snake_case)]
+    fn sendWebSocketText(&self, streamId: &str, text: String) -> HostResult<()>;
+
     /// Closes one previously opened WebSocket.
     #[allow(non_snake_case)]
     fn closeWebSocket(&self, streamId: &str) -> HostResult<()>;

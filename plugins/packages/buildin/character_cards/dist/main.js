@@ -3701,14 +3701,13 @@ var MemoryJobStatusError = class extends Error {
     this.name = "MemoryJobStatusError";
   }
 };
-function propagateJobFailure(error, publishStatus) {
+function publishJobFailure(error, publishStatus) {
   return __async(this, null, function* () {
     try {
       yield publishStatus();
     } catch (statusError) {
       throw new MemoryJobStatusError(error, statusError);
     }
-    throw error;
   });
 }
 function sameMessageRevision(current, planned) {
@@ -3848,6 +3847,17 @@ function startMemoryRebuild(ownerKey, rebuild, repository) {
     return space.rebuildProgress;
   });
 }
+function advanceRebuildWindow(task, progress) {
+  const window = task.windows[task.nextWindow];
+  if (window === void 0) throw new Error("Rebuild cursor has no source window");
+  task.nextWindow += 1;
+  progress.completedWindows += 1;
+  progress.processedSourceMessages += window.sourceMessageCount;
+  progress.currentChatTitle = window.chatTitle;
+  const next = task.windows[task.nextWindow];
+  if (next === void 0 || next.chatId !== window.chatId) progress.completedChats += 1;
+  progress.status = next === void 0 ? "completed" : "running";
+}
 function processRebuildWindow(ownerKey, taskId, owner2) {
   return __async(this, null, function* () {
     try {
@@ -3872,31 +3882,24 @@ function processRebuildWindow(ownerKey, taskId, owner2) {
           yield extractMessages(ownerKey, window.messages, repository);
           const updated = yield repository.readMemorySpace(ownerKey), savedTask = updated.rebuildTask;
           if (savedTask === null || savedTask.id !== taskId || savedTask.nextWindow !== task.nextWindow) throw new Error("Rebuild cursor changed within execution");
-          savedTask.nextWindow += 1;
-          updated.rebuildProgress.completedWindows += 1;
-          updated.rebuildProgress.processedSourceMessages += window.sourceMessageCount;
-          updated.rebuildProgress.currentChatTitle = window.chatTitle;
-          const next = savedTask.windows[savedTask.nextWindow];
-          if (next === void 0 || next.chatId !== window.chatId) updated.rebuildProgress.completedChats += 1;
-          updated.rebuildProgress.status = next === void 0 ? "completed" : "running";
+          advanceRebuildWindow(savedTask, updated.rebuildProgress);
           yield repository.writeMemorySpace(ownerKey, updated);
         })
       );
     } catch (error) {
-      yield propagateJobFailure(
+      yield publishJobFailure(
         error,
-        /** Persists terminal metadata through the same authoritative queue without retrying the failed work. */
+        /** Commits the failed window and its cursor before later work is allowed to run. */
         () => owner2.run(
-          /** Records the real terminal failure after the unsuccessful operation has published no edits. */
+          /** Retains the error and skips the failed window without publishing partial memory edits. */
           (repository) => __async(null, null, function* () {
             const space = yield repository.readMemorySpace(ownerKey);
             if (space.rebuildTask === null || space.rebuildTask.id !== taskId) throw new Error("Failed rebuild task identity changed");
-            if (space.rebuildProgress.status !== "cancelled") {
-              space.rebuildProgress.status = "failed";
-              space.rebuildProgress.failedWindows += 1;
-              space.rebuildProgress.lastError = errorText(error);
-              yield repository.writeMemorySpace(ownerKey, space);
-            }
+            if (space.rebuildProgress.status === "cancelled") return;
+            space.rebuildProgress.failedWindows += 1;
+            space.rebuildProgress.lastError = errorText(error);
+            advanceRebuildWindow(space.rebuildTask, space.rebuildProgress);
+            yield repository.writeMemorySpace(ownerKey, space);
           })
         )
       );
@@ -3904,99 +3907,85 @@ function processRebuildWindow(ownerKey, taskId, owner2) {
   });
 }
 var CANDIDATE_PROCESSING_LEASE_MS = 30 * 60 * 1e3;
+function failCandidate(candidate, error) {
+  candidate.status = "failed";
+  candidate.lastError = error;
+  candidate.updatedAt = Date.now();
+}
 function processCandidates(ownerKey, candidates, owner2) {
   return __async(this, null, function* () {
-    const ids = /* @__PURE__ */ new Set();
-    for (const candidate of candidates) ids.add(candidate.id);
-    const chatId = candidates[0].chatId;
+    const failures = /* @__PURE__ */ new Map(), chatId = candidates[0].chatId;
     try {
       yield owner2.run(
-        /** Validates every claimed source individually so one stale record cannot discard valid siblings. */
+        /** Validates each source independently before committing valid extraction and failed metadata together. */
         (repository) => __async(null, null, function* () {
           let messages = yield readMessages(chatId);
-          const accepted = [], rejections = /* @__PURE__ */ new Map();
+          const valid = [], excludedTimestamps = /* @__PURE__ */ new Set();
           for (const candidate of candidates) {
-            const source = messages.filter(
-              /** Revalidates each claimed source identity before any analysis or destructive queue update. */
-              (message) => message.timestamp === candidate.triggerMessageTimestamp && message.variantIndex === candidate.triggerVariantIndex
-            );
-            let failure2 = "";
-            if (source.length !== 1) failure2 = "A claimed candidate source no longer identifies exactly one message: " + candidate.id;
-            else {
+            try {
+              const source = messages.filter(
+                /** Resolves only the queued revision rather than substituting another message. */
+                (message) => message.timestamp === candidate.triggerMessageTimestamp && message.variantIndex === candidate.triggerVariantIndex
+              );
+              if (source.length === 0) throw new Error("\u6E90\u6D88\u606F\u5DF2\u5220\u9664\u6216\u6240\u9009\u7248\u672C\u5DF2\u53D8\u5316\uFF0C\u5DF2\u8DF3\u8FC7\u8BE5\u5019\u9009\uFF1A" + candidate.id);
+              if (source.length !== 1) throw new Error("\u6E90\u6D88\u606F\u65E0\u6CD5\u552F\u4E00\u5B9A\u4F4D\uFF0C\u5DF2\u8DF3\u8FC7\u8BE5\u5019\u9009\uFF1A" + candidate.id);
               const sender = source[0].sender;
-              if (candidate.sourceType === "selected_user_message" ? sender !== "user" : sender !== "ai" && sender !== "assistant") failure2 = "A claimed candidate source has changed sender: " + candidate.id;
-              else try {
-                if (candidate.sourceType === "reply_finalized_auto") yield requireMessageOwner(chatId, source[0], ownerKey, repository);
-                else yield requireChatOwner(chatId, ownerKey, repository);
-              } catch (error) {
-                failure2 = errorText(error);
-              }
+              if (candidate.sourceType === "selected_user_message" ? sender !== "user" : sender !== "ai" && sender !== "assistant") throw new Error("\u6E90\u6D88\u606F\u7684\u53D1\u9001\u8005\u5DF2\u53D8\u5316\uFF0C\u5DF2\u8DF3\u8FC7\u8BE5\u5019\u9009\uFF1A" + candidate.id);
+              if (candidate.sourceType === "reply_finalized_auto") yield requireMessageOwner(chatId, source[0], ownerKey, repository);
+              else yield requireChatOwner(chatId, ownerKey, repository);
+              valid.push(candidate);
+            } catch (error) {
+              failures.set(candidate.id, errorText(error));
+              excludedTimestamps.add(candidate.triggerMessageTimestamp);
             }
-            if (failure2 === "") accepted.push(candidate);
-            else rejections.set(candidate.id, failure2);
           }
-          if (accepted.length === 0) {
-            const space2 = yield repository.readMemorySpace(ownerKey);
-            for (const candidate of space2.candidates) {
-              const failure2 = rejections.get(candidate.id);
-              if (failure2 !== void 0) {
-                candidate.status = "failed";
-                candidate.lastError = failure2;
-                candidate.updatedAt = Date.now();
-              }
+          const completed3 = /* @__PURE__ */ new Set();
+          for (const candidate of valid) {
+            completed3.add(candidate.id);
+            excludedTimestamps.delete(candidate.triggerMessageTimestamp);
+          }
+          if (valid.length !== 0) {
+            if (valid[0].sourceType === "selected_user_message") {
+              const timestamps = /* @__PURE__ */ new Set();
+              for (const candidate of valid) timestamps.add(candidate.triggerMessageTimestamp);
+              messages = messages.filter(
+                /** Extracts only the selected user messages that passed source validation. */
+                (message) => message.sender === "user" && timestamps.has(message.timestamp)
+              );
+            } else {
+              let lastTimestamp = 0;
+              for (const candidate of valid) lastTimestamp = Math.max(lastTimestamp, candidate.triggerMessageTimestamp);
+              messages = messages.filter(
+                /** Keeps bounded context while excluding rejected sources and their changed revisions. */
+                (message) => message.timestamp <= lastTimestamp && !excludedTimestamps.has(message.timestamp)
+              ).slice(-48);
             }
-            yield repository.writeMemorySpace(ownerKey, space2);
-            return;
+            yield extractMessages(ownerKey, messages, repository);
           }
-          if (accepted.every(
-            /** Recognizes only the exact declared selected-user source type. */
-            (candidate) => candidate.sourceType === "selected_user_message"
-          )) {
-            const timestamps = /* @__PURE__ */ new Set();
-            for (const candidate of accepted) timestamps.add(candidate.triggerMessageTimestamp);
-            messages = messages.filter(
-              /** Selects the genuinely persisted requested user messages. */
-              (message) => message.sender === "user" && timestamps.has(message.timestamp)
-            );
-            if (messages.length !== timestamps.size) throw new Error("A selected candidate message no longer exists");
-          } else {
-            let lastTimestamp = 0;
-            for (const candidate of accepted) lastTimestamp = Math.max(lastTimestamp, candidate.triggerMessageTimestamp);
-            messages = messages.filter(
-              /** Bounds automatic extraction to actual source records at the final accepted candidate. */
-              (message) => message.timestamp <= lastTimestamp
-            ).slice(-48);
-          }
-          yield extractMessages(ownerKey, messages, repository);
-          const space = yield repository.readMemorySpace(ownerKey), acceptedIds = /* @__PURE__ */ new Set();
-          for (const candidate of accepted) acceptedIds.add(candidate.id);
-          space.candidates = space.candidates.filter(
-            /** Removes only the accepted records after their successful domain mutations. */
-            (candidate) => !acceptedIds.has(candidate.id)
-          );
+          const space = yield repository.readMemorySpace(ownerKey);
           for (const candidate of space.candidates) {
-            const failure2 = rejections.get(candidate.id);
-            if (failure2 !== void 0) {
-              candidate.status = "failed";
-              candidate.lastError = failure2;
-              candidate.updatedAt = Date.now();
-            }
+            const failure2 = failures.get(candidate.id);
+            if (failure2 !== void 0) failCandidate(candidate, failure2);
           }
+          space.candidates = space.candidates.filter(
+            /** Deletes only candidates included in the committed extraction. */
+            (candidate) => !completed3.has(candidate.id)
+          );
           yield repository.writeMemorySpace(ownerKey, space);
         })
       );
     } catch (error) {
-      yield propagateJobFailure(
+      for (const candidate of candidates) if (!failures.has(candidate.id)) failures.set(candidate.id, errorText(error));
+      yield publishJobFailure(
         error,
-        /** Persists terminal metadata through the same authoritative queue without retrying the failed work. */
+        /** Commits this batch's failures before continuing independent batches and owners. */
         () => owner2.run(
-          /** Persists a real failed state without automatic retries or successful empty output. */
+          /** Preserves individual source errors when a later extraction also fails. */
           (repository) => __async(null, null, function* () {
             const space = yield repository.readMemorySpace(ownerKey);
-            for (const candidate of space.candidates) if (ids.has(candidate.id)) {
-              candidate.status = "failed";
-              candidate.lastError = errorText(error);
-              candidate.updatedAt = Date.now();
+            for (const candidate of space.candidates) {
+              const failure2 = failures.get(candidate.id);
+              if (failure2 !== void 0) failCandidate(candidate, failure2);
             }
             yield repository.writeMemorySpace(ownerKey, space);
           })
@@ -4006,11 +3995,12 @@ function processCandidates(ownerKey, candidates, owner2) {
   });
 }
 var MemoryJobRunner = class {
+  /** Uses the shared transactional repository for all job and failure publications. */
   constructor(owner2) {
     this.owner = owner2;
     this.running = null;
   }
-  /** Shares the active pass and its failure instead of queuing obsolete timer notifications. */
+  /** Shares the active pass while durable job failures remain visible in their own statuses. */
   tick() {
     if (this.running === null) {
       this.running = this.runTick().finally(() => {
@@ -4090,7 +4080,7 @@ var MemoryJobRunner = class {
         );
         for (const batch of batches) {
           const claimed = yield this.owner.run(
-            /** Claims only the next actual batch so a failure leaves later sources genuinely pending. */
+            /** Claims each batch immediately before processing so independent failures cannot strand later work. */
             (repository) => __async(this, null, function* () {
               if (!(yield repository.readGlobalMemoryPreferences()).autoUpdateEnabled) return false;
               const space = yield repository.readMemorySpace(ownerKey), ids = /* @__PURE__ */ new Set();

@@ -13,3 +13,7 @@ Notes for Operit2 plugin authors live here.
 
 - [Edge hardware integration](edge-plugin-guide.md): native device calls, duplex channels, configuration and local input.
 - [Device scene protocol](edge-scene.md): saved display configuration, assets, limits and local animation.
+
+- [WebSocket (v2)](WEBSOCKET.md): engine-owned text connections through the shared networking Host, including ordered events and resource disposal.
+
+- [Waifu plugin](../packages/external/waifu/README.md): reusable sentence streaming, emotion images and prompt profiles through declared plugin dependencies.

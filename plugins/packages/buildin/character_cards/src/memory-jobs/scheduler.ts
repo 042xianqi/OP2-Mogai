@@ -23,11 +23,10 @@ export class MemoryJobStatusError extends Error {
   }
 }
 
-/** Publishes a real terminal status and propagates the execution error or the two explicit failures. */
-async function propagateJobFailure(error: unknown, publishStatus: () => Promise<unknown>): Promise<never> {
+/** Records a failed work unit so independent jobs can continue after its status is committed. */
+async function publishJobFailure(error: unknown, publishStatus: () => Promise<unknown>): Promise<void> {
   try { await publishStatus(); }
   catch (statusError) { throw new MemoryJobStatusError(error, statusError); }
-  throw error;
 }
 
 /** Compares every stored revision field structurally so a host codec reordering persisted keys cannot fail an unchanged plan. */
@@ -136,7 +135,18 @@ export async function startMemoryRebuild(ownerKey: string, rebuild: MemoryRebuil
   await repository.writeMemorySpace(ownerKey, space); return space.rebuildProgress;
 }
 
-/** Runs one real planned window and commits the domain edits with its durable progress cursor. */
+/** Advances a finished window and counts visited sources independently of the failure counter. */
+function advanceRebuildWindow(task: MemoryRebuildTask, progress: MemoryRebuildProgress): void {
+  const window = task.windows[task.nextWindow];
+  if (window === undefined) throw new Error("Rebuild cursor has no source window");
+  task.nextWindow += 1; progress.completedWindows += 1; progress.processedSourceMessages += window.sourceMessageCount;
+  progress.currentChatTitle = window.chatTitle;
+  const next = task.windows[task.nextWindow];
+  if (next === undefined || next.chatId !== window.chatId) progress.completedChats += 1;
+  progress.status = next === undefined ? "completed" : "running";
+}
+
+/** Runs one planned window and records its outcome without blocking later windows. */
 async function processRebuildWindow(ownerKey: string, taskId: string, owner: CharacterRepositoryOwner): Promise<void> {
   try {
     await owner.run(
@@ -159,22 +169,22 @@ async function processRebuildWindow(ownerKey: string, taskId: string, owner: Cha
         await extractMessages(ownerKey, window.messages, repository);
         const updated = await repository.readMemorySpace(ownerKey), savedTask = updated.rebuildTask;
         if (savedTask === null || savedTask.id !== taskId || savedTask.nextWindow !== task.nextWindow) throw new Error("Rebuild cursor changed within execution");
-        savedTask.nextWindow += 1; updated.rebuildProgress.completedWindows += 1; updated.rebuildProgress.processedSourceMessages += window.sourceMessageCount;
-        updated.rebuildProgress.currentChatTitle = window.chatTitle;
-        const next = savedTask.windows[savedTask.nextWindow]; if (next === undefined || next.chatId !== window.chatId) updated.rebuildProgress.completedChats += 1;
-        updated.rebuildProgress.status = next === undefined ? "completed" : "running";
+        advanceRebuildWindow(savedTask, updated.rebuildProgress);
         await repository.writeMemorySpace(ownerKey, updated);
       },
     );
   } catch (error) {
-    await propagateJobFailure(error,
-      /** Persists terminal metadata through the same authoritative queue without retrying the failed work. */
+    await publishJobFailure(error,
+      /** Commits the failed window and its cursor before later work is allowed to run. */
       () => owner.run(
-        /** Records the real terminal failure after the unsuccessful operation has published no edits. */
+        /** Retains the error and skips the failed window without publishing partial memory edits. */
         async repository => {
           const space = await repository.readMemorySpace(ownerKey);
           if (space.rebuildTask === null || space.rebuildTask.id !== taskId) throw new Error("Failed rebuild task identity changed");
-          if (space.rebuildProgress.status !== "cancelled") { space.rebuildProgress.status = "failed"; space.rebuildProgress.failedWindows += 1; space.rebuildProgress.lastError = errorText(error); await repository.writeMemorySpace(ownerKey, space); }
+          if (space.rebuildProgress.status === "cancelled") return;
+          space.rebuildProgress.failedWindows += 1; space.rebuildProgress.lastError = errorText(error);
+          advanceRebuildWindow(space.rebuildTask, space.rebuildProgress);
+          await repository.writeMemorySpace(ownerKey, space);
         },
       ),
     );
@@ -184,80 +194,79 @@ async function processRebuildWindow(ownerKey: string, taskId: string, owner: Cha
 /** Bounds how long a claimed record may stay processing before a surviving runtime may reclaim it. */
 const CANDIDATE_PROCESSING_LEASE_MS = 30 * 60 * 1000;
 
-/** Executes one claimed candidate batch, failing only invalid sources and deleting the accepted ones after a successful commit. */
+/** Retains one failed candidate with its exact cause and the time it was processed. */
+function failCandidate(candidate: MemoryCandidate, error: string): void {
+  candidate.status = "failed"; candidate.lastError = error; candidate.updatedAt = Date.now();
+}
+
+/** Extracts valid candidates while retaining individual source failures and isolating batch errors. */
 async function processCandidates(ownerKey: string, candidates: MemoryCandidate[], owner: CharacterRepositoryOwner): Promise<void> {
-  const ids = new Set<string>(); for (const candidate of candidates) ids.add(candidate.id);
-  const chatId = candidates[0].chatId;
+  const failures = new Map<string, string>(), chatId = candidates[0].chatId;
   try {
     await owner.run(
-      /** Validates every claimed source individually so one stale record cannot discard valid siblings. */
+      /** Validates each source independently before committing valid extraction and failed metadata together. */
       async repository => {
         let messages = await readMessages(chatId);
-        const accepted: MemoryCandidate[] = [], rejections = new Map<string, string>();
+        const valid: MemoryCandidate[] = [], excludedTimestamps = new Set<number>();
         for (const candidate of candidates) {
-          const source = messages.filter(
-            /** Revalidates each claimed source identity before any analysis or destructive queue update. */
-            message => message.timestamp === candidate.triggerMessageTimestamp && message.variantIndex === candidate.triggerVariantIndex,
-          );
-          let failure = "";
-          if (source.length !== 1) failure = "A claimed candidate source no longer identifies exactly one message: " + candidate.id;
-          else {
+          try {
+            const source = messages.filter(
+              /** Resolves only the queued revision rather than substituting another message. */
+              message => message.timestamp === candidate.triggerMessageTimestamp && message.variantIndex === candidate.triggerVariantIndex,
+            );
+            if (source.length === 0) throw new Error("源消息已删除或所选版本已变化，已跳过该候选：" + candidate.id);
+            if (source.length !== 1) throw new Error("源消息无法唯一定位，已跳过该候选：" + candidate.id);
             const sender = source[0].sender;
-            if (candidate.sourceType === "selected_user_message" ? sender !== "user" : sender !== "ai" && sender !== "assistant") failure = "A claimed candidate source has changed sender: " + candidate.id;
-            else try {
-              if (candidate.sourceType === "reply_finalized_auto") await requireMessageOwner(chatId, source[0], ownerKey, repository);
-              else await requireChatOwner(chatId, ownerKey, repository);
-            } catch (error) { failure = errorText(error); }
+            if (candidate.sourceType === "selected_user_message" ? sender !== "user" : sender !== "ai" && sender !== "assistant") throw new Error("源消息的发送者已变化，已跳过该候选：" + candidate.id);
+            if (candidate.sourceType === "reply_finalized_auto") await requireMessageOwner(chatId, source[0], ownerKey, repository);
+            else await requireChatOwner(chatId, ownerKey, repository);
+            valid.push(candidate);
+          } catch (error) {
+            failures.set(candidate.id, errorText(error)); excludedTimestamps.add(candidate.triggerMessageTimestamp);
           }
-          if (failure === "") accepted.push(candidate); else rejections.set(candidate.id, failure);
         }
-        if (accepted.length === 0) {
-          const space = await repository.readMemorySpace(ownerKey);
-          for (const candidate of space.candidates) {
-            const failure = rejections.get(candidate.id);
-            if (failure !== undefined) { candidate.status = "failed"; candidate.lastError = failure; candidate.updatedAt = Date.now(); }
+        const completed = new Set<string>();
+        for (const candidate of valid) { completed.add(candidate.id); excludedTimestamps.delete(candidate.triggerMessageTimestamp); }
+        if (valid.length !== 0) {
+          if (valid[0].sourceType === "selected_user_message") {
+            const timestamps = new Set<number>(); for (const candidate of valid) timestamps.add(candidate.triggerMessageTimestamp);
+            messages = messages.filter(
+              /** Extracts only the selected user messages that passed source validation. */
+              message => message.sender === "user" && timestamps.has(message.timestamp),
+            );
+          } else {
+            let lastTimestamp = 0; for (const candidate of valid) lastTimestamp = Math.max(lastTimestamp, candidate.triggerMessageTimestamp);
+            messages = messages.filter(
+              /** Keeps bounded context while excluding rejected sources and their changed revisions. */
+              message => message.timestamp <= lastTimestamp && !excludedTimestamps.has(message.timestamp),
+            ).slice(-48);
           }
-          await repository.writeMemorySpace(ownerKey, space); return;
+          await extractMessages(ownerKey, messages, repository);
         }
-        if (accepted.every(
-          /** Recognizes only the exact declared selected-user source type. */
-          candidate => candidate.sourceType === "selected_user_message",
-        )) {
-          const timestamps = new Set<number>(); for (const candidate of accepted) timestamps.add(candidate.triggerMessageTimestamp);
-          messages = messages.filter(
-            /** Selects the genuinely persisted requested user messages. */
-            message => message.sender === "user" && timestamps.has(message.timestamp),
-          );
-          if (messages.length !== timestamps.size) throw new Error("A selected candidate message no longer exists");
-        } else {
-          let lastTimestamp = 0; for (const candidate of accepted) lastTimestamp = Math.max(lastTimestamp, candidate.triggerMessageTimestamp);
-          messages = messages.filter(
-            /** Bounds automatic extraction to actual source records at the final accepted candidate. */
-            message => message.timestamp <= lastTimestamp,
-          ).slice(-48);
-        }
-        await extractMessages(ownerKey, messages, repository);
-        const space = await repository.readMemorySpace(ownerKey), acceptedIds = new Set<string>();
-        for (const candidate of accepted) acceptedIds.add(candidate.id);
-        space.candidates = space.candidates.filter(
-          /** Removes only the accepted records after their successful domain mutations. */
-          candidate => !acceptedIds.has(candidate.id),
-        );
+        const space = await repository.readMemorySpace(ownerKey);
         for (const candidate of space.candidates) {
-          const failure = rejections.get(candidate.id);
-          if (failure !== undefined) { candidate.status = "failed"; candidate.lastError = failure; candidate.updatedAt = Date.now(); }
+          const failure = failures.get(candidate.id);
+          if (failure !== undefined) failCandidate(candidate, failure);
         }
+        space.candidates = space.candidates.filter(
+          /** Deletes only candidates included in the committed extraction. */
+          candidate => !completed.has(candidate.id),
+        );
         await repository.writeMemorySpace(ownerKey, space);
       },
     );
   } catch (error) {
-    await propagateJobFailure(error,
-      /** Persists terminal metadata through the same authoritative queue without retrying the failed work. */
+    for (const candidate of candidates) if (!failures.has(candidate.id)) failures.set(candidate.id, errorText(error));
+    await publishJobFailure(error,
+      /** Commits this batch's failures before continuing independent batches and owners. */
       () => owner.run(
-        /** Persists a real failed state without automatic retries or successful empty output. */
+        /** Preserves individual source errors when a later extraction also fails. */
         async repository => {
           const space = await repository.readMemorySpace(ownerKey);
-          for (const candidate of space.candidates) if (ids.has(candidate.id)) { candidate.status = "failed"; candidate.lastError = errorText(error); candidate.updatedAt = Date.now(); }
+          for (const candidate of space.candidates) {
+            const failure = failures.get(candidate.id);
+            if (failure !== undefined) failCandidate(candidate, failure);
+          }
           await repository.writeMemorySpace(ownerKey, space);
         },
       ),
@@ -275,9 +284,10 @@ interface MemoryJobReport {
 export class MemoryJobRunner {
   private running: Promise<MemoryJobReport> | null = null;
 
+  /** Uses the shared transactional repository for all job and failure publications. */
   constructor(private readonly owner: CharacterRepositoryOwner) {}
 
-  /** Shares the active pass and its failure instead of queuing obsolete timer notifications. */
+  /** Shares the active pass while durable job failures remain visible in their own statuses. */
   tick(): Promise<MemoryJobReport> {
     if (this.running === null) {
       this.running = this.runTick().finally(() => {
@@ -347,7 +357,7 @@ export class MemoryJobRunner {
       );
       for (const batch of batches) {
         const claimed = await this.owner.run(
-          /** Claims only the next actual batch so a failure leaves later sources genuinely pending. */
+          /** Claims each batch immediately before processing so independent failures cannot strand later work. */
           async repository => {
             if (!(await repository.readGlobalMemoryPreferences()).autoUpdateEnabled) return false;
             const space = await repository.readMemorySpace(ownerKey), ids = new Set<string>();

@@ -302,10 +302,13 @@ test("real persisted-message and interval hooks: saved extraction rules control 
   await dialog.getByRole("switch", { name: "锁定 USER.md", exact: true }).check();
   await dialog.getByRole("button", { name: "保存", exact: true }).click();
   ui.harness.queueAnalysis({ main: null, new: [], update: [], merge: [], links: [], profile_markdown: "Must not overwrite locked profile" });
-  await assert.rejects(ui.runtime.interval(), /profile update forbidden by the owner settings/); ui.harness.assertOutputsConsumed();
+  await ui.runtime.interval(); ui.harness.assertOutputsConsumed();
   assert.equal(ui.harness.modelCalls.length, calls + 1);
   assert.equal((await ui.runtime.web({ action: "readUser", ownerKey: CONTROLLED_OWNER })).content, "# Queued user profile\n");
   assert.equal((await storedOwner(ui.harness)).candidates.filter(candidate => candidate.status === "failed").length, 5);
+  await dialog.getByRole("button", { name: "关闭", exact: true }).last().click();
+  const failedDialog = await ui.open();
+  assert.match(await failedDialog.locator("[data-memory-queue] .error-banner").innerText(), /profile update forbidden by the owner settings/);
   assert.deepEqual(ui.errors, []);
 });
 
@@ -495,4 +498,39 @@ test("runtime rejects missing or corrupt memory preferences without writing defa
   ui.harness.disk.storage.inspectPreferences("meta", values => { values.state.memoryPreferences = { userDescriptionEnabled: true, autoUpdateEnabled: "false" }; });
   await assert.rejects(ui.runtime.web({ action: "snapshot" }), /auto update enabled/);
   assert.equal(ui.harness.disk.storage.inspectPreferences("meta", values => values.state.memoryPreferences.autoUpdateEnabled), "false");
+});
+
+/** Keeps durable source failures visible while the production scheduler extracts the remaining valid candidates. */
+test("real queue failures stay visible after partial extraction and reopening the settings dialog", async t => {
+  const ui = await controlsPage(t), sources = await ui.runtime.enqueueReplies();
+  ui.harness.deleteMessage(sources[0].timestamp); await ui.runtime.makeDue();
+  ui.harness.queueAnalysis({}); await ui.runtime.interval(); ui.harness.assertOutputsConsumed();
+  const dialog = await ui.open(), queue = dialog.locator("[data-memory-queue]");
+  assert.match(await queue.innerText(), /待处理 0 条.*处理中 0.*失败 1/);
+  assert.match(await queue.locator(".error-banner").innerText(), /提取失败：源消息已删除或所选版本已变化，已跳过该候选/);
+  assert.equal(ui.harness.modelCalls.length, 1);
+  await dialog.getByRole("button", { name: "关闭", exact: true }).last().click();
+  const reopened = await ui.open();
+  assert.match(await reopened.locator("[data-memory-queue] .error-banner").innerText(), /源消息已删除或所选版本已变化/);
+  assert.deepEqual(ui.errors, []);
+});
+
+/** Distinguishes a completed rebuild with skipped windows from an entirely successful rebuild. */
+test("real rebuild reports partial failure after continuing through the remaining windows", async t => {
+  const ui = await controlsPage(t); await ui.runtime.startRebuild();
+  const planned = await storedOwner(ui.harness), failure = new Error("Controlled visible skipped-window failure");
+  ui.harness.queueExecutionError(failure); await ui.runtime.interval();
+  for (let index = 1; index < planned.rebuildProgress.totalWindows; index += 1) {
+    ui.harness.queueAnalysis({}); await ui.runtime.interval();
+  }
+  ui.harness.assertOutputsConsumed();
+  const dialog = await ui.open(); await dialog.getByRole("tab", { name: "历史重建", exact: true }).click();
+  const progress = dialog.locator("[data-memory-rebuild]");
+  assert.match(await progress.innerText(), /已完成（部分失败）/);
+  assert.match(await progress.innerText(), /失败 1/);
+  assert.equal(await progress.locator(".error-banner").innerText(), failure.message);
+  assert.equal(await dialog.getByRole("button", { name: "取消重建", exact: true }).isDisabled(), true);
+  await dialog.locator('[data-memory-chat="' + CONTROLLED_CHAT_ID + '"]').check();
+  assert.equal(await dialog.getByRole("button", { name: "开始重建", exact: true }).isEnabled(), true);
+  assert.deepEqual(ui.errors, []);
 });

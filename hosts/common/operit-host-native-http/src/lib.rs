@@ -47,7 +47,7 @@ struct HttpClientPolicy {
 /// Owns cancellation independently of a bounded WebSocket send queue.
 #[derive(Clone, Debug)]
 struct NativeWebSocketRegistration {
-    commands: tokio::sync::mpsc::Sender<Vec<u8>>,
+    commands: tokio::sync::mpsc::Sender<tungstenite::Message>,
     cancel: tokio::sync::watch::Sender<bool>,
 }
 
@@ -143,8 +143,16 @@ impl WebSocketHost for NativeHttpHost {
             .ok_or_else(|| HostError::new(format!("WebSocket is not open: {streamId}")))?;
         sender
             .commands
-            .try_send(message)
+            .try_send(tungstenite::Message::Binary(message))
             .map_err(|error| HostError::new(error.to_string()))
+    }
+
+    /// Sends one UTF-8 text frame through a native WebSocket.
+    #[allow(non_snake_case)]
+    fn sendWebSocketText(&self, streamId: &str, text: String) -> HostResult<()> {
+        let sender = self.webSockets.lock().map_err(|error| HostError::new(error.to_string()))?
+            .get(streamId).cloned().ok_or_else(|| HostError::new(format!("WebSocket is not open: {streamId}")))?;
+        sender.commands.try_send(tungstenite::Message::Text(text)).map_err(|error| HostError::new(error.to_string()))
     }
 
     /// Closes one native WebSocket.
@@ -164,7 +172,7 @@ impl WebSocketHost for NativeHttpHost {
 /// Drives a socket and its command queue without blocking a network worker.
 async fn executeNativeWebSocket(
     request: WebSocketRequestData,
-    mut commands: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    mut commands: tokio::sync::mpsc::Receiver<tungstenite::Message>,
     mut cancelled: tokio::sync::watch::Receiver<bool>,
     onOpened: WebSocketOpenedCallback,
     onMessage: WebSocketMessageCallback,
@@ -208,13 +216,19 @@ async fn executeNativeWebSocket(
             biased;
             _ = cancelled.changed() => { let _ = socket.close(None).await; return Ok(()); }
             command = commands.recv() => match command {
-                Some(message) => socket.send(tungstenite::Message::Binary(message)).await.map_err(|error| HostError::new(error.to_string()))?,
+                Some(message) => socket.send(message).await.map_err(|error| HostError::new(error.to_string()))?,
                 None => return Ok(()),
             },
             message = socket.next() => match message {
                 Some(Ok(tungstenite::Message::Binary(message))) => onMessage(message),
                 Some(Ok(tungstenite::Message::Text(message))) => onMessage(message.into_bytes()),
-                Some(Ok(tungstenite::Message::Close(_))) | None => return Ok(()),
+                Some(Ok(tungstenite::Message::Close(Some(frame)))) => {
+                    if frame.code != tungstenite::protocol::frame::coding::CloseCode::Normal {
+                        return Err(HostError::new(format!("WebSocket closed with code {}: {}", u16::from(frame.code), frame.reason)));
+                    }
+                    return Ok(());
+                }
+                Some(Ok(tungstenite::Message::Close(None))) | None => return Ok(()),
                 Some(Ok(_)) => {},
                 Some(Err(error)) => return Err(HostError::new(error.to_string())),
             }

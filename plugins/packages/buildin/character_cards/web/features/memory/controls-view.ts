@@ -21,14 +21,14 @@ export function memoryQueueStatus(dialog: OwnerSettingsDialog): string {
   const recovery = queue.failedCandidates === 0 ? "" : `<div class="actions">${dialog.pendingClearFailed
     ? button("confirm-clear-failed-candidates", "确认清除失败记录", "trash", "", "filled") + button("cancel-clear-failed-candidates", "取消", "close")
     : button("retry-failed-candidates", "重试失败候选", "refresh", "", "tonal") + button("clear-failed-candidates", "清除失败记录", "trash", "", "tonal")}</div>${dialog.pendingClearFailed ? '<p class="muted">清除只删除失败候选记录，不影响已写入的记忆。</p>' : ""}`;
-  return `<div class="muted">待处理 ${queue.pendingCandidates} 条 / ${queue.pendingChats} 个聊天 · 处理中 ${queue.processingCandidates} · 失败 ${queue.failedCandidates}</div><div class="muted">${queue.nextRunAtMs === 0 ? "尚未安排下次检查" : `下次检查：约 ${queue.minutesUntilNextRun} 分钟后`}</div>${queue.lastError === "" ? "" : `<p class="error-banner">${escapeHtml(queue.lastError)}</p>`}${recovery}`;
+  return `<div class="muted">待处理 ${queue.pendingCandidates} 条 / ${queue.pendingChats} 个聊天 · 处理中 ${queue.processingCandidates} · 失败 ${queue.failedCandidates}</div><div class="muted">${queue.nextRunAtMs === 0 ? "尚未安排下次检查" : `下次检查：约 ${queue.minutesUntilNextRun} 分钟后`}</div>${queue.lastError === "" ? "" : `<p class="error-banner">提取失败：${escapeHtml(queue.lastError)}</p>`}${recovery}`;
 }
 
 /** Projects genuine rebuild counters and failures without advancing them in the browser. */
 export function memoryRebuildStatus(dialog: OwnerSettingsDialog): string {
   const progress = dialog.progress;
   if (progress === null) return '<p class="muted">正在读取重建进度…</p>';
-  const names: Record<string, string> = { idle: "未开始", preparing: "准备中", running: "重建中", completed: "已完成", cancelled: "已取消", failed: "失败" };
+  const names: Record<string, string> = { idle: "未开始", preparing: "准备中", running: "重建中", completed: progress.failedWindows === 0 ? "已完成" : "已完成（部分失败）", cancelled: "已取消", failed: "失败" };
   return `<p>${escapeHtml(names[progress.status] ?? progress.status)} · 聊天 ${progress.completedChats}/${progress.totalChats} · 窗口 ${progress.completedWindows}/${progress.totalWindows} · 失败 ${progress.failedWindows}</p><p class="muted">已处理源消息 ${progress.processedSourceMessages}/${progress.totalSourceMessages}${progress.currentChatTitle === "" ? "" : ` · ${escapeHtml(progress.currentChatTitle)}`}</p>${memoryRebuilding(dialog) ? `<progress aria-label="重建进度" max="${Math.max(1, progress.totalWindows)}" value="${progress.completedWindows}"></progress><p class="muted">关闭此窗口不会终止后台重建；取消会在当前窗口结束后生效。</p>` : ""}${progress.lastError === "" ? "" : `<p class="error-banner">${escapeHtml(progress.lastError)}</p>`}`;
 }
 

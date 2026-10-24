@@ -522,12 +522,12 @@ mod tests {
         }
 
         /// Reports no environment value in manager tests.
-        fn read_environment_variable(&self, _key: &str) -> Result<Option<String>, String> {
+        fn read_environment_variable(&self, _owner: &operit_plugin_sdk::javascript::JsEnvironmentOwner, _key: &str) -> Result<Option<String>, String> {
             Ok(None)
         }
 
         /// Ignores environment writes in manager tests.
-        fn write_environment_variable(&self, _key: &str, _value: &str) -> Result<(), String> {
+        fn write_environment_variable(&self, _owner: &operit_plugin_sdk::javascript::JsEnvironmentOwner, _key: &str, _value: &str) -> Result<(), String> {
             Ok(())
         }
 

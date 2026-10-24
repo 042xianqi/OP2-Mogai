@@ -33,7 +33,7 @@ test("controlled Chat/AI: the settings page UI channel retries and clears owner-
   const harness = await createMemoryJobsHarness(t), runtime = harness.openRuntime(); await runtime.initialize(); await runtime.bind();
   await runtime.enqueueReplies(); await runtime.makeDue();
   const failure = new Error("Controlled model outage"); harness.queueExecutionError(failure);
-  await assert.rejects(runtime.interval(), error => error === failure);
+  await runtime.interval();
   assert.equal((await readOwner(harness)).candidates.length, 5);
   assert.deepEqual(plain(await runtime.web({ action: "retryFailedCandidates", ownerKey: CONTROLLED_OWNER })), { retried: 5 });
   const retried = await readOwner(harness);
@@ -43,7 +43,7 @@ test("controlled Chat/AI: the settings page UI channel retries and clears owner-
   assert.equal((await readOwner(harness)).candidates.length, 0);
   /** A second genuine terminal set is removed through the explicit confirmation request. */
   await runtime.enqueueReplies(); await runtime.makeDue(); harness.queueExecutionError(failure);
-  await assert.rejects(runtime.interval(), error => error === failure);
+  await runtime.interval();
   assert.equal((await readOwner(harness)).candidates.length, 5);
   assert.deepEqual(plain(await runtime.web({ action: "clearFailedCandidates", ownerKey: CONTROLLED_OWNER })), { cleared: 5 });
   assert.equal((await readOwner(harness)).candidates.length, 0);

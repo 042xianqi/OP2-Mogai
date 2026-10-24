@@ -65,6 +65,7 @@ test('all former Runtime operations invoke toolCall and the ordinary structured 
     ["Tools.Chat.writeExtension({kind:'chat',chatId:'chat'},{nested:[null,false]})", 'chat_write_extension', {target:{kind:'chat',chatId:'chat'},value:{nested:[null,false]}}, {nested:[null,false]}],
     ["Tools.Chat.deleteExtension({kind:'chat',chatId:'chat'})", 'chat_delete_extension', {target:{kind:'chat',chatId:'chat'}}, false],
     ["Tools.Storage.request({op:'close',handle:'database'})", 'storage_request', {request:{op:'close',handle:'database'}}, null],
+    ["Tools.Net.webSocket({op:'send',handle:'socket',text:'hello'})", 'web_socket', {request:{op:'send',handle:'socket',text:'hello'}}, {op:'send'}],
   ];
   for (const [expression, name, parameters, result] of cases) {
     const f = fixture();

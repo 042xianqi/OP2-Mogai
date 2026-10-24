@@ -13,6 +13,9 @@ pub mod StandardChatManagerTool;
 #[path = "StandardFileSystemTools.rs"]
 pub mod StandardFileSystemTools;
 
+#[path = "StandardWebSocketTools.rs"]
+pub(crate) mod StandardWebSocketTools;
+
 #[path = "StandardHttpTools.rs"]
 pub mod StandardHttpTools;
 
