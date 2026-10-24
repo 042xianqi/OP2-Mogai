@@ -1804,6 +1804,7 @@ class _AIChatSurfaceState extends State<_AIChatSurface> {
     }
   }
 
+  /// Applies the submit decision before changing the composer or starting a send.
   Future<void> _sendMessageWithHooksInner() async {
     final text = _messageController.text.trim();
     final hasAttachments = _attachments.isNotEmpty;

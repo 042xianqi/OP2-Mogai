@@ -1719,7 +1719,7 @@ impl JsEngineState {
         Ok(())
     }
 
-    /// Retains the callback context while a JavaScript call owns detached timers.
+    /// Retains the callback context while a call owns pending Promise reactions or host work.
     fn rememberDetachedCallContext(
         &mut self,
         pending: &JsPendingScriptExecution,

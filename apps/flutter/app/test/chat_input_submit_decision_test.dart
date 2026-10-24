@@ -23,7 +23,7 @@ void main() {
     expect(decision.clearInput, isTrue);
   });
 
-  test('normalizes every canonical action case-insensitively', () {
+  test('accepts every canonical Core action', () {
     expect(
       ChatInputSubmitDecision.fromJson(wire('Allow')).action,
       chatInputActionAllow,
@@ -40,14 +40,14 @@ void main() {
       ChatInputSubmitDecision.fromJson(wire('Replace')).action,
       chatInputActionReplace,
     );
-    expect(
-      ChatInputSubmitDecision.fromJson(wire('consume')).action,
-      chatInputActionConsume,
-    );
   });
 
-  test('preserves unknown action spellings for explicit fall-through', () {
-    final decision = ChatInputSubmitDecision.fromJson(wire('Mystery'));
-    expect(decision.action, 'Mystery');
+  test('rejects actions outside the canonical Core contract', () {
+    for (final action in ['consume', 'Mystery', '']) {
+      expect(
+        () => ChatInputSubmitDecision.fromJson(wire(action)),
+        throwsFormatException,
+      );
+    }
   });
 }

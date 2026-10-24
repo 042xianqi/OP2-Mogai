@@ -37,24 +37,13 @@ function submission(payload: ToolPkgTypes.ChatInputEventPayload, chatId: string,
   };
 }
 
-/**
- * Keeps the submitting call's session alive while its fire-and-forget work is queued.
- * The host cleans a completed call whose pending references are zero, and queued
- * continuations of such a session are then activated as cancelled, which kills the
- * background execution before its first native call. A retained timer reference marks
- * the session detached instead; clearing it after settlement releases the reference.
- */
-const DETACHED_WORK_KEEPALIVE_MS = 1_800_000;
-
 /** Records actual settlement or the original failure without retrying or manufacturing a successful receipt. */
 function observe(execution: InputExecution, work: Promise<GroupExecutionOutcome>): void {
-  const keepAlive = setTimeout(() => {}, DETACHED_WORK_KEEPALIVE_MS);
-  const release = () => clearTimeout(keepAlive);
   void work.then(
     /** Publishes only the controller's validated result and precise native message locators. */
-    outcome => { execution.status = "settled"; execution.outcome = outcome; release(); },
+    outcome => { execution.status = "settled"; execution.outcome = outcome; },
     /** Retains the original rejected error and exposes the background failure through the plugin log. */
-    failure => { execution.status = "failed"; execution.failure = failure; console.error("Group input " + execution.input.submissionId + " failed: " + String(failure)); release(); },
+    failure => { execution.status = "failed"; execution.failure = failure; console.error("Group input " + execution.input.submissionId + " failed: " + String(failure)); },
   );
 }
 

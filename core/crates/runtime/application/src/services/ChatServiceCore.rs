@@ -1375,31 +1375,6 @@ impl ChatServiceCore {
                 .setInputProcessingStateForChat(currentChatId, InputProcessingState::Idle);
             return false;
         }
-        // The configuration only gates summarization; the latest recorded assistant author
-        // keeps the resolution exact instead of failing multi-participant conversations.
-        let summaryParticipantId = match self.messageCoordinationDelegate.as_ref() {
-            Some(delegate) => delegate
-                .latestAssistantParticipantId(&enhancedAiService, &currentChatId)
-                .await,
-            None => None,
-        };
-        let configuration = match enhancedAiService.resolveChatConfigurationForOptions(
-            &operit_providers::chat::EnhancedAIService::SendMessageOptions {
-                chatId: Some(currentChatId.clone()),
-                executionParticipantId: summaryParticipantId,
-                ..operit_providers::chat::EnhancedAIService::SendMessageOptions::new()
-            },
-        ).await {
-            Ok(configuration) => configuration,
-            Err(error) => {
-                self.messageProcessingDelegate
-                    .setInputProcessingStateForChat(
-                        currentChatId,
-                        InputProcessingState::Error { message: error.to_string() },
-                    );
-                return false;
-            }
-        };
         let summaryMessage = match AIMessageManager::summarizeMemory(
             &mut enhancedAiService,
             messagesToSummarize,

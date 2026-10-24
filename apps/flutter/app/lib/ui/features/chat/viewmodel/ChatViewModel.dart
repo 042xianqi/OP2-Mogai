@@ -79,27 +79,18 @@ class ChatInputSubmitDecision {
     required this.timedOut,
   });
 
-  /// Parses the JSON decision returned by the Core ToolPkg chat input bridge.
-  ///
-  /// Core serializes the canonical capitalized actions (`Allow`, `Block`,
-  /// `Consume`, `Replace`); lowercase protocol spellings are rejected there,
-  /// so the value is normalized case-insensitively instead of being compared
-  /// with ad-hoc literals at every call site.
+  /// Decodes exactly the canonical submit actions declared by the Core bridge.
   factory ChatInputSubmitDecision.fromJson(Map<String, Object?> json) {
-    final rawAction = (json['action'] as String).toLowerCase();
-    final String action;
-    switch (rawAction) {
-      case 'allow':
-        action = chatInputActionAllow;
-      case 'block':
-        action = chatInputActionBlock;
-      case 'consume':
-        action = chatInputActionConsume;
-      case 'replace':
-        action = chatInputActionReplace;
-      default:
-        action = json['action'] as String;
-    }
+    final action = switch (json['action']) {
+      chatInputActionAllow => chatInputActionAllow,
+      chatInputActionBlock => chatInputActionBlock,
+      chatInputActionConsume => chatInputActionConsume,
+      chatInputActionReplace => chatInputActionReplace,
+      final value => throw FormatException(
+        'Unsupported chat input submit action',
+        value,
+      ),
+    };
     return ChatInputSubmitDecision(
       action: action,
       text: json['text'] == null ? null : json['text'] as String,

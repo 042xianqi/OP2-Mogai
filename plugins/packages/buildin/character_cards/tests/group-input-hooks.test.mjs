@@ -141,17 +141,17 @@ test("registered group input sends complete input once and ordered turns use rea
   assert.deepEqual(runtime.failures, []);
 });
 
-/** Retains the submitting call's session across fire-and-forget work and releases it after settlement. */
-test("consumed group submissions hold a session reference until the background work settles", async t => {
+/** Leaves background Promise ownership to the shared runtime without scheduling artificial timers. */
+test("consumed group submissions settle without plugin keepalive timers", async t => {
   const runtime = await environment(t); await bindGroup(runtime);
   runtime.tools.Chat.call = async () => ({ text: JSON.stringify({ rounds: [[]] }) });
   runtime.tools.Chat.sendMessage = async request => receipt(request);
   const admitted = await runtime.submit();
   assert.equal(admitted.action, "Consume");
-  assert.ok(runtime.timers.created >= 1, "a detached keepAlive reference must be retained");
+  assert.equal(runtime.timers.created, 0, "group execution must not schedule an artificial keepalive");
   const done = await settled(runtime, admitted.metadata.submissionId);
   assert.equal(done.status, "settled", done.error);
-  assert.equal(runtime.timers.cleared, runtime.timers.created, "every retained reference must be released after settlement");
+  assert.equal(runtime.timers.cleared, 0);
 });
 
 /** Cancels during real planner suspension, keeps duplicate input intact and resumes only by an explicit UI action. */

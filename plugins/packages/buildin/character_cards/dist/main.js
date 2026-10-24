@@ -10221,24 +10221,18 @@ function submission(payload, chatId, selection) {
     replyToMessageTimestamp: payload.replyToMessageTimestamp
   };
 }
-var DETACHED_WORK_KEEPALIVE_MS = 18e5;
 function observe(execution, work) {
-  const keepAlive = setTimeout(() => {
-  }, DETACHED_WORK_KEEPALIVE_MS);
-  const release = () => clearTimeout(keepAlive);
   void work.then(
     /** Publishes only the controller's validated result and precise native message locators. */
     (outcome) => {
       execution.status = "settled";
       execution.outcome = outcome;
-      release();
     },
     /** Retains the original rejected error and exposes the background failure through the plugin log. */
     (failure2) => {
       execution.status = "failed";
       execution.failure = failure2;
       console.error("Group input " + execution.input.submissionId + " failed: " + String(failure2));
-      release();
     }
   );
 }
