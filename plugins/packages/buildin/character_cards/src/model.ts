@@ -248,6 +248,8 @@ export type Request =
   | { action: "updateCurrentChatMemory"; chatId: string }
   | { action: "retryFailedCandidates"; chatId: string }
   | { action: "clearFailedCandidates"; chatId: string }
+  | { action: "retryFailedCandidates"; ownerKey: string }
+  | { action: "clearFailedCandidates"; ownerKey: string }
   | { action: "writeGlobalMemoryPreference"; key: keyof GlobalMemoryPreferences; value: boolean }
   | { action: "searchMemoryDebug"; ownerKey: string; query: string; config: MemorySearchConfig; relevanceThreshold: number }
   | { action: "readMemoryLink"; ownerKey: string; linkId: string }

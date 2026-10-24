@@ -5908,13 +5908,13 @@ function dispatch(request, host) {
       case "retryFailedCandidates":
         return executeDomain(
           "memory.candidates.retryFailed",
-          { ownerKey: yield menuMemoryOwner(request.chatId, host) },
+          { ownerKey: "ownerKey" in request ? request.ownerKey : yield menuMemoryOwner(request.chatId, host) },
           host
         );
       case "clearFailedCandidates":
         return executeDomain(
           "memory.candidates.clearFailed",
-          { ownerKey: yield menuMemoryOwner(request.chatId, host) },
+          { ownerKey: "ownerKey" in request ? request.ownerKey : yield menuMemoryOwner(request.chatId, host) },
           host
         );
       case "writeGlobalMemoryPreference":
