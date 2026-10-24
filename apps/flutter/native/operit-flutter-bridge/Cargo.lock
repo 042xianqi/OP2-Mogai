@@ -2372,7 +2372,6 @@ dependencies = [
 name = "operit-host-native-storage"
 version = "0.1.0"
 dependencies = [
- "fs2",
  "operit-host-api",
  "rusqlite",
  "uuid",
