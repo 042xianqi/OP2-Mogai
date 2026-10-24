@@ -225,3 +225,6 @@ apps/flutter/app/macos/Runner/Configs/Signing.local.xcconfig
 # Build-owned Flutter engine font resources
 apps/flutter/app/web/fonts/
 tools/theme/preview/web/fonts/
+
+# 本地构建产物
+*.toolpkg
