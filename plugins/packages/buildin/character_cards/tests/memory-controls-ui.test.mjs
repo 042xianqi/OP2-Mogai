@@ -254,9 +254,17 @@ test("real main IPC and local HTTP provider: saved embedding configuration sends
   await dialog.getByLabel("向量权重", { exact: true }).fill("1");
   await dialog.getByLabel("检索查询", { exact: true }).fill("Real provider query");
   await dialog.getByRole("button", { name: "使用当前权重检索", exact: true }).click();
-  assert.equal(received.length, 2); assert.deepEqual(received[1].body, { input: "Real provider query", model: "actual-local-model", encoding_format: "float" });
+  assert.equal(received.length, 4);
+  assert.deepEqual(received.slice(1).map(
+    /** Requires each explicit query term rather than the removed whole-query vector path. */
+    request => request.body,
+  ), ["Real", "provider", "query"].map(
+    /** Preserves the configured model and actual provider request encoding. */
+    input => ({ input, model: "actual-local-model", encoding_format: "float" }),
+  ));
   const debug = plain(await ui.runtime.web({ action: "searchMemoryDebug", ownerKey: CONTROLLED_OWNER, query: "Real provider query", config: { scoreMode: "BALANCED", keywordWeight: 0, tagWeight: 0, vectorWeight: 1, edgeWeight: 0 }, relevanceThreshold: 0 }));
-  assert.ok(debug.candidates[0].vectorScore > 0.999); assert.ok(debug.candidates[0].passedThreshold);
+  assert.ok(Math.abs(debug.candidates[0].vectorScore - Math.sqrt(3) * (1 + Math.sqrt(0.5) / 61)) < 1e-12);
+  assert.equal(received.length, 4, "Repeated per-term search must reuse the persisted cache"); assert.ok(debug.candidates[0].passedThreshold);
   assert.equal((await ui.runtime.web({ action: "readMemorySearchConfig", ownerKey: CONTROLLED_OWNER })).vectorWeight, 0);
   const cached = (await storedOwner(ui.harness)).embeddings;
   fail = true; await dialog.getByRole("button", { name: "重建 Embedding", exact: true }).click();
@@ -294,10 +302,13 @@ test("real persisted-message and interval hooks: saved extraction rules control 
   await dialog.getByRole("switch", { name: "锁定 USER.md", exact: true }).check();
   await dialog.getByRole("button", { name: "保存", exact: true }).click();
   ui.harness.queueAnalysis({ main: null, new: [], update: [], merge: [], links: [], profile_markdown: "Must not overwrite locked profile" });
-  await assert.rejects(ui.runtime.interval(), /profile update forbidden by the owner settings/); ui.harness.assertOutputsConsumed();
+  await ui.runtime.interval(); ui.harness.assertOutputsConsumed();
   assert.equal(ui.harness.modelCalls.length, calls + 1);
   assert.equal((await ui.runtime.web({ action: "readUser", ownerKey: CONTROLLED_OWNER })).content, "# Queued user profile\n");
   assert.equal((await storedOwner(ui.harness)).candidates.filter(candidate => candidate.status === "failed").length, 5);
+  await dialog.getByRole("button", { name: "关闭", exact: true }).last().click();
+  const failedDialog = await ui.open();
+  assert.match(await failedDialog.locator("[data-memory-queue] .error-banner").innerText(), /profile update forbidden by the owner settings/);
   assert.deepEqual(ui.errors, []);
 });
 
@@ -416,6 +427,7 @@ test("graph canonical relationship editing and full memory backup import/export 
   await editor.getByRole("button", { name: "保存", exact: true }).click();
   assert.equal((await storedOwner(ui.harness)).links[0].type_, "canonical-edited");
   assert.equal((await storedOwner(ui.harness)).links[0].description, link.description);
+  await graph.getByRole("button", { name: "更多操作", exact: true }).click();
   await graph.getByRole("button", { name: "导出记忆 JSON", exact: true }).click();
   const exported = ui.page.getByRole("dialog", { name: "导出 JSON", exact: true });
   const content = await exported.getByLabel("JSON 内容").inputValue(), backup = JSON.parse(content);
@@ -435,6 +447,7 @@ test("graph canonical relationship editing and full memory backup import/export 
   await ui.page.evaluate(() => { window.rejectExport = false; });
   await exported.getByRole("button", { name: "保存文件", exact: true }).click();
   assert.equal((await ui.harness.disk.readBytes(path)).toString("utf8"), content);
+  await graph.getByRole("button", { name: "更多操作", exact: true }).click();
   await graph.getByRole("button", { name: "导入记忆 JSON", exact: true }).click();
   const imported = ui.page.getByRole("dialog", { name: "导入记忆 JSON", exact: true });
   await imported.getByLabel("相同 UUID 记忆处理", { exact: true }).selectOption("UPDATE");
@@ -485,4 +498,39 @@ test("runtime rejects missing or corrupt memory preferences without writing defa
   ui.harness.disk.storage.inspectPreferences("meta", values => { values.state.memoryPreferences = { userDescriptionEnabled: true, autoUpdateEnabled: "false" }; });
   await assert.rejects(ui.runtime.web({ action: "snapshot" }), /auto update enabled/);
   assert.equal(ui.harness.disk.storage.inspectPreferences("meta", values => values.state.memoryPreferences.autoUpdateEnabled), "false");
+});
+
+/** Keeps durable source failures visible while the production scheduler extracts the remaining valid candidates. */
+test("real queue failures stay visible after partial extraction and reopening the settings dialog", async t => {
+  const ui = await controlsPage(t), sources = await ui.runtime.enqueueReplies();
+  ui.harness.deleteMessage(sources[0].timestamp); await ui.runtime.makeDue();
+  ui.harness.queueAnalysis({}); await ui.runtime.interval(); ui.harness.assertOutputsConsumed();
+  const dialog = await ui.open(), queue = dialog.locator("[data-memory-queue]");
+  assert.match(await queue.innerText(), /待处理 0 条.*处理中 0.*失败 1/);
+  assert.match(await queue.locator(".error-banner").innerText(), /提取失败：源消息已删除或所选版本已变化，已跳过该候选/);
+  assert.equal(ui.harness.modelCalls.length, 1);
+  await dialog.getByRole("button", { name: "关闭", exact: true }).last().click();
+  const reopened = await ui.open();
+  assert.match(await reopened.locator("[data-memory-queue] .error-banner").innerText(), /源消息已删除或所选版本已变化/);
+  assert.deepEqual(ui.errors, []);
+});
+
+/** Distinguishes a completed rebuild with skipped windows from an entirely successful rebuild. */
+test("real rebuild reports partial failure after continuing through the remaining windows", async t => {
+  const ui = await controlsPage(t); await ui.runtime.startRebuild();
+  const planned = await storedOwner(ui.harness), failure = new Error("Controlled visible skipped-window failure");
+  ui.harness.queueExecutionError(failure); await ui.runtime.interval();
+  for (let index = 1; index < planned.rebuildProgress.totalWindows; index += 1) {
+    ui.harness.queueAnalysis({}); await ui.runtime.interval();
+  }
+  ui.harness.assertOutputsConsumed();
+  const dialog = await ui.open(); await dialog.getByRole("tab", { name: "历史重建", exact: true }).click();
+  const progress = dialog.locator("[data-memory-rebuild]");
+  assert.match(await progress.innerText(), /已完成（部分失败）/);
+  assert.match(await progress.innerText(), /失败 1/);
+  assert.equal(await progress.locator(".error-banner").innerText(), failure.message);
+  assert.equal(await dialog.getByRole("button", { name: "取消重建", exact: true }).isDisabled(), true);
+  await dialog.locator('[data-memory-chat="' + CONTROLLED_CHAT_ID + '"]').check();
+  assert.equal(await dialog.getByRole("button", { name: "开始重建", exact: true }).isEnabled(), true);
+  assert.deepEqual(ui.errors, []);
 });

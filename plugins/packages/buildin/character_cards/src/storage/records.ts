@@ -120,11 +120,11 @@ export function records(state: CharacterState): StoredRecord[] {
   return result;
 }
 
-/** Reconstructs a validated operation snapshot from separately persisted host records. */
-export function stateFromRecords(
+/** Assembles stored records so migrations can repair released references before business validation. */
+export function decodeStateFromRecords(
   metadata: Storage.Value,
   rows: StoredRecord[],
-): CharacterState {
+) {
   assertObject(metadata, "character database metadata");
   if (metadata.migrationStatus === "writing" || metadata.legacyImportPending === true)
     throw new Error("Character migration has not completed");
@@ -188,6 +188,12 @@ export function stateFromRecords(
     }
     entries.push(row.value.record);
   }
+  return state;
+}
+
+/** Reconstructs and validates the current business snapshot after any released-data migration. */
+export function stateFromRecords(metadata: Storage.Value, rows: StoredRecord[]): CharacterState {
+  const state = decodeStateFromRecords(metadata, rows);
   assertCharacterState(state);
   return state;
 }

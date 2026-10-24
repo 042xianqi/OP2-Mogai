@@ -1,17 +1,18 @@
 /**
  * Preserves the copied v1 environment-variable signatures using the canonical v2 host methods.
  * @param {Pick<typeof import('../../../../../../../plugins/types/software_settings').SoftwareSettings, 'readEnvironmentVariable' | 'writeEnvironmentVariable'>} current
+ * @param {() => string} packageName
  * @returns {Pick<typeof import('../../../../../../../plugins/types-v1/software_settings').SoftwareSettings, 'readEnvironmentVariable' | 'writeEnvironmentVariable'>}
  */
-function __operitCreateV1SoftwareSettings(current) {
+function __operitCreateV1SoftwareSettings(current, packageName) {
     return {
         /** Reads the exact configured variable and preserves the host result and rejection. */
         readEnvironmentVariable(key) {
-            return current.readEnvironmentVariable(key);
+            return current.readEnvironmentVariable(packageName(), key);
         },
         /** Writes through the canonical host without changing the legacy optional value contract. */
         writeEnvironmentVariable(key, value) {
-            return current.writeEnvironmentVariable(key, value);
+            return current.writeEnvironmentVariable(packageName(), key, value);
         },
     };
 }
@@ -24,7 +25,16 @@ function installV1Adapters(runtime) {
     var Tools = runtime.Tools;
     var api = runtime.__operitToolPkgApi;
     var currentSettings = Object.assign({}, Tools.SoftwareSettings);
-    var legacySettings = __operitCreateV1SoftwareSettings(currentSettings);
+    /** Resolves the native installation owner retained by the exact active call. */
+    function environmentPackageName() {
+        var state = runtime.__operitGetCallState(api.currentCallId());
+        var owner = state.params.__operit_environment_owner;
+        if (typeof owner !== 'string' || !owner.trim()) {
+            throw new Error('Environment access requires an owning package installation');
+        }
+        return owner;
+    }
+    var legacySettings = __operitCreateV1SoftwareSettings(currentSettings, environmentPackageName);
     for (var [settingsMethod, settingsImplementation] of Object.entries(legacySettings)) {
         Tools.SoftwareSettings[settingsMethod] = api.method()
             .between('1.0.0', '2.0.0', settingsImplementation)
@@ -111,6 +121,41 @@ function installV1Adapters(runtime) {
         }
         return participant;
     }
+    /**
+     * Registers base64 image bytes and returns the historical link string.
+     * @param {string} base64
+     * @param {string} [mimeType]
+     */
+    function registerImageFromBase64(base64, mimeType) {
+        if (typeof base64 !== 'string' || base64.trim() === '') {
+            throw new Error('registerImageFromBase64 requires image data');
+        }
+        return __operitRegisterV1Image('base64', base64, mimeType);
+    }
+    /**
+     * Registers an Android device image path and returns the historical link string.
+     * @param {string} path
+     */
+    function registerImageFromPath(path) {
+        return __operitRegisterV1Image('path', path, null);
+    }
+    /**
+     * Exposes one historical global only while the active call uses API 1.0.0 or 1.0.1.
+     * @param {string} name
+     * @param {Function} implementation
+     */
+    function exposeLegacyFunction(name, implementation) {
+        var gated = api.method().between('1.0.0', '2.0.0', implementation).build(name);
+        Object.defineProperty(globalThis, name, {
+            configurable: true,
+            get: function() {
+                var version = api.currentVersion();
+                return version === '1.0.0' || version === '1.0.1' ? gated : undefined;
+            },
+        });
+    }
+    exposeLegacyFunction('registerImageFromBase64', registerImageFromBase64);
+    exposeLegacyFunction('registerImageFromPath', registerImageFromPath);
     var legacyGetter = api.method().between('1.0.0', '2.0.0', legacyCallerCardId).build('getCallerCardId');
     Object.defineProperty(globalThis, 'getCallerCardId', {
         configurable: true,

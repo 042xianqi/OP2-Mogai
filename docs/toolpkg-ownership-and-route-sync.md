@@ -2,7 +2,13 @@
 
 A manifest can fix its installation scope with `"installation_scope": "device"` or `"installation_scope": "space"`. The parser, package registration, bundled import, marketplace install, and scope moves enforce this declaration. A fixed-scope package cannot be installed or moved into the other scope. The package UI shows its required scope and hides scope moves.
 
+Older binaries registered every built-in package in device scope regardless of its manifest. When an upgrade leaves both a legacy device record and the required space record for the same built-in package, the package scan merges their enabled lists, members, subpackage states, and order into the space owner, then removes the stale device record. Only unambiguous built-in duplicates are healed; non-built-in owners and every other duplicate still fail with an ownership conflict instead of being merged.
+
 Device installations own local data. Space installations own synchronized data. Storage synchronization follows the registered directory owner; `Storage.open` does not accept a synchronization switch. Goal and Plan both require a space installation and keep their state in their own databases, independently of chat workspaces. Workspace records are not migrated.
+
+Package environment variables belong to the installation owner, including all of its subpackages. The environment editor, JavaScript `getEnv`/`setEnv`, and environment tools use the same owner resolution. Values are stored in `runtime/extensions/{scope}/plugins/configs/{owner}/environment.json` through the existing runtime storage host and file synchronization service. Space installations synchronize these configuration snapshots; device installations keep them local. Moving or deleting an installation moves or deletes its environment with the rest of its configuration. Concurrent changes to the same environment file follow the existing complete-file conflict rules.
+
+Environment tools and preference APIs require an explicit package name. Package JavaScript obtains its owner from the native call context; asynchronous callbacks retain that context, and registration uses the scope fixed before module evaluation. Missing package variables remain absent. The retired node-global preferences file and process environment are not runtime data sources. Existing declared values are imported once into each installation's environment before registration evaluates the main module; Space imports are initial seeds below explicit edits in conflict order. The editor saves only changed keys and preserves unrelated values.
 
 ## Implemented methods and decorators
 

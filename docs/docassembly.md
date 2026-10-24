@@ -494,7 +494,6 @@ root 下的主要路径：
 runtime/config/preferences/
   user_preferences.preferences.json
   api_settings.json
-  env_preferences.preferences.json
   github_auth_preferences.json
   character_cards.preferences.json
   character_groups.preferences.json
@@ -515,7 +514,10 @@ runtime/data/memory/shared/
 
 runtime/extensions/skills/
 runtime/extensions/packages/
-runtime/extensions/plugins/configs/
+runtime/extensions/device/plugins/configs/{owner}/
+  environment.json
+runtime/extensions/space/plugins/configs/{owner}/
+  environment.json
 runtime/extensions/mcp/
 runtime/extensions/mcp/mcp_config.json
 runtime/extensions/mcp/server_status.json
@@ -532,6 +534,10 @@ runtime/exports/
 
 workspaces/
 ```
+
+包和插件的环境变量由安装归属持有，子包共享所属安装的配置。本设备安装的环境变量保留在 `device`；设备空间安装的环境变量通过现有文件同步链路同步。安装移动、卸载时，环境变量随配置目录一起移动、删除。旧全局环境变量文件仅用于按声明键执行一次性迁移。
+
+日志保留策略：`runtime/logs/` 下的 `operit.log` 与 `toolpkg.log` 由 `AppLogger` 写入，单文件上限 4 MiB，超限后淘汰最早的记录并保留最新约 2 MiB（淘汰处留一行标记）。
 
 路径约定：
 
@@ -2004,25 +2010,25 @@ x86_64
 App assets：
 
 ```text
-operit2-app-windows-x86_64.zip
-operit2-app-windows-aarch64.zip
-operit2-app-linux-x86_64.tar.gz
-operit2-app-linux-aarch64.tar.gz
-operit2-app-macos-universal.zip
-operit2-app-android-arm64-v8a.apk
-operit2-app-android-armeabi-v7a.apk
-operit2-app-android-x86_64.apk
+operit2-app-windows-x86_64-<release-version>.zip
+operit2-app-windows-aarch64-<release-version>.zip
+operit2-app-linux-x86_64-<release-version>.tar.gz
+operit2-app-linux-aarch64-<release-version>.tar.gz
+operit2-app-macos-universal-<release-version>.zip
+operit2-app-android-arm64-v8a-<release-version>.apk
+operit2-app-android-armeabi-v7a-<release-version>.apk
+operit2-app-android-x86_64-<release-version>.apk
 ```
 
 CLI assets：
 
 ```text
-operit2-cli-windows-x86_64.zip
-operit2-cli-windows-aarch64.zip
-operit2-cli-linux-x86_64.tar.gz
-operit2-cli-linux-aarch64.tar.gz
-operit2-cli-macos-x86_64.tar.gz
-operit2-cli-macos-aarch64.tar.gz
+operit2-cli-windows-x86_64-<release-version>.zip
+operit2-cli-windows-aarch64-<release-version>.zip
+operit2-cli-linux-x86_64-<release-version>.tar.gz
+operit2-cli-linux-aarch64-<release-version>.tar.gz
+operit2-cli-macos-x86_64-<release-version>.tar.gz
+operit2-cli-macos-aarch64-<release-version>.tar.gz
 ```
 
 下载要求：

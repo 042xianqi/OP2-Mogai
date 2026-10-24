@@ -46,9 +46,9 @@ function engine(version = '1.0.0') {
     Files: files,
     SoftwareSettings: {
       /** Returns the exact current host result for the versioned legacy variable reader. */
-      async readEnvironmentVariable(key) { calls.push({ name: 'readEnvironmentVariable', args: [key] }); return { key, value: 'configured', exists: true, toString() { return this.value; } }; },
+      async readEnvironmentVariable(packageName, key) { calls.push({ name: 'readEnvironmentVariable', args: [packageName, key] }); return { key, value: 'configured', exists: true, toString() { return this.value; } }; },
       /** Preserves the optional value argument and reports the actual modeled write. */
-      async writeEnvironmentVariable(key, value) { calls.push({ name: 'writeEnvironmentVariable', args: [key, value] }); return { key, requestedValue: value, value, exists: value !== undefined, cleared: value === undefined, toString() { return this.key; } }; },
+      async writeEnvironmentVariable(packageName, key, value) { calls.push({ name: 'writeEnvironmentVariable', args: [packageName, key, value] }); return { key, requestedValue: value, value, exists: value !== undefined, cleared: value === undefined, toString() { return this.key; } }; },
     },
     Chat: {
       /** Captures the current object-based creation contract. */
@@ -72,7 +72,7 @@ function engine(version = '1.0.0') {
     },
   };
   const context = vm.createContext({
-    version, params: {}, Tools: tools, __operitCurrentCallId: 'call',
+    version, params: { __operit_environment_owner: 'test.package' }, Tools: tools, __operitCurrentCallId: 'call',
     /** Retains the actual owner call while the production dependency callback is outstanding. */
     __operitRetainCallReference(callId) { assert.equal(callId, 'call'); },
     /** Releases the same retained dependency call after native completion. */
@@ -112,7 +112,7 @@ function engine(version = '1.0.0') {
   const rust = source('core/crates/plugin/sdk/src/toolpkg/ToolPkgApiRuntimeScript.rs');
   const start = rust.indexOf('r#"') + 3;
   vm.runInContext(rust.slice(start, rust.indexOf('"#', start)), context);
-  for (const file of ['files.js', 'chat.js', 'workflow.js', 'characters.js', 'memory.js', 'install.js']) vm.runInContext(source(adapterRoot + file), context);
+  for (const file of ['files.js', 'media.js', 'chat.js', 'workflow.js', 'characters.js', 'memory.js', 'install.js']) vm.runInContext(source(adapterRoot + file), context);
   return { context, tools, calls };
 }
 
@@ -270,6 +270,27 @@ test('legacy caller IDs are provider-scoped and absent from the current contract
   assert.throws(() => context.getCallerCardId(), /another provider participant/);
   context.params = {};
   assert.equal(context.getCallerCardId(), undefined);
+});
+
+/** Checks the historical image globals stay synchronous and disappear on API 2. */
+test('v1 image registration returns a link and maps Android paths', () => {
+  const { context } = engine();
+  const requests = [];
+  context.__operitNativeRegisterMedia = request => {
+    requests.push(JSON.parse(request));
+    return JSON.stringify({ id: 'img', mimeType: 'image/png', link: '<link type="image" id="img"></link>', width: 2, height: 3 });
+  };
+  assert.equal(context.registerImageFromBase64('abc', 'image/png'), '<link type="image" id="img"></link>');
+  assert.equal(context.registerImageFromPath('/storage/emulated/0/photo.png'), '<link type="image" id="img"></link>');
+  assert.deepEqual(requests, [
+    { type: 'image', source: 'base64', base64: 'abc', mimeType: 'image/png' },
+    { type: 'image', source: 'path', path: '/sdcard/photo.png' },
+  ]);
+  assert.throws(() => context.registerImageFromBase64('  '), /requires image data/);
+  assert.throws(() => context.registerImageFromPath('/unsupported/photo.png'), /no VFS mapping/);
+  context.version = '2.0.0';
+  assert.equal(context.registerImageFromBase64, undefined);
+  assert.equal(context.registerImageFromPath, undefined);
 });
 
 /** Ensures this task never registers the legacy settings-management methods. */
@@ -452,6 +473,38 @@ test('legacy chat streaming projects growing snapshots and preserves completion'
   assert.deepEqual(events.slice(1).map(event => event.chunkIndex), [0, 1]);
 });
 
+/** Keeps declared legacy send controls on the existing native tool and preserves its actual receipt and failure. */
+test('legacy chat streaming retains declared controls through native ordinary send', async () => {
+  const { context } = engine();
+  for (const controls of [{}, { persist_turn: false }, { hide_user_message: true }, { disable_warning: true }, { timeout_ms: 4321 }]) {
+    const events = [], requests = [], roles = [];
+    const receipt = { chatId: 'current-chat', message: 'hello', aiResponse: '真实回复', sentAt: 12 };
+    const options = Object.freeze({ ...controls, runtime: 'main', notify_reply: true,
+      onIntermediateResult(event) { events.push(plain(event)); } });
+    const sender = Object.keys(controls).length === 0 ? 'Speaker' : undefined;
+    let failure;
+    const adapter = context.__operitCreateV1Chat({
+      async listAll() { return { currentChatId: 'current-chat' }; },
+      async *sendMessageStreaming() { throw new Error('Unexpected structured streaming'); },
+    }, async id => { roles.push(id); }, async params => {
+      requests.push(plain(params));
+      if (failure) throw failure;
+      return receipt;
+    }, async () => {});
+    assert.equal(await adapter.sendMessageStreaming('hello', undefined, 'role-one', sender, options), receipt);
+    assert.deepEqual(roles, ['role-one']);
+    assert.deepEqual(requests[0], { ...controls, runtime: 'main', notify_reply: true, message: 'hello',
+      chat_id: 'current-chat', participant_id: 'role-one', ...(sender === undefined ? {} : { sender_name: sender }) });
+    assert.deepEqual(events.map(event => [event.type, event.chunk, event.receivedChars]),
+      [['start', undefined, 0], ['chunk', '真实回复', 4]]);
+    assert.equal(Object.hasOwn(options, 'onIntermediateResult'), true);
+    failure = new Error('native send failed');
+    events.length = 0;
+    await assert.rejects(adapter.sendMessageStreaming('hello', undefined, 'role-one', sender, options), caught => caught === failure);
+    assert.deepEqual(events.map(event => event.type), ['start']);
+  }
+});
+
 /** Ensures malformed large identities, real host failures and rewritten snapshots never become successful empty results. */
 test('legacy adapters reject precision loss and propagate original provider failures', async t => {
   const runtime = await roleProvider(t);
@@ -511,13 +564,27 @@ test('legacy role callers keep the actual shared memory binding', async t => {
 test('V1 environment adapters preserve exact host results and optional write arguments', async () => {
   for (const version of ['1.0.0', '1.0.1', '2.0.0']) {
     const { context, tools, calls } = engine(version);
-    const result = await tools.SoftwareSettings.readEnvironmentVariable('EXACT_KEY');
+    const args = version === '2.0.0' ? ['test.package', 'EXACT_KEY'] : ['EXACT_KEY'];
+    const result = await tools.SoftwareSettings.readEnvironmentVariable(...args);
     assert.equal(result.key, 'EXACT_KEY'); assert.equal(result.value, 'configured'); assert.equal(result.toString(), 'configured');
-    await tools.SoftwareSettings.writeEnvironmentVariable('EXACT_KEY');
-    assert.deepEqual(calls.map(call => call.args), [['EXACT_KEY'], ['EXACT_KEY', undefined]]);
+    await tools.SoftwareSettings.writeEnvironmentVariable(...args);
+    assert.deepEqual(calls.map(call => call.args), [['test.package', 'EXACT_KEY'], ['test.package', 'EXACT_KEY', undefined]]);
     const original = new Error('EXACT_HOST_REJECTION');
-    const adapter = context.__operitCreateV1SoftwareSettings({ readEnvironmentVariable: async () => { throw original; }, writeEnvironmentVariable: async () => { throw original; } });
+    const adapter = context.__operitCreateV1SoftwareSettings({ readEnvironmentVariable: async () => { throw original; }, writeEnvironmentVariable: async () => { throw original; } }, () => 'test.package');
     await assert.rejects(adapter.readEnvironmentVariable('EXACT_KEY'), error => error === original);
     await assert.rejects(adapter.writeEnvironmentVariable('EXACT_KEY'), error => error === original);
   }
+});
+
+/** Keeps each legacy environment call bound to the native installation of its current call. */
+test('V1 environment adapters use the current native installation and reject unowned calls', async () => {
+  const { context, tools, calls } = engine('1.0.0');
+  context.params.__operit_environment_owner = 'first.package';
+  await tools.SoftwareSettings.readEnvironmentVariable('TOKEN');
+  context.params.__operit_environment_owner = 'second.package';
+  await tools.SoftwareSettings.writeEnvironmentVariable('TOKEN', 'value');
+  assert.deepEqual(calls.map(call => call.args), [['first.package', 'TOKEN'], ['second.package', 'TOKEN', 'value']]);
+  delete context.params.__operit_environment_owner;
+  assert.throws(() => tools.SoftwareSettings.readEnvironmentVariable('TOKEN'), /Environment access requires an owning package installation/);
+  assert.equal(calls.length, 2);
 });

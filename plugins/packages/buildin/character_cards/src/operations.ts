@@ -1,4 +1,5 @@
 import { uuid } from "./identity";
+import { searchMemoryChunks } from "./memory-search";
 import type { DomainInput, DomainOperation, DomainOutput } from "./api";
 import type { CharacterRepository } from "./canonical";
 import type { Card, Memory, MemoryLink } from "./model";
@@ -6,9 +7,9 @@ import { createCharacterDraft, createGroupDraft, createTagDraft } from "./drafts
 import { parseDomainPayload, resolveChatConfiguration } from "./domain";
 import type { ChatConfigurationService } from "./domain";
 import { autoCategorizeMemory, updateChatMemory } from "./memory-jobs/analysis";
-import { listMemoryChats, requireChat } from "./memory-jobs/chat";
+import { listMemoryChats, pruneMissingMemoryChats, requireChat } from "./memory-jobs/chat";
 import { rebuildMemoryEmbeddings } from "./memory-jobs/embeddings";
-import { enqueueCandidate, startMemoryRebuild } from "./memory-jobs/scheduler";
+import { clearFailedCandidates, enqueueCandidate, retryFailedCandidates, startMemoryRebuild } from "./memory-jobs/scheduler";
 import { decodeCharacterBackup, decodeGroupBackup, decodeMemoryBackup, exportCharacterBackup, exportGroupBackup, exportMemoryBackup } from "./backup";
 import { decodeCharacterImport, decodeGroupImport, encodeCharacterExport } from "./serialization";
 import { assertCard, assertGroup, assertMemory, assertNumber, assertStrings, assertTag, normalizeNames, requireId, requireName } from "./validation";
@@ -78,10 +79,18 @@ export async function resolveConfiguration(
 
 /** Implements every published domain operation with typed handlers sharing the editor's actual business service. */
 const handlers: DomainHandlers = {
+  /** Ranks original chunks and commits provider vectors in the same repository operation. */
+  "memory.chunks": async (input, repository) => {
+    const space = await repository.readMemorySpace(input.ownerKey), cached = space.embeddings.length;
+    const result = await searchMemoryChunks(space, input.memoryId, input.query, input.count);
+    if (space.embeddings.length !== cached) await repository.writeMemorySpace(input.ownerKey, space);
+    return result;
+  },
   /** Keeps full-filter searches and provider embedding persistence on the same serialized service. */
   "memory.searchWithOptions": async (input, repository) => ({ ownerKey: input.ownerKey, items: await searchMemories(input, repository) }),
   /** Lists actual owner-bound generic chat summaries. */
   "memory.chat.list": (input, repository) => listMemoryChats(input.ownerKey, repository),
+  "memory.chat.pruneMissing": (input, repository) => pruneMissingMemoryChats(input.ownerKey, repository),
   /** Extracts real chat messages through the configured functional MEMORY model. */
   "memory.chat.update": (input, repository) => updateChatMemory(input.ownerKey, input.chatId, repository),
   /** Performs genuine ten-record functional categorization in the same operation. */
@@ -96,6 +105,10 @@ const handlers: DomainHandlers = {
   "memory.embeddings.rebuild": (input, repository) => rebuildMemoryEmbeddings(input.ownerKey, repository),
   /** Enqueues only actual persisted message sources and genuine bound owners. */
   "memory.candidate.enqueue": (input, repository) => enqueueCandidate(input, repository),
+  /** Returns genuine terminal failures to the pending queue for one later interval retry. */
+  "memory.candidates.retryFailed": (input, repository) => retryFailedCandidates(input.ownerKey, repository),
+  /** Removes genuine terminal failures from the owner queue. */
+  "memory.candidates.clearFailed": (input, repository) => clearFailedCandidates(input.ownerKey, repository),
   /** Resolves chat configuration using this operation's existing repository snapshot. */
   "chat.configuration.resolve": (input, repository) => resolveConfiguration(input, {
     /** Reads only the requested character. */
@@ -180,7 +193,7 @@ const handlers: DomainHandlers = {
   /** Applies the plugin's explicit chat-binding selection logic. */
   "activePrompt.activateForChat": (input, host) => activateForChat(input, host),
   /** Resolves the real next-send actor under the canonical active card or group selection. */
-  "activePrompt.resolvedCard": async (_input, host) => { const active = await host.readActive(); if (!("CharacterCard" in active)) throw new Error("An active group requires an explicit execution participant"); return { id: active.CharacterCard.id }; },
+  "activePrompt.resolvedCard": async (_input, host) => { const active = await host.readActive(); if (!("CharacterCard" in active)) throw new Error("An active group requires an explicit execution participant"); const card = await host.getCharacter(active.CharacterCard.id); return { id: card.id }; },
   /** Reads complete canonical tags. */
   "tag.list": async (_input, host) => { const tags = await host.listTags(); for (const tag of tags) assertTag(tag); return tags; },
   /** Requires an existing complete canonical tag. */

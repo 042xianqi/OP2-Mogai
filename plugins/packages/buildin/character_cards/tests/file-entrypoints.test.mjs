@@ -60,19 +60,36 @@ test("registered API command and Web IPC share actual file-backed character reco
   assert.deepEqual(plain(await reopened.web({ action: "getCharacter", id: created.id })), plain(viaApi));
 });
 
-/** Executes actual retained initialization errors through all entrypoints without a successful domain Host or fixture. */
-test("registered API command and Web IPC preserve a bad-file initialization failure without partial writes", async t => {
+/** Keeps partial synchronized domain state out of the retained storage initialization result. */
+test("registered service reads current data after an alias source disappears without restarting", async t => {
+  const disk = await createDiskHarness(t, { legacyIdentity: "default" });
+  await loadModule("src/storage/database.ts", disk.globals).DatabaseCharacterRepository.open();
+  disk.storage.inspectPreferences("cards", values => {
+    values.record_pending = { ...values.record_default, id: "pending" };
+  });
+  disk.clearCalls();
+  const plugin = openPlugin(disk);
+  assert.deepEqual(plain(await plugin.api("character.list", {})).map(card => card.id).sort(), ["default", "pending"]);
+  await assert.rejects(plugin.api("character.update", { id: "default", changes: { name: "Blocked" } }), /missing an owner memory space/);
+  assertNoMutations(disk);
+  disk.storage.inspectPreferences("cards", values => { delete values.record_pending; });
+  assert.deepEqual(plain(await plugin.api("character.list", {})).map(card => card.id), ["default"]);
+  assert.equal((await plugin.api("character.update", { id: "default", changes: { name: "Synchronized" } })).name, "Synchronized");
+});
+
+/** Validates malformed current records through each entrypoint without publishing changes. */
+test("registered API command and Web IPC reject malformed current records without partial writes", async t => {
   const disk = await createDiskHarness(t, { legacyIdentity: "default" }), files = loadModule("src/storage/database.ts", disk.globals);
   await files.DatabaseCharacterRepository.open();
   disk.storage.inspectPreferences("cards", values => { values.record_default.memoryBindingMode = "BROKEN"; });
   disk.clearCalls(); const plugin = openPlugin(disk); let original;
   await assert.rejects(plugin.api("character.list", {}),
-    /** Captures the actual rejected initialization error from the real provider path. */
+    /** Captures the actual validation error from the real provider path. */
     error => { original = error; return error.message === "Invalid memory binding mode"; },
   );
   await assert.rejects(plugin.web({ action: "getCharacter", id: "default" }),
-    /** Requires the same retained service initialization failure on the actual IPC handler. */
-    error => error === original,
+    /** Requires the same record validation on the actual IPC handler. */
+    error => error.message === original.message,
   );
   const command = await plugin.command("character", ["list"]);
   assert.equal(command.json.ok, false); assert.equal(command.json.error.code, "domain_operation_failed");
@@ -366,7 +383,7 @@ test("sidebar preparation supplies avatar paths without binary reads or opening 
   assert.equal(disk.calls.length, 0, "Registration must stay lazy");
   await assert.rejects(plugin.apis.get("chat.sidebar.prepare").function({ callerPackage: "other", payload: { chats: [] } }), /authenticated host/);
   const chats = [{ id: "prepared-chat", title: "提前加载", updatedAt: "1", displayOrder: 0,
-    workspaceId: null, workspaceName: null, locked: false, pinned: false, group: null }];
+    workspaceId: null, workspaceName: null, locked: false, pinned: false, group: null, parentChatId: null }];
   const result = plain(await plugin.api("chat.sidebar.prepare", { chats }));
   assert.equal(result.entries.length, 1);
   assert.equal(result.entries[0].entryId, "sidebar-characters");

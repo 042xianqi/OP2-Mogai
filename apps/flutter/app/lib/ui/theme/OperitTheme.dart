@@ -265,9 +265,7 @@ class _OperitThemeState extends State<OperitTheme> {
               widget.initialThemePreferenceSnapshot.themeMode;
     return _OperitThemeScope(
       controller: _controller,
-      child: Stack(
-        alignment: Alignment.topLeft,
-        fit: StackFit.expand,
+      child: ThemeRenderStack(
         children: <Widget>[
           if (retainApplication)
             Offstage(
@@ -1098,7 +1096,14 @@ class _VideoThemeBackgroundState extends State<_VideoThemeBackground> {
         child: SizedBox(
           width: controller.value.size.width,
           height: controller.value.size.height,
-          child: VideoPlayer(controller),
+          child: ValueListenableBuilder<VideoPlayerValue>(
+            valueListenable: controller,
+            child: VideoPlayer(controller),
+            builder: (context, value, child) => LiquidGlassSourceAnimation(
+              active: value.isPlaying,
+              child: child!,
+            ),
+          ),
         ),
       ),
     );

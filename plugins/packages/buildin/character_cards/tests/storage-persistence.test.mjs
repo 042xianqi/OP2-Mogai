@@ -259,3 +259,27 @@ test("a failed bulk import resumes with SKIP after earlier batches committed", a
   assert.equal(completed.length, 1005);
   assert.equal(new Set(completed.map(value => value.uuid)).size, 1005);
 });
+
+/** Opens installed v1 data with repairable model selections without changing the persisted records. */
+test("installed cards with unknown or incomplete model bindings reopen and remain editable", async t => {
+  for (const binding of [
+    { chatModelBindingMode: "UNRECOGNIZED_MODE", chatModelId: "old-model", chatProviderId: "old-provider" },
+    { chatModelBindingMode: "FIXED_CONFIG", chatModelId: "old-model", chatProviderId: null },
+    { chatModelBindingMode: "FIXED_MODEL", chatModelId: null, chatProviderId: null },
+    { chatModelBindingMode: "FIXED_MODEL", chatModelId: "", chatProviderId: "" },
+  ]) {
+    const disk = await createDiskHarness(t, { legacyIdentity: "default" });
+    disk.storage.inspectPreferences("cards", values => Object.assign(values.record_default, binding));
+    const before = disk.stateBytes(); disk.clearCalls();
+    const owner = await open(disk);
+    assert.deepEqual(disk.stateBytes(), before);
+    assert.equal(disk.calls.some(call => ["storage.commit", "storage.preferences.edit"].includes(call.method)), false);
+    const loaded = plain(await owner.run(session => session.getCharacter("default")));
+    for (const [key, value] of Object.entries(binding)) assert.equal(loaded[key], value);
+    await owner.run(session => session.createCharacter(card("Other usable card")));
+    assert.equal((await owner.run(session => session.listCharacters())).length, 2);
+    await owner.run(session => session.updateCharacter({ ...loaded, chatModelBindingMode: "FOLLOW_GLOBAL", chatProviderId: null, chatModelId: null }));
+    const reopened = await open(disk);
+    assert.equal((await reopened.run(session => session.getCharacter("default"))).chatModelBindingMode, "FOLLOW_GLOBAL");
+  }
+});

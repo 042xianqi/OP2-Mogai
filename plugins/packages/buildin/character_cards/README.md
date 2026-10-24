@@ -256,15 +256,28 @@ placeholder controls:
   without flags upgrades to its previously active behavior; malformed stored flags
   fail reads instead of guessing values. Provider prompt assembly trusts the plugin
   execution profile, not a second retired Core preference gate.
-- Retrieval debugging reuses the production search index and real provider embeddings.
+- Retrieval debugging reuses the production RRF search and real provider embeddings.
   Draft weights are not saved. Each candidate reports actual lexical/tag/vector/edge
   contributions and its threshold decision; normal retrieval filters the same results.
 - Graph export/import invokes the full owner backup codec, including records, document
-  chunks, relationships, settings and USER.md. Relationship editing reads the canonical
-  persisted link by ID, even if a graph projection lacks its description.
+  chunks, relationships, settings and USER.md. Relationship tools read one owner-scoped
+  graph snapshot containing the actual record and link identities and descriptions.
 - Character imports select Operit or Tavern JSON; exports invoke the corresponding
   production serializer. Preview avatars use the existing host-loaded image resources.
   Export dialogs only report success after the real host file operation acknowledges it.
+
+Memory nodes and document chunks share lexical and semantic ranking; tools no longer
+export full backups or maintain their own embedding/scoring implementation. UI memory
+mutations use the same domain operations as dependency clients. Extraction follows the
+Kotlin query budgets, duplicate-title prompt and new-identity merge behavior; the
+scheduler orders candidates by source timestamp before applying its twenty-record cap.
+
+Kotlin remains the behavior reference, with explicit implementation differences:
+lexical expansion uses bounded Unicode terms and Han unigrams/bigrams rather than
+Jieba; imported document chunks also participate in node recall; vectors use the
+configured HTTP provider, exact-input cache and linear comparison rather than native
+indices. Failed jobs stay terminal without automatic retry. Merge removes source
+chunks and internal links that would become self-links under this domain's invariant.
 
 The browser/main-IPC suite covers these flows, failed writes, runtime reopening,
 owner isolation and a real local HTTP vector provider. `cargo check -p operit-runtime
@@ -282,3 +295,20 @@ requires running the updated application.
 插件启用时，原生选择器提供“仅使用模型”，CLI 提供 `active-prompt set-model`。没有角色关联的现有聊天属于普通模型模式。该模式不注入角色提示词，不授予角色记忆资源，自动记忆队列不为其建立任务。全局无角色状态使用现有可空 active 存储表达，消息中的无记忆目的地使用空 primaryOwnerKey 表达；SQL 表声明不变。
 
 回复者名称使用实际模型名，头像通过明确的 `provider-logo:<providerTypeId>` 标识加载供应商 logo，不按供应商名称猜测。Core 为新消息和开场消息保存通用的显示身份；Flutter 各消息样式读取所选消息版本的身份，不使用当前聊天头像替换历史回复。v1 SDK 保持原设计。
+
+
+### 群组历史、输入持久化和回合结束摘要
+
+群组在调用 `ROLE_RESPONSE_PLANNER` 前，先通过 `record_only` 保存完整原始输入、附件和回复目标。
+输入钩子等待真实入库回执后才清空编辑框；入库失败时保留编辑框原文，规划失败时保留已入库的用户消息。
+所有成员回复均继续同一条用户消息，不重复提交输入。空计划仅留下用户消息。
+
+执行配置显式声明 `historyPolicy`。角色卡按已保存的作者 ID 区分历史；群组同时给用户消息添加
+`[From user]`。当前角色自己的历史保留 assistant/tool 边界，其他角色的 Markdown 发言以
+`[From role: name]` 作为参考上下文，排除其思考、状态和工具协议。姓名来自原消息的显示身份；
+改名、重名和成员退出不改变历史作者。缺失作者身份会直接报错。
+
+中间成员使用 `summaryPolicy: "defer"`，最后一个成员使用 `"after_reply"`。每次成员回复期间均不自动摘要；
+最后一个成员真实完成且原生发送清理结束后，Core 重新计算各参与者上下文窗口并检查摘要阈值，
+达到阈值时通过已有摘要任务执行一次摘要，不继续生成新回复。取消、发送失败和空计划不触发结束摘要。
+宿主只处理通用历史和摘要策略，群组计划仍由插件负责。

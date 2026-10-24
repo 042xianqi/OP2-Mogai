@@ -157,7 +157,7 @@ verify(/handler\.executeToolInvocation\(&call, ToolExecutionPolicy::Direct\)/.te
 verify(/ownedActiveExecution\(owner, chatId\)/.test(toolsRuntime)
   && /sequence\.owner == owner && sequence\.chatId == chatId/.test(nativeTransport), "Cancellation captures the actual authenticated owner/chat execution before asynchronous model access");
 verify(/source\.sender != "user"/.test(nativeTransport) && /Continuation source was superseded/.test(nativeTransport), "A continuation must identify a real nonsuperseded committed user row");
-verify(/ChatSendRequest::Continue/.test(nativeTransport) && /AdmittedChatTurnWork::Continue \{ userMessageTimestamp, participantId \}/.test(nativeTransport), "Continuation admission never resubmits replacement input or attachments");
+verify(/ChatSendRequest::Continue/.test(nativeTransport) && /AdmittedChatTurnWork::Continue \{ userMessageTimestamp, participantId, summaryPolicy \}/.test(nativeTransport), "Continuation admission never resubmits replacement input or attachments");
 verify(/requestCancellation/.test(nativeTransport) && /cancelled\.store\(true, Ordering::Release\)/.test(nativeTransport), "Cancellation covers the admitted-before-start interval");
 verify(/nativeExecutionId\.as_deref\(\) == Some\(executionId\)/.test(processor) && /isNativeExecutionActive\(chatId, executionId\)/.test(core), "Native cancellation must match the precise runtime execution before touching the model");
 verify(/commitUserMessage/.test(nativeRecordOnly) && /protectRevision/.test(nativeRecordOnly) && /buildRecordedUserMessageContent/.test(nativeRecordOnly), "Record-only must use checked canonical persistence and the real sequence lease");

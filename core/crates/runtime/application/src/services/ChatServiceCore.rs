@@ -301,6 +301,16 @@ impl ChatServiceCore {
             .clone()
     }
 
+    /// Executes only model inference on the Binding's owner; conversation and tools keep their own routes.
+    #[operit_route_macros::operit_core_route(binding = bindingKey, permission = "target:runtime.execute")]
+    pub async fn generateLocalLlm(&self, bindingKey: String, modelBinding: String,
+        requestJson: String, settingsJson: String) -> Result<operit_local_models::LocalInference::LocalChatResponse, String> {
+        let _ = bindingKey;
+        let context = self.runtimeToolHandler().getContext();
+        let storage = context.runtimeStorageHost.clone().ok_or("Local inference requires runtime storage")?;
+        super::LocalLlmService::executeLocalLlm(storage, modelBinding, requestJson, settingsJson).await
+    }
+
     /// Clones the plugin execution host before releasing the borrowed chat core.
     #[operit_route_macros::operit_core_internal]
     pub fn toolPkgRouteHost(&self) -> AIToolHandler {
@@ -397,6 +407,10 @@ impl ChatServiceCore {
         self.chatHistoryDelegate = ChatHistoryDelegate::new(self.selectionMode.clone());
         self.messageProcessingDelegate = MessageProcessingDelegate::default();
         self.messageProcessingDelegate.fileSystemHost = Some(self.fileSystemHost.clone());
+        let summaryCancellationDelegate = self.messageProcessingDelegate.clone_for_core();
+        self.chatHistoryDelegate.setBeforeDestructiveHistoryMutation(move |chatId| {
+            summaryCancellationDelegate.cancelSummaryTasks(Some(&chatId));
+        });
         let messageProcessingDelegate = self.messageProcessingDelegate.clone_for_core();
         self.messageCoordinationDelegate = Some(MessageCoordinationDelegate::new(
             self.chatHistoryDelegate.clone_for_core(),
@@ -1025,6 +1039,7 @@ impl ChatServiceCore {
         &mut self,
         setAsCurrentChat: bool,
         sourceChatId: Option<String>,
+        parentChatId: Option<String>,
         input: Option<serde_json::Value>,
     ) -> Result<String, String> {
         let service = self
@@ -1034,7 +1049,7 @@ impl ChatServiceCore {
             .clone();
         let chatId = self
             .chatHistoryDelegate
-            .createNewChat(&service, setAsCurrentChat, sourceChatId, input)
+            .createNewChat(&service, setAsCurrentChat, sourceChatId, parentChatId, input)
             .await?;
         if setAsCurrentChat {
             self.initialized = true;
@@ -1183,7 +1198,15 @@ impl ChatServiceCore {
         if !deleted {
             return Err(format!("Core conversation deletion failed: {chatId}"));
         }
-        api.deleteConfiguration(&chatId).await?;
+        // The conversation is already gone; a failed owner cleanup must not
+        // report the deletion as failed. Dangling plugin state is recovered by
+        // the owner's own missing-binding cleanup.
+        if let Err(error) = api.deleteConfiguration(&chatId).await {
+            AppLogger::e(
+                "ChatConfiguration",
+                &format!("Post-deletion cleanup failed for {chatId}: {error}"),
+            );
+        }
         self.syncTokenStatisticsForCurrentChat();
         Ok(deleted)
     }
@@ -1352,22 +1375,6 @@ impl ChatServiceCore {
                 .setInputProcessingStateForChat(currentChatId, InputProcessingState::Idle);
             return false;
         }
-        let configuration = match enhancedAiService.resolveChatConfigurationForOptions(
-            &operit_providers::chat::EnhancedAIService::SendMessageOptions {
-                chatId: Some(currentChatId.clone()),
-                ..operit_providers::chat::EnhancedAIService::SendMessageOptions::new()
-            },
-        ).await {
-            Ok(configuration) => configuration,
-            Err(error) => {
-                self.messageProcessingDelegate
-                    .setInputProcessingStateForChat(
-                        currentChatId,
-                        InputProcessingState::Error { message: error.to_string() },
-                    );
-                return false;
-            }
-        };
         let summaryMessage = match AIMessageManager::summarizeMemory(
             &mut enhancedAiService,
             messagesToSummarize,
@@ -2424,7 +2431,7 @@ impl ChatServiceCore {
         chatId: String,
         input: Option<serde_json::Value>,
     ) -> Result<String, String> {
-        self.createNewChat(false, Some(chatId), input).await
+        self.createNewChat(false, Some(chatId), None, input).await
     }
 
     /// Returns messages from the Core selected by Binding for one explicit chat.
@@ -2653,13 +2660,13 @@ impl ChatServiceCore {
         }
         // Fixed export names and no user-supplied tool name/arguments. Existing
         // ToolPkg hook runtime and nested tool permission checks remain in force.
-        let raw = manager.runToolPkgMainHookWithTimeoutMillis(
+        let raw = manager.runToolPkgMainHook(
             &packageName, function,
             operit_plugin_sdk::toolpkg::ToolPkgCommonPluginConstants::TOOLPKG_EVENT_CORE_COMMAND,
             Some("core_command"), None, None,
             serde_json::json!({"chatId":chatId,"diagnostic":true}),
-            None, None, None, 6000,
-        ).await.map_err(|_| "插件测试函数不可用、执行失败或超时".to_string())?
+            None, None, None,
+        ).await.map_err(|error| format!("插件测试函数执行失败：{error}"))?
             .ok_or_else(|| "插件未提供测试结果".to_string())?;
         let value: serde_json::Value = serde_json::from_str(&raw)
             .map_err(|_| "插件测试结果格式错误".to_string())?;

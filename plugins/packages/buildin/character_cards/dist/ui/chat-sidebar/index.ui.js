@@ -1,5 +1,7 @@
-// @operit-compose-artifact 2
+// @operit-compose-artifact 4
 "use strict";
+var __operitUiPrograms_=[{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:22185","root":0,"nodes":[{"type":"Spacer","props":[2,["width"],[[1,0]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:22269","root":0,"nodes":[{"type":"HoverOnly","props":[2,["key","alwaysVisible"],[[1,0],[1,1]]],"children":[1,2],"explicitChildren":true}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:22716","root":0,"nodes":[{"type":"ActivityDots","props":[2,["key","width","height","running","selected","restingColor","activeColor"],[[1,0],[0,10],[0,13.5],[1,1],[1,2],[1,3],[1,4]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:23037","root":0,"nodes":[{"type":"Draggable","props":[2,["key","data","dragType","enabled","feedback"],[[1,0],[1,1],[1,2],[0,true],[4,1]]],"children":[1,6],"explicitChildren":true},{"type":"Row","props":[2,["width","height","paddingHorizontal","verticalAlignment","background","backgroundShape"],[[0,220],[0,34],[0,10],[0,"center"],[1,3],[2,["cornerRadius"],[[0,8]]]]],"children":[4,2],"explicitChildren":true},{"type":"Text","props":[2,["text","weight","maxLines","overflow","fontSize","color"],[[1,4],[0,1],[0,1],[0,"ellipsis"],[0,13],[1,5]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:23533","root":0,"nodes":[{"type":"Text","props":[1,0],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:23852","root":0,"nodes":[{"type":"Icon","props":[2,["name","size","tint"],[[0,"PushPin"],[0,12],[1,0]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:24009","root":0,"nodes":[{"type":"Icon","props":[2,["name","size","tint"],[[0,"Lock"],[0,12],[1,0]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:24313","root":0,"nodes":[{"type":"IconButton","props":[2,["key","icon","width","height","tooltip","onClick"],[[1,0],[1,1],[0,26],[0,28],[1,2],[1,3]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:24847","root":0,"nodes":[{"type":"Row","props":[2,["key","weight","height","verticalAlignment","paddingHorizontal","modifier"],[[1,0],[0,1],[0,31],[0,"center"],[0,6],[1,1]]],"children":[1,2],"explicitChildren":true}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:25682","root":0,"nodes":[{"type":"Box","props":[2,["key","width","height","contentAlignment"],[[1,0],[1,1],[1,2],[0,"center"]]],"children":[3,[[4,1],[4,2]]],"explicitChildren":true},{"type":"Box","props":[2,["key","width","height","backgroundColor"],[[1,3],[0,1],[1,4],[1,5]]],"children":[0,null],"explicitChildren":false},{"type":"Box","props":[2,["key","width","height","backgroundColor","backgroundShape","animation","hoverStyle"],[[1,6],[1,7],[1,8],[1,9],[2,["cornerRadius"],[[0,1.5]]],[2,["durationMillis","curve"],[[0,160],[0,"easeOutCubic"]]],[2,["width","height","backgroundColor"],[[0,2],[1,10],[1,11]]]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:26540","root":0,"nodes":[{"type":"DragTarget","props":[2,["key","acceptedTypes","excludedData","hoverBorderColor","shape","fillMaxWidth","onDrop"],[[1,0],[3,[[1,1]]],[3,[[1,2]]],[1,3],[2,["cornerRadius"],[[0,8]]],[0,true],[1,4]]],"children":[4,1],"explicitChildren":true},{"type":"HoverRegion","props":[2,["key","fillMaxWidth"],[[1,5],[0,true]]],"children":[4,2],"explicitChildren":true},{"type":"Row","props":[2,["key","fillMaxWidth","height","paddingStart","paddingEnd","verticalAlignment"],[[1,6],[0,true],[1,7],[1,8],[1,9],[0,"center"]]],"children":[3,[[1,10],[1,11],[4,3]]],"explicitChildren":true},{"type":"HoverRegion","props":[2,["weight","hoverBackground","shape"],[[0,1],[1,12],[2,["cornerRadius"],[[1,13]]]]],"children":[4,4],"explicitChildren":true},{"type":"SwipeActions","props":[2,["key","actionThreshold","height","modifier","onStartAction","onEndAction","startBackground","endBackground"],[[1,14],[0,0.5],[0,31],[1,15],[1,16],[1,17],[4,5],[4,7]]],"children":[1,28],"explicitChildren":true},{"type":"Box","props":[2,["fillMaxSize","paddingStart","background","contentAlignment"],[[0,true],[0,12],[1,18],[0,"start"]]],"children":[4,6],"explicitChildren":true},{"type":"Icon","props":[2,["name","size","width","height","tint"],[[0,"Edit"],[1,19],[1,20],[1,21],[1,22]]],"children":[0,null],"explicitChildren":false},{"type":"Box","props":[2,["fillMaxSize","paddingEnd","background","contentAlignment"],[[0,true],[0,12],[1,23],[0,"end"]]],"children":[4,8],"explicitChildren":true},{"type":"Icon","props":[2,["name","size","width","height","tint"],[[0,"Delete"],[1,24],[1,25],[1,26],[1,27]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:29550","root":0,"nodes":[{"type":"Row","props":[2,["key","fillMaxWidth","paddingStart","paddingEnd","paddingTop","height","verticalAlignment","spacing","onClick"],[[1,0],[0,true],[1,1],[1,2],[0,2],[0,34],[0,"center"],[0,8],[1,3]]],"children":[3,[[4,1],[4,2]]],"explicitChildren":true},{"type":"Icon","props":[2,["name","size","tint"],[[1,4],[0,18],[1,5]]],"children":[0,null],"explicitChildren":false},{"type":"Text","props":[2,["text","style","fontWeight","color"],[[1,6],[0,"labelMedium"],[0,"600"],[1,7]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:30337","root":0,"nodes":[{"type":"Image","props":[2,["key","uri","width","height","contentScale","contentDescription","modifier"],[[1,0],[1,1],[1,2],[1,3],[0,"crop"],[1,4],[1,5]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:30643","root":0,"nodes":[{"type":"Box","props":[2,["width","height","contentAlignment","background","backgroundShape"],[[1,0],[1,1],[0,"center"],[1,2],[2,["type"],[[0,"circle"]]]]],"children":[4,1],"explicitChildren":true},{"type":"Icon","props":[2,["name","size","tint"],[[1,3],[0,14],[1,4]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:31029","root":0,"nodes":[{"type":"Column","props":[2,["key","fillMaxWidth","paddingStart","paddingEnd","paddingTop","paddingBottom"],[[1,0],[0,true],[1,1],[1,2],[0,5],[0,5]]],"children":[4,1],"explicitChildren":true},{"type":"DragTarget","props":[2,["key","acceptedTypes","onDrop"],[[1,3],[3,[[1,4]]],[1,5]]],"children":[4,2],"explicitChildren":true},{"type":"Row","props":[2,["fillMaxWidth","verticalAlignment","height","onClick","modifier"],[[0,true],[0,"center"],[0,24],[1,6],[1,7]]],"children":[3,[[1,8],[1,9],[4,3],[1,13],[4,4],[4,5],[4,6]]],"explicitChildren":true},{"type":"Text","props":[2,["text","style","fontWeight","maxLines","overflow","modifier","color"],[[1,10],[0,"titleSmall"],[0,"700"],[0,1],[0,"ellipsis"],[1,11],[1,12]]],"children":[0,null],"explicitChildren":false},{"type":"Text","props":[2,["text","style","fontWeight","color"],[[1,14],[0,"labelSmall"],[0,"700"],[1,15]]],"children":[0,null],"explicitChildren":false},{"type":"GradientRule","props":[2,["weight","paddingHorizontal","height","startColor","endColor"],[[0,1],[0,10],[0,2],[1,16],[1,17]]],"children":[0,null],"explicitChildren":false},{"type":"Icon","props":[2,["name","size","tint"],[[1,18],[0,23],[1,19]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:33227","root":0,"nodes":[{"type":"Icon","props":[2,["name","size","tint"],[[0,"FolderOutlined"],[0,16],[1,0]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:33351","root":0,"nodes":[{"type":"Text","props":[2,["text","weight","style","fontWeight","maxLines","overflow","color"],[[1,0],[0,1],[0,"labelLarge"],[0,"700"],[0,1],[0,"ellipsis"],[1,1]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:33549","root":0,"nodes":[{"type":"Icon","props":[2,["name","size","tint"],[[0,"PushPinRounded"],[0,12],[1,0]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:33691","root":0,"nodes":[{"type":"HoverOnly","props":[2,["width","height"],[[0,24],[0,24]]],"children":[1,0],"explicitChildren":true}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:33821","root":0,"nodes":[{"type":"Icon","props":[2,["name","size","tint"],[[1,0],[0,20],[1,1]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:32747","root":0,"nodes":[{"type":"Row","props":[1,0],"children":[1,1],"explicitChildren":true}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:33977","root":0,"nodes":[{"type":"Column","props":[2,["key","fillMaxWidth","paddingStart","paddingEnd","paddingTop","paddingBottom"],[[1,0],[0,true],[1,1],[1,2],[0,3],[0,3]]],"children":[4,1],"explicitChildren":true},{"type":"DragTarget","props":[2,["key","acceptedTypes","hoverBorderColor","shape","onDrop"],[[1,3],[3,[[1,4]]],[1,5],[2,["cornerRadius"],[[1,6]]],[1,7]]],"children":[4,2],"explicitChildren":true},{"type":"HoverRegion","props":[2,["shape"],[[2,["cornerRadius"],[[1,8]]]]],"children":[1,9],"explicitChildren":true}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:36804","root":0,"nodes":[{"type":"Text","props":[2,["text","height","color","fontSize","paddingHorizontal"],[[1,0],[1,1],[1,2],[0,12],[0,20]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:49793","root":0,"nodes":[{"type":"PopupMenu","props":[2,["key","width","height","tooltip","enabled","items","onSelected"],[[1,0],[0,22],[0,22],[0,"对话操作"],[1,1],[3,[[2,["label","icon"],[[0,"编辑名称"],[0,"Edit"]]],[2,["label","icon"],[[1,2],[0,"PushPin"]]],[2,["label","icon"],[[1,3],[1,4]]],[2,["label","icon","danger"],[[0,"删除"],[0,"DeleteOutline"],[0,true]]]]],[1,5]]],"children":[4,1],"explicitChildren":true},{"type":"Icon","props":[2,["name","size","tint"],[[0,"MoreHoriz"],[0,16],[1,6]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:50928","root":0,"nodes":[{"type":"PopupMenu","props":[2,["key","width","height","menuMaxWidth","tooltip","enabled","items","onSelected"],[[1,0],[0,22],[0,22],[0,138],[0,"分组操作"],[1,1],[3,[[2,["label","icon"],[[0,"新建对话"],[0,"AddCommentOutlined"]]],[2,["label","icon"],[[0,"编辑名称"],[0,"EditOutlined"]]],[2,["label","icon"],[[1,2],[1,3]]],[2,["label","icon","danger","dividerBefore"],[[0,"删除"],[0,"DeleteOutlineRounded"],[0,true],[0,true]]]]],[1,4]]],"children":[4,1],"explicitChildren":true},{"type":"Icon","props":[2,["name","size","tint"],[[0,"MoreHorizRounded"],[0,16],[1,5]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:52730","root":0,"nodes":[{"type":"PopupMenu","props":[2,["key","width","height","menuMaxWidth","tooltip","items","enabled","onSelected"],[[1,0],[0,22],[0,22],[0,138],[0,"分组操作"],[1,1],[1,2],[1,3]]],"children":[4,1],"explicitChildren":true},{"type":"Icon","props":[2,["name","size","tint"],[[0,"MoreHorizRounded"],[0,16],[1,4]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:55595","root":0,"nodes":[{"type":"Row","props":[2,["key","fillMaxWidth","verticalAlignment","spacing","paddingStart","paddingEnd","paddingBottom"],[[0,"sidebar-toolbar"],[0,true],[0,"center"],[0,8],[0,14],[0,12],[0,8]]],"children":[3,[[4,1],[4,9]]],"explicitChildren":true},{"type":"Surface","props":[2,["key","weight","height","containerColor","contentColor","shape"],[[0,"sidebar-create-bar"],[0,1],[0,34],[1,0],[1,1],[2,["type"],[[0,"pill"]]]]],"children":[4,2],"explicitChildren":true},{"type":"Row","props":[2,["fillMaxSize","verticalAlignment"],[[0,true],[0,"center"]]],"children":[3,[[4,3],[4,6],[4,7]]],"explicitChildren":true},{"type":"Row","props":[2,["key","weight","height","verticalAlignment","horizontalArrangement","onClick","spacing"],[[0,"sidebar-new-chat"],[0,1],[0,34],[0,"center"],[0,"center"],[1,2],[0,6]]],"children":[3,[[4,4],[4,5]]],"explicitChildren":true},{"type":"Icon","props":[2,["name","size","tint"],[[0,"AddRounded"],[0,17],[1,3]]],"children":[0,null],"explicitChildren":false},{"type":"Text","props":[1,4],"children":[0,null],"explicitChildren":false},{"type":"Box","props":[2,["width","height","background"],[[0,1],[0,16],[1,5]]],"children":[0,null],"explicitChildren":false},{"type":"Row","props":[2,["key","width","height","verticalAlignment","horizontalArrangement","onClick"],[[0,"sidebar-new-group"],[0,38],[0,34],[0,"center"],[0,"center"],[1,6]]],"children":[4,8],"explicitChildren":true},{"type":"Icon","props":[2,["name","size","tint","contentDescription"],[[0,"CreateNewFolderOutlined"],[0,16],[1,7],[0,"新建分组"]]],"children":[0,null],"explicitChildren":false},{"type":"Row","props":[2,["key","width","height","verticalAlignment","horizontalArrangement","onClick","modifier","background"],[[0,"sidebar-search-toggle"],[0,34],[0,34],[0,"center"],[0,"center"],[1,8],[1,9],[1,10]]],"children":[4,10],"explicitChildren":true},{"type":"Icon","props":[2,["name","size","tint","contentDescription"],[[1,11],[0,17],[1,12],[1,13]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:58819","root":0,"nodes":[{"type":"Column","props":[2,["fillMaxWidth","paddingHorizontal","paddingBottom"],[[0,true],[0,12],[0,12]]],"children":[4,1],"explicitChildren":true},{"type":"TextField","props":[2,["key","value","onValueChange","placeholder","singleLine","fillMaxWidth","style","leadingIcon","decoration"],[[0,"sidebar-search"],[1,0],[1,1],[0,"搜索对话"],[0,true],[0,true],[2,["color"],[[1,2]]],[4,2],[2,["isDense","filled","fillColor","cornerRadius","focusedBorderColor","hintStyle","contentPadding"],[[0,true],[0,true],[1,4],[0,14],[1,5],[2,["color"],[[1,6]]],[2,["horizontal","vertical"],[[0,12],[0,10]]]]]]],"children":[0,null],"explicitChildren":false},{"type":"Icon","props":[2,["name","size","tint"],[[0,"Search"],[0,20],[1,3]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:59688","root":0,"nodes":[{"type":"Spacer","props":[2,["height"],[[0,0]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:58620","root":0,"nodes":[{"type":"Box","props":[2,["key","fillMaxWidth","animation"],[[0,"sidebar-search-container"],[0,true],[2,["durationMillis","curve","animateContentSize"],[[0,180],[0,"easeOutCubic"],[0,true]]]]],"children":[1,0],"explicitChildren":true}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:59759","root":0,"nodes":[{"type":"Text","props":[2,["key","text","fontSize","color","paddingHorizontal","paddingVertical"],[[0,"sidebar-error"],[1,0],[0,11],[1,1],[0,20],[0,6]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:60575","root":0,"nodes":[{"type":"Box","props":[2,["fillMaxWidth","height","contentAlignment"],[[0,true],[0,80],[0,"center"]]],"children":[4,1],"explicitChildren":true},{"type":"LoadingIndicator","props":[2,["size"],[[0,24]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:60804","root":0,"nodes":[{"type":"Text","props":[2,["text","fontSize","fontWeight"],[[1,0],[0,16],[0,"600"]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:61410","root":0,"nodes":[{"type":"TextField","props":[2,["key","value","label","onValueChange","enabled"],[[0,"sidebar-group-name"],[1,0],[1,1],[1,2],[1,3]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:61776","root":0,"nodes":[{"type":"Text","props":[2,["text","fontSize"],[[1,0],[0,12]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:62284","root":0,"nodes":[{"type":"Text","props":[2,["text","fillMaxWidth","maxLines","style","color"],[[1,0],[0,true],[0,2],[0,"titleMedium"],[1,1]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:62485","root":0,"nodes":[{"type":"Surface","props":[2,["fillMaxWidth","onClick","shape","color"],[[0,true],[1,0],[2,["cornerRadius"],[[0,12]]],[1,1]]],"children":[4,1],"explicitChildren":true},{"type":"Row","props":[2,["fillMaxWidth","paddingHorizontal","paddingVertical","verticalAlignment","spacing"],[[0,true],[0,16],[0,10],[0,"center"],[0,12]]],"children":[3,[[4,2],[4,3]]],"explicitChildren":true},{"type":"Icon","props":[2,["name","size","tint"],[[1,2],[0,20],[1,3]]],"children":[0,null],"explicitChildren":false},{"type":"Text","props":[2,["text","weight","fontSize","color"],[[1,4],[0,1],[0,14],[1,5]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:63836","root":0,"nodes":[{"type":"Text","props":[2,["key","text","fontSize","color"],[[0,"sidebar-delete-result"],[1,0],[0,11],[1,1]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:64203","root":0,"nodes":[{"type":"Text","props":[2,["text","color","fontSize"],[[1,0],[1,1],[0,11]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:64324","root":0,"nodes":[{"type":"TextButton","props":[2,["text","enabled","onClick"],[[0,"取消"],[1,0],[1,1]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:64502","root":0,"nodes":[{"type":"Button","props":[2,["text","enabled","onClick"],[[0,"确认"],[1,0],[1,1]]],"children":[0,null],"explicitChildren":false}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:64289","root":0,"nodes":[{"type":"Row","props":[2,["spacing"],[[0,8]]],"children":[1,0],"explicitChildren":true}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:64624","root":0,"nodes":[{"type":"Dialog","props":[2,["key","closeOnDismissRequest","onDismissRequest"],[[0,"sidebar-edit-dialog"],[1,0],[1,1]]],"children":[4,1],"explicitChildren":true},{"type":"Column","props":[2,["padding","spacing","width"],[[0,20],[0,12],[0,320]]],"children":[1,2],"explicitChildren":true}]},{"id":"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:1gj5p55:64989","root":0,"nodes":[{"type":"Column","props":[2,["key","fillMaxWidth","paddingBottom","spacing","onLoad","onInputsChanged"],[[0,"native-character-sidebar"],[0,true],[0,16],[0,0],[1,0],[1,1]]],"children":[1,2],"explicitChildren":true}]}];
+
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -125,6 +127,10 @@ function number(value, path) {
 function integer(value, path) {
   if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new Error(`${path} must be a safe integer`);
 }
+function nonnegativeInteger(value, path) {
+  integer(value, path);
+  nonnegative(value, path);
+}
 function messageVariant(value, path) {
   integer(value, path);
   if (typeof value !== "number" || value < 0 || value > 2147483647) throw new Error(path + " must be a nonnegative i32 message variant index");
@@ -245,8 +251,10 @@ var contentOnly = shape({ content: required(text) });
 var format = enumeration("operit", "tavern");
 var memoryQueryRequest = shape({ participantId: required(nonblank), query: required(nonblank), limit: required(nonnegative), snapshotId: required(nullable(nonblank)) });
 var validators = {
-  "memory.searchWithOptions": shape({ ownerKey: required(owner), query: required(text), folderPath: required(nullable(text)), relevanceThreshold: required(nonnegative), createdAtStartMs: required(nullable(integer)), createdAtEndMs: required(nullable(integer)) }),
+  "memory.chunks": shape({ ownerKey: required(owner), memoryId: required(nonblank), query: required(nonblank), count: required(nonnegativeInteger) }),
+  "memory.searchWithOptions": shape({ ownerKey: required(owner), query: required(nonblank), folderPath: required(nullable(text)), relevanceThreshold: required(nonnegative), createdAtStartMs: required(nullable(integer)), createdAtEndMs: required(nullable(integer)) }),
   "memory.chat.list": ownerOnly,
+  "memory.chat.pruneMissing": ownerOnly,
   "memory.chat.update": shape({ ownerKey: required(owner), chatId: required(nonblank) }),
   "memory.categorize": ownerOnly,
   "memory.rebuild.start": shape({ ownerKey: required(owner), rebuild: required(shape({ chatIds: required(strings), windowMessageCount: required(integer), fromInclusive: required(nullable(integer)), toInclusive: required(nullable(integer)) })) }),
@@ -254,6 +262,8 @@ var validators = {
   "memory.rebuild.cancel": ownerOnly,
   "memory.embeddings.rebuild": ownerOnly,
   "memory.candidate.enqueue": shape({ chatId: required(nonblank), timestamp: required(integer), variantIndex: required(messageVariant), sourceType: required(enumeration("reply_finalized_auto", "selected_user_message")), ownerKey: required(nullable(owner)) }),
+  "memory.candidates.retryFailed": ownerOnly,
+  "memory.candidates.clearFailed": ownerOnly,
   "chat.configuration.resolve": parseChatConfigurationRequest,
   "chat.configuration.binding.read": shape({ chatId: required(nonblank) }),
   "chat.configuration.binding.write": shape({ chatId: required(nonblank), selection: required(nonblank) }),
@@ -346,6 +356,9 @@ function parseChatConfigurationRequest(value) {
   return request;
 }
 
+// src/memory-jobs/scheduler.ts
+var CANDIDATE_PROCESSING_LEASE_MS = 30 * 60 * 1e3;
+
 // src/definition.ts
 var definition = { id: "com.operit.character_cards", title: "\u89D2\u8272\u5361", icon: "Badge", order: 150 };
 var chatUiRoutes = {
@@ -389,6 +402,44 @@ function createChatInput(selection) {
   return { [CHARACTER_CARDS_NAMESPACE]: { version: 1, selection: marker.selection } };
 }
 
+// src/sidebar-chat-tree.ts
+var SidebarChatTree = class {
+  /** Rejects duplicate identities and cycles before any recursive rows are rendered. */
+  constructor(chats) {
+    this.roots = /* @__PURE__ */ new Set();
+    this.children = /* @__PURE__ */ new Map();
+    const ids = new Set(chats.map((chat) => chat.id));
+    if (ids.size !== chats.length) throw new Error("Duplicate conversation id");
+    for (const chat of chats) this.children.set(chat.id, []);
+    for (const chat of chats) {
+      if (chat.parentChatId === null || !ids.has(chat.parentChatId)) this.roots.add(chat.id);
+      else this.children.get(chat.parentChatId).push(chat);
+    }
+    const visiting = /* @__PURE__ */ new Set(), visited = /* @__PURE__ */ new Set();
+    const visit = (chat) => {
+      if (visited.has(chat.id)) return;
+      if (visiting.has(chat.id)) throw new Error("Cyclic conversation parent: " + chat.id);
+      visiting.add(chat.id);
+      for (const child of this.children.get(chat.id)) visit(child);
+      visiting.delete(chat.id);
+      visited.add(chat.id);
+    };
+    for (const chat of chats) visit(chat);
+  }
+  /** Retains the complete ancestor path of every matching descendant. */
+  matching(chats, predicate) {
+    const result = /* @__PURE__ */ new Set();
+    const visit = (chat) => {
+      let matches = predicate(chat);
+      for (const child of this.children.get(chat.id)) matches = visit(child) || matches;
+      if (matches) result.add(chat.id);
+      return matches;
+    };
+    for (const chat of chats) if (this.roots.has(chat.id)) visit(chat);
+    return result;
+  }
+};
+
 // src/ui-sidebar-native-layout.ts
 var legacySidebarMetrics = Object.freeze({
   categoryStart: 20,
@@ -413,19 +464,21 @@ function sidebarRowBuilders(ctx, current, state, actions, defaultAvatar) {
   const query = state.query.trim().toLocaleLowerCase();
   const muted = colors.onSurfaceVariant.copy({ alpha: 0.8 });
   const rows = [];
+  const tree = new SidebarChatTree(current.chatSidebar.chats);
+  const matching = tree.matching(current.chatSidebar.chats, (chat) => query === "" || chat.title.toLocaleLowerCase().includes(query));
   function dragType(section) {
     return "character-sidebar.chat:" + section.id;
   }
-  const gap = (width) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:19934",[width],__operitUiTemplate_19934);
+  const gap = (width) => OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:22185",__operitUiPrograms_[0],[width]);
   function more(kind, id2, selected = false) {
-    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:20018",["sidebar-" + kind + "-menu-" + id2 + "-visibility",selected,actions.menu(kind, id2)],__operitUiTemplate_20018);
+    return OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:22269",__operitUiPrograms_[1],["sidebar-" + kind + "-menu-" + id2 + "-visibility",selected,actions.menu(kind, id2)]);
   }
-  function chatRow(chat, section, groupId) {
+  function chatRow(chat, section, groupId, depth = 0) {
     const selected = current.chatSidebar.currentChatId === chat.id;
     const titleColor = selected ? colors.onSecondaryContainer : muted;
     const running = current.chatSidebar.activeStreamingChatIds.includes(chat.id);
-    const status = OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:20454",["sidebar-status-" + chat.id,running,selected,selected ? colors.onSecondaryContainer.copy({ alpha: 0.7 }) : colors.onSurfaceVariant.copy({ alpha: 0.3 }),colors.primary],__operitUiTemplate_20454);
-    const content = [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:20775",["sidebar-chat-drag-" + chat.id,chat.id,dragType(section),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:20930",[colors.surfaceContainerHighest,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:21120",[chat.title,colors.onSurface],__operitUiTemplate_21120)],__operitUiTemplate_20930),status],__operitUiTemplate_20775), gap(5), OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:21271",[{
+    const status = OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:22716",__operitUiPrograms_[2],["sidebar-status-" + chat.id,running,selected,selected ? colors.onSecondaryContainer.copy({ alpha: 0.7 }) : colors.onSurfaceVariant.copy({ alpha: 0.3 }),colors.primary]);
+    const content = [OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:23037",__operitUiPrograms_[3],["sidebar-chat-drag-" + chat.id,chat.id,dragType(section),colors.surfaceContainerHighest,chat.title,colors.onSurface,status]), gap(5), OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:23533",__operitUiPrograms_[4],[{
       key: "sidebar-chat-title-" + chat.id,
       text: chat.title,
       weight: 1,
@@ -435,32 +488,46 @@ function sidebarRowBuilders(ctx, current, state, actions, defaultAvatar) {
       overflow: "ellipsis",
       color: titleColor,
       ...{ letterSpacing: -0.1 }
-    }],__operitUiTemplate_21271)];
-    if (chat.pinned) content.push(gap(5), OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:21590",[titleColor.copy ? titleColor.copy({ alpha: 0.6 }) : titleColor],__operitUiTemplate_21590));
-    if (chat.locked) content.push(gap(5), OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:21747",[titleColor.copy ? titleColor.copy({ alpha: 0.6 }) : titleColor],__operitUiTemplate_21747));
+    }])];
+    if (chat.pinned) content.push(gap(5), OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:23852",__operitUiPrograms_[5],[titleColor.copy ? titleColor.copy({ alpha: 0.6 }) : titleColor]));
+    if (chat.locked) content.push(gap(5), OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:24009",__operitUiPrograms_[6],[titleColor.copy ? titleColor.copy({ alpha: 0.6 }) : titleColor]));
+    const children = tree.children.get(chat.id);
+    if (children.length > 0) {
+      const expanded = query !== "" || state.expandedGroups.includes("children:" + chat.id);
+      content.push(OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:24313",__operitUiPrograms_[7],["sidebar-children-" + chat.id,expanded ? "ExpandLess" : "ExpandMore",expanded ? "\u6536\u8D77\u5B50\u4F1A\u8BDD" : "\u5C55\u5F00\u5B50\u4F1A\u8BDD\uFF08" + children.length + "\uFF09",() => actions.toggleGroup("children:" + chat.id)]));
+    }
     content.push(gap(4), more("chat", chat.id, selected));
-    const surface = OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:21938",["sidebar-chat-hit-" + chat.id,ctx.Modifier.clip({ cornerRadius: m.chatRadius }).background(colors.secondaryContainer.copy({ alpha: selected ? 0.78 : 0 }), { cornerRadius: m.chatRadius }).border(1, colors.onSecondaryContainer.copy({ alpha: selected ? 0.08 : 0 }), { cornerRadius: m.chatRadius }).combinedClickable({ onClick: () => actions.activate(chat.id), onLongClick: () => actions.longPress(chat.id) }),content],__operitUiTemplate_21938);
+    const surface = OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:24847",__operitUiPrograms_[8],["sidebar-chat-hit-" + chat.id,({__modifierOps:OperitComposeNodes.modifierBase(ctx.Modifier).concat([{name:"clip",args:[{ cornerRadius: m.chatRadius }]}]).concat([{name:"background",args:[colors.secondaryContainer.copy({ alpha: selected ? 0.78 : 0 }),{ cornerRadius: m.chatRadius }]}]).concat([{name:"border",args:[1,colors.onSecondaryContainer.copy({ alpha: selected ? 0.08 : 0 }),{ cornerRadius: m.chatRadius }]}]).concat([{name:"combinedClickable",args:[{ onClick: () => actions.activate(chat.id), onLongClick: () => actions.longPress(chat.id) }]}])}),content]);
     const indicatorColor = selected ? colors.primary : colors.onSurface.copy({ alpha: 0 });
-    const rail = OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:22773",["sidebar-chat-rail-" + chat.id,m.railWidth,m.chatHeight,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:22931",["sidebar-chat-rail-base-" + chat.id,m.chatHeight,colors.outlineVariant.copy({ alpha: 0.45 })],__operitUiTemplate_22931),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:23127",["sidebar-chat-rail-indicator-" + chat.id,selected ? 2 : 1,selected ? 16 : 0,indicatorColor,selected ? 16 : 10,selected ? colors.primary : colors.onSurface.copy({ alpha: 0.55 })],__operitUiTemplate_23127)],__operitUiTemplate_22773);
-    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:23631",["sidebar-chat-drop-" + chat.id,dragType(section),chat.id,colors.primary.copy({ alpha: 0.55 }),(id2) => actions.drop(String(id2), section.id, groupId, chat.id),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:24004",["sidebar-chat-hover-" + chat.id,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:24102",["sidebar-chat-" + chat.id,m.chatHeight,m.chatStart,m.chatEnd,rail,gap(2),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:24384",[colors.onSurfaceVariant.copy({ alpha: 0.07 }),m.chatRadius,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:24546",["sidebar-chat-swipe-" + chat.id,ctx.Modifier.clip({ cornerRadius: m.chatRadius }),() => actions.rename(chat.id),() => actions.confirmSwipeDelete(chat.id),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:24918",[colors.primary,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:25058",[m.swipeIconSize,m.swipeIconSize,m.swipeIconSize,colors.onPrimary],__operitUiTemplate_25058)],__operitUiTemplate_24918),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:25230",[colors.error,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:25364",[m.swipeIconSize,m.swipeIconSize,m.swipeIconSize,colors.onError],__operitUiTemplate_25364)],__operitUiTemplate_25230),surface],__operitUiTemplate_24546)],__operitUiTemplate_24384)],__operitUiTemplate_24102)],__operitUiTemplate_24004)],__operitUiTemplate_23631);
+    const rail = OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:25682",__operitUiPrograms_[9],["sidebar-chat-rail-" + chat.id,m.railWidth,m.chatHeight,"sidebar-chat-rail-base-" + chat.id,m.chatHeight,colors.outlineVariant.copy({ alpha: 0.45 }),"sidebar-chat-rail-indicator-" + chat.id,selected ? 2 : 1,selected ? 16 : 0,indicatorColor,selected ? 16 : 10,selected ? colors.primary : colors.onSurface.copy({ alpha: 0.55 })]);
+    return OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:26540",__operitUiPrograms_[10],["sidebar-chat-drop-" + chat.id,dragType(section),chat.id,colors.primary.copy({ alpha: 0.55 }),(id2) => actions.drop(String(id2), section.id, groupId, chat.id),"sidebar-chat-hover-" + chat.id,"sidebar-chat-" + chat.id,m.chatHeight,m.chatStart + depth * 16,m.chatEnd,rail,gap(2),colors.onSurfaceVariant.copy({ alpha: 0.07 }),m.chatRadius,"sidebar-chat-swipe-" + chat.id,({__modifierOps:OperitComposeNodes.modifierBase(ctx.Modifier).concat([{name:"clip",args:[{ cornerRadius: m.chatRadius }]}])}),() => actions.rename(chat.id),() => actions.confirmSwipeDelete(chat.id),colors.primary,m.swipeIconSize,m.swipeIconSize,m.swipeIconSize,colors.onPrimary,colors.error,m.swipeIconSize,m.swipeIconSize,m.swipeIconSize,colors.onError,surface]);
   }
   function chats(values, id2, section, groupId, matchAll = false) {
-    const matches = query === "" || matchAll ? values : values.filter((chat) => chat.title.toLocaleLowerCase().includes(query));
+    const matches = values.filter((chat) => tree.roots.has(chat.id) && (matchAll || matching.has(chat.id)));
     const expanded = state.expandedGroups.includes("preview:" + id2);
     const preview = query !== "" || expanded ? matches : matches.filter((chat, index) => index < m.previewLimit || chat.pinned || current.chatSidebar.currentChatId === chat.id || current.chatSidebar.activeStreamingChatIds.includes(chat.id));
-    const result = preview.map((chat) => () => chatRow(chat, section, groupId));
+    const result = [];
+    function append(chat, depth) {
+      result.push(() => chatRow(chat, section, groupId, depth));
+      if (query !== "" || state.expandedGroups.includes("children:" + chat.id)) {
+        for (const child of tree.children.get(chat.id)) {
+          if (matchAll || matching.has(child.id)) append(child, depth + 1);
+        }
+      }
+    }
+    for (const chat of preview) append(chat, 0);
     const hidden = matches.length - preview.length;
-    if (query === "" && (hidden > 0 || expanded && matches.length > m.previewLimit)) result.push(() => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:26317",["sidebar-preview-" + id2,m.chatStart,m.chatEnd,() => actions.toggleGroup("preview:" + id2),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:26621",[expanded ? "ExpandLess" : "ExpandMore",colors.onSurfaceVariant.copy({ alpha: 0.72 })],__operitUiTemplate_26621),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:26753",[expanded ? "\u6536\u8D77" : "\u5C55\u5F00\u66F4\u591A " + hidden,colors.onSurfaceVariant.copy({ alpha: 0.72 })],__operitUiTemplate_26753)],__operitUiTemplate_26317));
+    if (query === "" && (hidden > 0 || expanded && matches.length > m.previewLimit)) result.push(() => OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:29550",__operitUiPrograms_[11],["sidebar-preview-" + id2,m.chatStart,m.chatEnd,() => actions.toggleGroup("preview:" + id2),expanded ? "ExpandLess" : "ExpandMore",colors.onSurfaceVariant.copy({ alpha: 0.72 }),expanded ? "\u6536\u8D77" : "\u5C55\u5F00\u66F4\u591A " + hidden,colors.onSurfaceVariant.copy({ alpha: 0.72 })]));
     return result;
   }
   function category(section) {
     const collapsed = state.collapsed.includes(section.id);
-    const avatar = section.kind === "card" ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:27104",["sidebar-avatar-" + section.id,section.avatarUri ?? defaultAvatar ?? "",m.categoryAvatar,m.categoryAvatar,section.title,ctx.Modifier.clip({ type: "circle" })],__operitUiTemplate_27104) : OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:27410",[m.categoryAvatar,m.categoryAvatar,colors.surfaceContainerLow.copy({ alpha: 0.72 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:27662",[section.kind === "group" ? "Groups" : "AccountTree",colors.onSurfaceVariant],__operitUiTemplate_27662)],__operitUiTemplate_27410);
-    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:27796",["sidebar-section-" + section.id,m.categoryStart,m.categoryEnd,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:28030",["sidebar-category-drop-" + section.id,dragType(section),(id2) => actions.drop(String(id2), section.id, null),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:28249",[() => actions.toggleSection(section.id),ctx.Modifier.clip({ cornerRadius: m.categoryRadius }),avatar,gap(8),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:28546",[section.title,ctx.Modifier.widthIn({ max: 170 }),colors.onSurface],__operitUiTemplate_28546),gap(8),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:28852",[String(section.chats.length),colors.onSurfaceVariant.copy({ alpha: 0.64 })],__operitUiTemplate_28852),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:29009",[colors.outlineVariant.copy({ alpha: 0.62 }),colors.outlineVariant.copy({ alpha: 0 })],__operitUiTemplate_29009),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:29198",[collapsed ? "KeyboardArrowDown" : "KeyboardArrowUp",colors.onSurfaceVariant.copy({ alpha: 0.78 })],__operitUiTemplate_29198)],__operitUiTemplate_28249)],__operitUiTemplate_28030)],__operitUiTemplate_27796);
+    const avatar = section.kind === "card" ? OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30337",__operitUiPrograms_[12],["sidebar-avatar-" + section.id,section.avatarUri ?? defaultAvatar ?? "",m.categoryAvatar,m.categoryAvatar,section.title,({__modifierOps:OperitComposeNodes.modifierBase(ctx.Modifier).concat([{name:"clip",args:[{ type: "circle" }]}])})]) : OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30643",__operitUiPrograms_[13],[m.categoryAvatar,m.categoryAvatar,colors.surfaceContainerLow.copy({ alpha: 0.72 }),section.kind === "group" ? "Groups" : "AccountTree",colors.onSurfaceVariant]);
+    return OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:31029",__operitUiPrograms_[14],["sidebar-section-" + section.id,m.categoryStart,m.categoryEnd,"sidebar-category-drop-" + section.id,dragType(section),(id2) => actions.drop(String(id2), section.id, null),() => actions.toggleSection(section.id),({__modifierOps:OperitComposeNodes.modifierBase(ctx.Modifier).concat([{name:"clip",args:[{ cornerRadius: m.categoryRadius }]}])}),avatar,gap(8),section.title,({__modifierOps:OperitComposeNodes.modifierBase(ctx.Modifier).concat([{name:"widthIn",args:[{ max: 170 }]}])}),colors.onSurface,gap(8),String(section.chats.length),colors.onSurfaceVariant.copy({ alpha: 0.64 }),colors.outlineVariant.copy({ alpha: 0.62 }),colors.outlineVariant.copy({ alpha: 0 }),collapsed ? "KeyboardArrowDown" : "KeyboardArrowUp",colors.onSurfaceVariant.copy({ alpha: 0.78 })]);
   }
   function groupRow(group, section, ungrouped = false) {
     const expanded = !state.collapsed.includes("group:" + group.id);
-    const groupBody = OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:29514",[{
+    const groupBody = OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:32747",__operitUiPrograms_[20],[{
       fillMaxWidth: true,
       verticalAlignment: "center",
       paddingStart: 12,
@@ -470,16 +537,16 @@ function sidebarRowBuilders(ctx, current, state, actions, defaultAvatar) {
       ...{ background: colors.surfaceContainerLow.copy({ alpha: 0.72 }), backgroundShape: { cornerRadius: m.groupRadius }, modifier: ctx.Modifier.border(1, colors.outlineVariant.copy({ alpha: 0.24 }), { cornerRadius: m.groupRadius }) },
       onClick: () => actions.toggleSection("group:" + group.id)
     },[
-      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:29994",[colors.onSurfaceVariant.copy({ alpha: 0.76 })],__operitUiTemplate_29994),
+      OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:33227",__operitUiPrograms_[15],[colors.onSurfaceVariant.copy({ alpha: 0.76 })]),
       gap(7),
-      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30118",[group.name,colors.onSurface.copy({ alpha: 1 })],__operitUiTemplate_30118),
-      ...group.pinned ? [gap(4), OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30316",[colors.onSurfaceVariant.copy({ alpha: 0.65 })],__operitUiTemplate_30316)] : [],
+      OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:33351",__operitUiPrograms_[16],[group.name,colors.onSurface.copy({ alpha: 1 })]),
+      ...group.pinned ? [gap(4), OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:33549",__operitUiPrograms_[17],[colors.onSurfaceVariant.copy({ alpha: 0.65 })])] : [],
       gap(2),
-      ungrouped ? OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30458",[actions.menu("ungrouped", section.id)],__operitUiTemplate_30458) : more("group", group.id),
+      ungrouped ? OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:33691",__operitUiPrograms_[18],[actions.menu("ungrouped", section.id)]) : more("group", group.id),
       gap(2),
-      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30588",[expanded ? "KeyboardArrowUp" : "KeyboardArrowDown",colors.onSurfaceVariant.copy({ alpha: 0.62 })],__operitUiTemplate_30588)
-    ]],__operitUiTemplate_29514);
-    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30744",["sidebar-group-" + group.id,m.groupStart,m.groupEnd,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:30968",["sidebar-group-drop-" + group.id,dragType(section),colors.primary.copy({ alpha: 0.55 }),m.groupRadius,(id2) => actions.drop(String(id2), section.id, ungrouped ? null : group.id),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:31321",[m.groupRadius,groupBody],__operitUiTemplate_31321)],__operitUiTemplate_30968)],__operitUiTemplate_30744);
+      OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:33821",__operitUiPrograms_[19],[expanded ? "KeyboardArrowUp" : "KeyboardArrowDown",colors.onSurfaceVariant.copy({ alpha: 0.62 })])
+    ]]);
+    return OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:33977",__operitUiPrograms_[21],["sidebar-group-" + group.id,m.groupStart,m.groupEnd,"sidebar-group-drop-" + group.id,dragType(section),colors.primary.copy({ alpha: 0.55 }),m.groupRadius,(id2) => actions.drop(String(id2), section.id, ungrouped ? null : group.id),m.groupRadius,groupBody]);
   }
   const sections = state.data.view === "characters" ? state.data.sections : state.data.scopes.map((scope) => ({
     id: scope.id,
@@ -492,34 +559,29 @@ function sidebarRowBuilders(ctx, current, state, actions, defaultAvatar) {
     ungroupedChats: scope.ungrouped
   }));
   for (const section of sections) {
-    const groups = section.conversationGroups ?? [], ungrouped = section.ungroupedChats ?? section.chats;
-    if (section.chats.length === 0 && groups.length === 0) continue;
+    const groups = (section.conversationGroups ?? []).filter((group) => group.chats.length === 0 || group.chats.some((chat) => tree.roots.has(chat.id)));
+    const ungrouped = (section.ungroupedChats ?? section.chats).filter((chat) => tree.roots.has(chat.id));
+    if (ungrouped.length === 0 && groups.length === 0) continue;
     const categoryMatches = query === "" || section.title.toLocaleLowerCase().includes(query);
-    const visibleGroups = groups.filter((group) => categoryMatches || group.name.toLocaleLowerCase().includes(query) || group.chats.some((chat) => chat.title.toLocaleLowerCase().includes(query)));
-    if (!categoryMatches && visibleGroups.length === 0 && !ungrouped.some((chat) => chat.title.toLocaleLowerCase().includes(query))) continue;
+    const visibleGroups = groups.filter((group) => categoryMatches || group.name.toLocaleLowerCase().includes(query) || group.chats.some((chat) => tree.roots.has(chat.id) && matching.has(chat.id)));
+    if (!categoryMatches && visibleGroups.length === 0 && !ungrouped.some((chat) => matching.has(chat.id))) continue;
     rows.push(() => category(section));
     if (state.collapsed.includes(section.id)) continue;
     for (const group of visibleGroups) {
       rows.push(() => groupRow(group, section));
       if (!state.collapsed.includes("group:" + group.id)) rows.push(...chats(group.chats, group.id, section, group.id, categoryMatches || group.name.toLocaleLowerCase().includes(query)));
     }
-    if (ungrouped.length > 0 && (categoryMatches || "\u672A\u5206\u7EC4".includes(query) || ungrouped.some((chat) => chat.title.toLocaleLowerCase().includes(query)))) {
+    if (ungrouped.length > 0 && (categoryMatches || "\u672A\u5206\u7EC4".includes(query) || ungrouped.some((chat) => matching.has(chat.id)))) {
       const id2 = "ungrouped:" + section.id;
       rows.push(() => groupRow({ id: id2, name: "\u672A\u5206\u7EC4", pinned: ungrouped.every((chat) => chat.pinned), displayOrder: 0, chats: ungrouped }, section, true));
       if (!state.collapsed.includes("group:" + id2)) rows.push(...chats(ungrouped, id2, section, null, categoryMatches || "\u672A\u5206\u7EC4".includes(query)));
     }
   }
-  if (rows.length === 0) rows.push(() => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:33468",[query === "" ? "\u6682\u65E0\u4F1A\u8BDD" : "\u6CA1\u6709\u5339\u914D\u7684\u4F1A\u8BDD",m.chatHeight,muted],__operitUiTemplate_33468));
+  if (rows.length === 0) rows.push(() => OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:36804",__operitUiPrograms_[22],[query === "" ? "\u6682\u65E0\u4F1A\u8BDD" : "\u6CA1\u6709\u5339\u914D\u7684\u4F1A\u8BDD",m.chatHeight,muted]));
   return rows;
 }
-function nativeSidebarLazyItems(ctx, current, state, actions, defaultAvatar) {
-  const builders = sidebarRowBuilders(ctx, current, state, actions, defaultAvatar);
-  return ctx.lazyItems({
-    key: "sidebar-conversation-rows",
-    itemCount: builders.length,
-    itemExtent: legacySidebarMetrics.chatHeight,
-    initialItemCount: 24
-  }, (index) => builders[index]());
+function nativeSidebarRows(ctx, current, state, actions, defaultAvatar) {
+  return sidebarRowBuilders(ctx, current, state, actions, defaultAvatar).map((build) => build());
 }
 
 // src/sidebar-group-delete.ts
@@ -818,17 +880,17 @@ function renderSidebarScreen(ctx) {
   function menu(kind, id2) {
     if (kind === "chat") {
       const chat = chatFor(id2);
-      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:46653",["sidebar-chat-menu-" + id2,!state.busy,chat.pinned ? "\u53D6\u6D88\u7F6E\u9876" : "\u7F6E\u9876",chat.locked ? "\u89E3\u9501" : "\u9501\u5B9A",chat.locked ? "LockOpen" : "Lock",(index) => __async(null, null, function* () {
+      return OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:49793",__operitUiPrograms_[23],["sidebar-chat-menu-" + id2,!state.busy,chat.pinned ? "\u53D6\u6D88\u7F6E\u9876" : "\u7F6E\u9876",chat.locked ? "\u89E3\u9501" : "\u9501\u5B9A",chat.locked ? "LockOpen" : "Lock",(index) => __async(null, null, function* () {
           if (index === 0) renameChat(id2);
           else if (index === 1) yield changeFlag(id2, true);
           else if (index === 2) yield changeFlag(id2, false);
           else if (index === 3) yield deleteChat(id2);
-        }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:47505",[colors.onSurfaceVariant.copy({ alpha: 0.78 })],__operitUiTemplate_47505)],__operitUiTemplate_46653);
+        }),colors.onSurfaceVariant.copy({ alpha: 0.78 })]);
     }
     if (kind === "ungrouped") {
       const scope = scopeFor(id2);
       const pinned = scope.ungrouped.length > 0 && scope.ungrouped.every((chat) => chat.pinned);
-      return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:47788",["sidebar-ungrouped-menu-" + id2,!state.busy && state.data !== null,pinned ? "\u53D6\u6D88\u7F6E\u9876" : "\u7F6E\u9876",pinned ? "PushPinOutlined" : "PushPinRounded",(index) => __async(null, null, function* () {
+      return OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:50928",__operitUiPrograms_[24],["sidebar-ungrouped-menu-" + id2,!state.busy && state.data !== null,pinned ? "\u53D6\u6D88\u7F6E\u9876" : "\u7F6E\u9876",pinned ? "PushPinOutlined" : "PushPinRounded",(index) => __async(null, null, function* () {
           if (index === 0) return createChat(scope.ownerSelection ?? "", null);
           if (index === 1) dialog("renameUngrouped", id2, "\u672A\u5206\u7EC4");
           if (index === 2) yield run(() => __async(null, null, function* () {
@@ -837,7 +899,7 @@ function renderSidebarScreen(ctx) {
           }));
           if (index === 3) dialog("deleteUngrouped", id2, "\u672A\u5206\u7EC4");
           return null;
-        }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:48992",[colors.onSurfaceVariant.copy({ alpha: 0.78 })],__operitUiTemplate_48992)],__operitUiTemplate_47788);
+        }),colors.onSurfaceVariant.copy({ alpha: 0.78 })]);
     }
     const group = scopeFor(id2).groups.find((value) => value.id === id2);
     const items = [
@@ -846,7 +908,7 @@ function renderSidebarScreen(ctx) {
       { label: group.pinned ? "\u53D6\u6D88\u7F6E\u9876" : "\u7F6E\u9876", icon: group.pinned ? "PushPinOutlined" : "PushPinRounded" },
       { label: "\u5220\u9664", icon: "DeleteOutlineRounded", danger: true, dividerBefore: true }
     ];
-    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:49590",["sidebar-group-menu-" + id2,items,!state.busy,(index) => __async(null, null, function* () {
+    return OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:52730",__operitUiPrograms_[25],["sidebar-group-menu-" + id2,items,!state.busy,(index) => __async(null, null, function* () {
         if (index === 0) {
           const owner2 = scopeFor(id2).ownerSelection;
           return createChat(owner2 ?? "", id2);
@@ -857,7 +919,7 @@ function renderSidebarScreen(ctx) {
         }));
         else if (index === 3) dialog("delete", id2, group.name);
         return null;
-      }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:50374",[colors.onSurfaceVariant.copy({ alpha: 0.78 })],__operitUiTemplate_50374)],__operitUiTemplate_49590);
+      }),colors.onSurfaceVariant.copy({ alpha: 0.78 })]);
   }
   function drop(chatId, scopeId, groupId, targetId) {
     return __async(this, null, function* () {
@@ -890,10 +952,11 @@ function renderSidebarScreen(ctx) {
   const data = visibleCatalog();
   const toggleSection = (id2) => update({ collapsed: state.collapsed.includes(id2) ? state.collapsed.filter((key) => key !== id2) : [...state.collapsed, id2] });
   const toggleGroup = (id2) => update({ expandedGroups: state.expandedGroups.includes(id2) ? state.expandedGroups.filter((key) => key !== id2) : [...state.expandedGroups, id2] });
-  const rows = [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:52389",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:52577",[colors.primaryContainer,colors.onPrimaryContainer,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:52820",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:52893",[() => __async(null, null, function* () {
+  const searchActive = state.search || state.query.trim() !== "";
+  const rows = [OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:55595",__operitUiPrograms_[26],[colors.primaryContainer,colors.onPrimaryContainer,() => __async(null, null, function* () {
             const active = yield callMainDomain("activePrompt.get", {});
             return createChat(encodeSelection(active), null);
-          }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:53319",[colors.onPrimaryContainer],__operitUiTemplate_53319),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:53409",[{ text: "\u65B0\u5EFA\u5BF9\u8BDD", fontSize: 13, fontWeight: "600", color: colors.onPrimaryContainer, ...{ letterSpacing: -0.1 } }],__operitUiTemplate_53409)],__operitUiTemplate_52893),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:53574",[colors.onPrimaryContainer.copy({ alpha: 0.16 })],__operitUiTemplate_53574),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:53681",[() => __async(null, null, function* () {
+          }),colors.onPrimaryContainer,{ text: "\u65B0\u5EFA\u5BF9\u8BDD", fontSize: 13, fontWeight: "600", color: colors.onPrimaryContainer, ...{ letterSpacing: -0.1 } },colors.onPrimaryContainer.copy({ alpha: 0.16 }),() => __async(null, null, function* () {
             const active = yield callMainDomain("activePrompt.get", {});
             const selection = encodeSelection(active);
             const catalog = visibleCatalog();
@@ -901,20 +964,9 @@ function renderSidebarScreen(ctx) {
             const scope = catalog.view === "characters" ? catalog.sections.find((section) => section.selection === selection) : catalog.scopes.find((scope2) => scope2.ownerSelection === selection);
             if (scope === void 0) throw new Error("The active owner is absent from the actual sidebar catalog");
             dialog("create", scope.id);
-          }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:54541",[colors.onPrimaryContainer],__operitUiTemplate_54541)],__operitUiTemplate_53681)],__operitUiTemplate_52820)],__operitUiTemplate_52577),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:54702",[() => update({ search: !state.search }),ctx.Modifier.clip({ cornerRadius: 6 }),state.search ? colors.secondaryContainer.copy({ alpha: 0.35 }) : colors.surface.copy({ alpha: 0 }),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:55127",[state.search ? "SearchOff" : "Search",colors.onSurfaceVariant.copy({ alpha: 0.78 }),state.search ? "\u6536\u8D77\u641C\u7D22" : "\u641C\u7D22\u5BF9\u8BDD"],__operitUiTemplate_55127)],__operitUiTemplate_54702)],__operitUiTemplate_52389)];
-  if (state.search) rows.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:55386",[{
-    key: "sidebar-search",
-    value: state.query,
-    onValueChange: (query) => update({ query }),
-    placeholder: "\u641C\u7D22\u5BF9\u8BDD",
-    singleLine: true,
-    fillMaxWidth: true,
-    paddingHorizontal: 12,
-    paddingBottom: 12,
-    ...{ shape: { cornerRadius: 14 } }
-  }],__operitUiTemplate_55386));
-  if (state.error !== "") rows.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:55728",[state.error,colors.error],__operitUiTemplate_55728));
-  let lazyItems = null;
+          }),colors.onPrimaryContainer,() => update({ search: !state.search }),({__modifierOps:OperitComposeNodes.modifierBase(ctx.Modifier).concat([{name:"clip",args:[{ cornerRadius: 6 }]}])}),searchActive ? colors.secondaryContainer.copy({ alpha: 0.35 }) : colors.surface.copy({ alpha: 0 }),state.search ? "SearchOffRounded" : "SearchRounded",searchActive ? colors.primary : colors.onSurfaceVariant.copy({ alpha: 0.78 }),state.search ? "\u6536\u8D77\u641C\u7D22" : "\u641C\u7D22\u5BF9\u8BDD"])];
+  rows.push(OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:58620",__operitUiPrograms_[29],[state.search ? OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:58819",__operitUiPrograms_[27],[state.query,(query) => update({ query }),colors.onSurface,colors.onSurfaceVariant.copy({ alpha: 0.72 }),colors.surfaceContainerLow.copy({ alpha: 0.72 }),colors.primary,colors.onSurfaceVariant.copy({ alpha: 0.62 })]) : OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:59688",__operitUiPrograms_[28],[])]));
+  if (state.error !== "") rows.push(OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:59759",__operitUiPrograms_[30],[state.error,colors.error]));
   if (data !== null) {
     const actions = {
       activate: activate2,
@@ -928,7 +980,7 @@ function renderSidebarScreen(ctx) {
     };
     const layoutActions = ctx.useRef("native-sidebar-layout-actions", actions);
     Object.assign(layoutActions.current, actions);
-    lazyItems = nativeSidebarLazyItems(
+    rows.push(...nativeSidebarRows(
       ctx,
       current.current,
       {
@@ -940,18 +992,17 @@ function renderSidebarScreen(ctx) {
       },
       layoutActions.current,
       state.defaultAvatar
-    );
-  } else if (state.loading) rows.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:56571",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:56655",null,__operitUiTemplate_56655)],__operitUiTemplate_56571));
-  const staticItemCount = rows.length;
-  const content = lazyItems === null ? [...rows] : [...rows, ...lazyItems.content];
+    ));
+  } else if (state.loading) rows.push(OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:60575",__operitUiPrograms_[31],[]));
+  const content = [...rows];
   if (state.dialog !== null) {
-    const staged = state.dialog, body = [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:56894",[{ create: "\u65B0\u5EFA\u5206\u7EC4", rename: "\u91CD\u547D\u540D\u5206\u7EC4", delete: "\u5220\u9664\u5206\u7EC4\u53CA\u5176\u5BF9\u8BDD", renameUngrouped: "\u91CD\u547D\u540D\u5206\u7EC4", deleteUngrouped: "\u5220\u9664\u5206\u7EC4\u53CA\u5176\u5BF9\u8BDD", renameChat: "\u7F16\u8F91\u5BF9\u8BDD\u540D\u79F0", deleteChat: "\u5220\u9664\u5BF9\u8BDD", chatActions: "\u804A\u5929\u8BB0\u5F55" }[staged.kind]],__operitUiTemplate_56894)];
-    if (staged.kind === "create" || staged.kind === "rename" || staged.kind === "renameUngrouped" || staged.kind === "renameChat") body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:57500",[staged.name,staged.kind === "renameChat" ? "\u5BF9\u8BDD\u540D\u79F0" : "\u5206\u7EC4\u540D\u79F0",(name) => update({ dialog: { ...staged, name } }),!state.busy],__operitUiTemplate_57500));
-    if (staged.kind === "delete" || staged.kind === "deleteUngrouped" || staged.kind === "deleteChat") body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:57866",[staged.kind === "deleteChat" ? `\u786E\u8BA4\u5220\u9664\u5BF9\u8BDD\u201C${staged.name}\u201D\uFF1F\u6B64\u64CD\u4F5C\u4E0D\u53EF\u64A4\u9500\u3002` : `\u786E\u8BA4\u5220\u9664\u201C${staged.name}\u201D\u53CA\u5176\u4E2D\u7684\u5168\u90E8\u5BF9\u8BDD\uFF1F\u6B64\u64CD\u4F5C\u4E0D\u53EF\u64A4\u9500\u3002`],__operitUiTemplate_57866));
+    const staged = state.dialog, body = [OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:60804",__operitUiPrograms_[32],[{ create: "\u65B0\u5EFA\u5206\u7EC4", rename: "\u91CD\u547D\u540D\u5206\u7EC4", delete: "\u5220\u9664\u5206\u7EC4\u53CA\u5176\u5BF9\u8BDD", renameUngrouped: "\u91CD\u547D\u540D\u5206\u7EC4", deleteUngrouped: "\u5220\u9664\u5206\u7EC4\u53CA\u5176\u5BF9\u8BDD", renameChat: "\u7F16\u8F91\u5BF9\u8BDD\u540D\u79F0", deleteChat: "\u5220\u9664\u5BF9\u8BDD", chatActions: "\u804A\u5929\u8BB0\u5F55" }[staged.kind]])];
+    if (staged.kind === "create" || staged.kind === "rename" || staged.kind === "renameUngrouped" || staged.kind === "renameChat") body.push(OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61410",__operitUiPrograms_[33],[staged.name,staged.kind === "renameChat" ? "\u5BF9\u8BDD\u540D\u79F0" : "\u5206\u7EC4\u540D\u79F0",(name) => update({ dialog: { ...staged, name } }),!state.busy]));
+    if (staged.kind === "delete" || staged.kind === "deleteUngrouped" || staged.kind === "deleteChat") body.push(OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61776",__operitUiPrograms_[34],[staged.kind === "deleteChat" ? `\u786E\u8BA4\u5220\u9664\u5BF9\u8BDD\u201C${staged.name}\u201D\uFF1F\u6B64\u64CD\u4F5C\u4E0D\u53EF\u64A4\u9500\u3002` : `\u786E\u8BA4\u5220\u9664\u201C${staged.name}\u201D\u53CA\u5176\u4E2D\u7684\u5168\u90E8\u5BF9\u8BDD\uFF1F\u6B64\u64CD\u4F5C\u4E0D\u53EF\u64A4\u9500\u3002`]));
     if (staged.kind === "chatActions") {
       const chat = chatFor(staged.id), ids = orderNeighbours(staged.id), index = ids.indexOf(staged.id);
-      body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:58374",[chat.title,colors.onSurfaceVariant],__operitUiTemplate_58374));
-      const tile = (label, icon, callback, enabled = true, danger = false) => OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:58575",[enabled ? callback : void 0,colors.surface,OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:58721",[OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:58854",[icon,danger ? colors.error : colors.onSurfaceVariant],__operitUiTemplate_58854),OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:58958",[label,danger ? colors.error : colors.onSurface],__operitUiTemplate_58958)],__operitUiTemplate_58721)],__operitUiTemplate_58575);
+      body.push(OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:62284",__operitUiPrograms_[35],[chat.title,colors.onSurfaceVariant]));
+      const tile = (label, icon, callback, enabled = true, danger = false) => OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:62485",__operitUiPrograms_[36],[enabled ? callback : void 0,colors.surface,icon,danger ? colors.error : colors.onSurfaceVariant,label,danger ? colors.error : colors.onSurface]);
       if (capabilities?.openInWindow === true) body.push(tile("\u5728\u65B0\u7A97\u53E3\u6253\u5F00", "OpenInNew", () => openInWindow(chat.id)));
       body.push(
         tile("\u7F16\u8F91\u540D\u79F0", "Edit", () => renameChat(chat.id)),
@@ -962,26 +1013,22 @@ function renderSidebarScreen(ctx) {
         tile("\u5220\u9664", "DeleteOutline", () => deleteChat(chat.id), true, true)
       );
     }
-    if (staged.progress !== null) body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:59926",[`\u5DF2\u5220\u9664 ${staged.progress.deletedChatIds.length} \u6761\u5BF9\u8BDD
-` + staged.progress.failedChatIds.map((value) => value.chatId + ": " + value.error).join("\n"),staged.progress.failedChatIds.length === 0 ? colors.onSurface : colors.error],__operitUiTemplate_59926));
-    if (state.error !== "") body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:60293",[state.error,colors.error],__operitUiTemplate_60293));
-    body.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:60379",[[
-      OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:60414",[!state.busy,() => update({ dialog: null })],__operitUiTemplate_60414),
-      ...staged.progress === null && staged.kind !== "chatActions" ? [OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:60592",[!state.busy,() => run(submit)],__operitUiTemplate_60592)] : []
-    ]],__operitUiTemplate_60379));
-    content.push(OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:60714",[!state.busy,() => {
+    if (staged.progress !== null) body.push(OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:63836",__operitUiPrograms_[37],[`\u5DF2\u5220\u9664 ${staged.progress.deletedChatIds.length} \u6761\u5BF9\u8BDD
+` + staged.progress.failedChatIds.map((value) => value.chatId + ": " + value.error).join("\n"),staged.progress.failedChatIds.length === 0 ? colors.onSurface : colors.error]));
+    if (state.error !== "") body.push(OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:64203",__operitUiPrograms_[38],[state.error,colors.error]));
+    body.push(OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:64289",__operitUiPrograms_[41],[[
+      OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:64324",__operitUiPrograms_[39],[!state.busy,() => update({ dialog: null })]),
+      ...staged.progress === null && staged.kind !== "chatActions" ? [OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:64502",__operitUiPrograms_[40],[!state.busy,() => run(submit)])] : []
+    ]]));
+    content.push(OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:64624",__operitUiPrograms_[42],[!state.busy,() => {
       if (!state.busy) update({ dialog: null });
-    },OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:60878",[body],__operitUiTemplate_60878)],__operitUiTemplate_60714));
+    },body]));
   }
   const onLoad = prepared === null ? refresh : () => {
     void Promise.resolve().then(refresh).catch(() => {
     });
   };
-  if (lazyItems !== null) {
-    const viewport = { ...lazyItems.viewport, staticItemCount };
-    return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61174",[viewport,onLoad,refreshInputs,content],__operitUiTemplate_61174);
-  }
-  return OperitComposeGeneration.template(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:61399",[onLoad,refreshInputs,content],__operitUiTemplate_61399);
+  return OperitComposeComposition.evaluate(ctx,"com.operit.character_cards:dist/ui/chat-sidebar/index.ui.js:64989",__operitUiPrograms_[43],[onLoad,refreshInputs,content]);
 }
 
 // src/ui-sidebar.ts
@@ -1017,15 +1064,16 @@ function parseSidebarInput(value) {
   return { view: input.view };
 }
 function parseSidebarChat(value) {
-  const chat = exactFields(value, ["id", "title", "updatedAt", "displayOrder", "workspaceId", "workspaceName", "locked", "pinned", "group"], "sidebar chat");
+  const chat = exactFields(value, ["id", "title", "updatedAt", "displayOrder", "workspaceId", "workspaceName", "locked", "pinned", "group", "parentChatId"], "sidebar chat");
   if (chat.group !== null && typeof chat.group !== "string") throw new Error("sidebar chat.group must be a string or null");
+  if (chat.parentChatId !== null) sidebarIdentity(chat.parentChatId, "sidebar chat.parentChatId");
   const id2 = sidebarIdentity(chat.id, "sidebar chat.id");
   if (typeof chat.title !== "string" || typeof chat.updatedAt !== "string") throw new Error("sidebar chat title and updatedAt must be strings");
   if (typeof chat.displayOrder !== "number" || !Number.isSafeInteger(chat.displayOrder)) throw new Error("sidebar chat.displayOrder must be a safe integer");
   if (chat.workspaceId !== null && typeof chat.workspaceId !== "string") throw new Error("sidebar chat.workspaceId must be a string or null");
   if (chat.workspaceName !== null && typeof chat.workspaceName !== "string") throw new Error("sidebar chat.workspaceName must be a string or null");
   if (typeof chat.locked !== "boolean" || typeof chat.pinned !== "boolean") throw new Error("sidebar chat locked and pinned must be booleans");
-  return { id: id2, title: chat.title, updatedAt: chat.updatedAt, displayOrder: chat.displayOrder, workspaceId: chat.workspaceId, workspaceName: chat.workspaceName, locked: chat.locked, pinned: chat.pinned, group: chat.group };
+  return { id: id2, title: chat.title, updatedAt: chat.updatedAt, displayOrder: chat.displayOrder, workspaceId: chat.workspaceId, workspaceName: chat.workspaceName, locked: chat.locked, pinned: chat.pinned, group: chat.group, parentChatId: chat.parentChatId };
 }
 function parseChatSidebarContext(value) {
   const context = exactFields(value, ["chats", "currentChatId", "activeStreamingChatIds"], "chatSidebar");
@@ -1110,87 +1158,3 @@ function reconcileSidebarCatalog(catalog, current) {
 function Screen(ctx) {
   return renderSidebarScreen(ctx);
 }
-
-function __operitUiTemplate_19934(__ctx,__values){return __ctx.UI.Spacer({width:__values[0]}); }
-function __operitUiTemplate_20018(__ctx,__values){return __ctx.UI.HoverOnly({key:__values[0],alwaysVisible:__values[1]},__values[2]); }
-function __operitUiTemplate_20454(__ctx,__values){return __ctx.UI.ActivityDots({key:__values[0],width:10,height:13.5,running:__values[1],selected:__values[2],restingColor:__values[3],activeColor:__values[4]}); }
-function __operitUiTemplate_21120(__ctx,__values){return __ctx.UI.Text({text:__values[0],weight:1,maxLines:1,overflow:"ellipsis",fontSize:13,color:__values[1]}); }
-function __operitUiTemplate_20930(__ctx,__values){return __ctx.UI.Row({width:220,height:34,paddingHorizontal:10,verticalAlignment:"center",background:__values[0],backgroundShape:{cornerRadius:8}},__values[1]); }
-function __operitUiTemplate_20775(__ctx,__values){return __ctx.UI.Draggable({key:__values[0],data:__values[1],dragType:__values[2],enabled:true,feedback:__values[3]},__values[4]); }
-function __operitUiTemplate_21271(__ctx,__values){return __ctx.UI.Text(__values[0]); }
-function __operitUiTemplate_21590(__ctx,__values){return __ctx.UI.Icon({name:"PushPin",size:12,tint:__values[0]}); }
-function __operitUiTemplate_21747(__ctx,__values){return __ctx.UI.Icon({name:"Lock",size:12,tint:__values[0]}); }
-function __operitUiTemplate_21938(__ctx,__values){return __ctx.UI.Row({key:__values[0],weight:1,height:31,verticalAlignment:"center",paddingHorizontal:6,modifier:__values[1]},__values[2]); }
-function __operitUiTemplate_22931(__ctx,__values){return __ctx.UI.Box({key:__values[0],width:1,height:__values[1],backgroundColor:__values[2]}); }
-function __operitUiTemplate_23127(__ctx,__values){return __ctx.UI.Box({key:__values[0],width:__values[1],height:__values[2],backgroundColor:__values[3],backgroundShape:{cornerRadius:1.5},animation:{durationMillis:160,curve:"easeOutCubic"},hoverStyle:{width:2,height:__values[4],backgroundColor:__values[5]}}); }
-function __operitUiTemplate_22773(__ctx,__values){return __ctx.UI.Box({key:__values[0],width:__values[1],height:__values[2],contentAlignment:"center"},[__values[3],__values[4]]); }
-function __operitUiTemplate_25058(__ctx,__values){return __ctx.UI.Icon({name:"Edit",size:__values[0],width:__values[1],height:__values[2],tint:__values[3]}); }
-function __operitUiTemplate_24918(__ctx,__values){return __ctx.UI.Box({fillMaxSize:true,paddingStart:12,background:__values[0],contentAlignment:"start"},__values[1]); }
-function __operitUiTemplate_25364(__ctx,__values){return __ctx.UI.Icon({name:"Delete",size:__values[0],width:__values[1],height:__values[2],tint:__values[3]}); }
-function __operitUiTemplate_25230(__ctx,__values){return __ctx.UI.Box({fillMaxSize:true,paddingEnd:12,background:__values[0],contentAlignment:"end"},__values[1]); }
-function __operitUiTemplate_24546(__ctx,__values){return __ctx.UI.SwipeActions({key:__values[0],actionThreshold:0.5,height:31,modifier:__values[1],onStartAction:__values[2],onEndAction:__values[3],startBackground:__values[4],endBackground:__values[5]},__values[6]); }
-function __operitUiTemplate_24384(__ctx,__values){return __ctx.UI.HoverRegion({weight:1,hoverBackground:__values[0],shape:{cornerRadius:__values[1]}},__values[2]); }
-function __operitUiTemplate_24102(__ctx,__values){return __ctx.UI.Row({key:__values[0],fillMaxWidth:true,height:__values[1],paddingStart:__values[2],paddingEnd:__values[3],verticalAlignment:"center"},[__values[4],__values[5],__values[6]]); }
-function __operitUiTemplate_24004(__ctx,__values){return __ctx.UI.HoverRegion({key:__values[0],fillMaxWidth:true},__values[1]); }
-function __operitUiTemplate_23631(__ctx,__values){return __ctx.UI.DragTarget({key:__values[0],acceptedTypes:[__values[1]],excludedData:[__values[2]],hoverBorderColor:__values[3],shape:{cornerRadius:8},fillMaxWidth:true,onDrop:__values[4]},__values[5]); }
-function __operitUiTemplate_26621(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:18,tint:__values[1]}); }
-function __operitUiTemplate_26753(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"labelMedium",fontWeight:"600",color:__values[1]}); }
-function __operitUiTemplate_26317(__ctx,__values){return __ctx.UI.Row({key:__values[0],fillMaxWidth:true,paddingStart:__values[1],paddingEnd:__values[2],paddingTop:2,height:34,verticalAlignment:"center",spacing:8,onClick:__values[3]},[__values[4],__values[5]]); }
-function __operitUiTemplate_27104(__ctx,__values){return __ctx.UI.Image({key:__values[0],uri:__values[1],width:__values[2],height:__values[3],contentScale:"crop",contentDescription:__values[4],modifier:__values[5]}); }
-function __operitUiTemplate_27662(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:14,tint:__values[1]}); }
-function __operitUiTemplate_27410(__ctx,__values){return __ctx.UI.Box({width:__values[0],height:__values[1],contentAlignment:"center",background:__values[2],backgroundShape:{type:"circle"}},__values[3]); }
-function __operitUiTemplate_28546(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"titleSmall",fontWeight:"700",maxLines:1,overflow:"ellipsis",modifier:__values[1],color:__values[2]}); }
-function __operitUiTemplate_28852(__ctx,__values){return __ctx.UI.Text({text:__values[0],style:"labelSmall",fontWeight:"700",color:__values[1]}); }
-function __operitUiTemplate_29009(__ctx,__values){return __ctx.UI.GradientRule({weight:1,paddingHorizontal:10,height:2,startColor:__values[0],endColor:__values[1]}); }
-function __operitUiTemplate_29198(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:23,tint:__values[1]}); }
-function __operitUiTemplate_28249(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,verticalAlignment:"center",height:24,onClick:__values[0],modifier:__values[1]},[__values[2],__values[3],__values[4],__values[5],__values[6],__values[7],__values[8]]); }
-function __operitUiTemplate_28030(__ctx,__values){return __ctx.UI.DragTarget({key:__values[0],acceptedTypes:[__values[1]],onDrop:__values[2]},__values[3]); }
-function __operitUiTemplate_27796(__ctx,__values){return __ctx.UI.Column({key:__values[0],fillMaxWidth:true,paddingStart:__values[1],paddingEnd:__values[2],paddingTop:5,paddingBottom:5},__values[3]); }
-function __operitUiTemplate_29994(__ctx,__values){return __ctx.UI.Icon({name:"FolderOutlined",size:16,tint:__values[0]}); }
-function __operitUiTemplate_30118(__ctx,__values){return __ctx.UI.Text({text:__values[0],weight:1,style:"labelLarge",fontWeight:"700",maxLines:1,overflow:"ellipsis",color:__values[1]}); }
-function __operitUiTemplate_30316(__ctx,__values){return __ctx.UI.Icon({name:"PushPinRounded",size:12,tint:__values[0]}); }
-function __operitUiTemplate_30458(__ctx,__values){return __ctx.UI.HoverOnly({width:24,height:24},__values[0]); }
-function __operitUiTemplate_30588(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:20,tint:__values[1]}); }
-function __operitUiTemplate_29514(__ctx,__values){return __ctx.UI.Row(__values[0],__values[1]); }
-function __operitUiTemplate_31321(__ctx,__values){return __ctx.UI.HoverRegion({shape:{cornerRadius:__values[0]}},__values[1]); }
-function __operitUiTemplate_30968(__ctx,__values){return __ctx.UI.DragTarget({key:__values[0],acceptedTypes:[__values[1]],hoverBorderColor:__values[2],shape:{cornerRadius:__values[3]},onDrop:__values[4]},__values[5]); }
-function __operitUiTemplate_30744(__ctx,__values){return __ctx.UI.Column({key:__values[0],fillMaxWidth:true,paddingStart:__values[1],paddingEnd:__values[2],paddingTop:3,paddingBottom:3},__values[3]); }
-function __operitUiTemplate_33468(__ctx,__values){return __ctx.UI.Text({text:__values[0],height:__values[1],color:__values[2],fontSize:12,paddingHorizontal:20}); }
-function __operitUiTemplate_47505(__ctx,__values){return __ctx.UI.Icon({name:"MoreHoriz",size:16,tint:__values[0]}); }
-function __operitUiTemplate_46653(__ctx,__values){return __ctx.UI.PopupMenu({key:__values[0],width:22,height:22,tooltip:"\u5BF9\u8BDD\u64CD\u4F5C",enabled:__values[1],items:[{label:"\u7F16\u8F91\u540D\u79F0",icon:"Edit"},{label:__values[2],icon:"PushPin"},{label:__values[3],icon:__values[4]},{label:"\u5220\u9664",icon:"DeleteOutline",danger:true}],onSelected:__values[5]},__values[6]); }
-function __operitUiTemplate_48992(__ctx,__values){return __ctx.UI.Icon({name:"MoreHorizRounded",size:16,tint:__values[0]}); }
-function __operitUiTemplate_47788(__ctx,__values){return __ctx.UI.PopupMenu({key:__values[0],width:22,height:22,menuMaxWidth:138,tooltip:"\u5206\u7EC4\u64CD\u4F5C",enabled:__values[1],items:[{label:"\u65B0\u5EFA\u5BF9\u8BDD",icon:"AddCommentOutlined"},{label:"\u7F16\u8F91\u540D\u79F0",icon:"EditOutlined"},{label:__values[2],icon:__values[3]},{label:"\u5220\u9664",icon:"DeleteOutlineRounded",danger:true,dividerBefore:true}],onSelected:__values[4]},__values[5]); }
-function __operitUiTemplate_50374(__ctx,__values){return __ctx.UI.Icon({name:"MoreHorizRounded",size:16,tint:__values[0]}); }
-function __operitUiTemplate_49590(__ctx,__values){return __ctx.UI.PopupMenu({key:__values[0],width:22,height:22,menuMaxWidth:138,tooltip:"\u5206\u7EC4\u64CD\u4F5C",items:__values[1],enabled:__values[2],onSelected:__values[3]},__values[4]); }
-function __operitUiTemplate_53319(__ctx,__values){return __ctx.UI.Icon({name:"AddRounded",size:17,tint:__values[0]}); }
-function __operitUiTemplate_53409(__ctx,__values){return __ctx.UI.Text(__values[0]); }
-function __operitUiTemplate_52893(__ctx,__values){return __ctx.UI.Row({key:"sidebar-new-chat",weight:1,height:34,verticalAlignment:"center",horizontalArrangement:"center",onClick:__values[0],spacing:6},[__values[1],__values[2]]); }
-function __operitUiTemplate_53574(__ctx,__values){return __ctx.UI.Box({width:1,height:16,background:__values[0]}); }
-function __operitUiTemplate_54541(__ctx,__values){return __ctx.UI.Icon({name:"CreateNewFolderOutlined",size:16,tint:__values[0],contentDescription:"\u65B0\u5EFA\u5206\u7EC4"}); }
-function __operitUiTemplate_53681(__ctx,__values){return __ctx.UI.Row({key:"sidebar-new-group",width:38,height:34,verticalAlignment:"center",horizontalArrangement:"center",onClick:__values[0]},__values[1]); }
-function __operitUiTemplate_52820(__ctx,__values){return __ctx.UI.Row({fillMaxSize:true,verticalAlignment:"center"},[__values[0],__values[1],__values[2]]); }
-function __operitUiTemplate_52577(__ctx,__values){return __ctx.UI.Surface({key:"sidebar-create-bar",weight:1,height:34,containerColor:__values[0],contentColor:__values[1],shape:{type:"pill"}},__values[2]); }
-function __operitUiTemplate_55127(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:17,tint:__values[1],contentDescription:__values[2]}); }
-function __operitUiTemplate_54702(__ctx,__values){return __ctx.UI.Row({key:"sidebar-search-toggle",width:34,height:34,verticalAlignment:"center",horizontalArrangement:"center",onClick:__values[0],modifier:__values[1],background:__values[2]},__values[3]); }
-function __operitUiTemplate_52389(__ctx,__values){return __ctx.UI.Row({key:"sidebar-toolbar",fillMaxWidth:true,verticalAlignment:"center",spacing:8,paddingStart:14,paddingEnd:12,paddingBottom:8},[__values[0],__values[1]]); }
-function __operitUiTemplate_55386(__ctx,__values){return __ctx.UI.TextField(__values[0]); }
-function __operitUiTemplate_55728(__ctx,__values){return __ctx.UI.Text({key:"sidebar-error",text:__values[0],fontSize:11,color:__values[1],paddingHorizontal:20,paddingVertical:6}); }
-function __operitUiTemplate_56655(__ctx,__values){return __ctx.UI.LoadingIndicator({size:24}); }
-function __operitUiTemplate_56571(__ctx,__values){return __ctx.UI.Box({fillMaxWidth:true,height:80,contentAlignment:"center"},__values[0]); }
-function __operitUiTemplate_56894(__ctx,__values){return __ctx.UI.Text({text:__values[0],fontSize:16,fontWeight:"600"}); }
-function __operitUiTemplate_57500(__ctx,__values){return __ctx.UI.TextField({key:"sidebar-group-name",value:__values[0],label:__values[1],onValueChange:__values[2],enabled:__values[3]}); }
-function __operitUiTemplate_57866(__ctx,__values){return __ctx.UI.Text({text:__values[0],fontSize:12}); }
-function __operitUiTemplate_58374(__ctx,__values){return __ctx.UI.Text({text:__values[0],fillMaxWidth:true,maxLines:2,style:"titleMedium",color:__values[1]}); }
-function __operitUiTemplate_58854(__ctx,__values){return __ctx.UI.Icon({name:__values[0],size:20,tint:__values[1]}); }
-function __operitUiTemplate_58958(__ctx,__values){return __ctx.UI.Text({text:__values[0],weight:1,fontSize:14,color:__values[1]}); }
-function __operitUiTemplate_58721(__ctx,__values){return __ctx.UI.Row({fillMaxWidth:true,paddingHorizontal:16,paddingVertical:10,verticalAlignment:"center",spacing:12},[__values[0],__values[1]]); }
-function __operitUiTemplate_58575(__ctx,__values){return __ctx.UI.Surface({fillMaxWidth:true,onClick:__values[0],shape:{cornerRadius:12},color:__values[1]},__values[2]); }
-function __operitUiTemplate_59926(__ctx,__values){return __ctx.UI.Text({key:"sidebar-delete-result",text:__values[0],fontSize:11,color:__values[1]}); }
-function __operitUiTemplate_60293(__ctx,__values){return __ctx.UI.Text({text:__values[0],color:__values[1],fontSize:11}); }
-function __operitUiTemplate_60414(__ctx,__values){return __ctx.UI.TextButton({text:"\u53D6\u6D88",enabled:__values[0],onClick:__values[1]}); }
-function __operitUiTemplate_60592(__ctx,__values){return __ctx.UI.Button({text:"\u786E\u8BA4",enabled:__values[0],onClick:__values[1]}); }
-function __operitUiTemplate_60379(__ctx,__values){return __ctx.UI.Row({spacing:8},__values[0]); }
-function __operitUiTemplate_60878(__ctx,__values){return __ctx.UI.Column({padding:20,spacing:12,width:320},__values[0]); }
-function __operitUiTemplate_60714(__ctx,__values){return __ctx.UI.Dialog({key:"sidebar-edit-dialog",closeOnDismissRequest:__values[0],onDismissRequest:__values[1]},__values[2]); }
-function __operitUiTemplate_61174(__ctx,__values){return __ctx.UI.LazyColumn({key:"native-character-sidebar",fillMaxWidth:true,paddingBottom:16,spacing:0,viewport:__values[0],onLoad:__values[1],onInputsChanged:__values[2]},__values[3]); }
-function __operitUiTemplate_61399(__ctx,__values){return __ctx.UI.LazyColumn({key:"native-character-sidebar",fillMaxWidth:true,paddingBottom:16,spacing:0,onLoad:__values[0],onInputsChanged:__values[1]},__values[2]); }

@@ -186,6 +186,22 @@ impl ToolPkgConfigScope {
     }
 }
 
+/// Selects the environment owner from the native execution context.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JsEnvironmentOwner {
+    Package(String),
+    Registration { id: String, scope: ToolPkgConfigScope },
+}
+
+impl JsEnvironmentOwner {
+    /// Returns the exact installation identity carried by this native execution context.
+    pub fn package_name(&self) -> &str {
+        match self {
+            Self::Package(id) | Self::Registration { id, .. } => id,
+        }
+    }
+}
+
 /// Defines the fixed Rust execution contract required by package JavaScript.
 pub trait JsExecutionHost: Send + Sync {
     /// Captures immutable native caller state before crossing the JavaScript runtime scheduler.
@@ -209,11 +225,27 @@ pub trait JsExecutionHost: Send + Sync {
     /// Returns the language code exposed to package JavaScript.
     fn package_language(&self) -> Result<String, String>;
 
+    /// Imports declared legacy values before registration evaluates the owning package.
+    fn prepare_environment(
+        &self,
+        owner: &JsEnvironmentOwner,
+        declared_names: &[String],
+    ) -> Result<(), String>;
+
     /// Reads one environment variable exposed to package JavaScript.
-    fn read_environment_variable(&self, key: &str) -> Result<Option<String>, String>;
+    fn read_environment_variable(
+        &self,
+        owner: &JsEnvironmentOwner,
+        key: &str,
+    ) -> Result<Option<String>, String>;
 
     /// Writes one environment variable exposed to package JavaScript.
-    fn write_environment_variable(&self, key: &str, value: &str) -> Result<(), String>;
+    fn write_environment_variable(
+        &self,
+        owner: &JsEnvironmentOwner,
+        key: &str,
+        value: &str,
+    ) -> Result<(), String>;
 
     /// Returns the writable configuration directory for one plugin.
     fn plugin_config_dir(&self, plugin_id: &str) -> Result<String, String>;
@@ -293,6 +325,11 @@ pub trait JsExecutionHost: Send + Sync {
         request: JsToolPkgIpcRequest,
         completion: JsToolPkgIpcCompletion,
     ) -> Result<(), String>;
+
+    /// Registers image, audio, or video bytes and returns the canonical link JSON.
+    fn register_media(&self, _request_json: &str) -> Result<String, String> {
+        Err("media registration is not available on this host".to_string())
+    }
 
     /// Calls one Core route through the Rust route runtime and generated route rules.
     fn should_route_toolpkg(&self, _binding: String, _streaming: bool) -> Result<bool, String> {
@@ -523,6 +560,8 @@ pub struct ToolPkgMainRegistrationCapture {
     pub chatMessageMenuItems: Vec<String>,
     #[serde(rename = "chatRuntimeHooks", default)]
     pub chatRuntimeHooks: Vec<String>,
+    #[serde(rename = "chatResponseHooks", default)]
+    pub chatResponseHooks: Vec<String>,
     #[serde(rename = "hostEventHooks", default)]
     pub hostEventHooks: Vec<String>,
     #[serde(rename = "toolLifecycleHooks", default)]
@@ -585,7 +624,7 @@ impl ToolPkgExecutionContext {
 
 /// JavaScript execution handle supplied by the JS bridge crate.
 pub trait JsExecutionEngine: Send + Sync {
-    /// Executes a named JavaScript function for ToolPkg runtime hooks.
+    /// Executes a named JavaScript function without an automatic completion deadline.
     fn execute_script_function(
         &self,
         script: &str,
@@ -594,10 +633,9 @@ pub trait JsExecutionEngine: Send + Sync {
         env_overrides: &BTreeMap<String, String>,
         on_intermediate_result: Option<Arc<dyn Fn(String) + Send + Sync>>,
         dispatch_intermediate_on_main: bool,
-        timeout_sec: u64,
     ) -> JsExecutionCompletion<JsExecutionResult<Option<String>>>;
 
-    /// Executes a named JavaScript function with an exact millisecond timeout for ToolPkg runtime hooks.
+    /// Executes a before hook under its caller-owned millisecond completion deadline.
     fn execute_script_function_with_timeout_millis(
         &self,
         script: &str,
@@ -609,7 +647,7 @@ pub trait JsExecutionEngine: Send + Sync {
         timeout_millis: u64,
     ) -> JsExecutionCompletion<JsExecutionResult<Option<String>>>;
 
-    /// Executes a named JavaScript function without blocking the caller runtime.
+    /// Executes a named JavaScript function asynchronously without an automatic completion deadline.
     fn execute_script_function_async(
         &self,
         script: String,
@@ -618,15 +656,7 @@ pub trait JsExecutionEngine: Send + Sync {
         env_overrides: BTreeMap<String, String>,
         on_intermediate_result: Option<Arc<dyn Fn(String) + Send + Sync>>,
         dispatch_intermediate_on_main: bool,
-        timeout_millis: u64,
     ) -> JsExecutionFuture<JsExecutionResult<Option<String>>>;
-
-    /// Executes one stream step until completion or caller cancellation, with bounded CPU slices.
-    fn execute_script_function_until_cancelled(
-        &self, _script: String, _function_name: String, _params: BTreeMap<String, Value>, _env_overrides: BTreeMap<String, String>,
-    ) -> JsExecutionFuture<JsExecutionResult<Option<String>>> {
-        Box::pin(async { Err(crate::execution_result::JsExecutionError::invalid_request("This JavaScript engine does not support owner-scoped stream execution")) })
-    }
 
     /// Executes a ToolPkg registration function and returns captured declarations.
     fn execute_toolpkg_main_registration_function_with_text_resources(
@@ -644,7 +674,7 @@ pub trait JsExecutionEngine: Send + Sync {
         runtime_options: BTreeMap<String, Value>,
         env_overrides: BTreeMap<String, String>,
         text_resources: Arc<BTreeMap<String, String>>,
-        on_response: Arc<dyn Fn(Value) + Send + Sync>,
+        on_response: Arc<dyn Fn(operit_host_api::HostJavaScriptValue) + Send + Sync>,
     ) -> JsExecutionFuture<JsExecutionResult<Option<Value>>>;
 
     /// Dispatches one Compose DSL action without blocking the caller runtime.
@@ -654,7 +684,7 @@ pub trait JsExecutionEngine: Send + Sync {
         payload: Option<Value>,
         runtime_options: BTreeMap<String, Value>,
         env_overrides: BTreeMap<String, String>,
-        on_intermediate_result: Arc<dyn Fn(Value) + Send + Sync>,
+        on_intermediate_result: Arc<dyn Fn(operit_host_api::HostJavaScriptValue) + Send + Sync>,
     ) -> JsExecutionFuture<JsExecutionResult<Option<Value>>>;
 
     /// Destroys any engine resources owned by this handle.

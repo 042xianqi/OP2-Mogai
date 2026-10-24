@@ -58,10 +58,8 @@ export function assertCharacterState(value: unknown): asserts value is Character
     assertCard(card);
     requireId(card.id, "card id");
     for (const id of card.attachedTagIds) if (!tagIds.has(id)) throw new Error("Missing attached tag: " + id);
-    if (card.chatModelBindingMode !== "FOLLOW_GLOBAL" && card.chatModelBindingMode !== "FIXED_MODEL") throw new Error("Invalid model binding mode");
-    if (card.chatModelBindingMode === "FIXED_MODEL") requireId(card.chatModelId, "fixed model id");
-    if (card.memoryBindingMode !== "CHARACTER" && card.memoryBindingMode !== "SHARED") throw new Error("Invalid memory binding mode");
-    if (card.memoryBindingMode === "SHARED" && !storeIds.has(requireId(card.sharedMemoryId, "shared memory id"))) throw new Error("Missing primary shared library");
+    // Model binding validity belongs to explicit binding writes and chat execution, so damaged bindings remain editable.
+    // Primary memory selections remain editable when their old library is absent; writes and execution validate the target.
     for (const mount of card.sharedMemoryMounts) if (!storeIds.has(mount.sharedMemoryId)) throw new Error("Missing shared memory mount: " + mount.sharedMemoryId);
   }
   for (const group of groups) {
@@ -85,7 +83,8 @@ export function assertCharacterState(value: unknown): asserts value is Character
   if (activeKey !== "CharacterCard" && activeKey !== "CharacterGroup" && activeKey !== "Model") throw new Error("Invalid active prompt kind");
   const selected = value.active[activeKey]; assertObject(selected, "active selection");
   const activeId = requireId(selected.id, "active id");
-  if (activeKey === "Model" ? activeId !== "chat" : !(activeKey === "CharacterCard" ? cardIds : groupIds).has(activeId)) throw new Error("Active prompt references a missing entity: " + activeId);
+  // Stored active identities remain available for explicit reselection after their role is deleted.
+  if (activeKey === "Model" && activeId !== "chat") throw new Error("Invalid active model selection: " + activeId);
   const expectedOwners = new Set<string>();
   for (const id of cardIds) expectedOwners.add("character:" + id);
   for (const id of storeIds) expectedOwners.add("shared:" + id);
@@ -114,7 +113,6 @@ export function assertMemorySpace(value: unknown): asserts value is MemorySpace 
     assertObject(link, "link"); requireId(link.id, "link id");
     const source = requireId(link.sourceMemoryId, "source memory id"), target = requireId(link.targetMemoryId, "target memory id");
     if (!memoryIds.has(source) || !memoryIds.has(target)) throw new Error("Relationship references a missing memory: " + link.id);
-    if (source === target) throw new Error("Relationship cannot point to itself");
     assertString(link.type_, "link type"); assertNumber(link.weight, "link weight", 0, 1); assertString(link.description, "link description");
   }
   const indices = new Set<string>();
@@ -126,7 +124,7 @@ export function assertMemorySpace(value: unknown): asserts value is MemorySpace 
     const identity = JSON.stringify([chunk.memoryUuid, chunk.chunkIndex]);
     if (indices.has(identity)) throw new Error("Duplicate document chunk index"); indices.add(identity);
   }
-  const candidateSources = new Set<string>();
+  // Released queues may contain independent task IDs for the same migrated message revision.
   for (const candidate of value.candidates) {
     assertObject(candidate, "candidate"); requireId(candidate.id, "candidate id"); requireId(candidate.chatId, "candidate chat id");
     for (const field of ["triggerMessageTimestamp", "triggerVariantIndex", "createdAt", "updatedAt", "attemptCount"] as const) assertInteger(candidate[field], field, 0);
@@ -134,8 +132,6 @@ export function assertMemorySpace(value: unknown): asserts value is MemorySpace 
     if (candidate.status !== "pending" && candidate.status !== "processing" && candidate.status !== "failed") throw new Error("Invalid candidate status");
     if (candidate.sourceType !== "reply_finalized_auto" && candidate.sourceType !== "selected_user_message") throw new Error("Invalid candidate source type");
     if (typeof candidate.triggerVariantIndex !== "number" || candidate.triggerVariantIndex > 2147483647) throw new Error("Candidate message variant exceeds the host range");
-    const sourceKey = JSON.stringify([candidate.chatId, candidate.triggerMessageTimestamp, candidate.triggerVariantIndex, candidate.sourceType]);
-    if (candidateSources.has(sourceKey)) throw new Error("Duplicate persisted candidate source"); candidateSources.add(sourceKey);
   }
   assertMemorySettings(value.settings); assertSearchConfig(value.searchConfig); assertString(value.userDocumentPath, "USER.md path");
   if (value.userDocumentPath !== userDocumentPath(requireId(value.ownerKey, "owner key"))) throw new Error("Invalid owner USER.md path");

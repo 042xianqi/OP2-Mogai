@@ -73,6 +73,7 @@ test("registered configuration: group prompts preserve each speaker and saved me
   const group = await plugin.api("group.create", { values: { name: "Prompt group", members: [{ characterCardId: a.id, orderIndex: 9 }, { characterCardId: b.id, orderIndex: 2 }] } });
   const selection = "group:" + group.id, result = await committedConfiguration(plugin, selection, a.id);
   assert.equal(result.profile.id, a.id);
+  assert.deepEqual(result.historyPolicy, { isolateParticipants: true, labelUserMessages: true });
   assert.match(result.profile.introPrompt, /Exact A setting/);
   assert.ok(result.profile.introPrompt.includes("Stay in role as " + a.name));
   assert.ok(result.profile.introPrompt.includes("Group participants: " + b.name + ", " + a.name));
@@ -91,9 +92,11 @@ test("registered configuration: single cards and single-member groups retain the
   const disk = await createDiskHarness(t, { legacyIdentity: "default" }), settings = createHostDirectoriesFixture(disk, directories), plugin = openPlugin(settings.harness);
   const card = await plugin.api("character.create", { values: { name: "Solo prompt speaker", characterSetting: "Exact solo setting" } });
   const single = await committedConfiguration(plugin, "card:" + card.id);
+  assert.deepEqual(single.historyPolicy, { isolateParticipants: true, labelUserMessages: false });
   assert.doesNotMatch(single.profile.introPrompt, /Role response plan hint|Group participants/);
   const group = await plugin.api("group.create", { values: { name: "One member", members: [{ characterCardId: card.id, orderIndex: 0 }] } });
   const grouped = await committedConfiguration(plugin, "group:" + group.id, card.id, "single-member-group-chat");
+  assert.deepEqual(grouped.historyPolicy, { isolateParticipants: true, labelUserMessages: true });
   assert.ok(grouped.profile.introPrompt.includes("Stay in role as " + card.name));
   assert.ok(grouped.profile.introPrompt.includes("Group participants: " + card.name));
 });
@@ -119,6 +122,7 @@ test("registered configuration: no role association executes the configured mode
   const input = request("execution", "model:chat");
   const result = plain(await plugin.api("chat.configuration.resolve", input));
   assert.equal(result.profile.name, input.defaultModelBinding.modelId);
+  assert.deepEqual(result.historyPolicy, { isolateParticipants: false, labelUserMessages: false });
   assert.equal(result.profile.avatarUri, "provider-logo:fixture-provider-type");
   assert.equal(result.profile.introPrompt, ""); assert.equal(result.profile.userPreferencesText, "");
   assert.deepEqual(result.profile.resources, []); assert.equal(result.executionData.primaryOwnerKey, "");

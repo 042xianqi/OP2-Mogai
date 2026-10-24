@@ -67,7 +67,7 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
     private readonly directories: CharacterDirectories | null,
   ) {}
 
-  /** Initializes a new plugin database or opens the records written by the centralized Core migration. */
+  /** Opens storage and initializes first-install records without retaining a synchronized domain snapshot. */
   static async open(
     directories: CharacterDirectories | null = null,
   ): Promise<DatabaseCharacterRepository> {
@@ -98,11 +98,7 @@ export class DatabaseCharacterRepository implements CharacterRepositoryOwner {
         preferences.set("state", { version: state.version, active: storedValue(state.active), memoryPreferences: storedValue(state.memoryPreferences) });
       });
     }
-    const metadata = (await storage.metadata.data()).get<Storage.Value>("state");
-    if (metadata === undefined) throw new Error("Character initialization did not publish metadata");
-    const configuration = await storage.data();
-    const loaded = stateFromRecords(metadata, await repository.readRecords(configuration));
-    assertCharacterState(loaded);
+    await repository.readMetadata();
     return repository;
   }
 

@@ -379,26 +379,23 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
 
     /// Reads one stored environment variable.
     #[allow(non_snake_case)]
-    fn readEnvironmentVariable(&self, key: &str) -> Result<Option<String>, String> {
+    fn readEnvironmentVariable(&self, packageName: &str, key: &str) -> Result<Option<String>, String> {
         EnvPreferences::getInstance()
-            .getEnv(key)
-            .map_err(|error| error.to_string())
+            .getEnv(packageName, key)
     }
 
     /// Writes one stored environment variable.
     #[allow(non_snake_case)]
-    fn writeEnvironmentVariable(&self, key: &str, value: &str) -> Result<(), String> {
+    fn writeEnvironmentVariable(&self, packageName: &str, key: &str, value: &str) -> Result<(), String> {
         EnvPreferences::getInstance()
-            .setEnv(key, value)
-            .map_err(|error| error.to_string())
+            .setEnv(packageName, key, value)
     }
 
     /// Removes one stored environment variable.
     #[allow(non_snake_case)]
-    fn removeEnvironmentVariable(&self, key: &str) -> Result<(), String> {
+    fn removeEnvironmentVariable(&self, packageName: &str, key: &str) -> Result<(), String> {
         EnvPreferences::getInstance()
-            .removeEnv(key)
-            .map_err(|error| error.to_string())
+            .removeEnv(packageName, key)
     }
 
     /// Returns built-in and internal tool prompt categories.
@@ -644,6 +641,7 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
         &'a self,
         setAsCurrentChat: bool,
         sourceChatId: Option<String>,
+        parentChatId: Option<String>,
         input: Option<serde_json::Value>,
     ) -> ToolRuntimeSupportFuture<'a, Result<String, String>> {
         Box::pin(async move {
@@ -657,12 +655,12 @@ impl ToolRuntimeSupport for RuntimeToolSupport {
                         .ok_or_else(|| "Chat creation requires an initialized AI runtime".to_string())?;
                     (core.chatHistoryDelegate.clone_for_core(), service)
                 };
-                return history.createNewChat(&service, false, sourceChatId, input).await;
+                return history.createNewChat(&service, false, sourceChatId, parentChatId, input).await;
             }
             let mut holder = self.chatRuntimeHolder.lock().await;
             let chatId = holder
                 .getCore(ChatRuntimeSlot::MAIN)
-                .createNewChat(setAsCurrentChat, sourceChatId, input)
+                .createNewChat(setAsCurrentChat, sourceChatId, parentChatId, input)
                 .await?;
             holder.observeStats();
             Ok(chatId)
@@ -985,7 +983,22 @@ async fn finalizeAdmittedChatSend(
         (Err(publication), Err(release)) => Err(format!("Chat finalization failed: {publication}; chat lease release failed: {release}")),
     };
     match (result, cleanup) {
-        (Ok(result), Ok(())) => Ok(result),
+        (Ok(result), Ok(())) => {
+            if let Some(participantId) = admitted.work.summaryParticipantAfter(&result.outcome) {
+                let (mut coordinator, mut service) = {
+                    let mut runtime = holder.lock().await;
+                    let core = runtime.getCore(admitted.slot.clone());
+                    let service = core.enhancedAiService.as_ref()
+                        .ok_or("Completed chat execution has no enhanced AI service")?.clone();
+                    let coordinator = crate::services::core::MessageCoordinationDelegate::MessageCoordinationDelegate::forBackgroundWork(
+                        core.chatHistoryDelegate.clone_for_core(), core.messageProcessingDelegate.clone_for_core(),
+                    );
+                    (coordinator, service)
+                };
+                coordinator.checkSummaryAfterReply(&mut service, admitted.handle.chatId.clone(), participantId.to_string()).await?;
+            }
+            Ok(result)
+        },
         (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
         (Err(error), Err(cleanup)) => Err(format!("{error}; chat cleanup failed: {cleanup}")),
     }
@@ -1054,7 +1067,7 @@ async fn runAdmittedChatTurn(
                 ChatInitialTurn::Execute { participantId } => (participantId.clone(), text, attachments, input.replyToMessageTimestamp.as_value().copied(), None),
             }
         }
-        AdmittedChatTurnWork::Continue { userMessageTimestamp, participantId } =>
+        AdmittedChatTurnWork::Continue { userMessageTimestamp, participantId, .. } =>
             (Some(participantId.clone()), String::new(), Vec::new(), None, Some(ChatTurnContinuation { userMessageTimestamp: *userMessageTimestamp })),
     };
     let submission = {
@@ -1065,6 +1078,7 @@ async fn runAdmittedChatTurn(
             .loadChatMessageVariant(chatId, timestamp, 0).map_err(|error| error.to_string())).transpose()?;
         let options = ChatTurnOptions {
             continuation, nativeExecutionId: Some(admitted.handle.executionId.clone()), outputObserver: admitted.outputObserver.clone(), deferSequenceCompletion: true,
+            deferSummary: matches!(admitted.work, AdmittedChatTurnWork::Continue { .. }),
             chatInputSubmitRequestedHandled: true, notifyReply: Some(false), ..ChatTurnOptions::default()
         };
         let submission = core.startUserMessage(PromptFunctionType::CHAT, participantId, Some(chatId.clone()),

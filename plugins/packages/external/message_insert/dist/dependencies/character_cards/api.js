@@ -102,8 +102,10 @@ exports.characterCards = {
         /** Queries participant-bound memories using provider-owned snapshots and document matching. */
         query: (payload) => ToolPkg.callDependency("com.operit.character_cards", "memory.query", payload),
         chats: {
-            /** Lists actual generic chat summaries selected by persisted plugin bindings. */
+            /** Lists actual generic chat summaries selected by persisted plugin bindings, including missing-binding ids. */
             list: (payload) => call("memory.chat.list", payload),
+            /** Deletes bindings whose Core conversation no longer exists. */
+            pruneMissing: (payload) => call("memory.chat.pruneMissing", payload),
             /** Applies genuine functional MEMORY extraction to the selected real chat. */
             update: (payload) => call("memory.chat.update", payload),
         },
@@ -124,6 +126,10 @@ exports.characterCards = {
         candidates: {
             /** Enqueues an actual finalized reply or explicit selected-user message. */
             enqueue: (payload) => call("memory.candidate.enqueue", payload),
+            /** Returns terminal failed records to the pending queue for a genuine interval retry. */
+            retryFailed: (payload) => call("memory.candidates.retryFailed", payload),
+            /** Deletes terminal failed records instead of leaving them in the queue permanently. */
+            clearFailed: (payload) => call("memory.candidates.clearFailed", payload),
         },
         shared: {
             /** Lists shared memory libraries. */

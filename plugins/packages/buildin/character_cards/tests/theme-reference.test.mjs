@@ -66,7 +66,8 @@ test("actual plugin files preserve themeConfigId and reject old incomplete recor
   assert.equal(retained.themeConfigId, "independent-theme-one");
   disk.storage.inspectPreferences("cards", values => { delete values["record_" + saved.id].themeConfigId; });
   disk.clearCalls();
-  await assert.rejects(repository(disk), /themeConfigId/);
+  const current = await repository(disk);
+  await assert.rejects(current.getCharacter(saved.id), /themeConfigId/);
   assert.equal(disk.storage.inspectPreferences("cards", values => values["record_" + saved.id].themeConfigId), undefined);
   assert.equal(disk.calls.filter(
     /** Confirms failed reads cannot manufacture a new field or publish any implicit migration. */

@@ -25,6 +25,14 @@ impl MemoryStorageHost {
 }
 
 impl RuntimeStorageHost for MemoryStorageHost {
+    /// Confirms synchronous in-memory publication without copying or rewriting bytes.
+    fn flushFile(&self, path: &str) -> operit_host_api::HostResult<()> {
+        if !self.exists(path)? {
+            return Err(operit_host_api::HostError::new("runtime storage entry not found"));
+        }
+        Ok(())
+    }
+
     fn runtimeRootDir(&self) -> Option<std::path::PathBuf> {
         None
     }
@@ -65,6 +73,12 @@ impl RuntimeStorageHost for MemoryStorageHost {
             .ok_or_else(|| HostError::new("runtime storage byte range overflows usize"))?
             .min(content.len());
         Ok(content[start..end].to_vec())
+    }
+
+    /// Atomically replaces one in-memory file.
+
+    fn writeBytesAtomically(&self, path: &str, content: &[u8]) -> operit_host_api::HostResult<()> {
+        self.writeBytes(path, content)
     }
 
     fn writeBytes(&self, path: &str, content: &[u8]) -> operit_host_api::HostResult<()> {
@@ -215,6 +229,51 @@ fn domain_reads_reuse_logs_and_observe_local_remote_and_unobserved_appends() {
     assert_eq!(shared.operationsSince(&clock, &domains, usize::MAX).unwrap(), vec![unobserved]);
     shared.setExportFloor("peer", 7).unwrap();
     assert!(shared.operationsSince(&SyncClock::empty(), &domains, usize::MAX).unwrap().is_empty());
+}
+
+/// Acknowledging a control operation must not hide business operations that
+/// share the same origin and straddle its sequence.
+#[test]
+fn network_control_acknowledgement_preserves_business_sequences() {
+    use crate::NetworkControlStore::NETWORK_CONTROL_SYNC_DOMAIN;
+    let storage = Arc::new(MemoryStorageHost::default());
+    let store = SyncOperationStore::new(storage, "control-clock-test");
+    let domains = vec![
+        "chat".to_string(),
+        NETWORK_CONTROL_SYNC_DOMAIN.to_string(),
+    ];
+    let earlier = operationFromOrigin("peer", 5, "message", "earlier", "upsert", json!({}));
+    let mut control = operationFromOrigin("peer", 6, "command", "policy", "apply", json!({}));
+    control.domain = NETWORK_CONTROL_SYNC_DOMAIN.to_string();
+    let later = operationFromOrigin("peer", 7, "message", "later", "upsert", json!({}));
+    for operation in [&earlier, &control, &later] {
+        store.appendUnobservedOperation(operation).unwrap();
+    }
+    store.observeNetworkControlOperation(&control).unwrap();
+    // The acknowledged control page no longer exports, while both business
+    // operations on either side of its sequence still do.
+    let clock = store.localClock().unwrap();
+    let pending = store
+        .operationsSince(&clock, &domains, usize::MAX)
+        .unwrap();
+    assert_eq!(sequences(&pending), vec![5, 7]);
+    store.observeOperation(&earlier).unwrap();
+    let clock = store.localClock().unwrap();
+    let pending = store
+        .operationsSince(&clock, &domains, usize::MAX)
+        .unwrap();
+    assert_eq!(pending, vec![later.clone()]);
+    // Replaying the same control page stays idempotent.
+    store.observeNetworkControlOperation(&control).unwrap();
+    let clock = store.localClock().unwrap();
+    assert_eq!(
+        store
+            .operationsSince(&clock, &domains, usize::MAX)
+            .unwrap(),
+        vec![later]
+    );
+    // The acknowledgement is restricted to the control domain.
+    assert!(store.observeNetworkControlOperation(&earlier).is_err());
 }
 
 /// Verifies cached policy reads immediately apply revocation and match a fresh replay.
@@ -1067,7 +1126,7 @@ fn compact_preferences_preserves_other_origins_and_edits_after_entry_replacement
 /// Removes legacy preference history once a later native migration snapshot
 /// covers the same keys, keeping paged synchronization applicable to migrated peers.
 #[test]
-fn compact_preferences_drops_legacy_history_covered_by_native_migration() {
+fn compact_preferences_retains_originals_across_storage_migrations() {
     let path = "runtime/config/preferences/user_preferences.preferences.json";
     let mut legacy = preferenceOperation("device-a", 1, json!([]));
     legacy.payload = json!({
@@ -1097,14 +1156,14 @@ fn compact_preferences_drops_legacy_history_covered_by_native_migration() {
         schemaVersion: 3,
     };
 
-    let compacted = compactSyncOperations(vec![legacy, native.clone()]);
-    assert_eq!(compacted, vec![native]);
+    let original = vec![legacy, native];
+    assert_eq!(compactSyncOperations(original.clone()), original);
 }
 
 /// Does not treat an ordinary native edit as an old migration boundary when
 /// another legacy key still needs to be covered by the later full snapshot.
 #[test]
-fn compact_preferences_waits_for_unmarked_full_migration_snapshot() {
+fn compaction_does_not_infer_coverage_from_matching_key_sets() {
     let path = "runtime/config/preferences/user_preferences.preferences.json";
     let mut legacyTheme = preferenceOperation("device-a", 1, json!([]));
     legacyTheme.payload = json!({
@@ -1145,13 +1204,8 @@ fn compact_preferences_waits_for_unmarked_full_migration_snapshot() {
         ],
     });
 
-    let compacted = compactSyncOperations(vec![
-        legacyTheme,
-        legacyFont,
-        ordinaryNativeEdit.clone(),
-        migration.clone(),
-    ]);
-    assert_eq!(compacted, vec![ordinaryNativeEdit, migration]);
+    let original = vec![legacyTheme, legacyFont, ordinaryNativeEdit, migration];
+    assert_eq!(compactSyncOperations(original.clone()), original);
 }
 
 
@@ -1310,4 +1364,337 @@ fn sync_origins_are_unique_and_remain_stable_after_reopening() {
             .unwrap(),
         "existing-origin"
     );
+}
+
+/// Merges exact intervals without claiming missing predecessors or overflowing their bounds.
+#[test]
+fn receipt_ranges_preserve_gaps_and_merge_adjacent_intervals() {
+    let mut receipt = SyncReceipt::default();
+    receipt.observeRange("device-a", 102, 104);
+    receipt.observeRange("device-a", 1, 100);
+    assert_eq!(receipt.sequenceFor("device-a"), 100);
+    assert!(!receipt.containsSequence("device-a", 101));
+    assert!(receipt.containsSequence("device-a", 103));
+    receipt.observe("device-a", 101);
+    assert_eq!(receipt.ranges["device-a"], vec![[1, 104]]);
+    receipt.observe("device-a", i64::MAX);
+    receipt.observe("device-a", i64::MAX - 1);
+    assert_eq!(
+        receipt.ranges["device-a"],
+        vec![[1, 104], [i64::MAX - 1, i64::MAX]]
+    );
+    receipt.validate().unwrap();
+    receipt.ranges.insert("invalid".into(), vec![[4, 3]]);
+    assert!(receipt.validate().is_err());
+}
+
+/// Keeps failed work durable while later completed work retains its receipt after native compaction.
+#[test]
+fn received_work_survives_restart_and_completion_keeps_sparse_receipts() {
+    let host = Arc::new(MemoryStorageHost::default());
+    let store = SyncOperationStore::new(host.clone(), "receive-test");
+    let earlier = operation(
+        101,
+        "message",
+        "first",
+        "upsert",
+        SyncOperationSemantics::EntityState,
+        json!(1),
+    );
+    let later = operation(
+        102,
+        "message",
+        "second",
+        "upsert",
+        SyncOperationSemantics::EntityState,
+        json!(2),
+    );
+    store
+        .receiveOperations(&[earlier.clone(), later.clone()])
+        .unwrap();
+    assert!(store.preferenceHistory().unwrap().is_empty());
+    assert!(
+        store
+            .operationsSince(&SyncClock::empty(), &[], 10)
+            .unwrap()
+            .is_empty()
+    );
+    store
+        .completeOperations(std::slice::from_ref(&later))
+        .unwrap();
+    // A new host identity bypasses the process-local cache while preserving its files.
+    let reopened = SyncOperationStore::new(Arc::new((*host).clone()), "receive-test");
+    assert_eq!(reopened.pendingOperations().unwrap(), vec![earlier.clone()]);
+    let receipt = reopened.receipt().unwrap();
+    assert!(receipt.containsSequence("device-a", 101));
+    assert!(receipt.containsSequence("device-a", 102));
+    assert!(!receipt.containsSequence("device-a", 100));
+    assert_eq!(receipt.sequenceFor("device-a"), 0);
+    reopened.receiveOperations(&[later]).unwrap();
+    assert_eq!(reopened.pendingOperations().unwrap(), vec![earlier.clone()]);
+    reopened.completeOperations(&[earlier]).unwrap();
+    assert!(reopened.pendingOperations().unwrap().is_empty());
+    assert_eq!(reopened.receipt().unwrap(), receipt);
+}
+
+/// Requests an unseen older sequence even after a later sequence advanced the local clock.
+#[test]
+fn sparse_receipt_exports_missing_predecessor_before_page_limit() {
+    let host = Arc::new(MemoryStorageHost::default());
+    let store = SyncOperationStore::new(host, "sparse-export");
+    let earlier = operation(
+        101,
+        "message",
+        "first",
+        "upsert",
+        SyncOperationSemantics::EntityState,
+        json!(1),
+    );
+    let later = operation(
+        102,
+        "message",
+        "second",
+        "upsert",
+        SyncOperationSemantics::EntityState,
+        json!(2),
+    );
+    store.appendOperation(&later).unwrap();
+    store.appendOperation(&earlier).unwrap();
+    assert_eq!(store.localClock().unwrap().sequenceFor("device-a"), 102);
+    let mut receipt = SyncReceipt::default();
+    receipt.observe("device-a", 102);
+    for domains in [vec![], vec!["chat".to_owned()]] {
+        assert_eq!(
+            store.operationsSince(&receipt, &domains, 1).unwrap(),
+            vec![earlier.clone()]
+        );
+    }
+}
+
+/// Combines independent control acknowledgements with sparse receipts and out-of-order journal offsets.
+#[test]
+fn control_acknowledgements_and_sparse_receipts_share_export_filtering() {
+    let host = Arc::new(MemoryStorageHost::default());
+    let store = SyncOperationStore::new(host, "mixed-control-receipt-export");
+    let earlier = operation(
+        101,
+        "message",
+        "earlier",
+        "upsert",
+        SyncOperationSemantics::EntityState,
+        json!(1),
+    );
+    let mut control = operation(
+        102,
+        "command",
+        "policy",
+        "apply",
+        SyncOperationSemantics::EntityState,
+        json!(2),
+    );
+    control.domain = NETWORK_CONTROL_SYNC_DOMAIN.to_owned();
+    let later = operation(
+        103,
+        "message",
+        "later",
+        "upsert",
+        SyncOperationSemantics::EntityState,
+        json!(3),
+    );
+    for entry in [&later, &earlier, &control] {
+        store.appendUnobservedOperation(entry).unwrap();
+    }
+    for domains in [
+        vec![],
+        vec!["chat".to_owned(), NETWORK_CONTROL_SYNC_DOMAIN.to_owned()],
+    ] {
+        let mut receipt = SyncReceipt::default();
+        receipt.observeRange(&networkControlClockKey("device-a"), 1, 102);
+        assert_eq!(
+            store
+                .operationsSince(&receipt, &domains, usize::MAX)
+                .unwrap(),
+            vec![earlier.clone(), later.clone()]
+        );
+        let mut sparse = receipt.clone();
+        sparse.observe("device-a", 103);
+        assert_eq!(
+            store.operationsSince(&sparse, &domains, 1).unwrap(),
+            vec![earlier.clone()]
+        );
+        receipt.observeRange("device-a", 1, 101);
+        assert_eq!(
+            store.operationsSince(&receipt, &domains, 1).unwrap(),
+            vec![later.clone()]
+        );
+    }
+}
+
+/// Rejects conflicting immutable deliveries atomically and never acknowledges a partial receive batch.
+#[test]
+fn conflicting_received_operation_does_not_commit_other_batch_entries() {
+    let host = Arc::new(MemoryStorageHost::default());
+    let store = SyncOperationStore::new(host, "conflicting-receive");
+    let first = operation(
+        1,
+        "message",
+        "first",
+        "upsert",
+        SyncOperationSemantics::EntityState,
+        json!(1),
+    );
+    let second = operation(
+        2,
+        "message",
+        "second",
+        "upsert",
+        SyncOperationSemantics::EntityState,
+        json!(2),
+    );
+    store
+        .receiveOperations(std::slice::from_ref(&first))
+        .unwrap();
+    let mut conflicting = first.clone();
+    conflicting.payload = json!("changed");
+    assert!(store.receiveOperations(&[second, conflicting]).is_err());
+    assert_eq!(store.pendingOperations().unwrap(), vec![first]);
+    assert!(!store.receipt().unwrap().containsSequence("device-a", 2));
+}
+
+/// Uses the existing encrypted preference encoding for durable receive intent.
+#[test]
+fn pending_preferences_are_encrypted_at_rest() {
+    let host = Arc::new(MemoryStorageHost::default());
+    let store = SyncOperationStore::new(host.clone(), "encrypted-receive");
+    let mut incoming = operation(
+        1,
+        "entry",
+        "secret",
+        "set",
+        SyncOperationSemantics::EntityState,
+        json!({"storagePath":"runtime/config/preferences/secret.preferences.json", "encrypted":true, "key":"token", "value":"pending-secret-token"}),
+    );
+    incoming.domain = "preferences".into();
+    store
+        .receiveOperations(std::slice::from_ref(&incoming))
+        .unwrap();
+    let bytes = host
+        .readBytes("encrypted-receive/receive_state.json")
+        .unwrap();
+    assert!(
+        !String::from_utf8(bytes)
+            .unwrap()
+            .contains("pending-secret-token")
+    );
+    let reopened = SyncOperationStore::new(Arc::new((*host).clone()), "encrypted-receive");
+    assert_eq!(reopened.pendingOperations().unwrap(), vec![incoming]);
+}
+
+/// Retired history cannot consume a page and hide later theme and role preferences.
+#[test]
+fn retained_preferences_advance_past_retired_history_with_count_and_byte_limits() {
+    let host = Arc::new(MemoryStorageHost::default());
+    let store = SyncOperationStore::new(host, "retained-preference-export");
+    let retiredPath = "runtime/config/preferences/character_cards.preferences.json";
+    let mut history = (1..=520)
+        .map(|sequence| {
+            let mut entry = operation(
+                sequence,
+                "entry",
+                &format!("retired-{sequence}"),
+                "set",
+                SyncOperationSemantics::EntityState,
+                json!({
+                    "storagePath": retiredPath, "formatVersion": 2,
+                    "key": format!("record_{sequence}"), "value": "retired",
+                }),
+            );
+            entry.domain = "preferences".into();
+            entry
+        })
+        .collect::<Vec<_>>();
+    let mut theme = operation(
+        521,
+        "entry",
+        "saved-theme",
+        "set",
+        SyncOperationSemantics::EntityState,
+        json!({
+            "storagePath": "runtime/config/preferences/user_preferences.preferences.json",
+            "formatVersion": 2, "key": "theme_config_saved", "value": {"id":"saved"},
+        }),
+    );
+    theme.domain = "preferences".into();
+    let mut card = theme.clone();
+    card.opId = "device-a:522".into();
+    card.sequence = 522;
+    card.createdAt = 522;
+    card.entityId = "saved-card".into();
+    card.payload = json!({
+        "storagePath": "runtime/plugin_data/space/com.operit.character_cards/cards.preferences.json",
+        "formatVersion": 2, "key": "record_saved", "value": {"id":"saved"},
+    });
+    history.extend([theme.clone(), card.clone()]);
+    store.appendOperations(&history).unwrap();
+    let byteBudget = serde_json::to_vec(&theme).unwrap().len();
+    for domains in [vec![], vec!["preferences".to_owned()]] {
+        for (limit, maxBytes) in [(1, usize::MAX), (usize::MAX, byteBudget)] {
+            let mut receipt = SyncReceipt::default();
+            for expected in [&theme, &card] {
+                let page = store
+                    .operationsSinceWithBudget(&receipt, &domains, limit, maxBytes, |operation| {
+                        operation.payload["storagePath"] != retiredPath
+                    })
+                    .unwrap();
+                assert_eq!(page, vec![expected.clone()]);
+                receipt.observe(&expected.originDeviceId, expected.sequence);
+            }
+            let page = store
+                .operationsSinceWithBudget(&receipt, &domains, limit, maxBytes, |operation| {
+                    operation.payload["storagePath"] != retiredPath
+                })
+                .unwrap();
+            assert!(page.is_empty());
+            assert!(!receipt.containsSequence("device-a", 1));
+        }
+    }
+}
+
+/// Completed SQL-owned operations retain content verification independently of their pending payloads.
+#[test]
+fn completed_receipt_rejects_changed_original_payload_after_restart() {
+    let host = Arc::new(MemoryStorageHost::default());
+    let store = SyncOperationStore::new(host.clone(), "receipt-content");
+    let original = operation(1, "message", "id", "upsert", SyncOperationSemantics::Transaction, json!({"content":"original"}));
+    store.receiveOperations(&[original.clone()]).unwrap();
+    store.completeOperations(&[original.clone()]).unwrap();
+    let restarted = SyncOperationStore::new(Arc::new((*host).clone()), "receipt-content");
+    restarted.receiveOperations(&[original.clone()]).unwrap();
+    let mut changed = original; changed.payload = json!({"content":"changed"});
+    assert!(restarted.receiveOperations(&[changed]).is_err());
+    assert!(restarted.pendingOperations().unwrap().is_empty());
+}
+
+/// A retry after an interrupted append must remain a separate readable journal record.
+#[test]
+fn intact_operations_survive_retry_after_partial_journal_tail() {
+    for batch in [false, true] {
+        let host = Arc::new(MemoryStorageHost::default());
+        let store = SyncOperationStore::new(host.clone(), "runtime/sync");
+        let first = operation(1, "message", "one", "set", SyncOperationSemantics::Transaction, json!({"text":"one"}));
+        let second = operation(2, "message", "two", "set", SyncOperationSemantics::Transaction, json!({"text":"two"}));
+        let mut interrupted = serde_json::to_vec(&first).unwrap();
+        interrupted.extend_from_slice(b"\n{\"opId\":");
+        host.writeBytes(&store.operationsPath("device-a"), &interrupted).unwrap();
+        // First record spans an invalid tail in the offset index, but its identity remains readable.
+        store.appendOperations(std::slice::from_ref(&first)).unwrap();
+        if batch {
+            store.appendOperations(std::slice::from_ref(&second)).unwrap();
+        } else {
+            store.appendUnobservedOperation(&second).unwrap();
+        }
+        // A new Host instance rebuilds all caches from the persisted bytes.
+        let restarted = SyncOperationStore::new(Arc::new((*host).clone()), "runtime/sync");
+        assert_eq!(restarted.operationsSince(&SyncClock::empty(), &[], 100).unwrap(), vec![first, second]);
+    }
 }

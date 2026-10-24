@@ -98,6 +98,35 @@ impl ChatConfigurationApi {
         self.invokeResolve(request).await
     }
 
+    /// Resolves every currently bound participant for a conversation-wide context estimate.
+    pub async fn resolveContextParticipants(
+        &self,
+        mut request: ChatConfigurationRequest,
+    ) -> Result<Vec<ChatConfigurationResult>, String> {
+        request.requirePurpose(ChatConfigurationPurpose::Execution)?;
+        if request.participantId.is_some() {
+            return Ok(vec![self.resolve(request).await?]);
+        }
+        request.purpose = ChatConfigurationPurpose::Display;
+        let display = self.resolveDisplay(request.clone()).await?;
+        if display.participants.is_empty() {
+            return Err("Conversation context requires a current bound participant".to_string());
+        }
+        request.purpose = ChatConfigurationPurpose::Execution;
+        let mut configurations = Vec::with_capacity(display.participants.len());
+        for participant in display.participants {
+            request.participantId = Some(participant.id.clone());
+            let configuration = self.resolve(request.clone()).await?;
+            if display.contextKey.as_ref() != Some(&configuration.contextKey)
+                || configuration.profile.id != participant.id
+            {
+                return Err("Conversation binding changed during context estimation".to_string());
+            }
+            configurations.push(configuration);
+        }
+        Ok(configurations)
+    }
+
     /// Resolves display data for a creation draft without requiring a nonexistent conversation or execution participant.
     pub async fn resolveDraft(
         &self,
@@ -221,7 +250,7 @@ impl ChatConfigurationApi {
         }
         let executionData = serde_json::json!({ "schemaVersion": 1, "contextKey": "model:chat", "profile": profile, "participants": [profile] })
             .as_object().cloned().ok_or("Model execution data is not an object")?;
-        let result = ChatConfigurationResult { contextKey: "model:chat".into(), profile: profile.clone(), participants: vec![profile],
+        let result = ChatConfigurationResult { historyPolicy: operit_providers::runtime_support::ChatHistoryPolicy { isolateParticipants: false, labelUserMessages: false }, contextKey: "model:chat".into(), profile: profile.clone(), participants: vec![profile],
             executionData, extensionOwner: MODEL_CONFIGURATION_OWNER.into() };
         result.validate()?;
         Ok(result)
@@ -344,7 +373,7 @@ pub(crate) fn validateNativeModelExecutionData(snapshot: &operit_providers::runt
     if participantId != Some(saved.profile.id.as_str()) {
         return Err("Native model tool participant differs from its saved profile".into());
     }
-    let result = ChatConfigurationResult { contextKey: saved.contextKey, profile: saved.profile, participants: saved.participants,
+    let result = ChatConfigurationResult { historyPolicy: operit_providers::runtime_support::ChatHistoryPolicy { isolateParticipants: false, labelUserMessages: false }, contextKey: saved.contextKey, profile: saved.profile, participants: saved.participants,
         executionData: snapshot.clone(), extensionOwner: MODEL_CONFIGURATION_OWNER.into() };
     result.validate()
 }
@@ -363,6 +392,57 @@ struct RuntimeProviderSupport {
 }
 
 impl ProviderRuntimeSupport for RuntimeProviderSupport {
+    fn generateLocalLlm(
+        &self,
+        bindingKey: String,
+        modelBinding: String,
+        request: Value,
+        settings: Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + Send + '_>>
+    {
+        let context = self.tool_handler.getContext();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let scheduled = operit_host_api::HostManager::defaultHostRuntimeTaskSchedulerHost()
+            .scheduleHostRuntimeAsyncTask(
+                "local-llm-inference",
+                Box::new(move || {
+                    Box::pin(async move {
+                        let result = async {
+                            let storage = context
+                                .runtimeStorageHost
+                                .clone()
+                                .ok_or("Local inference requires runtime storage")?;
+                            let key = if bindingKey.is_empty() {
+                                super::LocalLlmService::ensureLocalLlmBinding(
+                                    storage.clone(),
+                                    &modelBinding,
+                                )?
+                            } else {
+                                bindingKey
+                            };
+                            let response = super::LocalLlmService::generateRoutedLocalLlm(
+                                storage,
+                                key,
+                                modelBinding,
+                                request.to_string(),
+                                settings.to_string(),
+                            )
+                            .await?;
+                            serde_json::to_value(response).map_err(|error| error.to_string())
+                        }
+                        .await;
+                        let _ = sender.send(result);
+                    })
+                }),
+            );
+        Box::pin(async move {
+            scheduled.map_err(|error| error.to_string())?;
+            receiver
+                .await
+                .map_err(|error| format!("Local inference task ended: {error}"))?
+        })
+    }
+
     /// Returns the root directory used by runtime data.
     fn dataDir(&self) -> Result<PathBuf, String> {
         let context = self.tool_handler.getContext();
@@ -677,7 +757,7 @@ mod chat_configuration_contract_tests {
             "resources":[{"key":"opaque/resource", "readable":true, "writable":false}]
         });
         let raw = serde_json::json!({
-            "contextKey":"opaque/context", "profile":profile, "participants":[profile],
+            "contextKey":"opaque/context", "historyPolicy":{"isolateParticipants":false,"labelUserMessages":false},"profile":profile, "participants":[profile],
             "executionData":{"actor":{"id":"participant"}, "voice":"voice", "revision":"7"}
         });
         for owner in ["org.example.owner-a", "org.example.owner-b"] {

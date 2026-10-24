@@ -71,6 +71,18 @@
         return resolvedCallId && getCallState(resolvedCallId) ? resolvedCallId : '';
     }
 
+    /** Restores identity and runtime together from the exact live registry entry. */
+    function restoreCallContext(callId) {
+        var state = getCallState(callId);
+        if (state && !state.completed) {
+            root.__operitCurrentCallId = state.callId;
+            root.__operit_call_runtime_ref = state.callRuntime;
+        } else {
+            root.__operitCurrentCallId = '';
+            delete root.__operit_call_runtime_ref;
+        }
+    }
+
     var callActivationSequence = 0;
 
     /** Advances the ordering that selects the most recently activated live call. */
@@ -119,9 +131,8 @@
         callState.resultCompleted = false;
         callState.detached = false;
         callState.detachedCleanup = null;
+        callState.cleanupCallbacks = new Set();
         callState.pendingReferences = 0;
-        callState.safetyTimeout = null;
-        callState.safetyTimeoutFinal = null;
         callState.lastExecStage = '';
         callState.lastExecFunction = '';
         callState.lastModulePath = '';
@@ -211,7 +222,13 @@
 
     function activateCall(callId) {
         var state = getCallState(callId);
-        if (!state || state.completed) return false;
+        if (!state || state.completed) {
+            nextCallActivation();
+            root.__operitCurrentCallId = callId;
+            root.__operitNativeActivateCall(callId, true);
+            delete root.__operit_call_runtime_ref;
+            return false;
+        }
         state.activatedAt = nextCallActivation();
         root.__operitCurrentCallId = callId;
         root.__operit_call_runtime_ref = state.callRuntime;
@@ -220,42 +237,81 @@
 
     // Explicit Promise continuations (including lowered async functions) belong to
     // their subscribing call, not to the call which happens to resolve a shared Promise.
+    var activeCallId = root.__operitCurrentCallId;
+    Object.defineProperty(root, '__operitCurrentCallId', {
+        configurable: true,
+        /** Returns the currently executing call identity. */
+        get: function() { return activeCallId; },
+        /** Selects the exact native execution owner whenever JavaScript changes context. */
+        set: function(callId) {
+            activeCallId = callId;
+            root.__operitNativeActivateCall(callId == null ? '' : String(callId), false);
+        }
+    });
+
     var originalThen = Promise.prototype.then;
+    /** Retains each subscribed reaction until delivery under its exact execution owner. */
     Promise.prototype.then = function(onFulfilled, onRejected) {
         var ownerCallId = normalizeCallId(root.__operitCurrentCallId);
-        if (!getCallState(ownerCallId)) {
+        if (!ownerCallId) {
             return originalThen.call(this, onFulfilled, onRejected);
         }
-        function bindContinuation(handler) {
-            if (typeof handler !== 'function') return handler;
+        retainCallReference(ownerCallId);
+        var retained = true;
+        /** Releases this subscription once, including rejected and invalid-receiver paths. */
+        function releaseSubscription() {
+            if (!retained) return;
+            retained = false;
+            releaseCallReference(ownerCallId);
+        }
+        /** Preserves normal Promise forwarding while restoring the subscribing call's identity. */
+        function bindContinuation(handler, rejected) {
+            /** Isolates cancelled callbacks and releases their pending reaction ownership. */
             return function(value) {
-                var ownerState = getCallState(ownerCallId);
-                // Never borrow another session if the originating call was cancelled.
-                if (!ownerState) {
-                    return handler(value);
-                }
-                var previousCallId = normalizeCallId(root.__operitCurrentCallId);
-                var previousRuntime = root.__operit_call_runtime_ref;
-                ownerState.activatedAt = nextCallActivation();
-                root.__operitCurrentCallId = ownerCallId;
-                root.__operit_call_runtime_ref = ownerState.callRuntime;
-                try { return handler(value); }
-                finally {
-                    // Completing the owning call already restored the surviving context.
-                    // Writing the captured value back would resurrect a cleaned call id and
-                    // leave an unrelated suspended call pointing at a deleted session.
-                    if (normalizeCallId(root.__operitCurrentCallId) === ownerCallId) {
-                        root.__operitCurrentCallId = restoreLiveCallId(previousCallId, ownerCallId);
-                        if (previousRuntime && typeof previousRuntime === 'object') {
-                            root.__operit_call_runtime_ref = previousRuntime;
-                        } else if (root.__operit_call_runtime_ref === ownerState.callRuntime) {
+                try {
+                    if (typeof handler !== 'function') {
+                        if (rejected) throw value;
+                        return value;
+                    }
+                    var ownerState = getCallState(ownerCallId);
+                    var previousCallId = normalizeCallId(root.__operitCurrentCallId);
+                    if (!ownerState) {
+                        var cancelledActivation = callActivationSequence;
+                        try {
+                            root.__operitCurrentCallId = ownerCallId;
+                            root.__operitNativeActivateCall(ownerCallId, true);
                             delete root.__operit_call_runtime_ref;
+                            return handler(value);
+                        } finally {
+                            if (normalizeCallId(root.__operitCurrentCallId) === ownerCallId &&
+                                callActivationSequence === cancelledActivation) {
+                                restoreCallContext(previousCallId);
+                            }
                         }
                     }
+                    ownerState.activatedAt = nextCallActivation();
+                    var continuationActivation = ownerState.activatedAt;
+                    root.__operitCurrentCallId = ownerCallId;
+                    root.__operit_call_runtime_ref = ownerState.callRuntime;
+                    try { return handler(value); }
+                    finally {
+                        // Preserve explicit host-completion handoffs and never restore a retired call.
+                        if (normalizeCallId(root.__operitCurrentCallId) === ownerCallId &&
+                            ownerState.activatedAt === continuationActivation) {
+                            restoreCallContext(restoreLiveCallId(previousCallId, ownerCallId));
+                        }
+                    }
+                } finally {
+                    releaseSubscription();
                 }
             };
         }
-        return originalThen.call(this, bindContinuation(onFulfilled), bindContinuation(onRejected));
+        try {
+            return originalThen.call(this, bindContinuation(onFulfilled, false), bindContinuation(onRejected, true));
+        } catch (error) {
+            releaseSubscription();
+            throw error;
+        }
     };
 
     /** Activates one detached call before its queued JavaScript jobs are resumed. */
@@ -279,16 +335,23 @@
         callState.timerIds = {};
     }
 
+    /** Releases owned subscriptions and timers before removing the call registry entry. */
     function cleanupCallSession(callId) {
         var resolvedCallId = normalizeCallId(callId);
         if (!resolvedCallId) {
             return;
         }
         var registry = ensureCallRegistry();
-        clearCallTimers(registry[resolvedCallId]);
+        var callState = registry[resolvedCallId];
+        if (callState) {
+            callState.cleanupCallbacks.forEach(/** Releases subscriptions owned by this exact call. */ function(cleanup) { cleanup(); });
+            callState.cleanupCallbacks.clear();
+        }
+        clearCallTimers(callState);
         delete registry[resolvedCallId];
     }
 
+    /** Cancels one call and restores identity and runtime from the same surviving session. */
     function cancelCallSession(callId) {
         var resolvedCallId = normalizeCallId(callId);
         if (!resolvedCallId) {
@@ -300,14 +363,7 @@
         }
         callState.completed = true;
         if (root.__operitCurrentCallId === resolvedCallId) {
-            root.__operitCurrentCallId = restoreLiveCallId(callState.previousCallId, resolvedCallId);
-        }
-        if (root.__operit_call_runtime_ref === callState.callRuntime) {
-            if (callState.previousCallRuntime && typeof callState.previousCallRuntime === 'object') {
-                root.__operit_call_runtime_ref = callState.previousCallRuntime;
-            } else {
-                delete root.__operit_call_runtime_ref;
-            }
+            restoreCallContext(restoreLiveCallId(callState.previousCallId, resolvedCallId));
         }
         cleanupCallSession(resolvedCallId);
     }
@@ -353,6 +409,7 @@
     expose('__operitCleanupCallSession', cleanupCallSession);
     expose('__operitCancelCallSession', cancelCallSession);
     expose('__operitRestoreLiveCallId', restoreLiveCallId);
+    expose('__operitRestoreCallContext', restoreCallContext);
     expose('__operitBuildRuntimeContext', buildRuntimeContext);
 
     expose('__operitGetActiveModuleExports', function() {
