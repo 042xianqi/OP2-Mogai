@@ -159,49 +159,72 @@ async function processRebuildWindow(ownerKey: string, taskId: string, owner: Cha
   }
 }
 
-/** Executes one claimed candidate batch and deletes it only with a successful extraction commit. */
+/** Bounds how long a claimed record may stay processing before a surviving runtime may reclaim it. */
+const CANDIDATE_PROCESSING_LEASE_MS = 30 * 60 * 1000;
+
+/** Executes one claimed candidate batch, failing only invalid sources and deleting the accepted ones after a successful commit. */
 async function processCandidates(ownerKey: string, candidates: MemoryCandidate[], owner: CharacterRepositoryOwner): Promise<void> {
   const ids = new Set<string>(); for (const candidate of candidates) ids.add(candidate.id);
   const chatId = candidates[0].chatId;
   try {
     await owner.run(
-      /** Validates the current chat owner and applies a genuine selected/automatic message batch. */
+      /** Validates every claimed source individually so one stale record cannot discard valid siblings. */
       async repository => {
         let messages = await readMessages(chatId);
+        const accepted: MemoryCandidate[] = [], rejections = new Map<string, string>();
         for (const candidate of candidates) {
           const source = messages.filter(
             /** Revalidates each claimed source identity before any analysis or destructive queue update. */
             message => message.timestamp === candidate.triggerMessageTimestamp && message.variantIndex === candidate.triggerVariantIndex,
           );
-          if (source.length !== 1) throw new Error("A claimed candidate source no longer identifies exactly one message: " + candidate.id);
-          const sender = source[0].sender;
-          if (candidate.sourceType === "selected_user_message" ? sender !== "user" : sender !== "ai" && sender !== "assistant") throw new Error("A claimed candidate source has changed sender: " + candidate.id);
-          if (candidate.sourceType === "reply_finalized_auto") await requireMessageOwner(chatId, source[0], ownerKey, repository);
-          else await requireChatOwner(chatId, ownerKey, repository);
+          let failure = "";
+          if (source.length !== 1) failure = "A claimed candidate source no longer identifies exactly one message: " + candidate.id;
+          else {
+            const sender = source[0].sender;
+            if (candidate.sourceType === "selected_user_message" ? sender !== "user" : sender !== "ai" && sender !== "assistant") failure = "A claimed candidate source has changed sender: " + candidate.id;
+            else try {
+              if (candidate.sourceType === "reply_finalized_auto") await requireMessageOwner(chatId, source[0], ownerKey, repository);
+              else await requireChatOwner(chatId, ownerKey, repository);
+            } catch (error) { failure = errorText(error); }
+          }
+          if (failure === "") accepted.push(candidate); else rejections.set(candidate.id, failure);
         }
-        if (candidates.every(
+        if (accepted.length === 0) {
+          const space = await repository.readMemorySpace(ownerKey);
+          for (const candidate of space.candidates) {
+            const failure = rejections.get(candidate.id);
+            if (failure !== undefined) { candidate.status = "failed"; candidate.lastError = failure; candidate.updatedAt = Date.now(); }
+          }
+          await repository.writeMemorySpace(ownerKey, space); return;
+        }
+        if (accepted.every(
           /** Recognizes only the exact declared selected-user source type. */
           candidate => candidate.sourceType === "selected_user_message",
         )) {
-          const timestamps = new Set<number>(); for (const candidate of candidates) timestamps.add(candidate.triggerMessageTimestamp);
+          const timestamps = new Set<number>(); for (const candidate of accepted) timestamps.add(candidate.triggerMessageTimestamp);
           messages = messages.filter(
             /** Selects the genuinely persisted requested user messages. */
             message => message.sender === "user" && timestamps.has(message.timestamp),
           );
           if (messages.length !== timestamps.size) throw new Error("A selected candidate message no longer exists");
         } else {
-          let lastTimestamp = 0; for (const candidate of candidates) lastTimestamp = Math.max(lastTimestamp, candidate.triggerMessageTimestamp);
+          let lastTimestamp = 0; for (const candidate of accepted) lastTimestamp = Math.max(lastTimestamp, candidate.triggerMessageTimestamp);
           messages = messages.filter(
-            /** Bounds automatic extraction to actual source records at the final candidate. */
+            /** Bounds automatic extraction to actual source records at the final accepted candidate. */
             message => message.timestamp <= lastTimestamp,
           ).slice(-48);
         }
         await extractMessages(ownerKey, messages, repository);
-        const space = await repository.readMemorySpace(ownerKey);
+        const space = await repository.readMemorySpace(ownerKey), acceptedIds = new Set<string>();
+        for (const candidate of accepted) acceptedIds.add(candidate.id);
         space.candidates = space.candidates.filter(
-          /** Removes only the explicitly claimed batch after successful domain mutations. */
-          candidate => !ids.has(candidate.id),
+          /** Removes only the accepted records after their successful domain mutations. */
+          candidate => !acceptedIds.has(candidate.id),
         );
+        for (const candidate of space.candidates) {
+          const failure = rejections.get(candidate.id);
+          if (failure !== undefined) { candidate.status = "failed"; candidate.lastError = failure; candidate.updatedAt = Date.now(); }
+        }
         await repository.writeMemorySpace(ownerKey, space);
       },
     );
@@ -249,6 +272,17 @@ export class MemoryJobRunner {
       repository => repository.listMemoryOwnerKeys(),
     ), report = { owners: keys.length, rebuildWindows: 0, candidateBatches: 0 };
     for (const ownerKey of keys) {
+      await this.owner.run(
+        /** Reclaims only outdated processing claims so interrupted batches can genuinely run again. */
+        async repository => {
+          const space = await repository.readMemorySpace(ownerKey), now = Date.now();
+          let reclaimed = 0;
+          for (const candidate of space.candidates) if (candidate.status === "processing" && now - candidate.updatedAt >= CANDIDATE_PROCESSING_LEASE_MS) {
+            candidate.status = "pending"; candidate.updatedAt = now; reclaimed += 1;
+          }
+          if (reclaimed !== 0) await repository.writeMemorySpace(ownerKey, space);
+        },
+      );
       const taskId = await this.owner.run(
         /** Reads a persisted runnable rebuild identity without fabricating a job. */
         async repository => {
