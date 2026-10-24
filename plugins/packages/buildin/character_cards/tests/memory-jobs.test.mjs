@@ -282,3 +282,26 @@ test("controlled Chat/AI: a deleted committed rebuild source fails before extrac
   const restarted = harness.openRuntime(); await restarted.initialize(); await restarted.interval();
   assert.deepEqual((await readOwner(harness)).rebuildProgress, failed.rebuildProgress); assert.equal(harness.modelCalls.length, 0);
 });
+
+/** Extracts unchanged sources even when the native storage codec returns persisted snapshot keys reordered, while genuine edits still fail. */
+test("controlled Chat/AI: alphabetically reordered plan snapshot keys still execute unchanged windows and genuine edits still fail their window", async t => {
+  const harness = await createMemoryJobsHarness(t), runtime = harness.openRuntime(); await runtime.initialize(); await runtime.bind();
+  await runtime.startRebuild();
+  /** Reproduces the production host bridge: persisted object keys return in sorted order instead of construction order. */
+  const planned = await harness.readState(), spaces = planned.owners.filter(space => space.ownerKey === CONTROLLED_OWNER);
+  assert.equal(spaces.length, 1); assert.ok(spaces[0].rebuildTask !== null);
+  for (const window of spaces[0].rebuildTask.windows) window.messages = window.messages.map(
+    /** Rewrites each snapshot with sorted keys exactly like the native serde codec round trip. */
+    message => Object.fromEntries(Object.entries(message).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)),
+  );
+  harness.disk.replaceState(planned);
+  harness.queueAnalysis({}); await runtime.interval(); harness.assertOutputsConsumed();
+  const running = plain(await runtime.api("memory.rebuild.progress", owner));
+  assert.equal(running.status, "running"); assert.equal(running.completedWindows, 1); assert.equal(harness.modelCalls.length, 1);
+  /** Proves the strict contract itself survived: a genuinely changed second-window source still terminates the plan. */
+  harness.deleteMessage(harness.message(8).timestamp);
+  await assert.rejects(runtime.interval(), /planned rebuild source message revision changed or was deleted: memory-jobs-controlled-chat at \d+\/0/u);
+  const failed = await readOwner(harness);
+  assert.equal(failed.rebuildProgress.status, "failed"); assert.equal(failed.rebuildProgress.failedWindows, 1); assert.equal(failed.rebuildProgress.completedWindows, 1);
+  assert.equal(harness.modelCalls.length, 1);
+});

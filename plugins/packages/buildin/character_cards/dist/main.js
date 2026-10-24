@@ -3672,6 +3672,9 @@ function propagateJobFailure(error, publishStatus) {
     throw error;
   });
 }
+function sameMessageRevision(current, planned) {
+  return current.sender === planned.sender && current.content === planned.content && current.timestamp === planned.timestamp && current.variantIndex === planned.variantIndex && current.variantCount === planned.variantCount && current.provider === planned.provider && current.modelName === planned.modelName;
+}
 function enqueueCandidate(input, repository) {
   return __async(this, null, function* () {
     if (input.sourceType === "reply_finalized_auto" && !(yield repository.readGlobalMemoryPreferences()).autoUpdateEnabled) return { owners: [], candidateIds: [] };
@@ -3796,7 +3799,7 @@ function processRebuildWindow(ownerKey, taskId, owner2) {
               /** Matches the exact planned revision before trusting its original extraction content. */
               (message) => message.timestamp === source.timestamp && message.variantIndex === source.variantIndex
             );
-            if (present.length !== 1 || JSON.stringify(present[0]) !== JSON.stringify(source)) throw new Error("A planned rebuild source message revision changed or was deleted");
+            if (present.length !== 1 || !sameMessageRevision(present[0], source)) throw new Error("A planned rebuild source message revision changed or was deleted: " + window.chatId + " at " + source.timestamp + "/" + source.variantIndex);
           }
           yield requireMessagesOwner(window.chatId, window.messages, ownerKey, repository);
           yield extractMessages(ownerKey, window.messages, repository);

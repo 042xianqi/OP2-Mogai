@@ -1,5 +1,5 @@
 import type { CharacterRepository, CharacterRepositoryOwner } from "../canonical";
-import type { MemoryCandidate, MemoryRebuild, MemoryRebuildProgress, MemoryRebuildTask } from "../model";
+import type { MemoryCandidate, MemoryChatMessage, MemoryRebuild, MemoryRebuildProgress, MemoryRebuildTask } from "../model";
 import { assertInteger, assertObject, assertStrings, requireId } from "../validation";
 import { extractMessages } from "./analysis";
 import { chatParticipants, planWindows, primaryOwner, readMessages, requireChat, requireChatOwner, requireMessageOwner, requireMessagesOwner, currentMessageMemoryAccess } from "./chat";
@@ -28,6 +28,13 @@ async function propagateJobFailure(error: unknown, publishStatus: () => Promise<
   try { await publishStatus(); }
   catch (statusError) { throw new MemoryJobStatusError(error, statusError); }
   throw error;
+}
+
+/** Compares every stored revision field structurally so a host codec reordering persisted keys cannot fail an unchanged plan. */
+function sameMessageRevision(current: MemoryChatMessage, planned: MemoryChatMessage): boolean {
+  return current.sender === planned.sender && current.content === planned.content && current.timestamp === planned.timestamp
+    && current.variantIndex === planned.variantIndex && current.variantCount === planned.variantCount
+    && current.provider === planned.provider && current.modelName === planned.modelName;
 }
 
 /** Enqueues a real selected message or finalized reply for exact bound memory owners. */
@@ -124,7 +131,7 @@ async function processRebuildWindow(ownerKey: string, taskId: string, owner: Cha
             /** Matches the exact planned revision before trusting its original extraction content. */
             message => message.timestamp === source.timestamp && message.variantIndex === source.variantIndex,
           );
-          if (present.length !== 1 || JSON.stringify(present[0]) !== JSON.stringify(source)) throw new Error("A planned rebuild source message revision changed or was deleted");
+          if (present.length !== 1 || !sameMessageRevision(present[0], source)) throw new Error("A planned rebuild source message revision changed or was deleted: " + window.chatId + " at " + source.timestamp + "/" + source.variantIndex);
         }
         await requireMessagesOwner(window.chatId, window.messages, ownerKey, repository);
         await extractMessages(ownerKey, window.messages, repository);
