@@ -1785,7 +1785,26 @@ class _AIChatSurfaceState extends State<_AIChatSurface> {
   }
 
   /// Dispatches submit_requested before mutating the visible input field.
+  ///
+  /// Runs unawaited from [_sendMessage]; a failed hook dispatch or send must stay
+  /// visible as a toast instead of surfacing only as an uncaught zone error.
   Future<void> _sendMessageWithHooks() async {
+    try {
+      await _sendMessageWithHooksInner();
+    } catch (error, stackTrace) {
+      ClientLogger.e(
+        'Failed to send chat message',
+        tag: 'AIChatScreen',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      if (mounted) {
+        _showLocalToast(error.toString());
+      }
+    }
+  }
+
+  Future<void> _sendMessageWithHooksInner() async {
     final text = _messageController.text.trim();
     final hasAttachments = _attachments.isNotEmpty;
     if (text.isEmpty && !hasAttachments) {
