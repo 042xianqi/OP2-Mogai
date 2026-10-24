@@ -27,7 +27,7 @@ export interface MemoryChat {
 export interface MemoryChatListing { chats: MemoryChat[]; missingChatIds: string[] }
 
 /** Publishes the complete MemoryExtractionResult contract in the standalone dependency client. */
-export interface MemoryExtractionResult { ownerKey: string; created: number; updated: number; merged: number; links: number; profileUpdated: boolean }
+export interface MemoryExtractionResult { ownerKey: string; created: number; updated: number; merged: number; links: number; profileUpdated: boolean; skipped: number }
 
 /** Publishes the complete MemoryRebuild contract in the standalone dependency client. */
 export interface MemoryRebuild {

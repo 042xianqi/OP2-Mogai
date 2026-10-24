@@ -153,6 +153,32 @@ test("controlled Chat/AI: concurrent source count or updated-at changes reject m
   const ownerState = await readOwner(harness); assert.equal(ownerState.candidates.length, 0); assert.equal(ownerState.rebuildTask, null); harness.assertOutputsConsumed();
 });
 
+/** Parses through model-emitted reasoning and prose while still rejecting output with no JSON payload. */
+test("model JSON parser ignores reasoning blocks and surrounding prose but still rejects invalid output", () => {
+  const { parseModelJson } = loadModule("src/memory-jobs/analysis.ts");
+  assert.deepEqual(plain(parseModelJson('{"main":null,"new":[],"update":[],"merge":[],"links":[]}')), { main: null, new: [], update: [], merge: [], links: [] });
+  assert.deepEqual(plain(parseModelJson('<think>internal reasoning</think>\n{"a":1}')), { a: 1 });
+  assert.deepEqual(plain(parseModelJson('分析如下：\n```json\n{"a":2}\n```\n完成')), { a: 2 });
+  assert.deepEqual(plain(parseModelJson('前言 {"a":3} 后记')), { a: 3 });
+  /** Checks the JSON syntax rejection across the module VM's own language realm. */
+  const isSyntax = error => error.name === "SyntaxError";
+  assert.throws(() => parseModelJson('<think>only reasoning</think>'), isSyntax);
+  assert.throws(() => parseModelJson('not json'), isSyntax);
+});
+
+/** Skips only the unresolvable model references while committing the rest of the extraction. */
+test("controlled Chat/AI: unresolvable model titles skip their own items instead of failing the extraction", async t => {
+  const harness = await createMemoryJobsHarness(t), runtime = harness.openRuntime(); await runtime.initialize(); await runtime.bind();
+  await runtime.enqueueReplies(); await runtime.makeDue();
+  harness.queueAnalysis({ main: { title: "Valid extraction", content: "A valid extracted fact", tags: ["Project"], folder_path: "Projects" },
+    new: [], update: [{ title: "Missing title", content: "Never applies", reason: "model reference drift" }],
+    merge: [{ source_titles: ["Missing title", "Valid extraction"], title: "Merged", content: "Never applies", tags: ["Project"], folder_path: "Projects", reason: "model reference drift" }],
+    links: [{ source: "Missing title", target: "Valid extraction", type: "RELATED", description: "Never applies", weight: 0.5 }] });
+  await runtime.interval(); harness.assertOutputsConsumed(); assert.equal(harness.modelCalls.length, 1);
+  const saved = await readOwner(harness);
+  assert.equal(saved.candidates.length, 0); assert.equal(saved.memories.length, 1); assert.equal(saved.memories[0].title, "Valid extraction");
+});
+
 /** Preserves both original failures when execution and real status-file publication fail, for each production job path. */
 test("controlled Chat/AI: rebuild and candidate execution plus state-publication failures retain both errors and stop the same repository", async t => {
   for (const kind of ["rebuild", "candidates"]) {

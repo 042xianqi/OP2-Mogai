@@ -11,11 +11,18 @@ interface Merge { source_titles: string[]; title: string; content: string; tags:
 interface Link { source: string; target: string; type: string; description: string; weight: number }
 interface Analysis { main: Entity | null; new: Entity[]; update: Update[]; merge: Merge[]; links: Link[]; profile_markdown?: string | null }
 
-/** Parses only strict JSON or its explicitly documented complete Markdown fence. */
+/** Parses one model JSON payload, ignoring emitted reasoning blocks and surrounding prose while still requiring valid JSON. */
 export function parseModelJson(text: string): unknown {
-  assertString(text, "model output"); const trimmed = text.trim();
-  const fence = /^```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```\s*$/u.exec(trimmed);
-  return JSON.parse(fence === null ? trimmed : fence[1]);
+  assertString(text, "model output");
+  const cleaned = text.replace(/<think(?:ing)?\b[^>]*>[\s\S]*?<\/think(?:ing)?>/giu, " ").trim();
+  const fence = /```(?:json)?\s*([\s\S]*?)```/u.exec(cleaned);
+  const payload = (fence === null ? cleaned : fence[1]).trim();
+  try { return JSON.parse(payload); }
+  catch (error) {
+    const start = payload.indexOf("{"), end = payload.lastIndexOf("}");
+    if (start < 0 || end <= start) throw error;
+    return JSON.parse(payload.slice(start, end + 1));
+  }
 }
 
 /** Checks each required named field before any domain record is modified. */
@@ -151,9 +158,17 @@ function extractionPrompt(candidates: Memory[], memories: Memory[], folders: str
   return prompt;
 }
 
+/** Recognizes model-authored reference conflicts that skip one item instead of discarding the whole extraction. */
+function unresolvedReference(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message;
+  return message.startsWith("Memory title does not identify exactly one record: ") || message.startsWith("Memory merge source does not exist: ")
+    || message === "Memory merge requires at least two unique source records" || message.startsWith("Name already exists: ") || message === "Self relationships are not allowed";
+}
+
 /** Applies one model result using one title index and the canonical repository mutations. */
 async function applyAnalysis(ownerKey: string, result: Analysis | null, settings: MemorySettings, repository: CharacterRepository): Promise<MemoryExtractionResult> {
-  const report: MemoryExtractionResult = { ownerKey, created: 0, updated: 0, merged: 0, links: 0, profileUpdated: false };
+  const report: MemoryExtractionResult = { ownerKey, created: 0, updated: 0, merged: 0, links: 0, profileUpdated: false, skipped: 0 };
   if (result === null) return report;
   if (result.profile_markdown !== undefined && result.profile_markdown !== null && (!settings.profileAutoUpdateEnabled || settings.profileAutoUpdateLocked))
     throw new Error("Model returned a profile update forbidden by the owner settings");
@@ -168,38 +183,40 @@ async function applyAnalysis(ownerKey: string, result: Analysis | null, settings
     if (matches === undefined || matches.length !== 1) throw new Error("Memory title does not identify exactly one record: " + title);
     return matches[0];
   }
-  for (const item of result.merge) {
+  for (const item of result.merge) try {
     const memory = await repository.mergeMemories(ownerKey, item.source_titles, { title: item.title, content: item.content,
       contentType: "text/plain", source: "merged_from_memory", credibility: 0.5, importance: 0.5, folderPath: item.folder_path, tags: item.tags });
     for (const title of item.source_titles) index.delete(title);
     index.set(memory.title, [memory]); report.merged += 1;
-  }
-  for (const item of result.update) {
+  } catch (error) { if (!unresolvedReference(error)) throw error; report.skipped += 1; }
+  for (const item of result.update) try {
     const memory = { ...resolve(item.title), content: item.content };
     if (item.credibility !== undefined && item.credibility !== null) memory.credibility = item.credibility;
     if (item.importance !== undefined && item.importance !== null) memory.importance = item.importance;
     const saved = await repository.saveMemory(ownerKey, memory); index.set(saved.title, [saved]); report.updated += 1;
-  }
+  } catch (error) { if (!unresolvedReference(error)) throw error; report.skipped += 1; }
   if (result.main !== null) {
     const item = result.main;
-    let saved: Memory;
-    if (index.has(item.title)) { saved = await repository.saveMemory(ownerKey, { ...resolve(item.title), content: item.content }); report.updated += 1; }
-    else { saved = await repository.createMemory(ownerKey, { title: item.title, content: item.content, contentType: "text/plain", source: "memory_analysis",
-      credibility: 1, importance: 0.8, folderPath: item.folder_path, tags: item.tags }); report.created += 1; }
-    index.set(saved.title, [saved]);
+    try {
+      let saved: Memory;
+      if (index.has(item.title)) { saved = await repository.saveMemory(ownerKey, { ...resolve(item.title), content: item.content }); report.updated += 1; }
+      else { saved = await repository.createMemory(ownerKey, { title: item.title, content: item.content, contentType: "text/plain", source: "memory_analysis",
+        credibility: 1, importance: 0.8, folderPath: item.folder_path, tags: item.tags }); report.created += 1; }
+      index.set(saved.title, [saved]);
+    } catch (error) { if (!unresolvedReference(error)) throw error; report.skipped += 1; }
   }
-  for (const item of result.new) {
+  for (const item of result.new) try {
     if (item.alias_for !== undefined && item.alias_for !== null) index.set(item.title, [resolve(item.alias_for)]);
     else {
       const saved = await repository.createMemory(ownerKey, { title: item.title, content: item.content, contentType: "text/plain", source: "memory_analysis",
         credibility: 0.5, importance: 0.5, folderPath: item.folder_path, tags: item.tags });
       index.set(saved.title, [saved]); report.created += 1;
     }
-  }
-  for (const item of result.links) {
+  } catch (error) { if (!unresolvedReference(error)) throw error; report.skipped += 1; }
+  for (const item of result.links) try {
     await repository.createLink(ownerKey, { sourceMemoryId: resolve(item.source).id, targetMemoryId: resolve(item.target).id,
       type_: item.type, description: item.description, weight: item.weight }); report.links += 1;
-  }
+  } catch (error) { if (!unresolvedReference(error)) throw error; report.skipped += 1; }
   if (result.profile_markdown !== undefined && result.profile_markdown !== null) {
     await repository.writeUser(ownerKey, result.profile_markdown); report.profileUpdated = true;
   }

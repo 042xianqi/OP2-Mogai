@@ -341,7 +341,7 @@ export interface MemoryRebuildTask { id: string; windows: MemoryJobWindow[]; nex
 /** Stores a real provider embedding, keyed by exact configured source and input text. */
 export interface MemoryEmbedding { id: string; endpoint: string; model: string; text: string; vector: number[]; updatedAt: number }
 /** Reports actual committed domain operations for a manual or background extraction. */
-export interface MemoryExtractionResult { ownerKey: string; created: number; updated: number; merged: number; links: number; profileUpdated: boolean }
+export interface MemoryExtractionResult { ownerKey: string; created: number; updated: number; merged: number; links: number; profileUpdated: boolean; skipped: number }
 
 /** Matches the complete MessagePart serde record used by extraction windows. */
 export interface MemoryMessagePart {
